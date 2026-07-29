@@ -10,6 +10,11 @@ $ROOT/scripts/verify-linux-bundled-mpv.sh"
 export OKP_CANDIDATE_TOOLCHAIN_REQUIRE_DOTNET_TOOLS=false
 VERSION="${1:-0.1.0-linux-alpha.1}"
 ARCH="${OKP_DEB_ARCH:-amd64}"
+# The build version is what the binary stamps into itself, what About reports and what the
+# artifact is named by. `Version:` needs the Debian encoding of it, because dpkg orders the
+# raw build version wrongly against the release it precedes (issue #709). One rule, one file.
+source "$ROOT/scripts/linux-package-version.sh"
+DEB_VERSION="$(okp_debian_version_for_build "$VERSION")"
 PACKAGE="ok-player"
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/rust/target}"
 DEB_DIR="$ROOT/artifacts/linux/deb"
@@ -51,7 +56,7 @@ done
 
 cat > "$BUILD_ROOT/DEBIAN/control" <<CONTROL
 Package: $PACKAGE
-Version: $VERSION
+Version: $DEB_VERSION
 Section: video
 Priority: optional
 Architecture: $ARCH
@@ -102,5 +107,5 @@ chmod 755 "$BUILD_ROOT/DEBIAN/postinst" "$BUILD_ROOT/DEBIAN/postrm"
 chmod -R u+rwX,go+rX,go-w "$BUILD_ROOT"
 dpkg-deb --root-owner-group --build "$BUILD_ROOT" "$DEB_DIR/${PACKAGE}_${VERSION}_${ARCH}.deb"
 
-echo "Debian package written to $DEB_DIR/${PACKAGE}_${VERSION}_${ARCH}.deb"
+echo "Debian package written to $DEB_DIR/${PACKAGE}_${VERSION}_${ARCH}.deb (Version: $DEB_VERSION)"
 echo "Run write-linux-acceptance-template.sh after both package lanes complete; publishing requires evidence for this exact artifact hash."

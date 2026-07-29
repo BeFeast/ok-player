@@ -34,6 +34,7 @@ pub mod ok_player_uri;
 pub mod online_subtitles;
 pub mod osc_overflow;
 pub mod osc_visibility;
+pub mod package_version;
 pub mod playback_failure;
 pub mod player;
 pub mod player_commands;

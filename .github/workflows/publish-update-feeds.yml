@@ -51,6 +51,9 @@ on:
       - 'scripts/build-linux-feed.sh'
       - 'scripts/build-apt-repo.sh'
       - 'scripts/verify-apt-repo.sh'
+      # verify-apt-repo.sh sources this helper to read the encoded Version field, so a
+      # change confined to the encoding must rebuild and re-verify the live archive.
+      - 'scripts/linux-package-version.sh'
       - '.github/workflows/publish-update-feeds.yml'
   workflow_dispatch:
   workflow_call:

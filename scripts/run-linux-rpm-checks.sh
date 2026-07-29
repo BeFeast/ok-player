@@ -7,14 +7,32 @@ source "$ROOT/scripts/ok-player-scratch.sh"
 FEDORA_VERSION="${FEDORA_VERSION:-unknown}"
 OUT_DIR="${1:-$ROOT/artifacts/linux/rpm/fedora-$FEDORA_VERSION}"
 
-for tool in dnf rpmbuild rpmlint cmp sha256sum; do
+for tool in dnf rpm rpmbuild rpmdev-vercmp rpmlint cmp sha256sum; do
   command -v "$tool" >/dev/null 2>&1 || { echo "Missing required tool: $tool" >&2; exit 127; }
 done
+
+# The upstream version this run packages, pinned here rather than left to the script's default,
+# so the assertion below is about a version that was actually passed in — the path that used to
+# be ignored (issue #709).
+export OKP_RPM_UPSTREAM_VERSION="${OKP_RPM_UPSTREAM_VERSION:-0.11.0-beta.1}"
+# shellcheck source=/dev/null
+source "$ROOT/scripts/linux-package-version.sh"
+EXPECTED_RPM_VERSION="$(okp_rpm_version_for_build "$OKP_RPM_UPSTREAM_VERSION")"
 
 SOURCE_DIR="$OUT_DIR/source"
 "$ROOT/scripts/package-linux-rpm-source.sh" "$SOURCE_DIR"
 SRPM="$(find "$SOURCE_DIR" -maxdepth 1 -name '*.src.rpm' -print -quit)"
 [[ -n "$SRPM" ]] || { echo "SRPM was not produced" >&2; exit 2; }
+
+# What the package calls itself, read out of the package. rpm forbids `-` in a version, so this
+# lane has always encoded; what is asserted is that the encoding is of the upstream version it
+# was given, rather than of a default nothing overrides.
+SRPM_VERSION="$(rpm -qp --queryformat '%{VERSION}' "$SRPM" 2>/dev/null)"
+[[ "$SRPM_VERSION" == "$EXPECTED_RPM_VERSION" ]] || {
+  echo "the SRPM built from ${OKP_RPM_UPSTREAM_VERSION} calls itself ${SRPM_VERSION}, expected ${EXPECTED_RPM_VERSION}" >&2
+  exit 1
+}
+echo "SRPM version: ${SRPM_VERSION} (from upstream ${OKP_RPM_UPSTREAM_VERSION})"
 
 REPRO_SOURCE_DIR="$(okp_make_scratch_dir rpm-repro "$OUT_DIR")"
 trap 'rm -rf "$REPRO_SOURCE_DIR"' EXIT
@@ -47,6 +65,27 @@ rpmbuild --rebuild "$SRPM" \
 PREVIOUS_RPM="$(find "$OUT_DIR/previous" -type f -name 'ok-player-[0-9]*.x86_64.rpm' -print -quit)"
 CURRENT_RPM="$(find "$OUT_DIR/current" -type f -name 'ok-player-[0-9]*.x86_64.rpm' -print -quit)"
 [[ -n "$PREVIOUS_RPM" && -n "$CURRENT_RPM" ]] || { echo "Binary RPMs were not produced" >&2; exit 2; }
+
+# The binary package the user installs, not just the source one.
+BINARY_RPM_VERSION="$(rpm -qp --queryformat '%{VERSION}' "$CURRENT_RPM" 2>/dev/null)"
+[[ "$BINARY_RPM_VERSION" == "$EXPECTED_RPM_VERSION" ]] || {
+  echo "the binary RPM calls itself ${BINARY_RPM_VERSION}, expected ${EXPECTED_RPM_VERSION}" >&2
+  exit 1
+}
+# And it must sort below the release it precedes, which is the whole reason rpm versions carry
+# `~` — asked of rpm's own comparator rather than assumed from the string.
+if [[ "$OKP_RPM_UPSTREAM_VERSION" == *-* ]]; then
+  set +e
+  # rpmdev-vercmp exits 11 when the first argument is newer and 12 when the second is.
+  rpmdev-vercmp "0:${BINARY_RPM_VERSION}-1" "0:${OKP_RPM_UPSTREAM_VERSION%%-*}-1" >/dev/null
+  VERCMP_STATUS=$?
+  set -e
+  ((VERCMP_STATUS == 12)) || {
+    echo "the binary RPM ${BINARY_RPM_VERSION} does not sort below the release ${OKP_RPM_UPSTREAM_VERSION%%-*} (rpmdev-vercmp said ${VERCMP_STATUS})" >&2
+    exit 1
+  }
+fi
+echo "binary RPM version: ${BINARY_RPM_VERSION}"
 
 RPMLINT_LOG="$OUT_DIR/rpmlint.txt"
 set +e

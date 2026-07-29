@@ -73,6 +73,9 @@ jobs:
       - name: Installed-RPM launch gate policy tests
         run: ./scripts/tests/rpm-installed-launch-gate.Tests.sh
 
+      - name: Linux package version scheme tests
+        run: ./scripts/tests/linux-package-version.Tests.sh
+
       - name: APT repository generator policy tests
         run: ./scripts/tests/apt-repo-generator.Tests.sh
 

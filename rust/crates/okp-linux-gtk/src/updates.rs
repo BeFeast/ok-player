@@ -250,10 +250,13 @@ const INSTALL_WATCH_INTERVAL: Duration = Duration::from_secs(30);
 /// Only the `.deb` lane is watched today, and each exclusion is a fact rather
 /// than a shortcut:
 ///
-/// * `rpm` reports a mangled version — `0.11.0~beta.1` where the build calls
-///   itself `0.11.0-beta.1`, because rpm forbids `-` in a version — and
-///   nothing in this repository owns the inverse mapping. Feeding the mangled
-///   string to the model would announce a version the user cannot recognise.
+/// * `rpm` reports an encoded version — `0.11.0~beta.1` where the build calls
+///   itself `0.11.0-beta.1`, because rpm forbids `-` in a version. Since #709
+///   the `.deb` lane encodes its version too, and
+///   [`okp_core::package_version`] owns that rule; but the rpm form carries no
+///   epoch, so it is a different string to read back, and this lane would also
+///   need its own `rpm -qf`/`rpm -q` resolver. Watching it is a change of its
+///   own rather than a line here — #712.
 /// * A Flatpak update does not touch the deployment the running sandbox is on;
 ///   the old one stays mounted until the app restarts, so this file never
 ///   changes and the watch would never fire. That lane needs the deploy
@@ -530,16 +533,27 @@ fn follow_the_running_resolver(
     });
 }
 
-/// The version of the package that owns `path`, as its packaging tool reports
-/// it.
+/// The **build** version of the package that owns `path`.
 ///
 /// Only the `.deb` lane is answered — see
-/// [`install_replacement_is_observable`] — and that answer is exact: the deb's
-/// `Version:` field *is* the version the build stamped into itself (both come
-/// from the same argument in `scripts/package-linux-deb.sh`), so it can be
-/// ordered against the running version without inventing a mapping. The owning
-/// package is looked up rather than assumed, so a renamed or derived package
-/// is still answered correctly.
+/// [`install_replacement_is_observable`]. dpkg's `Version:` is not the build
+/// version: it is the Debian encoding of it (`1:0.11.0~beta.0.209` for the
+/// build that calls itself `0.11.0-beta.0.209`), because the raw build version
+/// sorts above the release that follows it and the APT lane could not ship one
+/// (#709). So the answer is read back through
+/// [`package_version::build_version_from_debian_version`], the inverse of the
+/// rule the packaging applies, and what reaches the lifecycle is the same
+/// string family the running version belongs to — one comparator, not two.
+///
+/// A version that is not one this packaging emits — no epoch, or a Debian
+/// revision somebody's rebuild added — establishes nothing and is answered as
+/// "unknown" rather than compared. The watch treats that like a package
+/// database that has not caught up: it re-asks, bounded, and then settles
+/// quietly. Announcing an ordering the two comparators disagree about is the
+/// bug this closes, not a state to reach by another route.
+///
+/// The owning package is looked up rather than assumed, so a renamed or derived
+/// package is still answered correctly.
 fn installed_package_version(kind: InstallKind, path: &Path) -> Option<String> {
     use std::ffi::OsStr;
     if kind != InstallKind::Deb {
@@ -557,8 +571,23 @@ fn installed_package_version(kind: InstallKind, path: &Path) -> Option<String> {
             OsStr::new(&package),
         ],
     )?;
-    let version = version.trim().to_owned();
-    (!version.is_empty()).then_some(version)
+    build_version_of_installed_deb(version.trim())
+}
+
+/// The build version behind a `dpkg-query` answer, or nothing when the answer
+/// does not establish one. Split out so the translation is testable without a
+/// package database.
+pub(crate) fn build_version_of_installed_deb(reported: &str) -> Option<String> {
+    if reported.is_empty() {
+        return None;
+    }
+    let build_version = package_version::build_version_from_debian_version(reported);
+    if build_version.is_none() {
+        eprintln!(
+            "Installed build not established: dpkg reports {reported}, which this packaging does not emit"
+        );
+    }
+    build_version
 }
 
 /// The package name out of a `dpkg -S` answer (`ok-player: /usr/bin/…`).

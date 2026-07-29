@@ -39,6 +39,12 @@ if [[ "${OKP_RPM_ALLOW_DIRTY:-0}" != "1" ]] &&
 fi
 
 UPSTREAM_VERSION="${OKP_RPM_UPSTREAM_VERSION:-0.11.0-beta.1}"
+# rpm forbids `-` in a version, so the spec has always carried a mangled one. It used to carry
+# it as a hand-maintained `%global rpm_version` default that no override touched, so building
+# any other upstream version silently produced a package still calling itself 0.11.0~beta.1.
+# Both lanes now derive their version from the same rule (issue #709).
+source "$ROOT/scripts/linux-package-version.sh"
+RPM_VERSION="$(okp_rpm_version_for_build "$UPSTREAM_VERSION")"
 SOURCE_EPOCH="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct HEAD)}"
 SOURCE_COMMIT="$(git rev-parse HEAD)"
 PREFIX="ok-player-$UPSTREAM_VERSION"
@@ -99,6 +105,7 @@ cp "$OUT_DIR/$PREFIX-source-commit" "$TMP_DIR/rpmbuild/SOURCES/"
 rpmbuild -bs "$SPEC" \
   --define "_topdir $RPM_TOPDIR" \
   --define "upstream_version $UPSTREAM_VERSION" \
+  --define "rpm_version $RPM_VERSION" \
   --define "_buildhost reproducible.invalid" \
   --define "use_source_date_epoch_as_buildtime 1" \
   --define "clamp_mtime_to_source_date_epoch 1" \

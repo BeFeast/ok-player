@@ -97,6 +97,72 @@ budget charges each distinct pool file once for the same reason; counting a shar
 would shrink both windows for bytes that are not there. A pool file no suite indexes aborts the
 lane: it is dead weight against the budget and invisible to apt.
 
+## The version scheme (issue #709)
+
+A `.deb` does not carry the build version. It carries the **Debian encoding** of it:
+
+```text
+build version   0.11.0-beta.0.209        what About reports, what the feeds carry,
+                                         what the artifact file is named
+Version:        1:0.11.0~beta.0.209      what dpkg and apt compare
+```
+
+The rule is one line, and `scripts/linux-package-version.sh` owns it for the packaging while
+`okp_core::package_version` owns it for the shells that read a version back:
+
+> **`1:` + the build version with every `-` replaced by `~`.**
+
+Both halves are load-bearing, and each was measured with `dpkg --compare-versions` (dpkg 1.23.7)
+rather than reasoned about:
+
+| claim | verdict |
+|---|---|
+| `0.11.0-beta.0.208 gt 0.11.0` | **true** — dpkg reads the tail after the last `-` as a *Debian revision*, and a revision outranks its absence. Every `.deb` published under the build version sits above the release that follows it, so the APT lane could never ship a stable version to anybody. |
+| `0.11.0-beta.0.208 lt 0.11.0~beta.0.209` | **false** — `~` fixes the ordering against the release, but the corrected string now sorts *below* what testers already have installed, and apt refuses it as a downgrade. Every existing candidate subscriber would be stranded. |
+| `0.11.0-beta.0.208 lt 1:0.11.0~beta.0.209` | **true** — an epoch outranks anything without one, whatever it looks like. |
+| `1:0.11.0~beta.0.209 lt 1:0.11.0` | **true** — the release outranks the candidates that led to it. |
+| `1:0.11.0~beta.0.9 lt 1:0.11.0~beta.0.10` | **true** — candidates still order among themselves across a decimal boundary. |
+| `1:0.11.0-beta.0.208 lt 1:0.11.0` | **false** — the epoch alone does not fix anything; the `~` is what orders a prerelease below its release. |
+
+The epoch is **permanent**. Removing it later would strand exactly the people it was added for.
+It should also be the only one this project ever needs: `~` fixes the ordering itself, so no
+future release has to climb over its own prereleases with a second epoch.
+
+Every `-` is replaced, not just the first, so an encoded version never carries a Debian revision
+at all — `0.1.0-linux-alpha.112` becomes `1:0.1.0~linux~alpha.112`. A build version may not
+contain `~` or `:` (the packaging refuses one that does), which makes the substitution a
+bijection: `okp_build_version_from_debian` recovers the exact build a package was made from.
+That is what lets the installed-build watch (#707/#708) compare `dpkg-query`'s answer against
+the version the running session reports without a second comparator, and it is why a version
+this packaging never emits — no epoch, or somebody's rebuild with a real revision — is refused
+rather than guessed at.
+
+**File names are deliberately not encoded.** Pool files stay
+`ok-player_0.11.0-beta.0.209_amd64.deb`, named by the build, exactly like the AppImage, the
+release tag and the `candidate.linux.json` pointer beside them. A Debian pool file name never
+had to match the version inside it, and one identity for the artifact is worth more than
+matching a convention.
+
+The rpm lane shares the substitution and takes **no** epoch: rpm forbids `-` in a version
+outright, so that lane always emitted `0.11.0~beta.1` and its ordering was never wrong. Adding
+an epoch there would be a permanent cost for nothing. `scripts/package-linux-rpm-source.sh` now
+derives `rpm_version` from `upstream_version` through the same function, so the spec can no
+longer keep a stale hand-maintained default.
+
+`scripts/verify-apt-repo.sh` asserts this over every paragraph of every suite, before any
+container starts: a version must be exactly the encoding of the build its pool file is named
+for, must outrank `0.11.0-beta.0.208` (the newest build published before the encoding existed),
+and, if it is a prerelease, must sort below its own release.
+
+Packages published before the encoding are counted and reported rather than failed — the archive
+is rebuilt from the release assets, so they stay in the rolling window until they age out, and
+the epoch is what keeps them below everything encoded. That exception is narrow on purpose: the
+`Version:` must be *literally* the build version its pool file is named for, the build must be a
+prerelease, and it must be at or below `0.11.0-beta.0.208`. The prerelease condition is the one
+that is easy to miss — dpkg ranks a raw `0.11.0` **below** `0.11.0-beta.0.208`, so an exception
+phrased only as "at or below the high-water mark" would wave through exactly the unencoded
+release that no candidate subscriber could install.
+
 ## Derived, never authored
 
 `scripts/build-apt-repo.sh` is a pure function of the published `linux-v*` GitHub releases plus

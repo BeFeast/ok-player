@@ -28,9 +28,24 @@
 # distinguishes a working archive from a plausible-looking one, and a release lane that
 # quietly degrades to "we did not check" is how a broken repository reaches users.
 #
+#   * the version scheme — every version the archive advertises must be the encoding of the
+#     build its pool file is named for, and must outrank everything published before the
+#     encoding existed. This one is checked without a container, because it decides whether a
+#     release can be shipped at all rather than whether a package installs (issue #709).
+#
 # Usage: verify-apt-repo.sh <repo-root> [older-repo-root]
 # Requires: docker or podman, and dpkg (for version comparison).
 set -euo pipefail
+
+# The Debian version encoding, shared with the packaging that produced these files.
+OKP_APT_VERIFY_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=/dev/null
+source "$OKP_APT_VERIFY_ROOT/scripts/linux-package-version.sh"
+
+okp_apt_verify_fail() {
+  printf '::error::%s\n' "$*" >&2
+  exit 1
+}
 
 # The highest version an archive advertises, by Debian version ordering.
 #
@@ -77,6 +92,91 @@ okp_apt_versions_only_in() {
     | tr '\n' ' '
 }
 
+# The build version a pool file is named for. `.deb` file names are not encoded — see
+# scripts/linux-package-version.sh — so the file name is the archive's record of which build
+# each paragraph describes, and comparing it against the paragraph's `Version:` is what makes
+# the encoding checkable at all rather than merely asserted.
+okp_apt_build_version_from_pool_name() {
+  # okp_apt_build_version_from_pool_name <pool path or basename>
+  local name="${1##*/}" build
+  build="${name#ok-player_}"
+  build="${build%_amd64.deb}"
+  if [[ "$build" == "$name" || -z "$build" ]]; then
+    okp_apt_verify_fail "the archive carries ${name}, which is not an ok-player_<version>_amd64.deb; its build version cannot be read."
+  fi
+  printf '%s' "$build"
+}
+
+# Every version the archive advertises must be ordered by dpkg the way the builds are ordered
+# (issue #709).
+#
+# The defect this exists for is invisible in a passing install: a `.deb` published as
+# `0.11.0-beta.0.209` installs perfectly well, and only sorts *above* the `0.11.0` release
+# that follows it — so the release simply never reaches anyone, silently, months later. The
+# assertion is therefore about the strings rather than about apt's behaviour today:
+#
+#   * a version must be exactly `okp_debian_version_for_build` of the build its pool file is
+#     named for. Equality, not a pattern: an encoding that quietly disagrees with the build it
+#     came from is the same class of bug in a new place.
+#   * an encoded version must outrank the legacy high-water mark, or a tester already on it
+#     cannot move.
+#   * a prerelease must sort below its own release. `1:0.11.0~beta.0.209 lt 1:0.11.0` is the
+#     whole point of the `~`, and it is asserted with dpkg rather than reasoned about.
+#
+# The one exception is the tail of packages published *before* the encoding existed. The
+# archive is rebuilt from the release assets, so those stay in the rolling window until they
+# age out; they are counted and reported, not failed, and the epoch is what keeps them below
+# everything encoded. It is an exception with three conditions, and each one matters:
+#
+#   * the `Version:` is literally the build version, which is exactly what the pre-encoding
+#     lane stamped — not merely "something unencoded";
+#   * and the build is one of `OKP_DEBIAN_PRE_ENCODING_VERSIONS` — the closed list of what was
+#     actually published before the encoding, not a rule about what such a version looks like.
+#     A rule admits versions that were never published: a raw `0.11.0` (which dpkg ranks
+#     *below* `0.11.0-beta.0.208`, the defect itself) and equally a raw `0.11.0-alpha.999` from
+#     a regressed lane, both of which would then bypass every encoding and ordering assertion
+#     below. The list can only shrink, as entries age out of the rolling window.
+okp_apt_assert_version_scheme() {
+  # okp_apt_assert_version_scheme <repo-root> <suite>
+  local root="$1" suite="$2" index
+  index="$(okp_apt_suite_index "$root" "$suite")"
+  [[ -s "$index" ]] || okp_apt_verify_fail "no Packages index at ${index}"
+
+  local filename version build expected release legacy=0 encoded=0
+  while IFS=$'\t' read -r filename version; do
+    [[ -n "$version" ]] || continue
+    [[ -n "$filename" ]] \
+      || okp_apt_verify_fail "the ${suite} suite indexes ${version} with no Filename; the build it describes cannot be read."
+    build="$(okp_apt_build_version_from_pool_name "$filename")"
+    if [[ "$version" == "$build" ]] && okp_is_pre_encoding_version "$build"; then
+      legacy=$((legacy + 1))
+      continue
+    fi
+    expected="$(okp_debian_version_for_build "$build")" \
+      || okp_apt_verify_fail "the ${suite} suite carries ${filename}, whose build version ${build} this packaging cannot encode."
+    [[ "$version" == "$expected" ]] \
+      || okp_apt_verify_fail "the ${suite} suite advertises ${version} for ${filename}; the build ${build} encodes to ${expected}. A version apt orders differently than the builds order is how a stable release stops reaching users (issue #709)."
+    dpkg --compare-versions "$version" gt "$OKP_DEBIAN_LEGACY_HIGHWATER" \
+      || okp_apt_verify_fail "the ${suite} suite advertises ${version}, which does not outrank ${OKP_DEBIAN_LEGACY_HIGHWATER}; every machine already on that build would refuse it as a downgrade."
+    if [[ "$build" == *-* ]]; then
+      release="${OKP_DEBIAN_VERSION_EPOCH}:${build%%-*}"
+      dpkg --compare-versions "$version" lt "$release" \
+        || okp_apt_verify_fail "the ${suite} suite advertises the prerelease ${version}, which does not sort below its own release ${release}; the release could never be installed over it."
+    fi
+    encoded=$((encoded + 1))
+  done < <(awk '
+    /^Version: / { version = $2 }
+    /^Filename: / { filename = $2 }
+    /^$/ { if (version != "") print filename "\t" version; version = ""; filename = "" }
+    END { if (version != "") print filename "\t" version }
+  ' "$index")
+
+  ((encoded + legacy > 0)) \
+    || okp_apt_verify_fail "the ${suite} suite advertises no version at all."
+  printf 'version scheme (%s): %s encoded, %s published before the encoding\n' \
+    "$suite" "$encoded" "$legacy"
+}
+
 okp_apt_archive_version() {
   # okp_apt_archive_version <repo-root> <label> [suite]
   local index version
@@ -119,10 +219,12 @@ fi
 # here rather than in the container so a malformed index fails before one is started.
 okp_apt_has_suite "$REPO_ROOT" stable \
   || { echo "::error::the archive at $REPO_ROOT carries no stable suite" >&2; exit 1; }
+okp_apt_assert_version_scheme "$REPO_ROOT" stable
 STABLE_VERSION="$(okp_apt_archive_version "$REPO_ROOT" published stable)"
 CANDIDATE_VERSION=""
 CANDIDATE_ONLY_VERSIONS=""
 if okp_apt_has_suite "$REPO_ROOT" candidate; then
+  okp_apt_assert_version_scheme "$REPO_ROOT" candidate
   CANDIDATE_VERSION="$(okp_apt_archive_version "$REPO_ROOT" published candidate)"
   CANDIDATE_ONLY_VERSIONS="$(okp_apt_versions_only_in "$REPO_ROOT" candidate stable)"
 fi

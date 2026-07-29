@@ -5187,22 +5187,18 @@ fn answers_about_a_replaced_file_do_not_spend_the_next_files_budget() {
     assert_eq!(answers.about(second), 0);
 }
 
-/// The `.deb` lane hands `dpkg-query`'s version string to the shared ordering,
-/// which is only sound while the two comparators agree about the shapes this
-/// packaging emits. `scripts/package-linux-deb.sh` sets `Version:` to the build
-/// version verbatim, so every comparison is between two `X.Y.Z-<tail>` strings
-/// of the same family; the expected answers below are `dpkg --compare-versions`'
-/// own, taken from dpkg 1.22 on the Debian QA host.
+/// The `.deb` lane hands what `dpkg-query` says to the shared ordering, which
+/// is only sound while the two comparators agree.
 ///
-/// They part company as soon as one side has no tail at all: dpkg reads
-/// everything after the last `-` as a Debian revision, so it ranks
-/// `0.11.0-beta.0.208` *above* `0.11.0`, where the shared ordering ranks a
-/// release above the prereleases that led to it. That shape cannot come out of
-/// this packaging today — and the same rule is why apt would refuse the stable
-/// release as a downgrade — so it is tracked as a packaging question in #709
-/// rather than papered over in the watch.
+/// Since #709 the string dpkg holds is the *encoding* of the build version
+/// (`1:0.11.0~beta.0.209`), not the build version, so what the lane must get
+/// right is the pair: decode the answer, then order it. The pairs below are the
+/// shapes this packaging publishes, driven end to end — the encoded string a
+/// real `dpkg-query` would print, through the same decode the watch does, into
+/// the same ordering the lifecycle uses.
 #[test]
 fn the_deb_lane_orders_its_own_version_shapes_the_way_dpkg_does() {
+    use okp_core::package_version::debian_version_for_build;
     use okp_core::update_lifecycle::{ReportedVersion, compare_reported_build_order};
 
     for (older, newer) in [
@@ -5212,23 +5208,134 @@ fn the_deb_lane_orders_its_own_version_shapes_the_way_dpkg_does() {
         ("0.11.0-beta.1", "0.11.0-beta.2"),
         ("0.11.0-beta.0.208", "0.12.0-beta.0.1"),
         ("0.11.0-alpha.109", "0.11.0-beta.1"),
+        // The shape the whole issue is about: the release outranks every
+        // candidate that led to it, and the watch must read it that way too.
+        ("0.11.0-beta.0.208", "0.11.0"),
+        ("0.11.0", "0.11.1-beta.0.1"),
     ] {
+        let reported_newer = build_version_of_installed_deb(
+            &debian_version_for_build(newer).expect("this shape is packageable"),
+        )
+        .expect("what dpkg reports for a package this lane built is readable");
+        let reported_older = build_version_of_installed_deb(
+            &debian_version_for_build(older).expect("this shape is packageable"),
+        )
+        .expect("what dpkg reports for a package this lane built is readable");
+        assert_eq!(reported_newer, newer);
+        assert_eq!(reported_older, older);
+
         assert_eq!(
             compare_reported_build_order(
-                &ReportedVersion::complete(newer),
-                &ReportedVersion::complete(older),
+                &ReportedVersion::complete(reported_newer.clone()),
+                &ReportedVersion::complete(reported_older.clone()),
             ),
             Some(std::cmp::Ordering::Greater),
-            "{newer} is newer than {older} to dpkg; the watch must agree"
+            "{newer} is newer than {older}; the watch must agree"
         );
         assert_eq!(
             compare_reported_build_order(
-                &ReportedVersion::complete(older),
-                &ReportedVersion::complete(newer),
+                &ReportedVersion::complete(reported_older),
+                &ReportedVersion::complete(reported_newer),
             ),
             Some(std::cmp::Ordering::Less),
             "and {older} must not be announced as a restart onto {newer}"
         );
+    }
+}
+
+/// The other half of #709: a version this packaging never emits is not turned
+/// into a claim about which build is installed.
+///
+/// The `1.0.0` → `1.0.0-1` pair is the one the two comparators disagree about —
+/// dpkg calls it an upgrade because the revision outranks the bare version, the
+/// semver-shaped ordering calls it a downgrade — and it is exactly the answer
+/// that used to be handed to the lifecycle. Refusing to read it back means the
+/// watch says nothing rather than something the two orderings contradict.
+#[test]
+fn a_dpkg_answer_this_packaging_never_emits_is_not_ordered_at_all() {
+    for unreadable in [
+        "",
+        "1.0.0-1",
+        "1:1.0.0-1",
+        "0.11.0-beta.0.208",
+        "0.11.0~beta.0.209",
+        "2:0.11.0~beta.1",
+    ] {
+        assert_eq!(
+            build_version_of_installed_deb(unreadable),
+            None,
+            "{unreadable:?} does not establish which build is installed"
+        );
+    }
+}
+
+/// The encoding is written twice — once in the packaging, which is shell, and
+/// once here, for the shell that reads a version back — so the only thing worth
+/// asserting is that the two are the same function.
+///
+/// This runs the packaging's copy rather than reading it: a text pin would pass
+/// against a script that had been edited into disagreement anywhere the pin did
+/// not look, which is exactly how a version scheme drifts.
+#[test]
+fn the_packaging_script_encodes_versions_the_way_the_shell_reads_them_back() {
+    use okp_core::package_version::{build_version_from_debian_version, debian_version_for_build};
+
+    let helper = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../scripts/linux-package-version.sh")
+        .canonicalize()
+        .expect("the shared version rule should be readable");
+    let ask = |function: &str, argument: &str| -> Option<String> {
+        let output = Command::new("/bin/bash")
+            .arg("-c")
+            .arg(format!(r#". "$1"; {function} "$2""#))
+            .arg("bash")
+            .arg(&helper)
+            .arg(argument)
+            .output()
+            .expect("the shared version rule should run");
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    };
+
+    for build in [
+        "0.11.0-beta.0.209",
+        "0.11.0-beta.0.9",
+        "0.11.0-beta.0.10",
+        "0.11.0-beta.1",
+        "0.11.0-alpha.109",
+        "0.11.0",
+        "1.0.0",
+        "0.1.0-linux-alpha.112",
+    ] {
+        let packaged = ask("okp_debian_version_for_build", build);
+        assert_eq!(
+            packaged,
+            debian_version_for_build(build),
+            "the packaging and the shell must agree on how {build} is stamped"
+        );
+        let packaged = packaged.expect("this shape is packageable");
+        assert_eq!(
+            ask("okp_build_version_from_debian", &packaged),
+            build_version_from_debian_version(&packaged),
+            "and on which build {packaged} was made from"
+        );
+        assert_eq!(
+            build_version_from_debian_version(&packaged).as_deref(),
+            Some(build)
+        );
+    }
+
+    // And on what neither may accept: a build version that would not round-trip,
+    // and a version this packaging never emits.
+    for refused in ["0.11.0~beta.1", "1:0.11.0", "0.11.0-"] {
+        assert_eq!(ask("okp_debian_version_for_build", refused), None);
+        assert_eq!(debian_version_for_build(refused), None);
+    }
+    for refused in ["0.11.0-beta.0.208", "1:1.0.0-1", "2:0.11.0~beta.1"] {
+        assert_eq!(ask("okp_build_version_from_debian", refused), None);
+        assert_eq!(build_version_from_debian_version(refused), None);
     }
 }
 

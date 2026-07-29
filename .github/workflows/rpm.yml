@@ -13,6 +13,9 @@ on:
       - '.github/workflows/rpm.yml'
       - 'rust/**'
       - 'scripts/package-linux-rpm-source.sh'
+      # Shared with the .deb lane: the RPM version string is derived here, so a
+      # change to it must be proved against a real SRPM build before it merges.
+      - 'scripts/linux-package-version.sh'
       - 'scripts/run-linux-rpm-checks.sh'
       - 'scripts/smoke-linux-rpm-install-upgrade.sh'
       # The installed-RPM launch job runs these, so a change to any of them must
