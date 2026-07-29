@@ -130,12 +130,12 @@ okp_apt_build_version_from_pool_name() {
 #
 #   * the `Version:` is literally the build version, which is exactly what the pre-encoding
 #     lane stamped — not merely "something unencoded";
-#   * the build is a prerelease. Every version ever published before the encoding was one
-#     (`0.1.0-linux-alpha.N`, `0.11.0-beta.0.N`), and a bare `X.Y.Z` never was. Without this
-#     condition a raw `0.11.0` would be waved through as legacy, because dpkg ranks it
-#     *below* `0.11.0-beta.0.208` — which is the defect itself, and precisely the release
-#     that must not slip past;
-#   * and it is at or below the high-water mark, so the exception can only ever shrink.
+#   * and the build is one of `OKP_DEBIAN_PRE_ENCODING_VERSIONS` — the closed list of what was
+#     actually published before the encoding, not a rule about what such a version looks like.
+#     A rule admits versions that were never published: a raw `0.11.0` (which dpkg ranks
+#     *below* `0.11.0-beta.0.208`, the defect itself) and equally a raw `0.11.0-alpha.999` from
+#     a regressed lane, both of which would then bypass every encoding and ordering assertion
+#     below. The list can only shrink, as entries age out of the rolling window.
 okp_apt_assert_version_scheme() {
   # okp_apt_assert_version_scheme <repo-root> <suite>
   local root="$1" suite="$2" index
@@ -148,8 +148,7 @@ okp_apt_assert_version_scheme() {
     [[ -n "$filename" ]] \
       || okp_apt_verify_fail "the ${suite} suite indexes ${version} with no Filename; the build it describes cannot be read."
     build="$(okp_apt_build_version_from_pool_name "$filename")"
-    if [[ "$version" == "$build" && "$build" == *-* ]] \
-      && dpkg --compare-versions "$version" le "$OKP_DEBIAN_LEGACY_HIGHWATER"; then
+    if [[ "$version" == "$build" ]] && okp_is_pre_encoding_version "$build"; then
       legacy=$((legacy + 1))
       continue
     fi

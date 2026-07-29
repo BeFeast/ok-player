@@ -67,6 +67,51 @@ OKP_DEBIAN_VERSION_EPOCH=1
 # encoded version, or the ordering defect is back. Used by scripts/verify-apt-repo.sh.
 OKP_DEBIAN_LEGACY_HIGHWATER='0.11.0-beta.0.208'
 
+# The packages published before the encoding existed, read from the live archive on 2026-07-29.
+# This is a closed list rather than a rule, because the set is closed: no lane can publish an
+# unencoded version any more, so anything unencoded that is not one of these is a package from a
+# regressed or unrecognised lane, not a survivor. A rule phrased as "unencoded prerelease at or
+# below the high-water mark" admits versions that were never published at all — for example a raw
+# 0.11.0-alpha.999, which dpkg happens to sort low — and those bypass every ordering assertion.
+#
+# The list can only shrink: entries age out of the rolling window and are deleted here. If the
+# archive ever carries an unencoded version that is not listed, the verifier fails, which is the
+# intended direction — a pre-encoding lane publishing again is exactly what must not pass quietly.
+#
+# One operational note, true only until this change merges: the candidate lane publishes an
+# unencoded build on every push to main, so a candidate produced between the last refresh of this
+# list and the merge would not be listed and would fail the archive rebuild. That failure is
+# fail-closed — the previously deployed site keeps serving — and the fix is one line here. It
+# cannot recur afterwards, because from the merge on every published build is encoded.
+OKP_DEBIAN_PRE_ENCODING_VERSIONS=(
+  '0.1.0-linux-alpha.103'
+  '0.1.0-linux-alpha.104'
+  '0.1.0-linux-alpha.105'
+  '0.1.0-linux-alpha.106'
+  '0.1.0-linux-alpha.107'
+  '0.1.0-linux-alpha.108'
+  '0.1.0-linux-alpha.109'
+  '0.1.0-linux-alpha.110'
+  '0.1.0-linux-alpha.111'
+  '0.1.0-linux-alpha.112'
+  '0.11.0-beta.0.184'
+  '0.11.0-beta.0.185'
+  '0.11.0-beta.0.187'
+  '0.11.0-beta.0.193'
+  '0.11.0-beta.0.197'
+  '0.11.0-beta.0.208'
+  '0.11.0-beta.0.210'
+)
+
+# Whether a build version is one of those published before the encoding.
+okp_is_pre_encoding_version() {
+  local candidate="${1-}" published
+  for published in "${OKP_DEBIAN_PRE_ENCODING_VERSIONS[@]}"; do
+    [[ "$candidate" == "$published" ]] && return 0
+  done
+  return 1
+}
+
 # A build version this packaging can encode reversibly.
 #
 # The refusals are the point: `~` and `:` are the two characters the encoding uses to mean

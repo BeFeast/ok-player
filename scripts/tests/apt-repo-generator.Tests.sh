@@ -1100,6 +1100,35 @@ else
   fail "raw release control" "status ${raw_release_status}, output: ${raw_release_output}"
 fi
 
+# --- Negative control: an unencoded prerelease that was never published ----------------------
+# The exception is a closed list, not a rule, and this is why. `0.11.0-alpha.999` is a
+# prerelease, is unencoded, and dpkg sorts it below the pre-encoding high-water mark — so a rule
+# phrased in those terms admits it, even though no lane ever published it. Admitting it would
+# mean a package from a regressed or unrecognised lane bypasses every encoding and ordering
+# assertion in this function.
+if dpkg --compare-versions 0.11.0-alpha.999 le 0.11.0-beta.0.208; then
+  pass "the premise: dpkg sorts a never-published raw prerelease below the pre-encoding tail"
+else
+  fail "unpublished prerelease premise" "dpkg no longer sorts 0.11.0-alpha.999 low"
+fi
+if okp_is_pre_encoding_version 0.11.0-alpha.999; then
+  fail "published set" "0.11.0-alpha.999 is not a version this archive ever published"
+else
+  pass "a never-published version is not in the pre-encoding set"
+fi
+STAGE_UNPUBLISHED="$WORK/stage-unpublished"
+make_deb 0.11.0-alpha.999 "$STAGE_UNPUBLISHED" 0.11.0-alpha.999
+build_repo "$STAGE_UNPUBLISHED" "$WORK/run-unpublished" >/dev/null
+set +e
+unpublished_output="$(assert_scheme "$WORK/run-unpublished")"
+unpublished_status=$?
+set -e
+if ((unpublished_status != 0)) && grep -q 'encodes to' <<<"$unpublished_output"; then
+  pass "an unencoded version that was never published is not admitted as legacy"
+else
+  fail "unpublished control" "status ${unpublished_status}, output: ${unpublished_output}"
+fi
+
 # --- Negative control: the encoding disagrees with the build it is named for ----------------
 STAGE_MISMATCH="$WORK/stage-mismatch"
 make_deb 0.11.0-beta.0.209 "$STAGE_MISMATCH" "$(okp_debian_version_for_build 0.11.0-beta.0.210)"
