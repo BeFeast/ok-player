@@ -103,14 +103,19 @@ pub fn companion_content_height(
     content_natural.clamp(floor, cap)
 }
 
-/// Whether a companion window's height has stopped being the shell's to choose.
+/// Whether a companion window's size has stopped being the shell's to choose.
 ///
-/// `applied` is the last height the shell asked for and `observed` is the height the window
-/// actually has. Any difference means someone else decided - the reader dragging an edge, or
-/// a compositor placing the window - and a height chosen out there outranks a height a page
-/// wants, so automatic sizing ends for the session.
-pub fn companion_height_taken_over(applied: i32, observed: i32) -> bool {
-    observed > 0 && observed != applied
+/// `applied` is the last size the shell asked for and `observed` is the size the window
+/// actually has. A difference in either dimension means someone else decided - the reader
+/// dragging any edge, or a compositor placing the window - and a size chosen out there
+/// outranks a size a page wants, so automatic sizing ends for the session. Width counts as
+/// much as height: a page is measured at the width it will be laid out at, so a window the
+/// reader widened has to be left alone as much as one they made shorter.
+pub fn companion_size_taken_over(applied: WindowSize, observed: WindowSize) -> bool {
+    if observed.width <= 0 || observed.height <= 0 {
+        return false;
+    }
+    observed != applied
 }
 
 #[cfg(test)]
@@ -225,15 +230,39 @@ mod tests {
     }
 
     #[test]
-    fn a_height_the_shell_did_not_ask_for_ends_automatic_sizing() {
-        let applied = companion_content_height(CompanionWindowKind::Settings, 753, 0, 1032);
+    fn a_size_the_shell_did_not_ask_for_ends_automatic_sizing() {
+        let height = companion_content_height(CompanionWindowKind::Settings, 753, 0, 1032);
+        let applied = WindowSize { width: 760, height };
         // The window is the size it was asked to be: still the shell's to grow.
-        assert!(!companion_height_taken_over(applied, 753));
+        assert!(!companion_size_taken_over(applied, applied));
         // Dragged shorter by hand, or placed by a compositor: no longer.
-        assert!(companion_height_taken_over(applied, 620));
-        assert!(companion_height_taken_over(applied, 900));
+        assert!(companion_size_taken_over(
+            applied,
+            WindowSize {
+                width: 760,
+                height: 620,
+            }
+        ));
+        // Dragged only sideways counts too: the page is measured at that width.
+        assert!(companion_size_taken_over(
+            applied,
+            WindowSize { width: 900, height }
+        ));
         // An unmapped window has no allocation yet and decides nothing.
-        assert!(!companion_height_taken_over(applied, 0));
+        assert!(!companion_size_taken_over(
+            applied,
+            WindowSize {
+                width: 0,
+                height: 0,
+            }
+        ));
+        assert!(!companion_size_taken_over(
+            applied,
+            WindowSize {
+                width: 760,
+                height: 0,
+            }
+        ));
     }
 
     #[test]

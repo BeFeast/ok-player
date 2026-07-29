@@ -9,7 +9,9 @@ pub(crate) struct SettingsPageBuilder {
     window: glib::WeakRef<gtk::Window>,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
-    max_body_height: i32,
+    /// Shared with [`SettingsAutoHeight`], which raises it when the window moves to a taller
+    /// monitor. A page built afterwards has to be allowed the new room too.
+    max_body_height: Rc<Cell<i32>>,
 }
 
 impl SettingsPageBuilder {
@@ -171,7 +173,7 @@ impl SettingsPageBuilder {
         };
 
         stack.add_named(
-            &settings_scroller(&content, self.max_body_height),
+            &settings_scroller(&content, self.max_body_height.get()),
             Some(page.id()),
         );
     }
@@ -215,7 +217,9 @@ pub(crate) fn open_settings_window(
     }
 
     let work_area_height = settings_window_height_cap(parent);
-    let max_body_height = (work_area_height - SETTINGS_TITLEBAR_HEIGHT).max(1);
+    let max_body_height = Rc::new(Cell::new(
+        (work_area_height - SETTINGS_TITLEBAR_HEIGHT).max(1),
+    ));
     let window = build_companion_window(parent, &state, CompanionWindowKind::Settings, "Settings");
     window.add_css_class("okp-settings-window");
     apply_settings_window_theme(&window, state.borrow().settings.appearance_theme());
@@ -250,14 +254,15 @@ pub(crate) fn open_settings_window(
         window: window.downgrade(),
         state: Rc::clone(&state),
         status_toast: Rc::clone(&status_toast),
-        max_body_height,
+        max_body_height: Rc::clone(&max_body_height),
     });
     page_builder.ensure_page(&stack, initial_page);
 
     stack.set_visible_child_name(initial_page.id());
     let (rail, search) = settings_nav_rail(&stack, initial_page, Rc::clone(&page_builder));
     connect_settings_search_shortcut(&window, &search);
-    body.append(&settings_nav_rail_frame(rail, max_body_height));
+    let rail_frame = settings_nav_rail_frame(rail, max_body_height.get());
+    body.append(&rail_frame);
 
     stack.set_size_request(SETTINGS_CONTENT_WIDTH, -1);
     stack.set_hexpand(true);
@@ -273,7 +278,16 @@ pub(crate) fn open_settings_window(
     window.set_child(Some(&window_overlay));
     connect_companion_play_pause_space(&window, Rc::clone(&state));
 
-    let auto_height = SettingsAutoHeight::connect(&window, &root, work_area_height);
+    let auto_height = SettingsAutoHeight::connect(
+        &window,
+        &root,
+        SettingsBodyCaps {
+            stack: stack.clone(),
+            rail_frame,
+            max_body_height,
+        },
+        work_area_height,
+    );
     let resize_stack = stack.clone();
     let resize_height = Rc::clone(&auto_height);
     stack.connect_visible_child_name_notify(move |_| {
@@ -392,24 +406,60 @@ pub(crate) fn settings_window_height_cap_for_monitor(monitor_height: i32) -> i32
 pub(crate) struct SettingsAutoHeight {
     window: glib::WeakRef<gtk::Window>,
     content: gtk::Widget,
+    caps: SettingsBodyCaps,
     /// The cap resolved when the window opened. Only a fallback: the monitor a window is on
     /// can change while it is open, so each fit re-reads the work area it is actually on.
     opening_work_area_height: i32,
-    applied: Cell<i32>,
+    applied: Cell<window_fit::WindowSize>,
     taken_over: Cell<bool>,
+}
+
+/// Everything inside the window that carries a copy of "how tall a body may be".
+///
+/// Each scroller stops reporting a natural height once it reaches its own cap, so a window
+/// that moves to a taller monitor has to raise these before it measures anything - otherwise
+/// the new room exists only in the window and the page still says it needs no more than the
+/// old monitor allowed.
+pub(crate) struct SettingsBodyCaps {
+    stack: gtk::Stack,
+    rail_frame: gtk::ScrolledWindow,
+    max_body_height: Rc<Cell<i32>>,
+}
+
+impl SettingsBodyCaps {
+    /// Raise or lower every body cap to the room a window of `window_height` leaves.
+    fn apply(&self, work_area_height: i32) {
+        let body = (work_area_height - SETTINGS_TITLEBAR_HEIGHT).max(1);
+        if self.max_body_height.replace(body) == body {
+            return;
+        }
+        self.rail_frame.set_max_content_height(body);
+        let mut child = self.stack.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if let Ok(scroller) = current.downcast::<gtk::ScrolledWindow>() {
+                scroller.set_max_content_height(body);
+            }
+        }
+    }
 }
 
 impl SettingsAutoHeight {
     fn connect(
         window: &gtk::Window,
         content: &impl IsA<gtk::Widget>,
+        caps: SettingsBodyCaps,
         work_area_height: i32,
     ) -> Rc<Self> {
         let auto = Rc::new(Self {
             window: window.downgrade(),
             content: content.clone().upcast(),
+            caps,
             opening_work_area_height: work_area_height,
-            applied: Cell::new(window.default_height()),
+            applied: Cell::new(window_fit::WindowSize {
+                width: window.default_width(),
+                height: window.default_height(),
+            }),
             taken_over: Cell::new(false),
         });
 
@@ -418,16 +468,28 @@ impl SettingsAutoHeight {
         // a resize the shell never asked for; the mapped allocation is checked at every fit
         // as well, because the drag handles of this captionless window go through the
         // compositor and need not touch the request property at all.
-        let watched = Rc::clone(&auto);
+        let watched_height = Rc::clone(&auto);
         window.connect_default_height_notify(move |window| {
-            watched.observe(window.default_height());
+            watched_height.observe_window(window);
+        });
+        let watched_width = Rc::clone(&auto);
+        window.connect_default_width_notify(move |window| {
+            watched_width.observe_window(window);
         });
         auto
     }
 
-    /// Record a height the window has, and stop sizing it if the shell did not ask for it.
-    fn observe(&self, height: i32) {
-        if companion_window_core::companion_height_taken_over(self.applied.get(), height) {
+    /// Record the size the window is requesting, from either dimension's notification.
+    fn observe_window(&self, window: &gtk::Window) {
+        self.observe(window_fit::WindowSize {
+            width: window.default_width(),
+            height: window.default_height(),
+        });
+    }
+
+    /// Record a size the window has, and stop sizing it if the shell did not ask for it.
+    fn observe(&self, size: window_fit::WindowSize) {
+        if companion_window_core::companion_size_taken_over(self.applied.get(), size) {
             self.taken_over.set(true);
         }
     }
@@ -438,27 +500,38 @@ impl SettingsAutoHeight {
             return;
         };
         if window.is_mapped() {
-            self.observe(window.height());
+            self.observe(window_fit::WindowSize {
+                width: window.width(),
+                height: window.height(),
+            });
         }
         if self.taken_over.get() {
             return;
         }
+        // The body caps come first: a page cannot ask for room its own scroller has already
+        // capped away, so moving to a taller monitor has to reach them before measuring.
+        let work_area_height = self.work_area_height(&window);
+        self.caps.apply(work_area_height);
         // Keep whatever width the window was clamped to: a work area narrower than the
         // reference shell is the one case where widening to it would hang off the display,
         // and the page has to be measured at the width it will actually be laid out at.
+        let applied = self.applied.get();
         let width = window.default_width().max(1);
         let (_, natural, _, _) = self.content.measure(gtk::Orientation::Vertical, width);
-        let height = companion_window_core::companion_content_height(
-            CompanionWindowKind::Settings,
-            natural,
-            self.applied.get(),
-            self.work_area_height(&window),
-        );
-        if height == self.applied.get() {
+        let size = window_fit::WindowSize {
+            width,
+            height: companion_window_core::companion_content_height(
+                CompanionWindowKind::Settings,
+                natural,
+                applied.height,
+                work_area_height,
+            ),
+        };
+        if size == applied {
             return;
         }
-        self.applied.set(height);
-        window.set_default_size(width, height);
+        self.applied.set(size);
+        window.set_default_size(size.width, size.height);
     }
 
     /// The cap that applies right now: the work area of the monitor the window is on, which

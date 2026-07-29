@@ -62,7 +62,8 @@ back and re-running it:
 | About footer flows after the cards again | `the rail rule sits at y=717 and the page rule at y=694` |
 | Footer children stop declaring an alignment | `the footer button centres on y=723 and its links on y=717` |
 | Rules reported but painted transparent | `rail_rule: no rule is painted at y=694` |
-| Shell stops noticing a height it did not ask for | `a page change resized a hand-sized window from 620px to 1032px` |
+| Shell stops noticing a size it did not ask for | `a page change resized a window sized by hand (height) from 620px to 1032px` |
+| Shell watches only the height, so a sideways drag does not count | `a page change resized a window sized by hand (width) from 753px to 1956px` |
 
 Two claims deliberately carry no assertion, because nothing in this harness can make them
 fail: on a display smaller than the reference shell the window is held at 760x432 by GTK and
