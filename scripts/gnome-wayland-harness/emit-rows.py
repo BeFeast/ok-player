@@ -43,6 +43,16 @@ def main() -> int:
     parser.add_argument("--artifacts", required=True, help="directory of captured artefacts")
     parser.add_argument("--facts", required=True, help="session facts JSON")
     parser.add_argument("--harness-revision", required=True)
+    parser.add_argument(
+        "--package-sha256",
+        required=True,
+        help="digest of the exact package the harness drove; binds the rows to it",
+    )
+    parser.add_argument(
+        "--rows",
+        default="",
+        help="comma-separated states to emit; empty means every automatable row",
+    )
     parser.add_argument("--execution-environment-sha256", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
@@ -55,12 +65,23 @@ def main() -> int:
         "monitors": facts["monitors"],
         "harness_revision": args.harness_revision,
         "input_injector": facts["input_injector"],
+        "package_sha256": args.package_sha256,
     }
+
+    # A caller asking for a subset gets exactly that subset. Emitting the rest as
+    # `not-run` would overwrite states an earlier run already collected, because the merge
+    # replaces rows by state.
+    selected = [state.strip() for state in args.rows.split(",") if state.strip()]
+    unknown = [state for state in selected if state not in AUTOMATABLE]
+    if unknown:
+        print(f"emit-rows: not automatable: {', '.join(unknown)}", file=sys.stderr)
+        return 3
+    wanted = selected or list(AUTOMATABLE)
 
     results = pathlib.Path(args.results)
     artifacts = pathlib.Path(args.artifacts)
     rows = []
-    for state in AUTOMATABLE:
+    for state in wanted:
         result_file = results / f"{state}.result"
         status = "not-run"
         note = "the check did not run"

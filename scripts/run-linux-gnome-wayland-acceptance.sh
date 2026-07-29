@@ -22,12 +22,15 @@ AIM="$ROOT/scripts/wayland-drag-harness/aim.py"
 BINARY=""
 FIXTURE=""
 OUT_DIR=""
-ROWS="gnome-file-chooser,wayland-clipboard,desktop-portal,wayland-compositor-fullscreen,wayland-double-click-fullscreen,wayland-always-on-top-unavailable,keyboard-focus-navigation"
+ALL_ROWS="gnome-file-chooser,wayland-clipboard,desktop-portal,wayland-compositor-fullscreen,wayland-double-click-fullscreen,wayland-always-on-top-unavailable,keyboard-focus-navigation"
+ROWS="$ALL_ROWS"
+PACKAGE_SHA256=""
 NEGATIVE_CONTROL="${OKP_ACCEPTANCE_NEGATIVE_CONTROL:-}"
 
 usage() {
   cat >&2 <<'EOF'
-usage: run-linux-gnome-wayland-acceptance.sh --binary PATH --fixture PATH --out DIR [--rows a,b,c]
+usage: run-linux-gnome-wayland-acceptance.sh --binary PATH --fixture PATH --out DIR \
+         --package-sha256 SHA256 [--rows a,b,c] [--negative-control ROW]
 
 Runs on a live GNOME/Wayland session. Refuses anything else.
 EOF
@@ -38,7 +41,10 @@ while [[ $# -gt 0 ]]; do
     --binary) BINARY="${2:?}"; shift 2 ;;
     --fixture) FIXTURE="${2:?}"; shift 2 ;;
     --out) OUT_DIR="${2:?}"; shift 2 ;;
-    --rows) ROWS="${2:?}"; shift 2 ;;
+    # An empty selector means every automatable row, so a dispatch that leaves the
+    # input blank runs the full set instead of failing on an empty argument.
+    --rows) ROWS="${2-}"; [[ -n "$ROWS" ]] || ROWS="$ALL_ROWS"; shift 2 ;;
+    --package-sha256) PACKAGE_SHA256="${2:?}"; shift 2 ;;
     --negative-control) NEGATIVE_CONTROL="${2:?}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage; exit 64 ;;
@@ -48,6 +54,12 @@ done
 [[ -x "$BINARY" ]] || { echo "missing or non-executable --binary: $BINARY" >&2; exit 64; }
 [[ -f "$FIXTURE" ]] || { echo "missing --fixture: $FIXTURE" >&2; exit 64; }
 [[ -n "$OUT_DIR" ]] || { usage; exit 64; }
+# Rows merge by state, so evidence that does not name the bytes it exercised could land in
+# another candidate's manifest unnoticed.
+[[ "$PACKAGE_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || {
+  echo "--package-sha256 must be the 64-character digest of the package under test" >&2
+  exit 64
+}
 
 for tool in ydotool ydotoold wl-paste wl-copy dbus-monitor python3 gst-launch-1.0 sha256sum; do
   command -v "$tool" >/dev/null 2>&1 || { echo "missing required tool: $tool" >&2; exit 127; }
@@ -151,7 +163,17 @@ grep -q 'interaction: geometry part=window' "$APP_LOG" || {
 key() { ydotool key "$@"; }
 aim_click() { python3 "$AIM" --log "$APP_LOG" --part "${1:-video}" click; }
 aim_target() { python3 "$AIM" --log "$APP_LOG" --part "${1:-video}" target; }
-capture() { python3 "$HARNESS/capture-screen.py" "$ARTIFACTS/$1"; }
+# The composited frame is only evidence if it shows the monitor the player is on; on a
+# multi-head session the first connector Mutter lists is frequently a different one.
+capture() {
+  local connector
+  connector="$(geometry_field window monitor)"
+  [[ -n "$connector" && "$connector" != "unknown" ]] || {
+    echo "the app reports no monitor, so no capture can be aimed at it" >&2
+    return 1
+  }
+  python3 "$HARNESS/capture-screen.py" "$ARTIFACTS/$1" "$connector"
+}
 excerpt() { grep -E "$1" "$APP_LOG" | tail -40 >"$ARTIFACTS/$2" || true; }
 
 # Newest value of one key on one part of the geometry record.
@@ -379,5 +401,7 @@ python3 "$HARNESS/emit-rows.py" \
   --artifacts "$ARTIFACTS" \
   --facts "$OUT_DIR/session-facts.json" \
   --harness-revision "$HARNESS_REVISION" \
+  --package-sha256 "$PACKAGE_SHA256" \
   --execution-environment-sha256 "$EXECUTION_SHA256" \
+  --rows "$ROWS" \
   --output "$OUT_DIR/gnome-wayland-rows.json"

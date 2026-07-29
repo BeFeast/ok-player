@@ -87,13 +87,17 @@ cat >"$facts" <<'JSON'
 }
 JSON
 
+PACKAGE_SHA256="$(printf 'a%.0s' $(seq 64))"
+
 emit() {
   local results="$1" artifacts="$2" output="$3"
+  shift 3
   python3 "$HARNESS/emit-rows.py" \
     --results "$results" --artifacts "$artifacts" --facts "$facts" \
     --harness-revision "$(printf 'c%.0s' $(seq 40))" \
+    --package-sha256 "$PACKAGE_SHA256" \
     --execution-environment-sha256 "$(printf 'e%.0s' $(seq 64))" \
-    --output "$output"
+    --output "$output" "$@"
 }
 
 results="$WORK/results"; artifacts="$WORK/artifacts"
@@ -136,6 +140,52 @@ else
   fail "the harness emitted an operator-only row"
 fi
 
+# A passing row names the exact bytes it exercised, or it could be merged into another
+# candidate's manifest without anything noticing.
+python3 - "$WORK/rows.json" "$PACKAGE_SHA256" <<'PY'
+import json, sys
+rows = {row["id"]: row for row in json.load(open(sys.argv[1]))}
+assert rows["wayland-clipboard"]["automation"]["package_sha256"] == sys.argv[2]
+PY
+if [[ $? -eq 0 ]]; then
+  ok "a passing row is bound to the package digest under test"
+else
+  fail "a passing row does not name the package it exercised"
+fi
+
+# A subset selection emits that subset only: emitting the rest as not-run would overwrite
+# states an earlier run already collected, because the merge replaces rows by state.
+emit "$results" "$artifacts" "$WORK/subset.json" --rows wayland-clipboard >/dev/null
+python3 - "$WORK/subset.json" <<'PY'
+import json, sys
+rows = json.load(open(sys.argv[1]))
+assert [row["id"] for row in rows] == ["wayland-clipboard"], rows
+PY
+if [[ $? -eq 0 ]]; then
+  ok "a subset selection emits only the selected rows"
+else
+  fail "a subset selection must not emit the unselected states"
+fi
+
+# An empty selection is the whole automatable set, which is what the workflow advertises.
+emit "$results" "$artifacts" "$WORK/empty.json" --rows "" >/dev/null
+python3 - "$WORK/empty.json" <<'PY'
+import json, sys
+assert len(json.load(open(sys.argv[1]))) == 7
+PY
+if [[ $? -eq 0 ]]; then
+  ok "an empty selection means every automatable row"
+else
+  fail "an empty selection must mean every automatable row"
+fi
+
+# Naming an operator-only row is a hard error, not a quietly emitted extra row.
+if emit "$results" "$artifacts" "$WORK/operator.json" --rows wayland-drag-drop >/dev/null 2>&1; then
+  fail "an operator-only row must be refused by the selector"
+else
+  ok "the selector refuses an operator-only row"
+fi
+
 # An unusable status is a hard error, never a silent downgrade to not-run.
 printf 'probably\n' >"$results/desktop-portal.result"
 if emit "$results" "$artifacts" "$WORK/bad.json" >/dev/null 2>&1; then
@@ -156,12 +206,23 @@ printf '#!/bin/sh\nexit 0\n' >"$WORK/binary"; chmod +x "$WORK/binary"
 : >"$WORK/fixture.mp4"
 
 output="$(PATH="$fake_bin:$PATH" XDG_SESSION_TYPE=x11 WAYLAND_DISPLAY= \
-  "$RUNNER" --binary "$WORK/binary" --fixture "$WORK/fixture.mp4" --out "$WORK/x11" 2>&1)"
+  "$RUNNER" --binary "$WORK/binary" --fixture "$WORK/fixture.mp4" --out "$WORK/x11" \
+  --package-sha256 "$PACKAGE_SHA256" 2>&1)"
 status=$?
 if (( status != 0 )) && [[ "$output" == *"not a wayland session"* ]]; then
   ok "the harness refuses to attest an X11 session"
 else
   fail "the harness must refuse a non-Wayland session (status=$status): $output"
+fi
+
+# Evidence with no package digest is evidence about nothing in particular.
+output="$(PATH="$fake_bin:$PATH" \
+  "$RUNNER" --binary "$WORK/binary" --fixture "$WORK/fixture.mp4" --out "$WORK/nodigest" 2>&1)"
+status=$?
+if (( status != 0 )) && [[ "$output" == *"--package-sha256"* ]]; then
+  ok "the harness refuses to run without the package digest under test"
+else
+  fail "the harness must require the package digest (status=$status): $output"
 fi
 
 if (( failures == 0 )); then

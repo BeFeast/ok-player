@@ -808,6 +808,13 @@ pub struct AutomationAttestation {
     pub harness_revision: String,
     /// How real input reached the seat, for example `uinput`.
     pub input_injector: String,
+    /// SHA-256 of the exact package the harness drove.
+    ///
+    /// Without it a passing live row says nothing about *which* bytes passed: rows merge
+    /// by state, so a run against one candidate would drop silently into another
+    /// candidate's manifest. The validator requires this to name an artifact of the
+    /// package the manifest is bound to.
+    pub package_sha256: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -1037,7 +1044,17 @@ impl EvidenceManifest {
             if row.automated_status == EvidenceStatus::Pass {
                 match row.automation.as_ref() {
                     Some(attestation) => {
-                        validate_automation_attestation(&row.id, attestation, &mut errors)
+                        validate_automation_attestation(&row.id, attestation, &mut errors);
+                        if !self.package.artifacts.iter().any(|artifact| {
+                            artifact
+                                .sha256
+                                .eq_ignore_ascii_case(&attestation.package_sha256)
+                        }) {
+                            errors.push(format!(
+                                "{}: automated evidence names package {} , which is not an artifact of this candidate",
+                                row.id, attestation.package_sha256
+                            ));
+                        }
                     }
                     None => errors.push(format!(
                         "{}: automated PASS requires a session attestation",
@@ -1504,6 +1521,11 @@ fn validate_automation_attestation(
         &attestation.harness_revision,
         errors,
     );
+    validate_sha256(
+        &format!("{row_id} automation package_sha256"),
+        &attestation.package_sha256,
+        errors,
+    );
     if attestation.monitors.is_empty() {
         errors.push(format!(
             "{row_id}: automation attestation records no monitor layout"
@@ -1615,6 +1637,7 @@ mod tests {
             }],
             harness_revision: "c".repeat(40),
             input_injector: "uinput".to_owned(),
+            package_sha256: "a".repeat(64),
         }
     }
 
@@ -1714,6 +1737,28 @@ mod tests {
                 "{errors:?}"
             );
         }
+    }
+
+    #[test]
+    fn automated_evidence_must_name_an_artifact_of_this_candidate() {
+        let mut manifest = passing_manifest();
+        automate(&mut manifest, "wayland-clipboard");
+        manifest
+            .rows
+            .iter_mut()
+            .find(|row| row.state == "wayland-clipboard")
+            .expect("row")
+            .automation
+            .as_mut()
+            .expect("attestation")
+            .package_sha256 = "9".repeat(64);
+        let errors = manifest.validate_contract().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("not an artifact of this candidate")),
+            "{errors:?}"
+        );
     }
 
     #[test]

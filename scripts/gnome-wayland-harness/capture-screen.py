@@ -58,19 +58,32 @@ def main() -> int:
         None,
     )
 
-    if connector is None:
-        display = Gio.DBusProxy.new_sync(
-            bus,
-            Gio.DBusProxyFlags.NONE,
-            None,
-            "org.gnome.Mutter.DisplayConfig",
-            "/org/gnome/Mutter/DisplayConfig",
-            "org.gnome.Mutter.DisplayConfig",
-            None,
-        )
-        connector = display.call_sync(
+    display = Gio.DBusProxy.new_sync(
+        bus,
+        Gio.DBusProxyFlags.NONE,
+        None,
+        "org.gnome.Mutter.DisplayConfig",
+        "/org/gnome/Mutter/DisplayConfig",
+        "org.gnome.Mutter.DisplayConfig",
+        None,
+    )
+    attached = [
+        monitor[0][0]
+        for monitor in display.call_sync(
             "GetCurrentState", None, Gio.DBusCallFlags.NONE, 5000, None
-        ).unpack()[1][0][0][0]
+        ).unpack()[1]
+    ]
+    if connector is None:
+        # Only safe when there is nothing to choose between; on a multi-head session a
+        # frame of the wrong monitor would look exactly like evidence.
+        if len(attached) != 1:
+            fail(
+                "this session has several monitors: name the one the capture must show "
+                f"({', '.join(attached)})"
+            )
+        connector = attached[0]
+    elif connector not in attached:
+        fail(f"no monitor named {connector!r} is attached ({', '.join(attached)})")
 
     stream_path = session.call_sync(
         "RecordMonitor",

@@ -90,7 +90,9 @@ jobs:
           mkdir -p artifacts/extracted
           dpkg-deb -x "$deb" artifacts/extracted
           echo "OKP_TEST_BINARY=$PWD/artifacts/extracted/usr/bin/ok-player" >>"$GITHUB_ENV"
-          echo "OKP_TEST_DEB=$deb" >>"$GITHUB_ENV"
+          # The rows carry this digest, and the validator refuses evidence that does not
+          # name an artifact of the candidate it is merged into.
+          echo "OKP_TEST_PACKAGE_SHA256=$(sha256sum "$deb" | awk '{print $1}')" >>"$GITHUB_ENV"
 
       - name: Generate the media fixture
         shell: bash
@@ -114,6 +116,7 @@ jobs:
             --binary "$OKP_TEST_BINARY" \
             --fixture "$PWD/artifacts/fixture/acceptance.mp4" \
             --out "$PWD/artifacts/gnome-wayland" \
+            --package-sha256 "$OKP_TEST_PACKAGE_SHA256" \
             --rows "${{ inputs.rows }}"
 
       - name: Check the rows against the evidence contract
@@ -124,12 +127,15 @@ jobs:
           # The manifest a release consumes is assembled from the operator template; this
           # step only proves the harness rows themselves satisfy the contract they claim.
           python3 - <<'PY'
-          import json, pathlib, sys
+          import json, os, pathlib, sys
           rows = json.loads(pathlib.Path("artifacts/gnome-wayland/gnome-wayland-rows.json").read_text())
+          expected = os.environ["OKP_TEST_PACKAGE_SHA256"]
           bad = [r["id"] for r in rows if r["automated_status"] != "pass"]
           for row in rows:
               assert row["level"] == "gnome-wayland-automated", row["id"]
               assert row["operator_status"] == "not-run", row["id"]
+              if row["automated_status"] == "pass":
+                  assert row["automation"]["package_sha256"] == expected, row["id"]
           if bad:
               print("rows not passing: " + ", ".join(bad))
               sys.exit(1)
