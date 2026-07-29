@@ -5050,6 +5050,51 @@ fn answers_about_a_replaced_file_do_not_spend_the_next_files_budget() {
     assert_eq!(answers.about(second), 0);
 }
 
+/// The `.deb` lane hands `dpkg-query`'s version string to the shared ordering,
+/// which is only sound while the two comparators agree about the shapes this
+/// packaging emits. `scripts/package-linux-deb.sh` sets `Version:` to the build
+/// version verbatim, so every comparison is between two `X.Y.Z-<tail>` strings
+/// of the same family; the expected answers below are `dpkg --compare-versions`'
+/// own, taken from dpkg 1.22 on the Debian QA host.
+///
+/// They part company as soon as one side has no tail at all: dpkg reads
+/// everything after the last `-` as a Debian revision, so it ranks
+/// `0.11.0-beta.0.208` *above* `0.11.0`, where the shared ordering ranks a
+/// release above the prereleases that led to it. That shape cannot come out of
+/// this packaging today — and the same rule is why apt would refuse the stable
+/// release as a downgrade — so it is tracked as a packaging question in #709
+/// rather than papered over in the watch.
+#[test]
+fn the_deb_lane_orders_its_own_version_shapes_the_way_dpkg_does() {
+    use okp_core::update_lifecycle::{ReportedVersion, compare_reported_build_order};
+
+    for (older, newer) in [
+        ("0.11.0-beta.0.208", "0.11.0-beta.0.209"),
+        ("0.11.0-beta.0.208", "0.11.0-beta.0.1000"),
+        ("0.11.0-beta.0.9", "0.11.0-beta.0.10"),
+        ("0.11.0-beta.1", "0.11.0-beta.2"),
+        ("0.11.0-beta.0.208", "0.12.0-beta.0.1"),
+        ("0.11.0-alpha.109", "0.11.0-beta.1"),
+    ] {
+        assert_eq!(
+            compare_reported_build_order(
+                &ReportedVersion::complete(newer),
+                &ReportedVersion::complete(older),
+            ),
+            Some(std::cmp::Ordering::Greater),
+            "{newer} is newer than {older} to dpkg; the watch must agree"
+        );
+        assert_eq!(
+            compare_reported_build_order(
+                &ReportedVersion::complete(older),
+                &ReportedVersion::complete(newer),
+            ),
+            Some(std::cmp::Ordering::Less),
+            "and {older} must not be announced as a restart onto {newer}"
+        );
+    }
+}
+
 /// Every preview state is reached by walking real transitions, so the visual
 /// smoke fixtures cannot show a state the lifecycle cannot produce.
 #[test]
