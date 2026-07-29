@@ -345,15 +345,255 @@ fn night_gui_runs_headless_window_regressions_before_the_live_seat_gate() {
 #[test]
 fn narrow_width_portability_capture_uses_a_long_lived_dark_fixture() {
     let narrow = include_str!("../../../../scripts/smoke-linux-narrow-width.sh");
+    // The fixture has to outlast the readiness wait and the bounded re-captures, in
+    // the smoke's own default and in the caller that hands it a clip of its own.
     assert!(narrow.contains("FIXTURE=\"${3:-}\""));
-    assert!(narrow.contains("color=c=0x101010:s=640x360:r=2:d=30"));
-    let delayed_capture = narrow.find("sleep 6").expect("delayed capture wait");
-    let screenshot = narrow.find("import -window").expect("window screenshot");
-    assert!(delayed_capture < screenshot);
-
+    assert!(narrow.contains("color=c=0x101010:s=640x360:r=2:d=120"));
     let portability = include_str!("../../../../scripts/verify-linux-package-portability.sh");
     assert!(portability.contains("\"$scratch/dark.mkv\""));
-    assert!(portability.contains("color=c=0x101010:s=640x360:r=2:d=30"));
+    assert!(portability.contains("color=c=0x101010:s=640x360:r=2:d=120"));
+
+    // Readiness is a condition the shell publishes (#690), not a sleep, and it is
+    // exercised here rather than read: the helpers below are the smoke's own text,
+    // driven over a synthetic record.
+    let helpers = shell_section(
+        narrow,
+        "geometry_field() {",
+        "\n\n# Load the fixture clip",
+        "narrow-width geometry helpers",
+    );
+    let root = unique_temp_dir("okp-narrow-width-readiness");
+    let readiness = format!(
+        r#"set -euo pipefail
+OUT_DIR={out}
+mkdir -p "$OUT_DIR"
+NARROW_WIDTH=480
+app_pid=$$
+sleep() {{ return 0; }}
+xdotool() {{ return 0; }}
+{helpers}
+
+# One published record: the window line, the welcome plane whose targetability
+# distinguishes playback from the idle canvas, and whichever chrome planes are
+# mapped at that moment.
+record() {{
+  local seq="$1" width="$2" welcome_interactive="$3"
+  shift 3
+  printf 'interaction: geometry part=window reason=resize seq=%s w=%s.0 h=540.0\n' \
+    "$seq" "$width" >>"$OUT_DIR/app.log"
+  printf 'interaction: geometry part=welcome reason=resize seq=%s w=%s.0 h=540.0 interactive=%s\n' \
+    "$seq" "$width" "$welcome_interactive" >>"$OUT_DIR/app.log"
+  local plane
+  for plane in "$@"; do
+    printf 'interaction: geometry part=%s reason=resize seq=%s w=316.0 h=220.0 interactive=1\n' \
+      "$plane" "$seq" >>"$OUT_DIR/app.log"
+  done
+}}
+verdict() {{ if "$1"; then printf '%s=yes\n' "$2"; else printf '%s=no\n' "$2"; fi; }}
+always_false() {{ return 1; }}
+
+: >"$OUT_DIR/app.log"
+verdict window_is_mapped mapped_before_any_record
+record 1 1120 0 osc side-panel
+verdict window_is_mapped mapped_after_first_record
+verdict narrow_chrome_is_laid_out narrow_while_wide
+# The chrome planes stop being published once they unmap, so the newest record has
+# to own them - an older seq is a stale rectangle, not a surface on screen. Each is
+# required on its own, so neither can stand in for the other.
+record 2 480 0
+verdict narrow_chrome_is_laid_out narrow_without_current_chrome
+record 3 480 0 side-panel
+verdict narrow_chrome_is_laid_out narrow_without_current_osc
+record 4 480 0 osc
+verdict narrow_chrome_is_laid_out narrow_without_current_panel
+record 5 480 0 osc side-panel
+verdict narrow_chrome_is_laid_out narrow_with_current_chrome
+verdict playback_surface_is_live playback_live
+# Playback ended: the welcome canvas is targetable again, so the OSC assertions
+# would be reading the wrong surface.
+record 6 480 1 osc side-panel
+verdict playback_surface_is_live playback_after_idle_return
+verdict narrow_chrome_is_laid_out narrow_after_idle_return
+record 7 480 0 osc side-panel
+
+# Settling, observed over a record that is still moving: the shell keeps
+# republishing while the wait runs, and pauses in the middle long enough to look
+# finished. A wait that returns on the first agreeing pair reports the seq from
+# that pause; the real one holds out for the last record.
+sleep_calls=0
+sleep() {{
+  sleep_calls=$((sleep_calls + 1))
+  case "$sleep_calls" in
+    1|2|3) record $((7 + sleep_calls)) 480 0 osc side-panel ;;
+    6) record 20 480 0 osc side-panel ;;
+  esac
+  return 0
+}}
+settled_line="$(wait_for_geometry settled narrow_chrome_is_laid_out 60)"
+printf 'settled_at=%s\n' "${{settled_line##*seq=}}"
+sleep() {{ return 0; }}
+if wait_for_geometry never always_false 3 >/dev/null 2>&1; then
+  printf 'gives_up=no\n'
+else
+  printf 'gives_up=yes\n'
+fi
+"#,
+        out = root.path().display()
+    );
+    let observed = run_probe(&readiness, "narrow-width readiness probe");
+    assert_eq!(
+        observed,
+        "mapped_before_any_record=no\n\
+         mapped_after_first_record=yes\n\
+         narrow_while_wide=no\n\
+         narrow_without_current_chrome=no\n\
+         narrow_without_current_osc=no\n\
+         narrow_without_current_panel=no\n\
+         narrow_with_current_chrome=yes\n\
+         playback_live=yes\n\
+         playback_after_idle_return=no\n\
+         narrow_after_idle_return=no\n\
+         settled_at=20\n\
+         gives_up=yes\n"
+    );
+
+    // The capture loop itself: a rejected capture is re-taken, every attempt is kept,
+    // and a defect that never satisfies the assertions exhausts the bound and fails.
+    let capture_loop = shell_section(
+        narrow,
+        ": >\"$OUT_DIR/capture-attempts.txt\"",
+        "\necho \"narrow floor:",
+        "narrow-width capture loop",
+    );
+    // The ceiling the probe drives is the one the script declares.
+    let bound = shell_section(narrow, "CAPTURE_ATTEMPTS=", "\n", "capture attempt bound")
+        .trim_start_matches("CAPTURE_ATTEMPTS=")
+        .parse::<u32>()
+        .expect("capture attempt bound should be a number");
+    assert_eq!(bound, 15, "the retry stays a small, deliberate bound");
+
+    let retried = unique_temp_dir("okp-narrow-width-capture-retry");
+    let output = run_capture_probe(&capture_loop, retried.path(), bound, 2);
+    assert!(
+        output.status.success(),
+        "a capture the assertions accept should end the loop: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(evaluation_count(retried.path()), 3);
+    assert_eq!(kept_captures(retried.path()), 3);
+    assert_eq!(
+        fs::read_to_string(retried.path().join("narrow.png")).expect("accepted capture"),
+        "capture 3\n",
+        "the accepted attempt is the one published as narrow.png"
+    );
+    let attempts = fs::read_to_string(retried.path().join("capture-attempts.txt"))
+        .expect("attempt ledger should be written");
+    assert_eq!(attempts.matches("rejected:").count(), 2);
+    assert_eq!(attempts.matches("accepted").count(), 1);
+
+    let exhausted = unique_temp_dir("okp-narrow-width-capture-exhausted");
+    let output = run_capture_probe(&capture_loop, exhausted.path(), bound, u32::MAX);
+    assert!(
+        !output.status.success(),
+        "a defect must not be waited away by the retry"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!("failed on every one of {bound} captures")),
+        "the failure names the bound it exhausted: {stderr}"
+    );
+    assert!(
+        stderr.contains("OSC surface lacks contrast at narrow width"),
+        "the failure carries every rejection: {stderr}"
+    );
+    assert_eq!(evaluation_count(exhausted.path()), bound);
+    assert_eq!(kept_captures(exhausted.path()), bound as usize);
+    assert!(
+        exhausted.path().join("narrow.png").exists(),
+        "a failure still ships an image, not only a number"
+    );
+}
+
+/// A named region of a shell script, so a probe drives the shipped text rather than
+/// a paraphrase of it that can drift.
+fn shell_section(script: &str, start: &str, end: &str, what: &str) -> String {
+    let (_, tail) = script
+        .split_once(start)
+        .unwrap_or_else(|| panic!("{what}: start anchor not found"));
+    let (body, _) = tail
+        .split_once(end)
+        .unwrap_or_else(|| panic!("{what}: end anchor not found"));
+    format!("{start}{body}")
+}
+
+fn run_probe(script: &str, what: &str) -> String {
+    let output = Command::new("bash")
+        .args(["-c", script])
+        .output()
+        .unwrap_or_else(|error| panic!("{what} should run: {error}"));
+    assert!(
+        output.status.success(),
+        "{what} should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// Drive the capture loop with a stubbed screenshot and a stubbed acceptance that
+/// rejects its first `rejections` calls.
+fn run_capture_probe(capture_loop: &str, out_dir: &Path, bound: u32, rejections: u32) -> Output {
+    let script = format!(
+        r#"set -euo pipefail
+OUT_DIR={out}
+mkdir -p "$OUT_DIR"
+CAPTURE_ATTEMPTS={bound}
+CAPTURE_RETRY_DELAY=0
+window_id=17
+REJECTIONS={rejections}
+printf '0' >"$OUT_DIR/evaluations"
+sleep() {{ return 0; }}
+playback_surface_is_live() {{ return 0; }}
+import() {{ printf 'capture %s\n' "$(( $(cat "$OUT_DIR/evaluations") + 1 ))" >"$3"; }}
+# Command substitution runs this in a subshell, so the count lives in a file.
+evaluate_capture() {{
+  local calls
+  calls=$(( $(cat "$OUT_DIR/evaluations") + 1 ))
+  printf '%s' "$calls" >"$OUT_DIR/evaluations"
+  if (( calls <= REJECTIONS )); then
+    echo "OSC surface lacks contrast at narrow width: mean=0"
+    return 1
+  fi
+  printf 'osc-mean=0.0747 osc-left=1 osc-panel=0.9 panel=0.99\n'
+}}
+{capture_loop}
+"#,
+        out = out_dir.display()
+    );
+    Command::new("bash")
+        .args(["-c", &script])
+        .output()
+        .expect("capture loop probe should run")
+}
+
+fn evaluation_count(out_dir: &Path) -> u32 {
+    fs::read_to_string(out_dir.join("evaluations"))
+        .expect("evaluation counter should be written")
+        .trim()
+        .parse()
+        .expect("evaluation counter should be a number")
+}
+
+fn kept_captures(out_dir: &Path) -> usize {
+    fs::read_dir(out_dir)
+        .expect("probe output directory should exist")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("narrow-attempt-")
+        })
+        .count()
 }
 
 #[test]

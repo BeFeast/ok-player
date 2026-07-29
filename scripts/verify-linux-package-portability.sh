@@ -340,8 +340,11 @@ run_portability_smoke() {
     "$label" "$scratch/$label" "$PORTABILITY_EVIDENCE_DIR" "$smoke" "$binary"
 }
 
+# The narrow-width smoke waits for a published layout and may re-capture, so its
+# fixture has to outlast that budget - a clip that runs out mid-smoke would put the
+# idle canvas under the assertions. Keep this in step with the smoke's own default.
 ffmpeg -hide_banner -loglevel error -y \
-  -f lavfi -i 'color=c=0x101010:s=640x360:r=2:d=30' \
+  -f lavfi -i 'color=c=0x101010:s=640x360:r=2:d=120' \
   -c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p -g 4 -an \
   "$scratch/dark.mkv"
 ffmpeg -hide_banner -loglevel error -y \

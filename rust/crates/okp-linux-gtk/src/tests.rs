@@ -5711,6 +5711,7 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
     assert!(smoke.contains("residual_shutdown_decoder_retired"));
     assert!(smoke.contains("OKP_DEBUG_WINDOW_FIT=1"));
     assert!(smoke.contains("CONTINUE_WATCHING_IDENTITY_CROP='300x170+210+60'"));
+    assert!(smoke.contains("OKP_DEBUG_IDLE_RETURN_SMOKE=1 OKP_DEBUG_INTERACTIONS=1"));
     assert!(smoke.contains("Residual initial Continue Watching"));
     assert!(smoke.contains("export GSK_RENDERER=cairo"));
     assert!(smoke.contains("-crop 1120x638+0+42"));
@@ -5758,6 +5759,12 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
         1
     );
     assert_eq!(close_flow.matches("assert_idle_capture").count(), 1);
+    // Closing part-way through leaves the fixture partially watched, so this phase
+    // returns to the populated Continue-watching welcome and not the empty hero the
+    // other two phases return to. The capture waits for the shelf's own plane to be
+    // published and is measured over the crop that state owns - reading the empty
+    // hero's crop there made a shelf laid out on a grid look like a broken canvas
+    // (#702, #703).
 
     let residual_flow = smoke
         .split_once("run_residual_open_regression() {")
@@ -5807,13 +5814,17 @@ OUT_DIR={out}
 mkdir -p "$OUT_DIR"
 app_pid=4242
 window_id=17
+CONTINUE_WATCHING_IDENTITY_CROP='300x170+210+60'
 launch_count=0
 stop_count=0
+capture_crop=none
+: >"$OUT_DIR/markers.txt"
 launch_fixture() {{
   launch_count=$((launch_count + 1))
   : >"$OUT_DIR/$1.log"
   if (( launch_count == 2 )); then
     printf '%s\n' 'idle-return-smoke: file-loaded' 'idle-return-smoke: close-idle' \
+      'interaction: geometry part=recent-card-0 reason=layout seq=9 local-x=220.0 local-y=145.0 w=194.0 h=110.0 interactive=1' \
       >"$OUT_DIR/$1.log"
   fi
 }}
@@ -5824,16 +5835,20 @@ sleep() {{ return 0; }}
 rg() {{
   [[ "$1" == "-q" && "$2" == "-F" ]] || return 2
   local marker="$3" line
+  printf '%s\n' "$marker" >>"$OUT_DIR/markers.txt"
   while IFS= read -r line; do
     [[ "$line" == *"$marker"* ]] && return 0
   done <"$4"
   return 1
 }}
-assert_idle_capture() {{ return 0; }}
+assert_idle_capture() {{ capture_crop="${{4:-default}}"; return 0; }}
 close_log=close-app
 {close_flow}
 stop_app
-printf 'launch_count=%s\nstop_count=%s\n' "$launch_count" "$stop_count"
+shelf_marker=no
+grep -q 'part=recent-card-0' "$OUT_DIR/markers.txt" && shelf_marker=yes
+printf 'launch_count=%s\nstop_count=%s\ncapture_crop=%s\nshelf_marker=%s\n' \
+  "$launch_count" "$stop_count" "$capture_crop" "$shelf_marker"
 "#,
         out = root.path().display()
     );
@@ -5846,15 +5861,19 @@ printf 'launch_count=%s\nstop_count=%s\n' "$launch_count" "$stop_count"
         "retry probe should pass: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    // The crop and the marker are read out of the run, so a flow that waits for
+    // nothing, or measures the empty-welcome hero, fails here rather than passing on
+    // the strength of those strings still being somewhere in the file.
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "launch_count=2\nstop_count=2\n"
+        "launch_count=2\nstop_count=2\ncapture_crop=300x170+210+60\nshelf_marker=yes\n"
     );
     let results = fs::read_to_string(root.path().join("results.txt"))
         .expect("retry evidence should be written");
     assert!(results.contains("close_media_file_loaded=pass"));
     assert!(results.contains("close_media_launch_retry=pass"));
     assert!(results.contains("close_media_transition=pass"));
+    assert!(results.contains("close_media_shelf_reported=pass"));
 }
 
 #[test]
@@ -5878,6 +5897,7 @@ OUT_DIR={out}
 mkdir -p "$OUT_DIR"
 app_pid=4242
 window_id=17
+CONTINUE_WATCHING_IDENTITY_CROP='300x170+210+60'
 launch_count=0
 stop_count=0
 launch_fixture() {{
