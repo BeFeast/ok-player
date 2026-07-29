@@ -110,8 +110,12 @@ test_secret_reader() {
 
 # --- Real .deb packages ---------------------------------------------------------------
 make_deb() {
-  # make_deb <version> <output-dir>
-  local version="$1" destination="$2"
+  # make_deb <build version> <output-dir> [control version]
+  #
+  # The file name is the build version and the control `Version:` is its Debian encoding, which
+  # is how the real lane names things (issue #709). The third argument overrides the control
+  # version so a test can build the archive a regression would produce.
+  local version="$1" destination="$2" control_version="${3:-$1}"
   local build="$WORK/build/$version"
   rm -rf -- "$build"
   mkdir -p "$build/DEBIAN" "$build/usr/bin"
@@ -119,7 +123,7 @@ make_deb() {
   chmod 755 "$build/usr/bin/ok-player"
   {
     printf 'Package: ok-player\n'
-    printf 'Version: %s\n' "$version"
+    printf 'Version: %s\n' "$control_version"
     printf 'Architecture: amd64\n'
     printf 'Maintainer: OK Player <noreply@example.invalid>\n'
     printf 'Description: APT repository generator test package\n'
@@ -997,6 +1001,108 @@ if content_diff "$WORK/run-two" "$WORK/run-two-again" >"$WORK/two-suite-idempote
   pass "a two-suite archive reproduces byte for byte over an unchanged plan"
 else
   fail "two-suite idempotence" "$(head -n 20 "$WORK/two-suite-idempotence.diff")"
+fi
+
+# --- 14. The archive may only advertise versions apt orders the way builds order ------------
+# The defect this guards is invisible in a passing install (issue #709): a `.deb` published as
+# `0.11.0-beta.0.209` installs perfectly, and only sorts *above* the `0.11.0` release that
+# follows it — so the release silently never reaches anyone, months later. The assertion is in
+# the verifier, and it runs before any container, so it is exercised here directly.
+#
+# The verifier aborts by exiting, which is right for the lane and would end this suite, so each
+# case is run inside a command substitution.
+assert_scheme() {
+  # assert_scheme <repo-root> [suite]
+  ( okp_apt_assert_version_scheme "$1" "${2:-stable}" 2>&1 )
+}
+
+seed_secrets
+STAGE_SCHEME="$WORK/stage-scheme"
+ENCODED_209="$(okp_debian_version_for_build 0.11.0-beta.0.209)"
+make_deb 0.11.0-beta.0.209 "$STAGE_SCHEME" "$ENCODED_209"
+make_deb 0.11.0 "$STAGE_SCHEME" "$(okp_debian_version_for_build 0.11.0)"
+# The tail the archive keeps carrying: builds published before the encoding existed. They are
+# rebuilt into the archive from their release assets until they age out of the window, so
+# tolerating them is not a loophole — the epoch is what keeps them below everything encoded.
+make_deb 0.11.0-beta.0.208 "$STAGE_SCHEME" 0.11.0-beta.0.208
+make_deb 0.1.0-linux-alpha.112 "$STAGE_SCHEME" 0.1.0-linux-alpha.112
+build_repo "$STAGE_SCHEME" "$WORK/run-scheme" >/dev/null
+set +e
+scheme_output="$(assert_scheme "$WORK/run-scheme")"
+scheme_status=$?
+set -e
+if ((scheme_status == 0)) && grep -q '2 encoded, 2 published before the encoding' <<<"$scheme_output"; then
+  pass "an archive of encoded versions passes, and the pre-encoding tail is counted, not failed"
+else
+  fail "version scheme" "status ${scheme_status}, output: ${scheme_output}"
+fi
+
+# apt's own view of that archive: the release is what a client would be offered, over both the
+# candidate that preceded it and everything published before the encoding.
+if [[ "$(okp_apt_newest_indexed_version "$(packages_index "$WORK/run-scheme")")" \
+  == "$(okp_debian_version_for_build 0.11.0)" ]]; then
+  pass "the release is the newest version the archive advertises"
+else
+  fail "release ordering" \
+    "newest is $(okp_apt_newest_indexed_version "$(packages_index "$WORK/run-scheme")")"
+fi
+
+# --- Negative control: the scheme regresses ------------------------------------------------
+# The same build, stamped the way it was stamped before this change. Nothing about the archive
+# differs except one string, and that string is the whole defect.
+STAGE_REGRESSED="$WORK/stage-regressed"
+make_deb 0.11.0-beta.0.209 "$STAGE_REGRESSED" 0.11.0-beta.0.209
+build_repo "$STAGE_REGRESSED" "$WORK/run-regressed" >/dev/null
+set +e
+regressed_output="$(assert_scheme "$WORK/run-regressed")"
+regressed_status=$?
+set -e
+if ((regressed_status != 0)) && grep -q 'encodes to' <<<"$regressed_output"; then
+  pass "an unencoded version newer than the pre-encoding tail fails the archive"
+else
+  fail "version scheme control" "status ${regressed_status}, output: ${regressed_output}"
+fi
+
+# The regression really would ship: apt orders that package above the release, which is what
+# makes the assertion above the only thing standing between it and a release nobody receives.
+if dpkg --compare-versions 0.11.0-beta.0.209 gt "$(okp_debian_version_for_build 0.11.0)"; then
+  fail "regression premise" "the unencoded candidate no longer outranks the release"
+else
+  if dpkg --compare-versions 0.11.0-beta.0.209 gt 0.11.0; then
+    pass "the premise: without the encoding the candidate outranks the release it precedes"
+  else
+    fail "regression premise" "dpkg no longer ranks 0.11.0-beta.0.209 above 0.11.0"
+  fi
+fi
+
+# --- Negative control: the encoding disagrees with the build it is named for ----------------
+STAGE_MISMATCH="$WORK/stage-mismatch"
+make_deb 0.11.0-beta.0.209 "$STAGE_MISMATCH" "$(okp_debian_version_for_build 0.11.0-beta.0.210)"
+build_repo "$STAGE_MISMATCH" "$WORK/run-mismatch" >/dev/null
+set +e
+mismatch_output="$(assert_scheme "$WORK/run-mismatch")"
+mismatch_status=$?
+set -e
+if ((mismatch_status != 0)) && grep -q 'encodes to' <<<"$mismatch_output"; then
+  pass "a version that disagrees with the build its pool file names fails the archive"
+else
+  fail "version fidelity control" "status ${mismatch_status}, output: ${mismatch_output}"
+fi
+
+# --- Negative control: a Debian revision reappears -------------------------------------------
+# The shape that started all of this: a tail dpkg reads as a revision, so it outranks the
+# release of the same upstream version.
+STAGE_REVISION="$WORK/stage-revision"
+make_deb 0.11.0-beta.0.209 "$STAGE_REVISION" '1:0.11.0~beta.0.209-1'
+build_repo "$STAGE_REVISION" "$WORK/run-revision" >/dev/null
+set +e
+revision_output="$(assert_scheme "$WORK/run-revision")"
+revision_status=$?
+set -e
+if ((revision_status != 0)) && grep -q 'encodes to' <<<"$revision_output"; then
+  pass "a version carrying a Debian revision fails the archive"
+else
+  fail "revision control" "status ${revision_status}, output: ${revision_output}"
 fi
 
 if ((failures > 0)); then

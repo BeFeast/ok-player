@@ -26,6 +26,7 @@ use okp_core::hdr::HdrHandlingState;
 use okp_core::hwdec_policy::{self, HwdecGuard, HwdecPlan, PlaybackSample};
 use okp_core::key_press::KeyPressLatch;
 use okp_core::linux_renderer::LinuxRendererMode;
+use okp_core::package_version;
 use okp_core::player_commands::{
     self, PlayerCommandContext, PlayerCommandGroup, PlayerCommandId, PlayerCommandMenuEntry,
     PlayerCommandMenuPage, PlayerCommandSurface, ResolvedPlayerCommand,
