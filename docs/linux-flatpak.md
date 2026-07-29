@@ -86,9 +86,12 @@ the manifest, and the smoke check requires those two to stay consistent.
 
 ## Where the lane runs
 
-The Flatpak workflow runs on pull requests that touch the packaging manifest,
-its scripts, the workflow, or `rust/Cargo.lock`; on every push to `main` that
-touches the same files; nightly; and on manual dispatch. Changes elsewhere in
+The Flatpak workflow is a **deep lane**: it does not run on pull requests at
+all. It runs on every push to `main` that touches the packaging manifest, its
+scripts, the workflow, or `rust/Cargo.lock`; nightly; and on manual dispatch.
+A pull request is gated by the three required checks only, so a fix reaches a
+candidate in minutes instead of waiting on a lane it cannot break. Changes
+elsewhere in
 `rust/crates` deliberately do not trigger it, because the pinned source, not
 the working tree, is what the lane builds - the nightly run and the re-pin pull
 request are what carry current default-branch work into the package. Every step
@@ -101,20 +104,18 @@ guard behind another gaining one.
 
 ### Why this lane is not a required status check
 
-The three required contexts on `main` (`Unit tests (engine-agnostic Core,
-headless)`, `Rust workspace (Linux)`, `Integration tests (real libmpv +
-render-thread guard)`) have no path filter, so they report on every pull
-request. This workflow's `pull_request` trigger is path-filtered. A required
-context that never runs is never reported, and GitHub holds the pull request at
-"Expected - Waiting for status to be reported" indefinitely. Adding `Offline
-Flatpak beta build` to the required contexts as the workflow stands would
-therefore block every pull request that does not touch the packaging paths.
+It cannot be one: it does not subscribe to pull-request events. That is the
+deep-lane split, not an oversight - a required context that never reports leaves
+GitHub holding the pull request at "Expected - Waiting for status to be
+reported" forever, and a lane this size in front of every fix is what the split
+exists to remove.
 
-Making it required needs a companion job first: a second job with the same
-`name:` (so it reports the same check context), triggered on `pull_request` with
-`paths-ignore:` mirroring this workflow's `paths:`, doing nothing and
-succeeding. Only with that skip shim in place does the context report on every
-pull request, and only then is promoting it to required safe.
+Historically the obstacle was narrower: the trigger was path-filtered, so making
+the check required would have needed a companion skip shim - a second job with
+the same `name:`, triggered on `pull_request` with `paths-ignore:` mirroring the
+`paths:` list, doing nothing and succeeding (issue #639). That route is closed
+now and should not be reopened without revisiting the split itself; the lane's
+job is to catch a regression on `main` before a release is cut from it.
 
 Cost is not the objection. The lane's `timeout-minutes: 150` is a ceiling, not a
 duration; observed end-to-end job times are around ten minutes (9m45s and 10m24s

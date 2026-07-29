@@ -8,26 +8,19 @@ name: Flatpak
 # The filter is also why this job must not be made a required status check as it
 # stands: a required context that never reports on a pull request outside the
 # filter blocks that pull request forever. See docs/linux-flatpak.md.
+# Deep lane, not a pull-request gate (see the two-lane split).
+#
+# A pull request is gated by the three required checks only — Core unit tests, the Rust
+# workspace and the real-libmpv integration tests — so a user-visible fix reaches a candidate
+# in minutes instead of waiting on lanes that take half an hour each. Everything expensive and
+# everything platform-specific runs here instead: on every push to main, nightly, and on
+# demand. The trade is deliberate: a regression this lane catches is found after the merge, not
+# before it, and is answered by fixing forward or rolling the candidate pointer back — which is
+# cheaper than making every fix wait for every platform.
 on:
   push:
     branches:
       - main
-    paths:
-      - '.github/workflows/flatpak.yml'
-      - 'docs/linux-flatpak.md'
-      - 'rust/Cargo.lock'
-      - 'rust/packaging/flatpak/**'
-      - 'rust/packaging/linux/**'
-      - 'scripts/build-flatpak-beta.sh'
-      - 'scripts/flatpak-repin.sh'
-      - 'scripts/flatpak_cargo_sources.py'
-      - 'scripts/flatpak_integration_markers.py'
-      - 'scripts/smoke-linux-flatpak-lifecycle.sh'
-      - 'scripts/smoke-linux-flatpak.sh'
-      - 'scripts/smoke-linux-software-renderer.sh'
-      - 'scripts/tests/flatpak-integration-markers.sh'
-      - 'scripts/tests/flatpak-lifecycle-control.sh'
-  pull_request:
     paths:
       - '.github/workflows/flatpak.yml'
       - 'docs/linux-flatpak.md'
