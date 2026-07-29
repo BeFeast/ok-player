@@ -284,7 +284,39 @@ struct InstallWatch {
     /// records the new version, so the first answer about a file it is still
     /// unpacking can be the *old* version; adopting that as settled would
     /// swallow the upgrade for the rest of the session.
-    unconfirmed: u8,
+    unconfirmed: UnconfirmedAnswers,
+}
+
+/// How many times the file at the watched path has been answered with a
+/// version that is not ahead — together with *which* file those answers were
+/// about.
+///
+/// The two belong together. A query outstanding when the file is replaced again
+/// answers about the file it asked about, not the one on disk now; counting it
+/// against the newer file — or settling the newer file on the strength of it —
+/// would spend a budget that was never about it and lose that upgrade for good.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct UnconfirmedAnswers(Option<(InstalledFileIdentity, u8)>);
+
+impl UnconfirmedAnswers {
+    /// Answers so far about `identity`. A different file starts from zero.
+    pub(crate) fn about(self, identity: InstalledFileIdentity) -> u8 {
+        match self.0 {
+            Some((counted, answers)) if counted == identity => answers,
+            _ => 0,
+        }
+    }
+
+    /// Records one more answer about `identity`, dropping any count that was
+    /// about a different file.
+    pub(crate) fn count(&mut self, identity: InstalledFileIdentity) {
+        let answers = self.about(identity).saturating_add(1);
+        self.0 = Some((identity, answers));
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.0 = None;
+    }
 }
 
 /// How many times a replaced file may be answered with a version that is not
@@ -359,7 +391,7 @@ pub(crate) fn start_install_replacement_watch(
         resolved: None,
         resolving: None,
         following: false,
-        unconfirmed: 0,
+        unconfirmed: UnconfirmedAnswers::default(),
     }));
     glib::timeout_add_local(INSTALL_WATCH_INTERVAL, move || {
         poll_install_replacement(&watch, &state, &status_toast);
@@ -383,27 +415,30 @@ fn poll_install_replacement(
     if current == watch.baseline {
         watch.resolved = None;
         watch.resolving = None;
-        watch.unconfirmed = 0;
+        watch.unconfirmed.clear();
         return;
     }
 
     if let Some((identity, receiver)) = watch.resolving.take() {
         match receiver.try_recv() {
             Ok(Some(version)) => watch.resolved = Some((identity, version)),
-            Ok(None) => {
-                // The package manager could not name a version — it may be
-                // mid-transaction, holding its own database. Saying nothing is
-                // the honest answer for now, but adopting this file as the one
-                // the session runs would lose the upgrade for good, so the
-                // question is re-asked on the same budget as an answer that is
-                // not ahead.
-                watch.unconfirmed = watch.unconfirmed.saturating_add(1);
-                if watch.unconfirmed >= INSTALLED_VERSION_CONFIRMATIONS {
+            // The package manager could not name a version — it may be
+            // mid-transaction, holding its own database. Saying nothing is the
+            // honest answer for now, but adopting this file as the one the
+            // session runs would lose the upgrade for good, so the question is
+            // re-asked on the same budget as an answer that is not ahead. An
+            // answer about a file that has since been replaced again is about
+            // neither: it is dropped, and the file on disk now is asked about
+            // from scratch.
+            Ok(None) if identity == current => {
+                watch.unconfirmed.count(current);
+                if watch.unconfirmed.about(current) >= INSTALLED_VERSION_CONFIRMATIONS {
                     watch.baseline = current;
-                    watch.unconfirmed = 0;
+                    watch.unconfirmed.clear();
                 }
                 return;
             }
+            Ok(None) => {}
             Err(mpsc::TryRecvError::Empty) => {
                 watch.resolving = Some((identity, receiver));
                 return;
@@ -425,10 +460,10 @@ fn poll_install_replacement(
                 .installed_version_observed(version)
                 .map(|_| ());
             watch.resolved = None;
-            match classify_replacement_answer(&outcome, watch.unconfirmed) {
+            match classify_replacement_answer(&outcome, watch.unconfirmed.about(current)) {
                 ReplacementAnswer::Behind => {
                     watch.baseline = current;
-                    watch.unconfirmed = 0;
+                    watch.unconfirmed.clear();
                     eprintln!(
                         "Update session: {}",
                         state.borrow().linux_update.describe().updates_message
@@ -438,11 +473,11 @@ fn poll_install_replacement(
                 }
                 ReplacementAnswer::Settled => {
                     watch.baseline = current;
-                    watch.unconfirmed = 0;
+                    watch.unconfirmed.clear();
                     eprintln!("Installed build is not ahead of this session");
                 }
                 ReplacementAnswer::AskAgain => {
-                    watch.unconfirmed = watch.unconfirmed.saturating_add(1);
+                    watch.unconfirmed.count(current);
                     eprintln!("Installed build is not ahead of this session; asking again");
                 }
                 ReplacementAnswer::Deferred => {

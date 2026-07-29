@@ -5004,6 +5004,52 @@ fn a_package_database_that_has_not_caught_up_is_asked_again() {
     );
 }
 
+/// A `dpkg` query outstanding when the file is replaced *again* answers about
+/// the file it asked about, not the one on disk now. Counting that answer
+/// against the newer file would spend a budget that was never about it — after
+/// a few of them the newer file would be adopted as the build this session
+/// runs without its version ever being resolved, and that upgrade would never
+/// be announced.
+#[test]
+fn answers_about_a_replaced_file_do_not_spend_the_next_files_budget() {
+    let first = InstalledFileIdentity {
+        device: 28,
+        inode: 622920,
+        size: 12_720_896,
+        modified_seconds: 1_785_294_909,
+        modified_nanoseconds: 0,
+    };
+    let second = InstalledFileIdentity {
+        inode: 623_163,
+        ..first
+    };
+
+    let mut answers = UnconfirmedAnswers::default();
+    assert_eq!(answers.about(first), 0);
+    for expected in 1..=3 {
+        answers.count(first);
+        assert_eq!(answers.about(first), expected);
+    }
+
+    // The file moved on: the next file is asked about from scratch, however
+    // many answers the previous one collected.
+    assert_eq!(
+        answers.about(second),
+        0,
+        "a budget spent on one file cannot settle another"
+    );
+    answers.count(second);
+    assert_eq!(answers.about(second), 1);
+    assert_eq!(
+        answers.about(first),
+        0,
+        "and counting the new file forgets the old one rather than keeping both"
+    );
+
+    answers.clear();
+    assert_eq!(answers.about(second), 0);
+}
+
 /// Every preview state is reached by walking real transitions, so the visual
 /// smoke fixtures cannot show a state the lifecycle cannot produce.
 #[test]
