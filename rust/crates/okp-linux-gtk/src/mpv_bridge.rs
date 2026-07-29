@@ -1558,7 +1558,11 @@ pub(crate) fn connect_state_poll(
         // is gone, so give back the geometry that media borrowed (#716). This runs on the
         // edge out of playback rather than on every idle poll, so a window the user resizes
         // while already idle is left alone.
-        if playing_media.replace(has_media) && !has_media {
+        let left_playback = playing_media.replace(has_media) && !has_media;
+        // Compact mode auto-exits later in this same poll, so a restore deferred for it is
+        // retried on the polls that follow rather than being lost with the edge that raised it.
+        let restore_still_pending = !has_media && state.borrow().pre_playback_geometry.is_pending();
+        if left_playback || restore_still_pending {
             restore_idle_window_geometry(&window, &state, &window_bounds);
         }
         sync_native_video_background(&window, &root_surface, has_media);

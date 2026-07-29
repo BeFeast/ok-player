@@ -967,8 +967,10 @@ pub(crate) fn fit_player_window_to_video(
 /// Fitting to media is deliberate, but the geometry it chooses belongs to that media; the
 /// idle Continue-watching surface that follows it is a different surface with a different
 /// shape, and inheriting a tall narrow portrait window left it cropped (#716). A window
-/// the user has since made fullscreen, maximized or compact is in a state chosen after the
-/// fit, so the reading is dropped rather than applied underneath them.
+/// the user has since made fullscreen or maximized is in a state chosen after the fit, so the
+/// reading is dropped rather than applied underneath them. Compact mode is not such a state: it
+/// exits by itself once media closes and puts back what it captured after the fit, so the reading
+/// is kept and applied on the poll after that exit.
 pub(crate) fn restore_idle_window_geometry(
     window: &gtk::ApplicationWindow,
     state: &Rc<RefCell<PlayerState>>,
@@ -980,17 +982,30 @@ pub(crate) fn restore_idle_window_geometry(
         if !state.pre_playback_geometry.is_pending() {
             return;
         }
-        if window.is_fullscreen() || window.is_maximized() || window_compact_mode_active(window) {
-            state.pre_playback_geometry.forget();
-            if debug {
-                eprintln!(
-                    "window fit idle restore skipped: fullscreen={} maximized={} compact={}",
-                    window.is_fullscreen(),
-                    window.is_maximized(),
-                    window_compact_mode_active(window),
-                );
+        match state.pre_playback_geometry.idle_restore(
+            window.is_fullscreen(),
+            window.is_maximized(),
+            window_compact_mode_active(window),
+        ) {
+            window_fit::IdleRestore::Nothing => return,
+            window_fit::IdleRestore::Forget => {
+                state.pre_playback_geometry.forget();
+                if debug {
+                    eprintln!(
+                        "window fit idle restore skipped: fullscreen={} maximized={}",
+                        window.is_fullscreen(),
+                        window.is_maximized(),
+                    );
+                }
+                return;
             }
-            return;
+            window_fit::IdleRestore::Wait => {
+                if debug {
+                    eprintln!("window fit idle restore deferred: compact mode has not exited yet");
+                }
+                return;
+            }
+            window_fit::IdleRestore::Restore => {}
         }
         state.pre_playback_geometry.take_for_idle()
     };

@@ -207,6 +207,19 @@ pub fn compact_corner_snap(
         })
 }
 
+/// What a return to idle should do with a remembered pre-playback geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdleRestore {
+    /// No reading is held.
+    Nothing,
+    /// The user chose this window state after the fit; drop the reading.
+    Forget,
+    /// Compact mode has not auto-exited yet; keep the reading and try again.
+    Wait,
+    /// Give the window its pre-playback shape back.
+    Restore,
+}
+
 /// The idle geometry a playback session borrowed the window from.
 ///
 /// Fitting to media is a feature, but the shape it chooses belongs to that
@@ -247,6 +260,31 @@ impl PrePlaybackGeometry {
     /// Whether a restore is pending, without consuming it.
     pub const fn is_pending(&self) -> bool {
         self.remembered.is_some()
+    }
+
+    /// What a return to idle should do with the reading it is holding.
+    ///
+    /// Compact mode is not the user choosing a shape after the fit: when media
+    /// closes, compact mode exits on its own and puts back the window state it
+    /// captured — which, for media that resized the window, is the fitted shape.
+    /// Forgetting the reading there hands the idle surface the media's geometry
+    /// by a second route, so the restore waits for the auto-exit instead.
+    pub const fn idle_restore(
+        &self,
+        fullscreen: bool,
+        maximized: bool,
+        compact: bool,
+    ) -> IdleRestore {
+        if !self.is_pending() {
+            return IdleRestore::Nothing;
+        }
+        if fullscreen || maximized {
+            return IdleRestore::Forget;
+        }
+        if compact {
+            return IdleRestore::Wait;
+        }
+        IdleRestore::Restore
     }
 
     /// Drop the reading without restoring it.
@@ -1163,5 +1201,57 @@ mod tests {
         assert_eq!(fit_to_work_area(0, 180, 1280, 900), None);
         assert_eq!(fit_to_work_area(320, 180, 0, 900), None);
         assert_eq!(fill_client_to_work_area(640, 480, 704, 480, 0, 900), None);
+    }
+
+    #[test]
+    fn compact_mode_defers_the_idle_restore_instead_of_dropping_it() {
+        // Closing media while compact mode is on: compact exits by itself a moment
+        // later and restores the window state it captured *after* the media fit, so
+        // dropping the reading here would hand the idle surface the portrait shape
+        // by the back door (#716).
+        let mut memory = PrePlaybackGeometry::default();
+        memory.observe_fit(WindowSize {
+            width: 1120,
+            height: 680,
+        });
+        assert_eq!(
+            memory.idle_restore(false, false, true),
+            IdleRestore::Wait,
+            "compact mode must defer, not forget"
+        );
+        assert!(memory.is_pending(), "the reading must survive the deferral");
+        assert_eq!(
+            memory.idle_restore(false, false, false),
+            IdleRestore::Restore,
+            "once compact has exited the restore runs"
+        );
+    }
+
+    #[test]
+    fn a_state_the_user_chose_after_the_fit_drops_the_reading() {
+        for (fullscreen, maximized) in [(true, false), (false, true)] {
+            let mut memory = PrePlaybackGeometry::default();
+            memory.observe_fit(WindowSize {
+                width: 1120,
+                height: 680,
+            });
+            assert_eq!(
+                memory.idle_restore(fullscreen, maximized, false),
+                IdleRestore::Forget
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_is_reported_when_no_fit_ever_ran() {
+        let memory = PrePlaybackGeometry::default();
+        assert_eq!(
+            memory.idle_restore(false, false, false),
+            IdleRestore::Nothing
+        );
+        assert_eq!(
+            memory.idle_restore(false, false, true),
+            IdleRestore::Nothing
+        );
     }
 }
