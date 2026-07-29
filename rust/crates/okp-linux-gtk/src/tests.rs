@@ -4585,6 +4585,82 @@ fn a_retry_after_a_failed_restart_rediscovers_the_offer() {
     );
 }
 
+/// A press does exactly what the projection said it would. The shell drives on
+/// only a step already in flight; a state that offers the user its own control
+/// is left for the user to take. So "Install anyway" over a payload the skip
+/// kept stops at "Install and restart" — the action that does announce the
+/// restart — instead of applying and relaunching behind a press the projection
+/// says closes nothing (#696).
+#[test]
+fn the_shell_never_continues_past_an_action_the_user_has_to_take() {
+    let mut staged = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+    staged.start_check().expect("check starts");
+    staged.check_found("0.12.0").expect("found");
+    staged.start_download().expect("download starts");
+    staged.download_finished().expect("payload verified");
+    staged.start_apply().expect("apply starts");
+    staged
+        .apply_failed("permission denied")
+        .expect("the apply failed over a landed payload");
+    staged.skip_offer().expect("the offer can be skipped");
+
+    let presentation = staged.describe();
+    assert_eq!(presentation.action, Some(UpdateAction::InstallAnyway));
+    assert!(
+        !presentation.action_closes_the_app,
+        "the projection promised this press closes nothing"
+    );
+    let restored = staged
+        .install_anyway()
+        .expect("a skipped staged payload can still be installed")
+        .clone();
+    assert!(
+        !continues_without_the_user(&restored),
+        "so the shell must not apply and relaunch behind it, got {restored:?}"
+    );
+    let next = staged.describe();
+    assert_eq!(next.action, Some(UpdateAction::ApplyAndRestart));
+    assert!(
+        next.action_closes_the_app,
+        "the press that ends the session is the user's next one"
+    );
+
+    // A retry restores an offer and stops there too: the download is a press.
+    let mut retried = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+    retried.start_check().expect("check starts");
+    retried.check_found("0.12.0").expect("found");
+    retried.start_download().expect("download starts");
+    retried
+        .download_failed("checksum mismatch")
+        .expect("the download failed");
+    let restored = retried
+        .retry_failed_update()
+        .expect("a discovered offer stays retryable")
+        .clone();
+    assert!(!continues_without_the_user(&restored));
+    assert_eq!(
+        retried.describe().action,
+        Some(UpdateAction::DownloadUpdate)
+    );
+
+    // What the shell does continue is the step the acceptance already entered:
+    // nothing else drives a download in flight, and the projection warned that
+    // this one is the apply and the relaunch as well.
+    let mut unstaged = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+    unstaged.start_check().expect("check starts");
+    unstaged.check_found("0.12.0").expect("found");
+    unstaged.skip_offer().expect("the offer can be skipped");
+    assert!(
+        unstaged.describe().action_closes_the_app,
+        "an unstaged skip is the one call that downloads, applies and relaunches"
+    );
+    let restored = unstaged
+        .install_anyway()
+        .expect("a skipped offer can still be installed")
+        .clone();
+    assert!(continues_without_the_user(&restored));
+}
+
 /// A hand-off that failed is an error, not a quieter success.
 #[test]
 fn a_failed_appimage_handoff_is_reported_as_a_failure() {

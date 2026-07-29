@@ -220,6 +220,43 @@ public class UpdateLifecycleTests
         Assert.True(fresh.StartCheck());
     }
 
+    /// <summary>A check running over a standing offer still describes that offer: the check is a
+    /// status on top of what the surface is showing, not a replacement for it. Mirrors
+    /// <c>okp_core::update_lifecycle</c>'s rule so the two ports cannot drift (#696).</summary>
+    [Fact]
+    public void ACheckOverACarriedOfferStillDescribesThatOffer()
+    {
+        var refreshing = new UpdateLifecycle(InstallKind.WindowsVelopack, Complete("0.11.0-beta.0.14"));
+        Assert.True(refreshing.StartCheck());
+        Assert.True(refreshing.CheckFound("0.11.0-beta.0.15"));
+        Assert.True(refreshing.StartCheck());
+        Assert.Equal(
+            "Version 0.11.0-beta.0.15 is available. Checking for updates…",
+            refreshing.Describe().UpdatesMessage);
+
+        // A refresh over a failure keeps the error it is refreshing, not just the fact of a check.
+        var failed = new UpdateLifecycle(InstallKind.WindowsVelopack, Complete("0.11.0-beta.0.14"));
+        Assert.True(failed.StartCheck());
+        Assert.True(failed.CheckFound("0.11.0-beta.0.15"));
+        Assert.True(failed.StartDownload());
+        Assert.True(failed.DownloadFailed("checksum mismatch"));
+        Assert.True(failed.StartCheck());
+        Assert.Equal(
+            "The update to version 0.11.0-beta.0.15 failed: checksum mismatch Checking for updates…",
+            failed.Describe().UpdatesMessage);
+
+        // A check with no offer behind it has only itself to report.
+        var first = new UpdateLifecycle(InstallKind.WindowsVelopack, Complete("0.11.0-beta.0.14"));
+        Assert.True(first.StartCheck());
+        Assert.Equal("Checking for updates…", first.Describe().UpdatesMessage);
+
+        // About comes from the same projection and must describe the same offer, rather than
+        // reading a carried failure as an available update.
+        Assert.Equal(
+            "OK Player 0.11.0-beta.0.14 — updating to 0.11.0-beta.0.15 failed.",
+            failed.Describe().AboutMessage);
+    }
+
     [Fact]
     public void AFailedApplyRetriesTheStagedPayloadInsteadOfDownloadingAgain()
     {

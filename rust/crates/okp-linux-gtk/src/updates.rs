@@ -1393,20 +1393,32 @@ pub(crate) fn take_primary_update_action(
     }
 }
 
-/// Continues from whatever "install anyway" or "try again" restored: a payload
-/// still on disk is applied, and one that has to be fetched is downloaded —
-/// from wherever the restored state left the lifecycle, since the two entry
-/// points restore different ones.
+/// Whether the shell drives the state an accepted offer restored any further on
+/// its own.
+///
+/// Only a step already *in flight* is continued: `install_anyway` over an
+/// unstaged offer enters `Downloading`, which nothing but this shell will
+/// carry, and on the one-call lane that download is the apply and the relaunch
+/// — which is exactly what the projection warned about before the press.
+///
+/// A state that offers the user a control of its own is left to the user. A
+/// payload the skip kept comes back as `ReadyToApply`, whose action is "Install
+/// and restart" and whose projection says it closes the player; applying it
+/// from here would end the session behind a press the projection said closes
+/// nothing. The same holds for the `Available` a retry restores. So a press
+/// does what the projection said it would and no more (#696).
+pub(crate) fn continues_without_the_user(restored: &UpdateState) -> bool {
+    matches!(restored, UpdateState::Downloading { .. })
+}
+
+/// Continues from whatever "install anyway" or "try again" restored, as far as
+/// [`continues_without_the_user`] allows — which is the download an accepted
+/// offer already entered, and nothing else.
 fn continue_after_offer_accepted(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusToast>) {
     let restored = state.borrow().linux_update.lifecycle.state().clone();
     refresh_linux_update_views(&state);
-    match restored {
-        // `install_anyway` moves an unstaged offer straight into the download.
-        UpdateState::Downloading { .. } => run_update_download(state, status_toast),
-        UpdateState::ReadyToApply { .. } => start_update_apply(state, status_toast),
-        // A retry after a download that never landed starts it over.
-        UpdateState::Available { .. } => start_update_download(state, status_toast),
-        _ => {}
+    if continues_without_the_user(&restored) {
+        run_update_download(state, status_toast);
     }
 }
 
