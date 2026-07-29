@@ -152,10 +152,16 @@ longer keep a stale hand-maintained default.
 `scripts/verify-apt-repo.sh` asserts this over every paragraph of every suite, before any
 container starts: a version must be exactly the encoding of the build its pool file is named
 for, must outrank `0.11.0-beta.0.208` (the newest build published before the encoding existed),
-and, if it is a prerelease, must sort below its own release. Packages published before the
-encoding are counted and reported rather than failed — the archive is rebuilt from the release
-assets, so they stay in the rolling window until they age out, and the epoch is what keeps them
-below everything encoded.
+and, if it is a prerelease, must sort below its own release.
+
+Packages published before the encoding are counted and reported rather than failed — the archive
+is rebuilt from the release assets, so they stay in the rolling window until they age out, and
+the epoch is what keeps them below everything encoded. That exception is narrow on purpose: the
+`Version:` must be *literally* the build version its pool file is named for, the build must be a
+prerelease, and it must be at or below `0.11.0-beta.0.208`. The prerelease condition is the one
+that is easy to miss — dpkg ranks a raw `0.11.0` **below** `0.11.0-beta.0.208`, so an exception
+phrased only as "at or below the high-water mark" would wave through exactly the unencoded
+release that no candidate subscriber could install.
 
 ## Derived, never authored
 

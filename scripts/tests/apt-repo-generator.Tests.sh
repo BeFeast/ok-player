@@ -1075,6 +1075,31 @@ else
   fi
 fi
 
+# --- Negative control: the release itself, unencoded -----------------------------------------
+# The case the "published before the encoding" exception must not swallow. dpkg ranks a raw
+# `0.11.0` *below* `0.11.0-beta.0.208` — that is the defect — so an exception phrased as "at or
+# below the high-water mark" would wave through exactly the release that cannot be installed by
+# anyone on the candidate suite. It is admitted only for a prerelease whose Version is literally
+# its build version, which no release ever is.
+if dpkg --compare-versions 0.11.0 le 0.11.0-beta.0.208; then
+  pass "the premise: dpkg ranks a raw 0.11.0 below the last pre-encoding candidate"
+else
+  fail "raw release premise" "dpkg no longer ranks 0.11.0 below 0.11.0-beta.0.208"
+fi
+STAGE_RAW_RELEASE="$WORK/stage-raw-release"
+make_deb 0.11.0 "$STAGE_RAW_RELEASE" 0.11.0
+make_deb 0.11.0-beta.0.208 "$STAGE_RAW_RELEASE" 0.11.0-beta.0.208
+build_repo "$STAGE_RAW_RELEASE" "$WORK/run-raw-release" >/dev/null
+set +e
+raw_release_output="$(assert_scheme "$WORK/run-raw-release")"
+raw_release_status=$?
+set -e
+if ((raw_release_status != 0)) && grep -q 'encodes to 1:0.11.0' <<<"$raw_release_output"; then
+  pass "an unencoded release is not admitted as a package from before the encoding"
+else
+  fail "raw release control" "status ${raw_release_status}, output: ${raw_release_output}"
+fi
+
 # --- Negative control: the encoding disagrees with the build it is named for ----------------
 STAGE_MISMATCH="$WORK/stage-mismatch"
 make_deb 0.11.0-beta.0.209 "$STAGE_MISMATCH" "$(okp_debian_version_for_build 0.11.0-beta.0.210)"

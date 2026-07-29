@@ -115,17 +115,27 @@ okp_apt_build_version_from_pool_name() {
 # that follows it — so the release simply never reaches anyone, silently, months later. The
 # assertion is therefore about the strings rather than about apt's behaviour today:
 #
-#   * a version at or below OKP_DEBIAN_LEGACY_HIGHWATER with no epoch is a package published
-#     before the encoding existed. The archive is rebuilt from the release assets, so those
-#     stay in the rolling window until they age out; they are counted and reported, not
-#     failed. They can never outrank an encoded version — that is what the epoch buys.
-#   * everything else must be exactly `okp_debian_version_for_build` of the build its pool
-#     file is named for. Equality, not a pattern: an encoding that quietly disagrees with the
-#     build it came from is the same class of bug in a new place.
+#   * a version must be exactly `okp_debian_version_for_build` of the build its pool file is
+#     named for. Equality, not a pattern: an encoding that quietly disagrees with the build it
+#     came from is the same class of bug in a new place.
 #   * an encoded version must outrank the legacy high-water mark, or a tester already on it
 #     cannot move.
 #   * a prerelease must sort below its own release. `1:0.11.0~beta.0.209 lt 1:0.11.0` is the
 #     whole point of the `~`, and it is asserted with dpkg rather than reasoned about.
+#
+# The one exception is the tail of packages published *before* the encoding existed. The
+# archive is rebuilt from the release assets, so those stay in the rolling window until they
+# age out; they are counted and reported, not failed, and the epoch is what keeps them below
+# everything encoded. It is an exception with three conditions, and each one matters:
+#
+#   * the `Version:` is literally the build version, which is exactly what the pre-encoding
+#     lane stamped — not merely "something unencoded";
+#   * the build is a prerelease. Every version ever published before the encoding was one
+#     (`0.1.0-linux-alpha.N`, `0.11.0-beta.0.N`), and a bare `X.Y.Z` never was. Without this
+#     condition a raw `0.11.0` would be waved through as legacy, because dpkg ranks it
+#     *below* `0.11.0-beta.0.208` — which is the defect itself, and precisely the release
+#     that must not slip past;
+#   * and it is at or below the high-water mark, so the exception can only ever shrink.
 okp_apt_assert_version_scheme() {
   # okp_apt_assert_version_scheme <repo-root> <suite>
   local root="$1" suite="$2" index
@@ -137,12 +147,12 @@ okp_apt_assert_version_scheme() {
     [[ -n "$version" ]] || continue
     [[ -n "$filename" ]] \
       || okp_apt_verify_fail "the ${suite} suite indexes ${version} with no Filename; the build it describes cannot be read."
-    if [[ "$version" != *:* ]] \
+    build="$(okp_apt_build_version_from_pool_name "$filename")"
+    if [[ "$version" == "$build" && "$build" == *-* ]] \
       && dpkg --compare-versions "$version" le "$OKP_DEBIAN_LEGACY_HIGHWATER"; then
       legacy=$((legacy + 1))
       continue
     fi
-    build="$(okp_apt_build_version_from_pool_name "$filename")"
     expected="$(okp_debian_version_for_build "$build")" \
       || okp_apt_verify_fail "the ${suite} suite carries ${filename}, whose build version ${build} this packaging cannot encode."
     [[ "$version" == "$expected" ]] \
