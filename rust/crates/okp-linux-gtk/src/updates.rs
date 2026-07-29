@@ -256,7 +256,7 @@ const INSTALL_WATCH_INTERVAL: Duration = Duration::from_secs(30);
 ///   [`okp_core::package_version`] owns that rule; but the rpm form carries no
 ///   epoch, so it is a different string to read back, and this lane would also
 ///   need its own `rpm -qf`/`rpm -q` resolver. Watching it is a change of its
-///   own rather than a line here.
+///   own rather than a line here — #712.
 /// * A Flatpak update does not touch the deployment the running sandbox is on;
 ///   the old one stays mounted until the app restarts, so this file never
 ///   changes and the watch would never fire. That lane needs the deploy
