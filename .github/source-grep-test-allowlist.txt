@@ -58,7 +58,6 @@ rust/crates/okp-core/tests/isolated_xvfb_session.rs::main_window_fit_session_has
 rust/crates/okp-core/tests/isolated_xvfb_session.rs::player_window_drag_smoke_covers_survival_cancel_and_recovery
 rust/crates/okp-core/tests/isolated_xvfb_session.rs::window_regression_runner_dispatches_drag_and_fit_with_bound_evidence
 rust/crates/okp-core/tests/isolated_xvfb_session.rs::night_gui_runs_headless_window_regressions_before_the_live_seat_gate
-rust/crates/okp-core/tests/isolated_xvfb_session.rs::narrow_width_portability_capture_uses_a_long_lived_dark_fixture
 rust/crates/okp-core/tests/isolated_xvfb_session.rs::fullscreen_portability_capture_reads_the_application_toplevel
 rust/crates/okp-linux-gtk/src/tests.rs::renderer_environment_is_selected_before_gtk_initialization
 rust/crates/okp-linux-gtk/src/tests.rs::file_association_launches_present_before_media_delivery
