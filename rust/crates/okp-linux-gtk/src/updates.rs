@@ -1023,7 +1023,7 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
 
         if let Some(check) = view.check.as_ref().and_then(glib::WeakRef::upgrade) {
             check.set_visible(checks_possible);
-            check.set_sensitive(checks_possible && presentation.actions_enabled && !busy);
+            check.set_sensitive(checks_possible && presentation.check_available && !busy);
         }
         true
     });

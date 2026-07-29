@@ -788,6 +788,11 @@ pub struct UpdatePresentation {
     /// relaunches in one step — a surface must be able to warn before that,
     /// whatever the action is called.
     pub action_closes_the_app: bool,
+    /// Whether a check would be accepted from this state. A state that has
+    /// already been told what is on disk — or one with a step in flight — has
+    /// nothing to discover, and a surface with its own dedicated check control
+    /// disables it rather than offering a button that does nothing.
+    pub check_available: bool,
     /// The secondary action offered beside the primary one — today only
     /// "Skip this version" on a live offer. Kept in the projection so a shell
     /// never has to maintain its own parallel offer model.
@@ -970,24 +975,35 @@ impl UpdateLifecycle {
         if self.capability() == UpdateCapability::Unmanaged {
             return Err(UpdateTransitionError::CapabilityForbids(self.capability()));
         }
-        match self.state {
-            UpdateState::Idle
-            | UpdateState::UpToDate
-            | UpdateState::Available { .. }
-            | UpdateState::AvailableExternally { .. }
-            | UpdateState::Skipped { .. }
-            | UpdateState::Running { .. }
-            // A check is exactly how an unverifiable restart gets settled: the
-            // feed knows whether the target is still on offer.
-            | UpdateState::RestartUnverified { .. }
-            | UpdateState::Failed { .. } => {
-                // A re-check must not lose the offer already on screen: if it
-                // fails, that offer comes back exactly as it was.
-                let carried = self.carried_offer();
-                Ok(self.enter(UpdateState::Checking { carried }))
-            }
-            _ => Err(self.rejected()),
+        if !self.check_is_allowed() {
+            return Err(self.rejected());
         }
+        // A re-check must not lose the offer already on screen: if it fails,
+        // that offer comes back exactly as it was.
+        let carried = self.carried_offer();
+        Ok(self.enter(UpdateState::Checking { carried }))
+    }
+
+    /// Whether [`Self::start_check`] would be accepted right now. Projected
+    /// into [`UpdatePresentation::check_available`] so a surface with its own
+    /// check control reads the rule instead of keeping a second copy of it.
+    fn check_is_allowed(&self) -> bool {
+        if self.capability() == UpdateCapability::Unmanaged {
+            return false;
+        }
+        matches!(
+            self.state,
+            UpdateState::Idle
+                | UpdateState::UpToDate
+                | UpdateState::Available { .. }
+                | UpdateState::AvailableExternally { .. }
+                | UpdateState::Skipped { .. }
+                | UpdateState::Running { .. }
+                // A check is exactly how an unverifiable restart gets settled:
+                // the feed knows whether the target is still on offer.
+                | UpdateState::RestartUnverified { .. }
+                | UpdateState::Failed { .. }
+        )
     }
 
     /// The offer currently on screen, in the form a failed refresh would put
@@ -1451,6 +1467,7 @@ impl UpdateLifecycle {
             about_message,
             action: self.action(),
             actions_enabled: !matches!(self.state, UpdateState::Checking { .. }),
+            check_available: self.check_is_allowed(),
             action_closes_the_app: self.action_closes_the_app(),
             secondary_action: self.secondary_action(),
             notice: self.notice.clone(),
@@ -2668,6 +2685,50 @@ mod tests {
             ))
         );
         assert_eq!(lifecycle.state(), &UpdateState::Idle);
+    }
+
+    /// A surface that keeps its own check control must be told when pressing
+    /// it would be refused — a build already installed has nothing left to
+    /// discover, and a control that silently does nothing is its own small lie.
+    #[test]
+    fn the_projection_says_when_a_check_would_be_refused() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "1.0.0");
+        assert!(lifecycle.describe().check_available);
+        lifecycle.start_check().unwrap();
+        assert!(
+            !lifecycle.describe().check_available,
+            "a check in flight is not a state to start another from"
+        );
+        lifecycle.check_found_none().unwrap();
+        assert!(lifecycle.describe().check_available);
+
+        lifecycle.installed_version_observed("2.0.0").unwrap();
+        assert!(
+            !lifecycle.describe().check_available,
+            "the answer is already on disk"
+        );
+        assert!(lifecycle.start_check().is_err());
+
+        assert!(
+            !UpdateLifecycle::new(InstallKind::DevBuild, "0.0.0-dev")
+                .describe()
+                .check_available
+        );
+
+        // The projection and the transition cannot drift: whatever the state,
+        // the flag is exactly whether the transition is accepted.
+        for kind in SELF_APPLY_KINDS.iter().chain(&SYSTEM_MANAGED_KINDS) {
+            sweep_reachable_states(*kind, |life| {
+                let claimed = life.describe().check_available;
+                let accepted = life.clone().start_check().is_ok();
+                assert_eq!(
+                    claimed,
+                    accepted,
+                    "{kind} projected check_available={claimed} in state {:?}",
+                    life.state()
+                );
+            });
+        }
     }
 
     #[test]
