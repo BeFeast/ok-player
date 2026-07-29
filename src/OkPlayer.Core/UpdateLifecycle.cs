@@ -638,14 +638,19 @@ public sealed class UpdateLifecycle
         };
     }
 
+    /// <summary>The About message for the current state. Read off the presented state for the same
+    /// reason the Updates message is: the two surfaces come from one projection, so About reading
+    /// the raw Checking state would say "version X is available" beside an Updates line saying the
+    /// same version failed.</summary>
     private string AboutMessage(VersionClaim claim)
     {
         string running = _runningVersion.Text;
-        string target = _state.Version ?? string.Empty;
+        UpdateState presented = PresentedState;
+        string target = presented.Version ?? string.Empty;
         return claim switch
         {
             VersionClaim.Current => $"OK Player {running} — up to date.",
-            VersionClaim.Superseded => _state.Kind switch
+            VersionClaim.Superseded => presented.Kind switch
             {
                 UpdateStateKind.RestartPending =>
                     $"OK Player {running} — restart to finish updating to {target}.",
@@ -654,21 +659,23 @@ public sealed class UpdateLifecycle
             },
             VersionClaim.NotApplicable =>
                 $"OK Player {running} — development build; updates are disabled.",
-            _ => _state.Kind == UpdateStateKind.RestartUnverified
+            _ => presented.Kind == UpdateStateKind.RestartUnverified
                 ? $"OK Player {running} — the update to {target} could not be confirmed from this build's version."
                 : $"OK Player {running}.",
         };
     }
 
+    /// <summary>The state the surface is presenting. A refresh keeps the offer it is refreshing on
+    /// screen, controls and all — ActionsEnabled says they cannot be pressed yet — so everything
+    /// derived from the offer reads it here rather than each deriving it again.</summary>
+    private UpdateState PresentedState =>
+        _state.Kind == UpdateStateKind.Checking && _state.Carried is { } carried ? carried : _state;
+
     private UpdateAction? Action()
     {
         if (Capability() == UpdateCapability.Unmanaged)
             return null;
-        // A refresh keeps the offer it is refreshing on screen, controls and all; ActionsEnabled
-        // says they cannot be pressed yet.
-        UpdateState state = _state.Kind == UpdateStateKind.Checking && _state.Carried is { } carried
-            ? carried
-            : _state;
+        UpdateState state = PresentedState;
         return state.Kind switch
         {
             UpdateStateKind.Idle

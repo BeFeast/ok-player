@@ -249,6 +249,12 @@ public class UpdateLifecycleTests
         var first = new UpdateLifecycle(InstallKind.WindowsVelopack, Complete("0.11.0-beta.0.14"));
         Assert.True(first.StartCheck());
         Assert.Equal("Checking for updates…", first.Describe().UpdatesMessage);
+
+        // About comes from the same projection and must describe the same offer, rather than
+        // reading a carried failure as an available update.
+        Assert.Equal(
+            "OK Player 0.11.0-beta.0.14 — updating to 0.11.0-beta.0.15 failed.",
+            failed.Describe().AboutMessage);
     }
 
     [Fact]

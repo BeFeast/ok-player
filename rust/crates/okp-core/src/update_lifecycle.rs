@@ -1604,26 +1604,34 @@ impl UpdateLifecycle {
         }
     }
 
+    /// The About message for the current state.
+    ///
+    /// Read off the *presented* state for the same reason the Updates message
+    /// is: a refresh keeps the offer it is refreshing on screen, and the two
+    /// surfaces are rendered from one projection, so About reading the raw
+    /// `Checking` state would say "version X is available" beside an Updates
+    /// line that says the same version was skipped or failed.
     fn about_message(&self, claim: &VersionClaim) -> String {
         let running = &self.running_version;
+        let presented = self.presented_state();
         match claim {
             VersionClaim::Current => format!("OK Player {running} — up to date."),
             VersionClaim::Superseded { newer } => {
-                if matches!(self.state, UpdateState::ReplacedOnDisk { .. }) {
+                if matches!(presented.as_ref(), UpdateState::ReplacedOnDisk { .. }) {
                     format!(
                         "OK Player {running} — version {newer} is installed; restart to use it."
                     )
-                } else if matches!(self.state, UpdateState::RestartPending { .. }) {
+                } else if matches!(presented.as_ref(), UpdateState::RestartPending { .. }) {
                     format!("OK Player {running} — restart to finish updating to {newer}.")
-                } else if matches!(self.state, UpdateState::Failed { .. }) {
+                } else if matches!(presented.as_ref(), UpdateState::Failed { .. }) {
                     format!("OK Player {running} — updating to {newer} failed.")
-                } else if matches!(self.state, UpdateState::Skipped { .. }) {
+                } else if matches!(presented.as_ref(), UpdateState::Skipped { .. }) {
                     format!("OK Player {running} — version {newer} was skipped.")
                 } else {
                     format!("OK Player {running} — version {newer} is available.")
                 }
             }
-            VersionClaim::Unknown => match &self.state {
+            VersionClaim::Unknown => match presented.as_ref() {
                 UpdateState::ManagedExternally { hint } => format!("OK Player {running} — {hint}"),
                 UpdateState::RestartUnverified { target } => format!(
                     "OK Player {running} — the update to {target} could not be confirmed from this build's version."
@@ -4046,6 +4054,28 @@ mod tests {
         let mut first = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
         first.start_check().unwrap();
         assert_eq!(first.describe().updates_message, "Checking for updates…");
+
+        // And About, rendered from the same projection, describes the same
+        // offer: the two surfaces cannot disagree about what is being
+        // refreshed while it is being refreshed.
+        for (life, expected) in [
+            (&refreshing_available, "is available"),
+            (&refreshing_skipped, "was skipped"),
+            (&refreshing_staged, "failed"),
+        ] {
+            let message = life.describe().about_message;
+            assert!(
+                message.contains(expected),
+                "About must describe the carried offer too; wanted {expected:?} in {message:?}"
+            );
+        }
+        assert!(
+            !refreshing_skipped
+                .describe()
+                .about_message
+                .contains("is available"),
+            "a skipped offer must not read as an available one on About"
+        );
     }
 
     /// Invariant: a prerelease tail is ordered stage first, counter second, so
