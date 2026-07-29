@@ -1,5 +1,7 @@
 use super::*;
 
+use okp_core::osc_overflow::OscControlId;
+
 #[cfg(test)]
 pub(crate) fn parse_launch_args_from(args: impl Iterator<Item = std::ffi::OsString>) -> LaunchArgs {
     let cwd = env::current_dir().ok();
@@ -465,6 +467,40 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
                     host: "welcome",
                     prefix: "idle-footer-button",
                     css_class: "okp-idle-footer-button",
+                },
+                // The playback chrome, for the same reason: a headless check can
+                // only assert the OSC reflows at a narrow width if it can see the
+                // pill and every control still in it (#729). Collapsed controls
+                // are unmapped, so they simply stop being reported.
+                NestedPlanes {
+                    host: "osc",
+                    prefix: "osc-pill",
+                    css_class: "okp-controls",
+                },
+                NestedPlanes {
+                    host: "osc",
+                    prefix: "osc-slot",
+                    css_class: okp_core::osc_overflow::SLOT_CSS_CLASS,
+                },
+                NestedPlanes {
+                    host: "osc",
+                    prefix: "osc-play",
+                    css_class: OscControlId::Play.slot_css_class(),
+                },
+                NestedPlanes {
+                    host: "osc",
+                    prefix: "osc-timeline",
+                    css_class: OscControlId::Timeline.slot_css_class(),
+                },
+                NestedPlanes {
+                    host: "osc",
+                    prefix: "osc-volume",
+                    css_class: OscControlId::Volume.slot_css_class(),
+                },
+                NestedPlanes {
+                    host: "osc",
+                    prefix: "osc-overflow",
+                    css_class: OscControlId::Overflow.slot_css_class(),
                 },
             ],
         },

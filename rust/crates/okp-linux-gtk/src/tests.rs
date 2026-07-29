@@ -985,10 +985,11 @@ fn adaptive_osc_bar_collapses_into_overflow_without_overlap() {
     let controls = include_str!("controls.rs");
     let css = include_str!("css.rs");
 
-    // The bar reports only the floor as its horizontal minimum, so a narrow
-    // window hands it the real allocation instead of forcing the full width and
-    // clipping the trailing overflow entry.
-    assert!(osc.contains("osc_overflow::floor_min_width(&slots, SPACING)"));
+    // The bar reports the floor at the compact metrics as its horizontal
+    // minimum - the narrowest row it can actually honour - so a narrow window
+    // hands it the real allocation instead of forcing back a minimum it cannot
+    // lay out inside and clipping the trailing controls (#729).
+    assert!(osc.contains("osc_overflow::compact_floor_width(&slots)"));
     assert!(osc.contains("osc_overflow::plan(&slots, width, SPACING"));
     // Collapsed controls are unmapped: not painted, focusable, or hit-testable.
     assert!(osc.contains("child.set_child_visible(false)"));

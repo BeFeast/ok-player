@@ -9,8 +9,11 @@
 //! why the previous layout floated the overflow button as a separate overlay
 //! that then painted over its neighbour.
 //!
-//! This custom widget reports a *low* horizontal minimum (only the never-
-//! collapsing floor) so GTK hands it the real, narrow allocation, and then in
+//! This custom widget reports a *low* horizontal minimum — the never-collapsing
+//! floor at the compact metrics, which is the narrowest row it can actually lay
+//! out inside, since GTK hands back any minimum it is told and the surplus is
+//! then clipped by the window (#729) — so GTK gives it the real, narrow
+//! allocation, and then in
 //! `size_allocate` it runs the pure [`okp_core::osc_overflow`] policy to decide
 //! which controls stay and where each one sits. Collapsed controls are marked
 //! child-invisible, so they are unmapped — not painted, not focusable, not
@@ -89,10 +92,13 @@ mod imp {
             match orientation {
                 gtk::Orientation::Horizontal => {
                     let slots = measure_slots(&children);
-                    // Report only the floor as the minimum. That is what lets a
-                    // narrower window hand this widget its true allocation
-                    // instead of forcing the full-width minimum and clipping.
-                    let min = osc_overflow::floor_min_width(&slots, SPACING) + PAD_HORIZONTAL * 2;
+                    // Report the floor at the *compact* metrics — the narrowest
+                    // row this widget can actually honour. GTK never allocates a
+                    // widget less than the minimum it reports, so a minimum the
+                    // bar cannot lay out inside is handed back verbatim in a
+                    // narrower window and the tail is clipped rather than
+                    // reflowed (#729).
+                    let min = osc_overflow::compact_floor_width(&slots);
                     let nat = osc_overflow::natural_min_width(&slots, SPACING) + PAD_HORIZONTAL * 2;
                     (min, nat.max(min), -1, -1)
                 }
@@ -139,12 +145,7 @@ mod imp {
                     // Unmaps the control: it stops being painted, focusable, or
                     // hit-testable, and its action lives on in the overflow menu.
                     child.set_child_visible(false);
-                    if log_layout
-                        && matches!(
-                            id,
-                            OscControlId::Volume | OscControlId::Audio | OscControlId::Overflow
-                        )
-                    {
+                    if log_layout {
                         eprintln!(
                             "osc-layout: id={id:?} visible=false bar_width={width} bar_height={height}"
                         );
@@ -152,28 +153,23 @@ mod imp {
                     continue;
                 }
                 child.set_child_visible(true);
+                // The pill inset is whatever the policy laid the row out
+                // against, not the design constant: it tightens at narrow
+                // widths and the children have to follow it.
                 let x = if rtl {
-                    width - PAD_HORIZONTAL - placement.x - placement.width
+                    width - layout.pad_end - placement.x - placement.width
                 } else {
-                    PAD_HORIZONTAL + placement.x
+                    layout.pad_start + placement.x
                 };
                 let transform = gsk::Transform::new()
                     .translate(&graphene::Point::new(x as f32, PAD_VERTICAL as f32));
                 // Each control is allocated the content height and centres
                 // itself with its own valign, matching the previous GtkBox.
                 child.allocate(placement.width, content_height, -1, Some(transform));
-                if log_layout
-                    && matches!(
-                        id,
-                        OscControlId::Volume | OscControlId::Audio | OscControlId::Overflow
-                    )
-                {
+                if log_layout {
                     eprintln!(
                         "osc-layout: id={id:?} visible=true x={} y={} width={} height={} bar_width={width} bar_height={height}",
-                        PAD_HORIZONTAL + placement.x,
-                        PAD_VERTICAL,
-                        placement.width,
-                        content_height
+                        x, PAD_VERTICAL, placement.width, content_height
                     );
                 }
             }
@@ -209,6 +205,10 @@ impl OscBar {
     /// governs its collapse priority.
     pub(crate) fn push(&self, child: &impl IsA<gtk::Widget>, id: OscControlId) {
         let child = child.clone().upcast::<gtk::Widget>();
+        // Style-free markers so the geometry diagnostic can report each slot's
+        // rectangle under the control's own name (#729).
+        child.add_css_class(osc_overflow::SLOT_CSS_CLASS);
+        child.add_css_class(id.slot_css_class());
         child.set_parent(self);
         self.imp().children.borrow_mut().push((child, id));
     }
