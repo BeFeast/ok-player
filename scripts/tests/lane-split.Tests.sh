@@ -61,27 +61,47 @@ done
 policy="$(read_policy .github/workflows/windows-package.yml)"
 push_paths="${policy##*$'\n'}"
 push_paths="${push_paths#push_paths=}"
+# Compared element by element, not by substring: `docs/src/**` contains `src/**` and
+# `LICENSE.old` contains `LICENSE`, and either would stop the lane seeing the files it
+# builds from while a substring check stayed green.
 for required in 'src/**' 'LICENSE' 'THIRD-PARTY-NOTICES.md'; do
-  case "$push_paths" in
-    *"$required"*) pass "the Windows push filter covers $required" ;;
-    *) fail "the Windows push filter must cover $required" "paths: $push_paths" ;;
-  esac
+  found=no
+  IFS=$'\x1f' read -r -a entries <<<"$push_paths"
+  for entry in "${entries[@]}"; do
+    [[ "${entry%$'\n'}" == "$required" ]] && found=yes
+  done
+  if [[ "$found" == yes ]]; then
+    pass "the Windows push filter covers $required"
+  else
+    fail "the Windows push filter must list $required exactly" "paths: ${push_paths//$'\x1f'/, }"
+  fi
 done
 
 # The fast lane is the other half of the contract: the required checks report on every pull
 # request, so they must carry no path filter at all.
 for fast in .github/workflows/ci.yml .github/workflows/rust.yml; do
-  if python3 - "$fast" <<'PY'
+  reason="$(python3 - "$fast" <<'PY'
 import sys, yaml
 d = yaml.safe_load(open(sys.argv[1]))
 on = d.get(True) or d.get("on") or {}
-pr = on.get("pull_request")
-sys.exit(0 if isinstance(pr, dict) and "paths" not in pr or pr is None else 1)
+if "pull_request" not in on:
+    print("it carries no pull_request trigger at all")
+    sys.exit(0)
+pr = on["pull_request"] or {}
+if not isinstance(pr, dict):
+    print(f"its pull_request trigger is {pr!r}, which cannot be checked")
+    sys.exit(0)
+narrowing = sorted(k for k in ("paths", "paths-ignore") if k in pr)
+if narrowing:
+    print("its pull_request trigger is narrowed by " + ", ".join(narrowing))
+    sys.exit(0)
 PY
-  then
+)"
+  if [[ -z "$reason" ]]; then
     pass "$fast reports on every pull request"
   else
-    fail "$fast must not be path-filtered" "a required context that never runs is never reported"
+    fail "$fast must report on every pull request" \
+      "$reason - a required context that never runs is never reported, and GitHub waits forever"
   fi
 done
 
