@@ -9,7 +9,11 @@
 //! This module is the pure, testable policy. Given the available content width
 //! and the ordered list of control slots (each carrying the minimum width it
 //! measured), it decides which slots stay in the bar and the exact horizontal
-//! band each visible slot occupies. The GTK shell only performs the mechanical
+//! band each visible slot occupies. It has three levers, spent in the order the
+//! pillars rank them (#729): fold the secondary controls, tighten the gaps and
+//! the pill inset, and only then let the seek bar give width back — down to its
+//! own floor, which is narrow enough that the whole row fits inside any window a
+//! portrait clip can fit itself to. The GTK shell only performs the mechanical
 //! allocate + hide, so the collapse decision is deterministic and unit-tested
 //! away from any display server.
 
@@ -98,6 +102,62 @@ impl OscControlId {
     pub fn is_floor(self) -> bool {
         self.collapse_priority() == 0
     }
+
+    /// Marker CSS class the shell stamps on the slot's widget. It carries no
+    /// style; it is what lets the geometry diagnostic (#690) name the control
+    /// behind a reported rectangle, so a headless check can say *which* control
+    /// left the window rather than only that something did.
+    pub fn slot_css_class(self) -> &'static str {
+        match self {
+            OscControlId::Play => "okp-osc-slot-play",
+            OscControlId::Previous => "okp-osc-slot-previous",
+            OscControlId::Next => "okp-osc-slot-next",
+            OscControlId::Elapsed => "okp-osc-slot-elapsed",
+            OscControlId::Timeline => "okp-osc-slot-timeline",
+            OscControlId::Duration => "okp-osc-slot-duration",
+            OscControlId::Volume => "okp-osc-slot-volume",
+            OscControlId::Speed => "okp-osc-slot-speed",
+            OscControlId::Subtitles => "okp-osc-slot-subtitles",
+            OscControlId::Audio => "okp-osc-slot-audio",
+            OscControlId::Chapters => "okp-osc-slot-chapters",
+            OscControlId::Screenshot => "okp-osc-slot-screenshot",
+            OscControlId::Fullscreen => "okp-osc-slot-fullscreen",
+            OscControlId::Overflow => "okp-osc-slot-overflow",
+        }
+    }
+}
+
+/// Marker CSS class every OSC slot carries, whatever it is.
+pub const SLOT_CSS_CLASS: &str = "okp-osc-slot";
+
+/// The gap the bar tightens to once folding every collapsible control is no
+/// longer enough to fit the row. Gaps and padding are the cheapest width in the
+/// bar: taking them back keeps a control usable, where spilling past the window
+/// edge does not (#729).
+pub const COMPACT_SPACING: i32 = 8;
+
+/// The horizontal pill inset the bar tightens to under the same pressure.
+pub const COMPACT_PADDING: i32 = 8;
+
+/// The width the seek bar is held at while there is still a secondary control
+/// that could fold instead.
+///
+/// The pillars rank playback control above secondary affordances, so the bar
+/// folds a screenshot button before it shortens the scrubber. Only once nothing
+/// is left to fold does the seek bar start giving width back, down to its own
+/// measured floor. The value is the width the timeline used to refuse to go
+/// below, so the widths at which controls fold are unchanged by #729.
+pub const FLEXIBLE_COMFORT_WIDTH: i32 = 144;
+
+/// The width a slot occupies in the fit test: its measured minimum, except for
+/// the flexible seek bar, which is held at [`FLEXIBLE_COMFORT_WIDTH`] for as
+/// long as something else can fold instead.
+fn fit_width(slot: &OscSlot, hold_flexible: bool) -> i32 {
+    if hold_flexible && slot.id.is_flexible() {
+        slot.min_width.max(FLEXIBLE_COMFORT_WIDTH)
+    } else {
+        slot.min_width
+    }
 }
 
 /// One measured control handed to [`plan`]: its identity and the minimum width
@@ -141,6 +201,15 @@ impl SlotPlacement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OscLayout {
     pub placements: Vec<SlotPlacement>,
+    /// Leading pill inset the placements were laid out against. The bar tightens
+    /// it at narrow widths, so the shell must offset children by this rather
+    /// than by its own design constant.
+    pub pad_start: i32,
+    /// Trailing pill inset, used for the same reason when the row is mirrored
+    /// for a right-to-left locale.
+    pub pad_end: i32,
+    /// Gap between adjacent visible controls in this layout.
+    pub spacing: i32,
 }
 
 impl OscLayout {
@@ -174,9 +243,47 @@ pub fn floor_min_width(slots: &[OscSlot], spacing: i32) -> i32 {
     row_width(floor.iter().map(|slot| slot.min_width), spacing)
 }
 
-/// The natural content width with every slot visible.
+/// The natural content width with every slot visible and the seek bar at its
+/// comfortable width.
 pub fn natural_min_width(slots: &[OscSlot], spacing: i32) -> i32 {
-    row_width(slots.iter().map(|slot| slot.min_width), spacing)
+    row_width(slots.iter().map(|slot| fit_width(slot, true)), spacing)
+}
+
+/// The narrowest *outer* width the bar can lay itself out inside: the floor row
+/// at the tightened metrics, padding included.
+///
+/// This is the number the shell must report as its horizontal minimum. GTK
+/// never allocates a widget less than the minimum it reports, so a minimum the
+/// bar cannot honour is handed straight back to it inside a narrower window and
+/// the tail of the row is clipped instead of reflowed — which is exactly the
+/// defect in #729 and, on the idle canvas, in #716. Reporting the compact floor
+/// keeps the reported minimum and the honoured minimum the same number.
+pub fn compact_floor_width(slots: &[OscSlot]) -> i32 {
+    floor_min_width(slots, COMPACT_SPACING) + COMPACT_PADDING * 2
+}
+
+/// The gaps and padding the row is laid out with at `available_width`.
+///
+/// The bar keeps its roomy design metrics for as long as the never-collapsing
+/// floor fits between them, and tightens to the compact pair below that. It is
+/// deliberately a step rather than a slide: two stable looks are easier to
+/// recognise than a bar whose gaps drift with every pixel of a drag.
+fn metrics_for(
+    slots: &[OscSlot],
+    available_width: i32,
+    spacing: i32,
+    pad_start: i32,
+    pad_end: i32,
+) -> (i32, i32, i32) {
+    let (spacing, pad_start, pad_end) = (spacing.max(0), pad_start.max(0), pad_end.max(0));
+    if floor_min_width(slots, spacing) + pad_start + pad_end <= available_width {
+        return (spacing, pad_start, pad_end);
+    }
+    (
+        spacing.min(COMPACT_SPACING),
+        pad_start.min(COMPACT_PADDING),
+        pad_end.min(COMPACT_PADDING),
+    )
 }
 
 fn row_width(widths: impl Iterator<Item = i32>, spacing: i32) -> i32 {
@@ -194,12 +301,15 @@ fn row_width(widths: impl Iterator<Item = i32>, spacing: i32) -> i32 {
 
 /// Compute the adaptive bar layout.
 ///
-/// `available_width` is the bar's outer allocation; `pad_start`/`pad_end` inset
-/// the content (the pill's horizontal padding) and `spacing` is the gap between
-/// adjacent visible controls. The returned placements are, by construction,
-/// pairwise disjoint: each visible slot begins at least `spacing` px past the
-/// previous slot's right edge, so no two controls ever share bounds and the
-/// overflow entry always keeps an exclusive hit target.
+/// `available_width` is the bar's outer allocation; `pad_start`/`pad_end` are
+/// the pill's design padding and `spacing` the design gap between adjacent
+/// visible controls. All three are upper bounds: below the width where the
+/// never-collapsing floor still fits between them the row is laid out on the
+/// compact metrics instead, and the layout reports back the pair it used. The
+/// returned placements are, by construction, pairwise disjoint: each visible
+/// slot begins at least `spacing` px past the previous slot's right edge, so no
+/// two controls ever share bounds and the overflow entry always keeps an
+/// exclusive hit target.
 pub fn plan(
     slots: &[OscSlot],
     available_width: i32,
@@ -207,8 +317,9 @@ pub fn plan(
     pad_start: i32,
     pad_end: i32,
 ) -> OscLayout {
-    let spacing = spacing.max(0);
-    let content_width = (available_width - pad_start.max(0) - pad_end.max(0)).max(0);
+    let (spacing, pad_start, pad_end) =
+        metrics_for(slots, available_width, spacing, pad_start, pad_end);
+    let content_width = (available_width - pad_start - pad_end).max(0);
 
     // Start with everything visible, then fold the highest-priority collapsible
     // slots one at a time until the remaining row fits — or until only the
@@ -217,13 +328,18 @@ pub fn plan(
     // stable from the trailing edge inward.
     let mut visible: Vec<bool> = vec![true; slots.len()];
     loop {
-        if row_fits(slots, &visible, spacing, content_width) {
+        // While something can still fold, the seek bar is measured at its
+        // comfortable width, so a secondary control folds before the scrubber
+        // is shortened.
+        let hold_flexible = next_collapse_victim(slots, &visible).is_some();
+        if row_fits(slots, &visible, spacing, content_width, hold_flexible) {
             break;
         }
         let Some(victim) = next_collapse_victim(slots, &visible) else {
-            // Only the floor remains; it cannot be narrowed further. Placing it
-            // still yields disjoint bands (they extend past the content edge at
-            // pathological widths, which no supported window reaches).
+            // Only the floor remains, laid out on the compact metrics. The shell
+            // reports exactly this width as its minimum and GTK never allocates
+            // a widget less than the minimum it reported, so a real bar is never
+            // planned below it; the bands stay disjoint either way.
             break;
         };
         visible[victim] = false;
@@ -296,15 +412,26 @@ pub fn plan(
         placed_any = true;
     }
 
-    OscLayout { placements }
+    OscLayout {
+        placements,
+        pad_start,
+        pad_end,
+        spacing,
+    }
 }
 
-fn row_fits(slots: &[OscSlot], visible: &[bool], spacing: i32, content_width: i32) -> bool {
+fn row_fits(
+    slots: &[OscSlot],
+    visible: &[bool],
+    spacing: i32,
+    content_width: i32,
+    hold_flexible: bool,
+) -> bool {
     let widths = slots
         .iter()
         .zip(visible)
         .filter(|(_, vis)| **vis)
-        .map(|(slot, _)| slot.min_width);
+        .map(|(slot, _)| fit_width(slot, hold_flexible));
     row_width(widths, spacing) <= content_width
 }
 
@@ -338,15 +465,15 @@ mod tests {
 
     /// Representative measured minimums (px) for the canonical bar, close to the
     /// GTK CSS floors: 32 px icon buttons, a 50 px speed chip, ~46 px time
-    /// clocks, a 32 px resting volume, and a timeline that never shrinks below
-    /// 90 px so the scrubber stays grabbable.
+    /// clocks, a 32 px resting volume, and the seek bar's own hard floor, which
+    /// only binds once every collapsible control has already folded.
     fn canonical_slots() -> Vec<OscSlot> {
         OscControlId::CANONICAL_ORDER
             .into_iter()
             .map(|id| {
                 let min = match id {
                     OscControlId::Elapsed | OscControlId::Duration => 46,
-                    OscControlId::Timeline => 90,
+                    OscControlId::Timeline => 72,
                     OscControlId::Speed => 50,
                     _ => 32,
                 };
@@ -363,8 +490,10 @@ mod tests {
         for slot in layout.placements.iter().filter(|slot| slot.visible) {
             assert!(slot.width > 0, "visible slot {:?} has zero width", slot.id);
             if let Some(right) = previous_right {
+                // The gap is whatever the layout used: it tightens to the
+                // compact metrics at narrow widths.
                 assert!(
-                    slot.x >= right + SPACING,
+                    slot.x >= right + layout.spacing,
                     "slot {:?} at x={} overlaps previous right edge {}",
                     slot.id,
                     slot.x,
@@ -507,7 +636,7 @@ mod tests {
             let overflow = visible[overflow_index];
             let neighbour = visible[overflow_index - 1];
             assert!(
-                overflow.x >= neighbour.right() + SPACING,
+                overflow.x >= neighbour.right() + layout.spacing,
                 "overflow at x={} overlaps neighbour {:?} ending at {} (width {width})",
                 overflow.x,
                 neighbour.id,
@@ -542,6 +671,106 @@ mod tests {
         );
     }
 
+    /// The defect in #729: the bar was laid out wider than the window it sits in,
+    /// so the trailing controls — the volume and the `…` entry — were drawn past
+    /// the right edge, half-visible and unreachable. Nothing the policy plans may
+    /// leave the content box, at any width the bar can actually be given.
+    #[test]
+    fn no_control_is_ever_planned_outside_the_bar() {
+        let slots = canonical_slots();
+        let floor = compact_floor_width(&slots);
+        for width in (floor..=1200).step_by(7) {
+            let layout = plan(&slots, width, SPACING, PAD, PAD);
+            let content_right = width - layout.pad_start - layout.pad_end;
+            for slot in layout.placements.iter().filter(|slot| slot.visible) {
+                assert!(
+                    slot.x >= 0 && slot.right() <= content_right,
+                    "{:?} spans {}..{} outside a {content_right}px content box (bar {width}px)",
+                    slot.id,
+                    slot.x,
+                    slot.right(),
+                );
+            }
+        }
+    }
+
+    /// Playback control outranks secondary affordances: the bar folds a
+    /// screenshot or a chapter button before it shortens the scrubber, and only
+    /// starts giving seek width back once nothing else can fold.
+    #[test]
+    fn the_seek_bar_shortens_last() {
+        let slots = canonical_slots();
+        for width in (compact_floor_width(&slots)..=1200).step_by(3) {
+            let layout = plan(&slots, width, SPACING, PAD, PAD);
+            let timeline = layout.placement(OscControlId::Timeline).unwrap();
+            let anything_left_to_fold = layout
+                .placements
+                .iter()
+                .any(|slot| slot.visible && !slot.id.is_floor());
+            if anything_left_to_fold {
+                assert!(
+                    timeline.width >= FLEXIBLE_COMFORT_WIDTH,
+                    "the seek bar shrank to {}px at {width}px while {:?} was still foldable",
+                    timeline.width,
+                    layout
+                        .placements
+                        .iter()
+                        .find(|slot| slot.visible && !slot.id.is_floor())
+                        .map(|slot| slot.id),
+                );
+            }
+        }
+    }
+
+    /// The number the shell reports to GTK has to be one the policy can honour.
+    /// GTK never allocates below a reported minimum, so any gap between the two
+    /// is clipping waiting to happen.
+    #[test]
+    fn the_reported_minimum_is_a_width_the_row_fits_inside() {
+        let slots = canonical_slots();
+        let floor = compact_floor_width(&slots);
+        let layout = plan(&slots, floor, SPACING, PAD, PAD);
+        let content_right = floor - layout.pad_start - layout.pad_end;
+        let last = layout.placements.iter().rfind(|slot| slot.visible).unwrap();
+        assert_eq!(last.id, OscControlId::Overflow);
+        assert!(
+            last.right() <= content_right,
+            "the floor row needs {}px inside the {content_right}px the reported minimum leaves",
+            last.right(),
+        );
+        for id in OscControlId::CANONICAL_ORDER
+            .into_iter()
+            .filter(|id| id.is_floor())
+        {
+            assert!(
+                layout.is_visible(id),
+                "{id:?} collapsed at the reported floor"
+            );
+        }
+    }
+
+    /// Gaps and padding are the first width the bar gives back, and only once
+    /// folding every collapsible control has stopped being enough.
+    #[test]
+    fn metrics_tighten_only_under_pressure() {
+        let slots = canonical_slots();
+        let roomy = plan(&slots, 1120, SPACING, PAD, PAD);
+        assert_eq!(
+            (roomy.spacing, roomy.pad_start, roomy.pad_end),
+            (SPACING, PAD, PAD)
+        );
+
+        let tight = plan(&slots, compact_floor_width(&slots), SPACING, PAD, PAD);
+        assert_eq!(
+            (tight.spacing, tight.pad_start, tight.pad_end),
+            (COMPACT_SPACING, COMPACT_PADDING, COMPACT_PADDING)
+        );
+        assert!(
+            compact_floor_width(&slots) < floor_min_width(&slots, SPACING) + PAD * 2,
+            "the compact floor has to be narrower than the roomy one to be worth having"
+        );
+    }
+
     #[test]
     fn floor_min_width_is_below_the_natural_width() {
         let slots = canonical_slots();
@@ -549,7 +778,7 @@ mod tests {
         let natural = natural_min_width(&slots, SPACING);
         assert!(floor < natural);
         // Mandated floor: play+prev+next+timeline+volume+overflow (no clock).
-        let expected = 32 + 32 + 32 + 90 + 32 + 32 + SPACING * 5;
+        let expected = 32 + 32 + 32 + 72 + 32 + 32 + SPACING * 5;
         assert_eq!(floor, expected);
     }
 }

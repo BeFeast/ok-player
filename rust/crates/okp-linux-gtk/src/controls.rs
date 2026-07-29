@@ -13,6 +13,13 @@ pub(crate) const VOLUME_COLLAPSE_MS: u64 = 120;
 pub(crate) const VOLUME_HOVER_GRACE_MS: u64 = 220;
 pub(crate) const AUDIO_TRACK_ICON_SIZE: i32 = 19;
 pub(crate) const TIMELINE_HEIGHT: i32 = 20;
+/// Narrowest the seek bar is ever asked to be. It is the only control that
+/// absorbs the bar's slack, so its own floor is also the bar's: a 120px floor
+/// here put the whole pill above the width a portrait clip fits the window to,
+/// and the tail of the row was clipped instead of reflowed (#729). At any
+/// ordinary width the timeline is far wider than this; the floor only binds at
+/// the extreme, where a short scrubber still beats an unreachable one.
+pub(crate) const TIMELINE_MIN_WIDTH: i32 = 48;
 pub(crate) const TIMELINE_RAIL_HEIGHT: f64 = 4.0;
 pub(crate) const TIMELINE_THUMB_DIAMETER: f64 = 12.0;
 
@@ -80,7 +87,7 @@ impl TimelineRail {
     fn new(adjustment: &gtk::Adjustment) -> Self {
         let area = gtk::DrawingArea::new();
         area.add_css_class("okp-timeline-rail");
-        area.set_content_width(120);
+        area.set_content_width(TIMELINE_MIN_WIDTH);
         area.set_content_height(TIMELINE_HEIGHT);
         area.set_hexpand(true);
         area.set_can_target(false);
@@ -1129,7 +1136,7 @@ pub(crate) fn build_controls(
     seek.set_draw_value(false);
     seek.set_hexpand(true);
     seek.set_sensitive(false);
-    seek.set_size_request(120, TIMELINE_HEIGHT);
+    seek.set_size_request(TIMELINE_MIN_WIDTH, TIMELINE_HEIGHT);
     seek.add_css_class("okp-seek");
 
     let timeline_rail = TimelineRail::new(&seek.adjustment());
@@ -1138,7 +1145,7 @@ pub(crate) fn build_controls(
     timeline.add_css_class("okp-timeline");
     timeline.set_hexpand(true);
     timeline.set_valign(gtk::Align::Center);
-    timeline.set_size_request(120, TIMELINE_HEIGHT);
+    timeline.set_size_request(TIMELINE_MIN_WIDTH, TIMELINE_HEIGHT);
     timeline.set_child(Some(timeline_rail.widget()));
     timeline.add_overlay(&seek);
     timeline.set_measure_overlay(&seek, true);

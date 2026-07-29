@@ -1757,14 +1757,18 @@ const OKP_STYLESHEET: &str = "
             background: rgba(255, 255, 255, 0.14);
         }
 
+        /* The seek bar's floor is the whole pill's floor: it is the only control
+           that absorbs slack, so a wide minimum here is what pushed the bar past
+           a portrait-fit window and got its tail clipped (#729). Keep this in
+           step with TIMELINE_MIN_WIDTH in controls.rs. */
         .okp-timeline,
         .okp-seek {
-            min-width: 120px;
+            min-width: 48px;
             min-height: 20px;
         }
 
         .okp-timeline-rail {
-            min-width: 120px;
+            min-width: 48px;
             min-height: 20px;
         }
 
