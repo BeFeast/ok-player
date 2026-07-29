@@ -67,9 +67,6 @@ pub(crate) const CHROME_ICONS: &[&str] = &[
     "okp-network-server-symbolic",
     "okp-object-select-symbolic",
     "okp-pan-down-symbolic",
-    "okp-pan-end-symbolic",
-    "okp-pan-start-symbolic",
-    "okp-pan-up-symbolic",
     "okp-process-working-symbolic",
     "okp-system-search-symbolic",
     "okp-user-bookmarks-symbolic",
@@ -365,7 +362,7 @@ mod tests {
         }
         assert_eq!(
             named.len(),
-            5,
+            2,
             "the stylesheet's CSS-driven icon nodes changed: {named:?}"
         );
     }

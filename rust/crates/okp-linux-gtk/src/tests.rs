@@ -895,7 +895,7 @@ fn volume_and_audio_track_actions_use_distinct_icon_identities() {
 
     // Volume keeps the speaker/level glyph in both resting and reactive states.
     assert!(
-        controls.contains("gtk::Image::from_icon_name(\"audio-volume-high-symbolic\")"),
+        controls.contains("gtk::Image::from_icon_name(\"okp-audio-volume-high-symbolic\")"),
         "volume control must keep the speaker/level icon"
     );
 
@@ -2929,7 +2929,7 @@ fn command_menu_search_is_a_single_shared_compact_entry_with_icon() {
     assert!(source.contains("fn player_command_search_entry()"));
     assert!(source.contains("gtk::Entry::new()"));
     assert!(source.contains("gtk::EntryIconPosition::Primary"));
-    assert!(source.contains("\"system-search-symbolic\""));
+    assert!(source.contains("\"okp-system-search-symbolic\""));
     assert!(source.contains("set_icon_tooltip_text(gtk::EntryIconPosition::Primary"));
     assert!(source.contains("gtk::AccessibleRole::SearchBox"));
     assert!(!source.contains("gtk::SearchEntry::new()"));
