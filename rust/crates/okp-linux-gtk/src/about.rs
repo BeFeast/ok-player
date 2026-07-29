@@ -81,7 +81,11 @@ pub(crate) fn settings_about_section(
     sheet.append(&about_host_card(&snapshot.borrow(), &mut deferred_labels));
     pane.append(&sheet);
 
-    pane.append(&about_footer(Rc::clone(&snapshot), status_toast));
+    append_settings_footer_band(
+        &pane,
+        &about_footer(Rc::clone(&snapshot), status_toast),
+        SettingsFooterSite::Page,
+    );
 
     let (sender, receiver) = mpsc::channel::<AboutDeferredFields>();
     std::thread::spawn(move || {
@@ -396,6 +400,13 @@ pub(crate) fn about_spec_row_with_label(
     (row, val)
 }
 
+/// The row that sits in the About page's footer band.
+///
+/// Every child declares the same vertical alignment, the way the Windows surface this
+/// window is modelled on states it on each cell of its footer grid. Left to the default
+/// each child would be stretched to the row and would then centre its own contents against
+/// its own metrics, which is how a button and a pair of links end up a couple of pixels
+/// apart with nothing in the code saying they should line up.
 pub(crate) fn about_footer(
     snapshot: Rc<RefCell<AboutSnapshot>>,
     status_toast: Rc<StatusToast>,
@@ -413,10 +424,13 @@ pub(crate) fn about_footer(
         }
         status_toast.show("Diagnostics copied");
     });
+    copy.set_valign(gtk::Align::Center);
     footer.append(&copy);
 
     let links = gtk::Box::new(gtk::Orientation::Horizontal, 13);
+    links.add_css_class("okp-about-footer-links");
     links.set_halign(gtk::Align::End);
+    links.set_valign(gtk::Align::Center);
     links.set_hexpand(true);
 
     let github = about_link_button("GitHub");
@@ -456,6 +470,7 @@ pub(crate) fn about_link_button(label: &str) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-about-link-button");
     button.set_has_frame(false);
+    button.set_valign(gtk::Align::Center);
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 5);
     content.append(&gtk::Label::new(Some(label)));
     let icon = gtk::Label::new(Some("↗"));

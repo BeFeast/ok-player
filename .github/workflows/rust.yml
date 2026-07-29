@@ -144,3 +144,6 @@ jobs:
 
       - name: Continue-watching shelf stays a grid under a virtual display
         run: ./scripts/smoke-linux-recents-shelf.sh
+
+      - name: Settings opens About whole and on one grid under a virtual display
+        run: ./scripts/smoke-linux-settings-about.sh

@@ -3475,7 +3475,7 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-settings-rail {
-            padding: 12px 10px;
+            padding: 12px 10px 0;
             background: rgba(0, 0, 0, 0.015);
             border-right: 1px solid rgba(0, 0, 0, 0.05);
         }
@@ -3576,9 +3576,8 @@ const OKP_STYLESHEET: &str = "
             color: inherit;
         }
 
-        .okp-settings-rail-divider {
-            margin: 6px 9px 8px;
-            background: rgba(0, 0, 0, 0.05);
+        .okp-settings-footer-rule {
+            background: rgba(0, 0, 0, 0.07);
         }
 
         .okp-captionless-window-drag-layer {
@@ -3640,7 +3639,7 @@ const OKP_STYLESHEET: &str = "
         }
 
         .okp-about-pane {
-            padding: 28px 44px 28px 24px;
+            padding: 28px 44px 0 24px;
             background: @okp_settings_light;
         }
 
@@ -3789,12 +3788,6 @@ const OKP_STYLESHEET: &str = "
         .okp-about-tag.is-accent {
             background: alpha(@okp_teal, 0.12);
             color: @okp_teal_deep;
-        }
-
-        .okp-about-footer {
-            margin-top: 8px;
-            padding-top: 17px;
-            border-top: 1px solid rgba(0, 0, 0, 0.07);
         }
 
         .okp-about-copy-button {
@@ -4414,7 +4407,7 @@ const OKP_STYLESHEET: &str = "
             color: @okp_accent;
         }
 
-        window.okp-settings-window.is-dark .okp-settings-rail-divider {
+        window.okp-settings-window.is-dark .okp-settings-footer-rule {
             background: rgba(255, 255, 255, 0.06);
         }
 
@@ -4473,7 +4466,6 @@ const OKP_STYLESHEET: &str = "
             background: rgba(255, 255, 255, 0.08);
         }
 
-        window.okp-settings-window.is-dark .okp-about-footer,
         window.okp-settings-window.is-dark .okp-shortcut-row {
             border-color: rgba(255, 255, 255, 0.08);
         }

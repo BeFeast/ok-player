@@ -171,10 +171,23 @@ const LINUX_CANDIDATE_FEED_URL: &str =
 // points at it instead of at a file the app downloaded.
 const APT_REPOSITORY_URL: &str = "https://befeast.github.io/ok-player/apt";
 const SETTINGS_REFERENCE_WIDTH: i32 = 760;
-const SETTINGS_REFERENCE_HEIGHT: i32 = 560;
 const SETTINGS_TITLEBAR_HEIGHT: i32 = 42;
 const SETTINGS_RAIL_WIDTH: i32 = 192;
 const SETTINGS_CONTENT_WIDTH: i32 = SETTINGS_REFERENCE_WIDTH - SETTINGS_RAIL_WIDTH;
+// The one bottom band both Settings columns end with (issue #711). The rail's About entry
+// and a page footer are built from these four numbers, so their rules land on a single
+// baseline and a page added later inherits the grid instead of re-deriving a margin.
+// Vertical order, bottom of the rule downwards: rule, gap, row slot, inset.
+const SETTINGS_NAV_ROW_HEIGHT: i32 = 36;
+const SETTINGS_FOOTER_RULE_GAP: i32 = 10;
+const SETTINGS_FOOTER_ROW_SLOT: i32 = 36;
+const SETTINGS_FOOTER_BOTTOM_INSET: i32 = 12;
+// Clearance kept above the rule when the column's content reaches it.
+const SETTINGS_FOOTER_CONTENT_GAP: i32 = 8;
+// The rail's rule stops short of the frame to match the rounded ends of the nav rows.
+const SETTINGS_RAIL_RULE_INSET: i32 = 9;
+// Change detector for the Settings geometry record; only a changed sample prints.
+const SETTINGS_GEOMETRY_SAMPLE_INTERVAL: Duration = Duration::from_millis(100);
 const CAPTIONLESS_DRAG_HEIGHT: i32 = SETTINGS_TITLEBAR_HEIGHT;
 const LINUX_KEY_MEDIA_MIME_TYPES: &[&str] = &[
     "video/mp4",

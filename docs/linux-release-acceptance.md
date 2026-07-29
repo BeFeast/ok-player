@@ -161,6 +161,28 @@ path. Settings → Playback renders the current state as a disabled **Deferred /
 and `scripts/smoke-linux-settings.sh <binary> <output> playback` verifies that the packaged shell
 reports that state while rendering the page.
 
+## Settings window height
+
+Settings opens at the height the page it opens on measures, not at a constant (issue #711).
+The height is bounded by the monitor's work area - the monitor rectangle less the strip
+reserved for a panel or a dock, the same rectangle every companion window is placed inside -
+and by the companion policy minimum. A page taller than that room scrolls; a page that fits
+never arrives pre-truncated.
+
+Paging inside an open window follows one rule: **grow to fit, never shrink**. Moving to a
+longer page grows the window up to the work area, moving back to a shorter one keeps the
+height already shown, so switching pages cannot make the window jump smaller under the
+pointer. Resizing the window by hand ends automatic sizing for the rest of that session: a
+height the reader chose outranks a height a page wants.
+
+Both Settings columns end with one shared bottom band - a hairline rule, a fixed row slot and
+one bottom inset - so the rule over the rail's About entry and the rule over a page footer
+share a baseline, and a page added later inherits the grid. The band is bottom-anchored, so
+the baseline also holds when a page overflows and is scrolled to its end. The policy is
+unit-tested in `okp_core::companion_window`; the rendered geometry is checked by
+`scripts/smoke-linux-settings-about.sh`, which reads the `interaction: settings-geometry`
+record the window publishes under `OKP_DEBUG_INTERACTIONS` on a 1080p and on a 4K display.
+
 ## Shift-locked interactive resize
 
 Holding **Shift** while dragging any window edge or corner locks the current video/client aspect

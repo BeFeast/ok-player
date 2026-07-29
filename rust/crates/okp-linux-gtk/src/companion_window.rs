@@ -1,6 +1,8 @@
 use super::*;
 
-const COMPANION_WORK_AREA_MARGIN: i32 = 48;
+/// Room left for a panel or a dock. The display servers this shell targets do not all
+/// publish a work area, so the shell reserves a strip rather than covering one.
+pub(crate) const COMPANION_WORK_AREA_MARGIN: i32 = 48;
 const COMPANION_RESIZE_EDGE: i32 = 7;
 const COMPANION_RESIZE_CORNER: i32 = 12;
 
@@ -126,8 +128,17 @@ pub(crate) fn build_companion_window(
         if place_once.replace(true) {
             return;
         }
-        let position = window_fit::centered_position(size, work_area);
-        move_resize_player_window_on_x11(window, position, size);
+        // Read the size back rather than reusing the one requested above: a companion that
+        // has measured its own content by now has already asked for the height it needs,
+        // and placing it at the pre-content guess would undo that on X11.
+        let (width, height) = window.default_size();
+        let placed_size = companion_window_core::companion_window_size(
+            kind,
+            Some(window_fit::WindowSize { width, height }),
+            work_area,
+        );
+        let position = window_fit::centered_position(placed_size, work_area);
+        move_resize_player_window_on_x11(window, position, placed_size);
     });
 
     let map_state = Rc::clone(state);
@@ -236,10 +247,7 @@ pub(crate) fn companion_window_work_area_for_monitor(
         x: geometry.x(),
         y: geometry.y(),
         width: geometry.width().max(1),
-        height: geometry
-            .height()
-            .saturating_sub(COMPANION_WORK_AREA_MARGIN)
-            .max(1),
+        height: settings_window_height_cap_for_monitor(geometry.height()),
     }
 }
 
