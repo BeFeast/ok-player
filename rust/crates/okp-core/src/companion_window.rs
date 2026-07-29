@@ -79,6 +79,45 @@ pub fn companion_window_size(
     }
 }
 
+/// The height a companion window should take once its own content can be measured.
+///
+/// `natural_size` above is only a first guess made before a page exists, so a window that
+/// keeps it arrives pre-truncated whenever its content is taller - with the desktop still
+/// half empty. The size that matters is the one the built page asks for, bounded by the
+/// work area the shell reports (never the raw monitor rectangle: a panel or a dock must
+/// stay uncovered) and by the policy minimum.
+///
+/// `shown` is the height this session has already presented for the same window. Paging
+/// between surfaces of different lengths therefore grows the window to fit and never
+/// shrinks it back, so switching pages cannot make the window jump smaller under the
+/// pointer. A page taller than the work area is not grown into: it scrolls.
+pub fn companion_content_height(
+    kind: CompanionWindowKind,
+    content_natural: i32,
+    shown: i32,
+    work_area_height: i32,
+) -> i32 {
+    let policy = companion_window_policy(kind);
+    let cap = work_area_height.max(1);
+    let floor = policy.minimum_size.height.max(shown).min(cap);
+    content_natural.clamp(floor, cap)
+}
+
+/// Whether a companion window's size has stopped being the shell's to choose.
+///
+/// `applied` is the last size the shell asked for and `observed` is the size the window
+/// actually has. A difference in either dimension means someone else decided - the reader
+/// dragging any edge, or a compositor placing the window - and a size chosen out there
+/// outranks a size a page wants, so automatic sizing ends for the session. Width counts as
+/// much as height: a page is measured at the width it will be laid out at, so a window the
+/// reader widened has to be left alone as much as one they made shorter.
+pub fn companion_size_taken_over(applied: WindowSize, observed: WindowSize) -> bool {
+    if observed.width <= 0 || observed.height <= 0 {
+        return false;
+    }
+    observed != applied
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +188,90 @@ mod tests {
                 width: 640,
                 height: 400,
             }
+        );
+    }
+
+    #[test]
+    fn a_page_that_fits_opens_at_its_own_height_instead_of_the_first_guess() {
+        // The About page measured on a 1080p desktop: taller than the 560px first guess
+        // and far shorter than the work area, so nothing may be cut off.
+        assert_eq!(
+            companion_content_height(CompanionWindowKind::Settings, 753, 0, 1032),
+            753
+        );
+    }
+
+    #[test]
+    fn a_page_taller_than_the_work_area_stops_at_the_work_area_and_scrolls() {
+        assert_eq!(
+            companion_content_height(CompanionWindowKind::Settings, 1400, 0, 1032),
+            1032
+        );
+    }
+
+    #[test]
+    fn a_short_page_never_goes_under_the_policy_minimum() {
+        assert_eq!(
+            companion_content_height(CompanionWindowKind::Settings, 320, 0, 1032),
+            480
+        );
+    }
+
+    #[test]
+    fn paging_grows_the_window_and_never_shrinks_it_back() {
+        let about = companion_content_height(CompanionWindowKind::Settings, 753, 0, 1032);
+        let shortcuts = companion_content_height(CompanionWindowKind::Settings, 900, about, 1032);
+        assert_eq!(shortcuts, 900);
+        // Back to the shorter page: the window keeps the height it already showed.
+        assert_eq!(
+            companion_content_height(CompanionWindowKind::Settings, 753, shortcuts, 1032),
+            900
+        );
+    }
+
+    #[test]
+    fn a_size_the_shell_did_not_ask_for_ends_automatic_sizing() {
+        let height = companion_content_height(CompanionWindowKind::Settings, 753, 0, 1032);
+        let applied = WindowSize { width: 760, height };
+        // The window is the size it was asked to be: still the shell's to grow.
+        assert!(!companion_size_taken_over(applied, applied));
+        // Dragged shorter by hand, or placed by a compositor: no longer.
+        assert!(companion_size_taken_over(
+            applied,
+            WindowSize {
+                width: 760,
+                height: 620,
+            }
+        ));
+        // Dragged only sideways counts too: the page is measured at that width.
+        assert!(companion_size_taken_over(
+            applied,
+            WindowSize { width: 900, height }
+        ));
+        // An unmapped window has no allocation yet and decides nothing.
+        assert!(!companion_size_taken_over(
+            applied,
+            WindowSize {
+                width: 0,
+                height: 0,
+            }
+        ));
+        assert!(!companion_size_taken_over(
+            applied,
+            WindowSize {
+                width: 760,
+                height: 0,
+            }
+        ));
+    }
+
+    #[test]
+    fn a_work_area_smaller_than_what_was_shown_still_wins() {
+        // A window dragged onto a shorter monitor may not keep a height that would hang
+        // over the panel there.
+        assert_eq!(
+            companion_content_height(CompanionWindowKind::Settings, 900, 900, 600),
+            600
         );
     }
 }

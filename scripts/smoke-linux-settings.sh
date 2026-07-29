@@ -249,6 +249,12 @@ if [[ "$PAGE" == "subtitles" ]]; then
 fi
 
 if [[ "$PAGE" == "integration" ]]; then
+  # Settings opens at the height its page measures (issue #711), so this branch first puts
+  # the window back at the canonical reference size. Every coordinate below is a position on
+  # that shell, and the window keeps a size set by hand for the rest of the session.
+  xdotool windowsize --sync "$settings_id" 760 560
+  sleep 1
+
   # The Integration page is intentionally long. Scroll the independent content pane until the
   # Privacy card is fully visible, then capture the actual controls rather than treating the
   # section header at the fold as evidence.

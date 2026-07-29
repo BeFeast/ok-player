@@ -1,12 +1,17 @@
 use super::*;
 
+use okp_core::interaction_geometry as geometry;
+use okp_core::settings_geometry;
+
 #[derive(Clone)]
 pub(crate) struct SettingsPageBuilder {
     parent: glib::WeakRef<gtk::ApplicationWindow>,
     window: glib::WeakRef<gtk::Window>,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
-    max_body_height: i32,
+    /// Shared with [`SettingsAutoHeight`], which raises it when the window moves to a taller
+    /// monitor. A page built afterwards has to be allowed the new room too.
+    max_body_height: Rc<Cell<i32>>,
 }
 
 impl SettingsPageBuilder {
@@ -168,7 +173,7 @@ impl SettingsPageBuilder {
         };
 
         stack.add_named(
-            &settings_scroller(&content, self.max_body_height),
+            &settings_scroller(&content, self.max_body_height.get()),
             Some(page.id()),
         );
     }
@@ -211,8 +216,10 @@ pub(crate) fn open_settings_window(
         return;
     }
 
-    let max_window_height = settings_window_height_cap(parent);
-    let max_body_height = (max_window_height - SETTINGS_TITLEBAR_HEIGHT).max(1);
+    let work_area_height = settings_window_height_cap(parent);
+    let max_body_height = Rc::new(Cell::new(
+        (work_area_height - SETTINGS_TITLEBAR_HEIGHT).max(1),
+    ));
     let window = build_companion_window(parent, &state, CompanionWindowKind::Settings, "Settings");
     window.add_css_class("okp-settings-window");
     apply_settings_window_theme(&window, state.borrow().settings.appearance_theme());
@@ -247,22 +254,19 @@ pub(crate) fn open_settings_window(
         window: window.downgrade(),
         state: Rc::clone(&state),
         status_toast: Rc::clone(&status_toast),
-        max_body_height,
+        max_body_height: Rc::clone(&max_body_height),
     });
     page_builder.ensure_page(&stack, initial_page);
 
     stack.set_visible_child_name(initial_page.id());
     let (rail, search) = settings_nav_rail(&stack, initial_page, Rc::clone(&page_builder));
     connect_settings_search_shortcut(&window, &search);
-    body.append(&settings_nav_rail_frame(rail, max_body_height));
+    let rail_frame = settings_nav_rail_frame(rail, max_body_height.get());
+    body.append(&rail_frame);
 
     stack.set_size_request(SETTINGS_CONTENT_WIDTH, -1);
     stack.set_hexpand(true);
     stack.set_vexpand(false);
-    let resize_stack = stack.clone();
-    stack.connect_visible_child_name_notify(move |_| {
-        resize_stack.queue_resize();
-    });
     body.append(&stack);
     root.append(&body);
 
@@ -273,6 +277,25 @@ pub(crate) fn open_settings_window(
     window_overlay.add_overlay(&settings_window_controls(&window));
     window.set_child(Some(&window_overlay));
     connect_companion_play_pause_space(&window, Rc::clone(&state));
+
+    let auto_height = SettingsAutoHeight::connect(
+        &window,
+        &root,
+        SettingsBodyCaps {
+            stack: stack.clone(),
+            rail_frame,
+            max_body_height,
+        },
+        work_area_height,
+    );
+    let resize_stack = stack.clone();
+    let resize_height = Rc::clone(&auto_height);
+    stack.connect_visible_child_name_notify(move |_| {
+        resize_stack.queue_resize();
+        resize_height.fit_to_content();
+    });
+    auto_height.fit_to_content();
+    connect_settings_geometry_diagnostics(&window, &stack, work_area_height);
 
     begin_companion_map_timing(
         &state,
@@ -354,16 +377,171 @@ pub(crate) fn normalized_settings_page(page: &str) -> Option<SettingsPage> {
     SettingsPage::from_id(page)
 }
 
-pub(crate) fn settings_window_height_cap(parent: &gtk::ApplicationWindow) -> i32 {
-    parent
-        .surface()
-        .and_then(|surface| surface.display().monitor_at_surface(&surface))
-        .map(|monitor| settings_window_height_cap_for_monitor(monitor.geometry().height()))
-        .unwrap_or(SETTINGS_REFERENCE_HEIGHT)
+/// The tallest the Settings window may be on the monitor it opens on.
+///
+/// This is the work area, not the raw monitor rectangle: a panel or a dock has to stay
+/// uncovered. It is the same rectangle every companion window is placed inside, resolved
+/// once so the cap and the placement cannot drift apart.
+pub(crate) fn settings_window_height_cap(parent: &impl IsA<gtk::Window>) -> i32 {
+    companion_window_work_area(parent).height.max(1)
 }
 
+/// The usable height of a monitor: its own height less the room a panel or a dock takes.
+///
+/// One definition, because the cap on how tall Settings may grow and the rectangle every
+/// companion window is placed inside have to mean the same thing.
 pub(crate) fn settings_window_height_cap_for_monitor(monitor_height: i32) -> i32 {
-    monitor_height.saturating_sub(48).max(1)
+    monitor_height
+        .saturating_sub(COMPANION_WORK_AREA_MARGIN)
+        .max(1)
+}
+
+/// Session state behind the content-driven Settings height.
+///
+/// The window is opened by [`build_companion_window`] before any page exists, so its first
+/// size can only be a guess. Once the page is built its natural height is known, and the
+/// window takes it - within the work area, never below what this session already showed,
+/// and never against the reader: the moment the window is resized by hand the shell stops
+/// sizing it at all, because a height the reader chose outranks a height a page wants.
+pub(crate) struct SettingsAutoHeight {
+    window: glib::WeakRef<gtk::Window>,
+    content: gtk::Widget,
+    caps: SettingsBodyCaps,
+    /// The cap resolved when the window opened. Only a fallback: the monitor a window is on
+    /// can change while it is open, so each fit re-reads the work area it is actually on.
+    opening_work_area_height: i32,
+    applied: Cell<window_fit::WindowSize>,
+    taken_over: Cell<bool>,
+}
+
+/// Everything inside the window that carries a copy of "how tall a body may be".
+///
+/// Each scroller stops reporting a natural height once it reaches its own cap, so a window
+/// that moves to a taller monitor has to raise these before it measures anything - otherwise
+/// the new room exists only in the window and the page still says it needs no more than the
+/// old monitor allowed.
+pub(crate) struct SettingsBodyCaps {
+    stack: gtk::Stack,
+    rail_frame: gtk::ScrolledWindow,
+    max_body_height: Rc<Cell<i32>>,
+}
+
+impl SettingsBodyCaps {
+    /// Raise or lower every body cap to the room a window of `window_height` leaves.
+    fn apply(&self, work_area_height: i32) {
+        let body = (work_area_height - SETTINGS_TITLEBAR_HEIGHT).max(1);
+        if self.max_body_height.replace(body) == body {
+            return;
+        }
+        self.rail_frame.set_max_content_height(body);
+        let mut child = self.stack.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if let Ok(scroller) = current.downcast::<gtk::ScrolledWindow>() {
+                scroller.set_max_content_height(body);
+            }
+        }
+    }
+}
+
+impl SettingsAutoHeight {
+    fn connect(
+        window: &gtk::Window,
+        content: &impl IsA<gtk::Widget>,
+        caps: SettingsBodyCaps,
+        work_area_height: i32,
+    ) -> Rc<Self> {
+        let auto = Rc::new(Self {
+            window: window.downgrade(),
+            content: content.clone().upcast(),
+            caps,
+            opening_work_area_height: work_area_height,
+            applied: Cell::new(window_fit::WindowSize {
+                width: window.default_width(),
+                height: window.default_height(),
+            }),
+            taken_over: Cell::new(false),
+        });
+
+        // Two ways a height can stop being the shell's. GTK republishes the default height
+        // when the size request changes, and the allocation moves when a compositor honours
+        // a resize the shell never asked for; the mapped allocation is checked at every fit
+        // as well, because the drag handles of this captionless window go through the
+        // compositor and need not touch the request property at all.
+        let watched_height = Rc::clone(&auto);
+        window.connect_default_height_notify(move |window| {
+            watched_height.observe_window(window);
+        });
+        let watched_width = Rc::clone(&auto);
+        window.connect_default_width_notify(move |window| {
+            watched_width.observe_window(window);
+        });
+        auto
+    }
+
+    /// Record the size the window is requesting, from either dimension's notification.
+    fn observe_window(&self, window: &gtk::Window) {
+        self.observe(window_fit::WindowSize {
+            width: window.default_width(),
+            height: window.default_height(),
+        });
+    }
+
+    /// Record a size the window has, and stop sizing it if the shell did not ask for it.
+    fn observe(&self, size: window_fit::WindowSize) {
+        if companion_window_core::companion_size_taken_over(self.applied.get(), size) {
+            self.taken_over.set(true);
+        }
+    }
+
+    /// Grow the window to the visible page, if nobody else has taken its height over.
+    fn fit_to_content(&self) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        if window.is_mapped() {
+            self.observe(window_fit::WindowSize {
+                width: window.width(),
+                height: window.height(),
+            });
+        }
+        if self.taken_over.get() {
+            return;
+        }
+        // The body caps come first: a page cannot ask for room its own scroller has already
+        // capped away, so moving to a taller monitor has to reach them before measuring.
+        let work_area_height = self.work_area_height(&window);
+        self.caps.apply(work_area_height);
+        // Keep whatever width the window was clamped to: a work area narrower than the
+        // reference shell is the one case where widening to it would hang off the display,
+        // and the page has to be measured at the width it will actually be laid out at.
+        let applied = self.applied.get();
+        let width = window.default_width().max(1);
+        let (_, natural, _, _) = self.content.measure(gtk::Orientation::Vertical, width);
+        let size = window_fit::WindowSize {
+            width,
+            height: companion_window_core::companion_content_height(
+                CompanionWindowKind::Settings,
+                natural,
+                applied.height,
+                work_area_height,
+            ),
+        };
+        if size == applied {
+            return;
+        }
+        self.applied.set(size);
+        window.set_default_size(size.width, size.height);
+    }
+
+    /// The cap that applies right now: the work area of the monitor the window is on, which
+    /// is not necessarily the one the parent player was on when it opened.
+    fn work_area_height(&self, window: &gtk::Window) -> i32 {
+        if window.surface().is_some() {
+            return settings_window_height_cap(window);
+        }
+        self.opening_work_area_height
+    }
 }
 
 pub(crate) fn settings_scroller<T: IsA<gtk::Widget>>(
@@ -492,14 +670,6 @@ pub(crate) fn settings_nav_rail(
         rail.append(&row);
     }
 
-    let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    spacer.set_vexpand(true);
-    rail.append(&spacer);
-
-    let divider = gtk::Separator::new(gtk::Orientation::Horizontal);
-    divider.add_css_class("okp-settings-rail-divider");
-    rail.append(&divider);
-
     let about = settings_nav_row(
         SettingsPage::About.title(),
         SettingsNavIcon::About,
@@ -509,7 +679,7 @@ pub(crate) fn settings_nav_rail(
     buttons
         .borrow_mut()
         .push((SettingsPage::About, about.clone()));
-    rail.append(&about);
+    append_settings_footer_band(&rail, &about, SettingsFooterSite::Rail);
 
     (rail, search)
 }
@@ -679,7 +849,7 @@ pub(crate) fn settings_nav_row(label: &str, icon: SettingsNavIcon, selected: boo
     let button = gtk::Button::new();
     button.add_css_class("okp-settings-nav-row");
     button.set_has_frame(false);
-    button.set_size_request(171, 36);
+    button.set_size_request(171, SETTINGS_NAV_ROW_HEIGHT);
     if selected {
         button.add_css_class("is-selected");
     }
@@ -890,6 +1060,215 @@ pub(crate) fn navigate_settings_page(
             row.remove_css_class("is-selected");
         }
     }
+}
+
+/// The surfaces the Settings geometry record publishes, by the CSS class that marks them.
+///
+/// Nothing here is decorative: these are exactly the rectangles the layout promises to keep
+/// on one grid, so a harness can subtract them instead of comparing screenshots by eye.
+const SETTINGS_GEOMETRY_PROBES: &[(&str, &str)] = &[
+    (settings_geometry::RAIL_RULE_PLANE, "okp-settings-rail-rule"),
+    (
+        settings_geometry::CONTENT_RULE_PLANE,
+        "okp-settings-page-rule",
+    ),
+    (
+        settings_geometry::FOOTER_ACTION_PLANE,
+        "okp-about-copy-button",
+    ),
+    (
+        settings_geometry::FOOTER_LINKS_PLANE,
+        "okp-about-footer-links",
+    ),
+    (settings_geometry::CONTENT_COLUMN_PLANE, "okp-about-sheet"),
+];
+
+/// Publish the Settings window's own rectangles under `OKP_DEBUG_INTERACTIONS`.
+///
+/// Same stream, same grammar and same change-detector shape as the player geometry
+/// diagnostic (#690); a separate `part` namespace because this is a different toplevel and
+/// a harness must never mistake one window's rectangle for the other's.
+pub(crate) fn connect_settings_geometry_diagnostics(
+    window: &gtk::Window,
+    stack: &gtk::Stack,
+    work_area_height: i32,
+) {
+    if env::var_os("OKP_DEBUG_INTERACTIONS").is_none() {
+        return;
+    }
+
+    let weak_window = window.downgrade();
+    let stack = stack.clone();
+    let previous: RefCell<Option<settings_geometry::SettingsGeometry>> = RefCell::new(None);
+    let seq = Cell::new(0u64);
+    glib::timeout_add_local(SETTINGS_GEOMETRY_SAMPLE_INTERVAL, move || {
+        let Some(window) = weak_window.upgrade() else {
+            return glib::ControlFlow::Break;
+        };
+        let Some(current) = settings_geometry_snapshot(&window, &stack, work_area_height) else {
+            return glib::ControlFlow::Continue;
+        };
+        let mut previous = previous.borrow_mut();
+        if previous.as_ref() == Some(&current) {
+            return glib::ControlFlow::Continue;
+        }
+        let next = seq.get().wrapping_add(1);
+        seq.set(next);
+        for line in current.record(next) {
+            eprintln!("{line}");
+        }
+        *previous = Some(current);
+        glib::ControlFlow::Continue
+    });
+}
+
+fn settings_geometry_snapshot(
+    window: &gtk::Window,
+    stack: &gtk::Stack,
+    work_area_height: i32,
+) -> Option<settings_geometry::SettingsGeometry> {
+    if !window.is_mapped() {
+        return None;
+    }
+    let width = f64::from(window.width());
+    let height = f64::from(window.height());
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+
+    let root = window.clone().upcast::<gtk::Widget>();
+    let planes = SETTINGS_GEOMETRY_PROBES
+        .iter()
+        .filter_map(|(name, css_class)| {
+            let widget = descendant_with_css_class(&root, css_class)?;
+            let bounds = widget.compute_bounds(window)?;
+            Some(geometry::Plane::new(
+                *name,
+                geometry::Rect::new(
+                    bounds.x().into(),
+                    bounds.y().into(),
+                    bounds.width().into(),
+                    bounds.height().into(),
+                ),
+                widget.can_target(),
+            ))
+        })
+        .collect();
+
+    Some(settings_geometry::SettingsGeometry {
+        page: stack
+            .visible_child_name()
+            .map(|name| name.to_string())
+            .unwrap_or_else(|| "unknown".to_owned()),
+        client: geometry::Rect::new(0.0, 0.0, width, height),
+        work_area_height: f64::from(work_area_height),
+        content_overflow: settings_content_overflow(stack),
+        planes,
+    })
+}
+
+/// How much of the visible page is out of view. Zero is the whole promise of #711: the
+/// window opens at the height the page wants, so nothing has to be scrolled to.
+fn settings_content_overflow(stack: &gtk::Stack) -> f64 {
+    stack
+        .visible_child()
+        .and_downcast::<gtk::ScrolledWindow>()
+        .map(|scroller| {
+            let adjustment = scroller.vadjustment();
+            (adjustment.upper() - adjustment.page_size()).max(0.0)
+        })
+        .unwrap_or(0.0)
+}
+
+/// The first descendant of `root` carrying `css_class`, in on-screen order.
+fn descendant_with_css_class(root: &gtk::Widget, css_class: &str) -> Option<gtk::Widget> {
+    let mut pending = vec![root.clone()];
+    while let Some(widget) = pending.pop() {
+        if widget.has_css_class(css_class) {
+            return Some(widget);
+        }
+        let mut children = Vec::new();
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            children.push(current);
+        }
+        pending.extend(children.into_iter().rev());
+    }
+    None
+}
+
+/// Where a footer band is being built. Only the rule's horizontal inset and the name the
+/// geometry record gives it differ; every vertical measurement is shared, which is the
+/// whole point of the band.
+#[derive(Clone, Copy)]
+pub(crate) enum SettingsFooterSite {
+    /// The navigation rail, whose rule is inset to match the nav rows' rounded ends.
+    Rail,
+    /// A content page, whose column inset already comes from the page padding.
+    Page,
+}
+
+impl SettingsFooterSite {
+    fn rule_inset(self) -> i32 {
+        match self {
+            Self::Rail => SETTINGS_RAIL_RULE_INSET,
+            Self::Page => 0,
+        }
+    }
+
+    fn rule_class(self) -> &'static str {
+        match self {
+            Self::Rail => "okp-settings-rail-rule",
+            Self::Page => "okp-settings-page-rule",
+        }
+    }
+}
+
+/// Push a footer band to the bottom of a Settings column.
+///
+/// Both columns of this window end the same way: a hairline rule, then one control row.
+/// Building them from one measurement is what puts the rule over the rail's About entry
+/// and the rule over a page footer on a single baseline - and it is what a page added
+/// later inherits, instead of re-deriving a margin that lands a few pixels off.
+///
+/// The band is bottom-anchored by an expanding spacer, so the baseline holds whether the
+/// column is exactly as tall as its content or the window has been stretched past it.
+pub(crate) fn append_settings_footer_band(
+    column: &gtk::Box,
+    row: &impl IsA<gtk::Widget>,
+    site: SettingsFooterSite,
+) {
+    let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    spacer.set_vexpand(true);
+    column.append(&spacer);
+
+    let band = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    band.add_css_class("okp-settings-footer-band");
+    band.set_margin_top(SETTINGS_FOOTER_CONTENT_GAP);
+    band.set_margin_bottom(SETTINGS_FOOTER_BOTTOM_INSET);
+
+    let rule = gtk::Separator::new(gtk::Orientation::Horizontal);
+    rule.add_css_class("okp-settings-footer-rule");
+    rule.add_css_class(site.rule_class());
+    rule.set_margin_start(site.rule_inset());
+    rule.set_margin_end(site.rule_inset());
+    rule.set_margin_bottom(SETTINGS_FOOTER_RULE_GAP);
+    band.append(&rule);
+
+    // The row is a fixed slot rather than whatever its tallest child happens to measure,
+    // and every child is centred in it. That is what makes the footer controls share one
+    // centre line by construction instead of by coincidence.
+    let slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    slot.add_css_class("okp-settings-footer-slot");
+    slot.set_height_request(SETTINGS_FOOTER_ROW_SLOT);
+    let row = row.as_ref();
+    row.set_valign(gtk::Align::Center);
+    row.set_hexpand(true);
+    slot.append(row);
+    band.append(&slot);
+
+    column.append(&band);
 }
 
 pub(crate) fn settings_section(title: &str) -> gtk::Box {

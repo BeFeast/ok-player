@@ -1215,7 +1215,11 @@ fn an_interactive_toast_outlives_a_plain_confirmation() {
 #[test]
 fn settings_shell_matches_windows_reference_geometry() {
     assert_eq!(SETTINGS_REFERENCE_WIDTH, 760);
-    assert_eq!(SETTINGS_REFERENCE_HEIGHT, 560);
+    // The height a Settings window opens at before its page exists lives in the shared
+    // policy, because the height it settles on is the page's own (issue #711).
+    let policy = companion_window_core::companion_window_policy(CompanionWindowKind::Settings);
+    assert_eq!(policy.natural_size.width, SETTINGS_REFERENCE_WIDTH);
+    assert_eq!(policy.natural_size.height, 560);
     assert_eq!(SETTINGS_TITLEBAR_HEIGHT, 42);
     assert_eq!(SETTINGS_RAIL_WIDTH, 192);
     assert_eq!(SETTINGS_CONTENT_WIDTH, 568);
@@ -1232,6 +1236,32 @@ fn settings_natural_height_is_capped_inside_the_monitor() {
     assert_eq!(settings_window_height_cap_for_monitor(900), 852);
     assert_eq!(settings_window_height_cap_for_monitor(648), 600);
     assert_eq!(settings_window_height_cap_for_monitor(32), 1);
+    // The cap and the rectangle a companion window is placed inside are the same work
+    // area, so a page sized to its content can never be sized over a panel.
+    for monitor_height in [1080, 900, 648, 2160] {
+        assert_eq!(
+            companion_window_work_area_for_monitor(gdk::Rectangle::new(0, 0, 1920, monitor_height))
+                .height,
+            settings_window_height_cap_for_monitor(monitor_height)
+        );
+    }
+}
+
+#[test]
+fn the_settings_bottom_band_is_one_measurement_for_both_columns() {
+    // The rail's About entry and a page footer are laid out from these numbers, so their
+    // rules share a baseline. Their sum is the distance from the bottom of either column
+    // to the top of its rule, and it is what the screenshot check subtracts.
+    assert_eq!(SETTINGS_FOOTER_RULE_GAP, 10);
+    assert_eq!(SETTINGS_FOOTER_ROW_SLOT, 36);
+    assert_eq!(SETTINGS_FOOTER_BOTTOM_INSET, 12);
+    assert_eq!(
+        1 + SETTINGS_FOOTER_RULE_GAP + SETTINGS_FOOTER_ROW_SLOT + SETTINGS_FOOTER_BOTTOM_INSET,
+        59
+    );
+    // The rail row is the tallest control either band carries, so the slot is exactly it:
+    // a slot shorter than the row would clip it and move the rule with it.
+    assert_eq!(SETTINGS_FOOTER_ROW_SLOT, SETTINGS_NAV_ROW_HEIGHT);
 }
 
 #[test]
