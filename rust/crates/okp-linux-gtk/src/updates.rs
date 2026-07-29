@@ -988,6 +988,25 @@ pub(crate) fn primary_update_action(presentation: &UpdatePresentation) -> Option
         .filter(|action| *action != UpdateAction::CheckNow)
 }
 
+/// What a screen reader announces for the primary button. The visible label
+/// comes from the action, so the announced one has to follow it: a button that
+/// only starts a check must not be announced as an update (#701), and one that
+/// installs a version the user skipped says which (#682).
+pub(crate) fn primary_action_accessible_label(action: UpdateAction) -> &'static str {
+    match action {
+        UpdateAction::CheckNow => "Check for OK Player updates",
+        UpdateAction::InstallAnyway => "Install the skipped update anyway",
+        // Everything else is a step of the update itself — the download, the
+        // apply, the restart that finishes it, or a retry of one of those.
+        UpdateAction::DownloadUpdate
+        | UpdateAction::ApplyAndRestart
+        | UpdateAction::RestartToFinish
+        | UpdateAction::RestartToUseInstalled
+        | UpdateAction::Retry
+        | UpdateAction::SkipVersion => "Update OK Player",
+    }
+}
+
 /// The action the offer banner's button offers. The banner carries no check
 /// control of its own, so unlike the Settings page it shows the check when the
 /// check is what the state offers — a restart that came back on the old build
@@ -1054,11 +1073,7 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
                     .then_some("OK Player closes to finish this update."),
             );
             primary.update_property(&[gtk::accessible::Property::Label(
-                if action == UpdateAction::InstallAnyway {
-                    "Install the skipped update anyway"
-                } else {
-                    "Update OK Player"
-                },
+                primary_action_accessible_label(action),
             )]);
         }
 

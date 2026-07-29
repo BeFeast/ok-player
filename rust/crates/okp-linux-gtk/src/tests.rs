@@ -4590,6 +4590,21 @@ fn a_failed_restart_recovers_by_re_checking_and_the_button_says_so() {
             .is_err(),
         "the model refuses an in-place retry that has nothing to repeat"
     );
+    // And a screen reader hears the same thing the button says, rather than an
+    // update it is not about to perform.
+    assert_eq!(
+        primary_action_accessible_label(UpdateAction::CheckNow),
+        "Check for OK Player updates"
+    );
+    assert_ne!(
+        primary_action_accessible_label(UpdateAction::CheckNow),
+        primary_action_accessible_label(UpdateAction::DownloadUpdate),
+        "a button that only starts a check must not be announced as an update"
+    );
+    assert_eq!(
+        primary_action_accessible_label(UpdateAction::InstallAnyway),
+        "Install the skipped update anyway"
+    );
     assert!(
         state
             .borrow_mut()
