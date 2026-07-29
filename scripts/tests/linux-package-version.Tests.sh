@@ -17,14 +17,25 @@
 # to be false. Without those the assertions would pass just as happily over a scheme that
 # never fixed anything.
 #
-# Runs on any Linux host with dpkg. No network, no container.
+# The last section runs `scripts/package-linux-deb.sh` for real against a fixture root — the
+# compiler, the bundled mpv runtime and its verifier stubbed, the control-file emission and
+# `dpkg-deb` genuine — and reads the version back out of the `.deb` it wrote. What the rpm lane
+# emits is asserted the same way, out of the SRPM, in scripts/run-linux-rpm-checks.sh, which is
+# where an rpm is actually built.
+#
+# Runs on any Linux host with dpkg and dpkg-deb. No network, no container, no compiler.
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 HELPER="$ROOT/scripts/linux-package-version.sh"
 
-command -v dpkg >/dev/null 2>&1 \
-  || { printf 'the package version tests require dpkg, which is not on PATH\n' >&2; exit 1; }
+for tool in dpkg dpkg-deb; do
+  command -v "$tool" >/dev/null 2>&1 \
+    || { printf 'the package version tests require %s, which is not on PATH\n' "$tool" >&2; exit 1; }
+done
+
+WORK="$(mktemp -d)"
+trap 'rm -rf -- "$WORK"' EXIT
 
 # shellcheck source=/dev/null
 source "$HELPER"
@@ -156,38 +167,81 @@ expect_not_order "the tilde alone does not reach what is already installed" \
 expect_not_order "the epoch alone does not order the release above the candidate" \
   "1:0.11.0-beta.0.208" "1:0.11.0"
 
-# --- 5. The lanes that have to stay in step -------------------------------------------------
-DEB_SCRIPT="$(cat "$ROOT/scripts/package-linux-deb.sh")"
-if [[ "$DEB_SCRIPT" == *'DEB_VERSION="$(okp_debian_version_for_build "$VERSION")"'* ]] \
-  && [[ "$DEB_SCRIPT" == *'Version: $DEB_VERSION'* ]] \
-  && [[ "$DEB_SCRIPT" != *'Version: $VERSION'* ]]; then
-  pass "the Debian packaging stamps the encoded version"
-else
-  fail "deb packaging" "package-linux-deb.sh does not stamp the encoded version"
-fi
+# --- 5. The package the packaging actually produces -----------------------------------------
+# Not a reading of the script: `scripts/package-linux-deb.sh` is run, and the `Version:` field
+# is read back out of the `.deb` it wrote. Everything the packaging needs but this assertion
+# does not is stubbed in a fixture root — the compiler, the bundled mpv runtime and its
+# verifier — so what runs is the real control-file emission and the real `dpkg-deb`.
+FIXTURE="$WORK/repo"
+STUB_BIN="$WORK/stub-bin"
+mkdir -p \
+  "$FIXTURE/scripts" \
+  "$FIXTURE/rust/packaging/linux/icons/hicolor" \
+  "$FIXTURE/rust/target/release" \
+  "$FIXTURE/mpv-runtime" \
+  "$STUB_BIN"
+cp "$ROOT/scripts/package-linux-deb.sh" "$ROOT/scripts/linux-package-version.sh" "$FIXTURE/scripts/"
+cat >"$FIXTURE/scripts/linux-bundled-mpv-env.sh" <<'STUB'
+okp_use_linux_bundled_mpv() { export OKP_BUNDLED_MPV_RUNTIME_DIR="$OKP_TEST_MPV_RUNTIME"; }
+STUB
+printf '#!/usr/bin/env bash\nexit 0\n' >"$FIXTURE/scripts/verify-linux-bundled-mpv.sh"
+printf '#!/bin/sh\nexit 0\n' >"$STUB_BIN/cargo"
+chmod 755 "$FIXTURE/scripts/verify-linux-bundled-mpv.sh" "$STUB_BIN/cargo"
+printf '[Desktop Entry]\nName=OK Player\n' \
+  >"$FIXTURE/rust/packaging/linux/com.befeast.okplayer.desktop"
+printf '<component type="desktop-application"/>\n' \
+  >"$FIXTURE/rust/packaging/linux/com.befeast.okplayer.metainfo.xml"
+printf '<svg/>\n' >"$FIXTURE/rust/packaging/linux/com.befeast.okplayer.svg"
+for size in 16 24 32 48 64; do
+  mkdir -p "$FIXTURE/rust/packaging/linux/icons/hicolor/${size}x${size}/apps"
+  printf '<svg/>\n' \
+    >"$FIXTURE/rust/packaging/linux/icons/hicolor/${size}x${size}/apps/com.befeast.okplayer.svg"
+done
+printf '#!/bin/sh\nexit 0\n' >"$FIXTURE/rust/target/release/okp-linux-gtk"
+chmod 755 "$FIXTURE/rust/target/release/okp-linux-gtk"
+printf 'bundled runtime\n' >"$FIXTURE/mpv-runtime/libmpv.so.2"
 
-RPM_SCRIPT="$(cat "$ROOT/scripts/package-linux-rpm-source.sh")"
-if [[ "$RPM_SCRIPT" == *'RPM_VERSION="$(okp_rpm_version_for_build "$UPSTREAM_VERSION")"'* ]] \
-  && [[ "$RPM_SCRIPT" == *'--define "rpm_version $RPM_VERSION"'* ]]; then
-  pass "the rpm source lane derives its version instead of inheriting a stale default"
-else
-  fail "rpm packaging" "package-linux-rpm-source.sh does not derive rpm_version"
-fi
-
-# The spec's own fallback defaults only apply to a bare `rpmbuild`, and nothing else would ever
-# notice them drifting apart.
-SPEC="$ROOT/rust/packaging/fedora/ok-player.spec"
-spec_default() {
-  awk -v name="$1" '$0 ~ "^%\\{!\\?" name ":%global " name " " { print $3; exit }' "$SPEC" \
-    | tr -d '}'
+package_deb() {
+  # package_deb <build version> — returns the path of the .deb the packaging wrote.
+  local build="$1"
+  env -u CARGO_TARGET_DIR PATH="$STUB_BIN:$PATH" \
+    OKP_TEST_MPV_RUNTIME="$FIXTURE/mpv-runtime" \
+    bash "$FIXTURE/scripts/package-linux-deb.sh" "$build" >/dev/null 2>"$WORK/package.err" || {
+    fail "packaging run" "package-linux-deb.sh failed for ${build}: $(cat "$WORK/package.err")"
+    return 1
+  }
+  printf '%s/artifacts/linux/deb/ok-player_%s_amd64.deb' "$FIXTURE" "$build"
 }
-SPEC_UPSTREAM="$(spec_default upstream_version)"
-SPEC_RPM="$(spec_default rpm_version)"
-if [[ -n "$SPEC_UPSTREAM" && "$SPEC_RPM" == "$(okp_rpm_version_for_build "$SPEC_UPSTREAM")" ]]; then
-  pass "the spec's two version defaults are the same build under the shared rule"
+
+CANDIDATE_DEB="$(package_deb 0.11.0-beta.0.209)"
+RELEASE_DEB="$(package_deb 0.11.0)"
+
+if [[ -f "$CANDIDATE_DEB" && -f "$RELEASE_DEB" ]]; then
+  pass "the packaging names its artifacts by the build version"
 else
-  fail "spec defaults" \
-    "upstream_version=$SPEC_UPSTREAM encodes to $(okp_rpm_version_for_build "$SPEC_UPSTREAM"), but rpm_version=$SPEC_RPM"
+  fail "artifact naming" "expected $CANDIDATE_DEB and $RELEASE_DEB"
+fi
+
+PACKAGED_CANDIDATE="$(dpkg-deb -f "$CANDIDATE_DEB" Version)"
+PACKAGED_RELEASE="$(dpkg-deb -f "$RELEASE_DEB" Version)"
+if [[ "$PACKAGED_CANDIDATE" == "$(okp_debian_version_for_build 0.11.0-beta.0.209)" ]] \
+  && [[ "$PACKAGED_RELEASE" == "$(okp_debian_version_for_build 0.11.0)" ]]; then
+  pass "the produced .deb carries the encoded version ($PACKAGED_CANDIDATE, $PACKAGED_RELEASE)"
+else
+  fail "packaged version" \
+    "the .deb files carry $PACKAGED_CANDIDATE and $PACKAGED_RELEASE"
+fi
+
+# The properties that matter, asked of the packages the packaging produced rather than of
+# strings this test composed.
+expect_order "the produced release outranks the produced candidate" \
+  "$PACKAGED_CANDIDATE" "$PACKAGED_RELEASE"
+expect_order "the produced candidate outranks what testers have installed" \
+  "$INSTALLED" "$PACKAGED_CANDIDATE"
+if [[ "$(okp_build_version_from_debian "$PACKAGED_CANDIDATE")" == "0.11.0-beta.0.209" ]]; then
+  pass "the produced .deb reads back as the build it was made from"
+else
+  fail "packaged round trip" "$PACKAGED_CANDIDATE reads back as $(okp_build_version_from_debian "$PACKAGED_CANDIDATE")"
 fi
 
 if ((failures > 0)); then

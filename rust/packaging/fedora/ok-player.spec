@@ -1,10 +1,12 @@
 # rpm_version is upstream_version with every `-` replaced by `~`, the rule
 # scripts/linux-package-version.sh owns for both Linux package lanes (issue #709).
-# scripts/package-linux-rpm-source.sh always passes both, so these two defaults only apply to
-# a bare `rpmbuild` — and they are a matched pair, pinned by
-# scripts/tests/linux-package-version.Tests.sh so they cannot drift apart.
+# scripts/package-linux-rpm-source.sh passes it explicitly, from that one implementation; the
+# derivation below is the fallback for a bare `rpmbuild`. It is derived rather than written
+# out because it used to be a hand-maintained literal that no --define upstream_version
+# touched, so overriding the upstream version produced a package still calling itself
+# 0.11.0~beta.1. A default that cannot disagree needs no test to keep it honest.
 %{!?upstream_version:%global upstream_version 0.11.0-beta.1}
-%{!?rpm_version:%global rpm_version 0.11.0~beta.1}
+%{!?rpm_version:%global rpm_version %(printf '%%s' '%{upstream_version}' | tr '-' '~')}
 %{!?rpm_release:%global rpm_release 1}
 
 Name:           ok-player
