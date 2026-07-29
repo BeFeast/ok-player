@@ -22,28 +22,16 @@ name: Windows Installer
 # duplicated rather than shared because GitHub Actions does not support YAML
 # anchors; keep them identical.
 
+# Deep lane, not a pull-request gate (see the two-lane split).
+#
+# A pull request is gated by the three required checks only — Core unit tests, the Rust
+# workspace and the real-libmpv integration tests — so a user-visible fix reaches a candidate
+# in minutes instead of waiting on lanes that take half an hour each. Everything expensive and
+# everything platform-specific runs here instead: on every push to main, nightly, and on
+# demand. The trade is deliberate: a regression this lane catches is found after the merge, not
+# before it, and is answered by fixing forward or rolling the candidate pointer back — which is
+# cheaper than making every fix wait for every platform.
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/windows-package.yml'
-      - 'installer/**'
-      # All of src/**, not just App and Core: OkPlayer.App references
-      # OkPlayer.DesignSystem and OkPlayer.Render, and Render references
-      # OkPlayer.Mpv, so every project under src/ ends up inside the installer.
-      # A DesignSystem resource change that compiles but breaks the packaged
-      # main window would otherwise skip this lane entirely.
-      - 'src/**'
-      - 'OkPlayer.sln'
-      # Central build and package version pinning (WindowsAppSDK, Velopack):
-      # a change here changes what the installer contains.
-      - 'Directory.Build.props'
-      - 'Directory.Packages.props'
-      - 'scripts/fetch-natives.ps1'
-      - 'scripts/assert-windows-installed-tree.ps1'
-      # build-velopack.ps1 copies both of these into the publish tree
-      # unconditionally, so renaming or deleting either breaks the pack.
-      - 'LICENSE'
-      - 'THIRD-PARTY-NOTICES.md'
   push:
     branches: [ main ]
     paths:
@@ -57,6 +45,8 @@ on:
       - 'scripts/assert-windows-installed-tree.ps1'
       - 'LICENSE'
       - 'THIRD-PARTY-NOTICES.md'
+  schedule:
+    - cron: '0 1 * * *'
   workflow_dispatch:
 
 jobs:
