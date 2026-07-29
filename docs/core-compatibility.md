@@ -705,3 +705,12 @@ About block and the copied diagnostics from disagreeing (#660).
   marker file beside `settings.json`, written before `ApplyUpdatesAndRestart` and consumed by
   the next launch; Velopack itself remembers the packages but not what the old process was
   expecting.
+- **An install replaced underneath the process (#707).** `ReplacedOnDisk`,
+  `installed_version_observed` and the `RestartToUseInstalled` action are Rust-only for now.
+  They exist because a package manager can upgrade a `.deb`/`.rpm`/Flatpak install *while the
+  player runs*, which no Windows lane produces: Velopack stages into its own layout and swaps
+  on the restart the app itself asks for, which is `RestartPending`. The state is deliberately
+  capability-agnostic rather than system-managed-only, so if an MSI-style install ever replaces
+  a running Windows process the port inherits a modelled state instead of inventing one — the
+  same rule that keeps the other unreachable branches out of the C# projection until something
+  can reach them.
