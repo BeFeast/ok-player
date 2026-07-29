@@ -253,6 +253,10 @@ struct PlayerState {
     nfo_title_jobs: NfoTitleJobs,
     source_generation: u64,
     initial_window_fit: window_fit::InitialFitState,
+    /// The idle geometry the running playback session took the window from, so
+    /// leaving playback can give it back instead of leaving the idle surface in
+    /// a shape chosen for media that is no longer on screen (#716).
+    pre_playback_geometry: window_fit::PrePlaybackGeometry,
     current_video_dimensions: Option<VideoDimensions>,
     seek_generation: u64,
     playlist: Playlist,

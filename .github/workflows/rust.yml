@@ -150,3 +150,5 @@ jobs:
 
       - name: Settings opens About whole and on one grid under a virtual display
         run: ./scripts/smoke-linux-settings-about.sh
+      - name: Idle canvas survives a narrow window and gives its geometry back
+        run: ./scripts/smoke-linux-idle-narrow-canvas.sh

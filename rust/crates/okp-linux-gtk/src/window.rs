@@ -420,6 +420,9 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
             // The Continue-watching shelf is rebuilt whenever the welcome model changes, so
             // its cards are resolved per snapshot. Reporting them is what lets a headless
             // check assert the shelf is a uniform grid instead of a text-shaped row (#702).
+            // The rest of the idle canvas is reported for the same reason: a headless check
+            // can only assert that nothing is cropped at a narrow width if it can see where
+            // each part of the surface ended up (#716).
             nested: vec![
                 NestedPlanes {
                     host: "welcome",
@@ -430,6 +433,38 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
                     host: "welcome",
                     prefix: "recents-more",
                     css_class: "okp-recents-history-button",
+                },
+                NestedPlanes {
+                    host: "welcome",
+                    prefix: "idle-headline",
+                    css_class: "okp-welcome-recents-title",
+                },
+                NestedPlanes {
+                    host: "welcome",
+                    prefix: "idle-subtitle",
+                    css_class: "okp-welcome-recents-subtitle",
+                },
+                NestedPlanes {
+                    host: "welcome",
+                    prefix: "idle-shelf",
+                    css_class: "okp-recents-shelf",
+                },
+                NestedPlanes {
+                    host: "welcome",
+                    prefix: "idle-actions",
+                    css_class: "okp-welcome-action-row",
+                },
+                NestedPlanes {
+                    host: "welcome",
+                    prefix: "idle-footer",
+                    css_class: "okp-idle-footer",
+                },
+                // Index 0 is the History affordance and index 1 the settings button - the
+                // one the operator's screenshot showed cut in half.
+                NestedPlanes {
+                    host: "welcome",
+                    prefix: "idle-footer-button",
+                    css_class: "okp-idle-footer-button",
                 },
             ],
         },
@@ -832,6 +867,7 @@ pub(crate) fn current_player_scale(window: &gtk::ApplicationWindow) -> f64 {
 
 pub(crate) fn fit_player_window_to_video(
     window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
     reported_bounds: &Rc<RefCell<Option<PlayerWindowBounds>>>,
     video: window_fit::WindowSize,
     request: PlayerWindowFitRequest,
@@ -894,6 +930,23 @@ pub(crate) fn fit_player_window_to_video(
             bounds_source.label(),
         );
     }
+    // Take the reading before the window loses it. Only the first fit of a session records
+    // anything, so a portrait file followed by a landscape one still returns to the one
+    // geometry the user chose rather than to the portrait shape (#716).
+    let remembered = state
+        .borrow_mut()
+        .pre_playback_geometry
+        .observe_fit(window_fit::WindowSize {
+            width: window.width(),
+            height: window.height(),
+        });
+    if debug && remembered {
+        eprintln!(
+            "window fit remembers idle geometry: {}x{}",
+            window.width(),
+            window.height()
+        );
+    }
     window.set_default_size(placement.size.width, placement.size.height);
     move_resize_player_window_on_x11(window, placement.position, placement.size);
     if debug {
@@ -905,6 +958,76 @@ pub(crate) fn fit_player_window_to_video(
             placement.position.x,
             placement.position.y,
             window.is_mapped(),
+        );
+    }
+}
+
+/// Give the window back the shape it had before the media that is now closed opened.
+///
+/// Fitting to media is deliberate, but the geometry it chooses belongs to that media; the
+/// idle Continue-watching surface that follows it is a different surface with a different
+/// shape, and inheriting a tall narrow portrait window left it cropped (#716). A window
+/// the user has since made fullscreen or maximized is in a state chosen after the fit, so the
+/// reading is dropped rather than applied underneath them. Compact mode is not such a state: it
+/// exits by itself once media closes and puts back what it captured after the fit, so the reading
+/// is kept and applied on the poll after that exit.
+pub(crate) fn restore_idle_window_geometry(
+    window: &gtk::ApplicationWindow,
+    state: &Rc<RefCell<PlayerState>>,
+    reported_bounds: &Rc<RefCell<Option<PlayerWindowBounds>>>,
+) {
+    let debug = env::var_os("OKP_DEBUG_WINDOW_FIT").is_some();
+    let restored = {
+        let mut state = state.borrow_mut();
+        if !state.pre_playback_geometry.is_pending() {
+            return;
+        }
+        match state.pre_playback_geometry.idle_restore(
+            window.is_fullscreen(),
+            window.is_maximized(),
+            window_compact_mode_active(window),
+        ) {
+            window_fit::IdleRestore::Nothing => return,
+            window_fit::IdleRestore::Forget => {
+                state.pre_playback_geometry.forget();
+                if debug {
+                    eprintln!(
+                        "window fit idle restore skipped: fullscreen={} maximized={}",
+                        window.is_fullscreen(),
+                        window.is_maximized(),
+                    );
+                }
+                return;
+            }
+            window_fit::IdleRestore::Wait => {
+                if debug {
+                    eprintln!("window fit idle restore deferred: compact mode has not exited yet");
+                }
+                return;
+            }
+            window_fit::IdleRestore::Restore => {}
+        }
+        state.pre_playback_geometry.take_for_idle()
+    };
+    let Some(size) = restored else {
+        return;
+    };
+
+    window.set_default_size(size.width, size.height);
+    // The fit centered the window on its work area; restoring the size around that same
+    // center keeps the idle surface where the user is already looking instead of leaving it
+    // hanging off an edge the smaller window fitted inside.
+    if let Some(work_area) = current_player_work_area(window, reported_bounds) {
+        move_resize_player_window_on_x11(
+            window,
+            window_fit::centered_position(size, work_area),
+            size,
+        );
+    }
+    if debug {
+        eprintln!(
+            "window fit idle restore: target={}x{}",
+            size.width, size.height
         );
     }
 }
@@ -985,6 +1108,7 @@ pub(crate) fn fit_player_window_to_current_media(
         window_fit::ExplicitWindowFitAction::FitWindowed => {
             fit_player_window_to_video(
                 window,
+                state,
                 reported_bounds,
                 video,
                 PlayerWindowFitRequest::Explicit,
@@ -1043,6 +1167,7 @@ fn schedule_explicit_player_window_fit(
 
         fit_player_window_to_video(
             &window,
+            &state,
             &reported_bounds,
             video,
             PlayerWindowFitRequest::Explicit,

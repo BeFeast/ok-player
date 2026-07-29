@@ -41,6 +41,25 @@ fn welcome_action_row_stacks(width: i32) -> bool {
     width < WELCOME_CONTENT_WIDTH
 }
 
+/// Let a run of idle-canvas prose reflow instead of setting a floor under the window.
+///
+/// A GtkLabel that neither wraps nor ellipsizes reports its whole text as its *minimum*
+/// width, and a minimum propagates all the way up: the idle canvas ends up unable to be
+/// narrower than its longest sentence, and a window narrower than that - a portrait fit, a
+/// tiling compositor, a hand drag - gets the canvas' minimum allocated inside it and clips
+/// the overflow rather than compressing it (#716). Wrapping keeps the whole sentence
+/// readable, which ellipsizing a headline would not, and leaves the natural width alone so
+/// the canonical desktop layout is unchanged.
+pub(crate) fn reflowing_copy(label: &gtk::Label) {
+    label.set_wrap(true);
+    // Word boundaries first, but a single unbreakable token - a long file name, a URL - may
+    // still be broken rather than allowed back out past the window edge.
+    label.set_wrap_mode(pango::WrapMode::WordChar);
+    // The natural width stays the un-wrapped sentence, so every width at or above the
+    // canonical desktop layout renders exactly as it did before; only the minimum moves.
+    label.set_natural_wrap_mode(gtk::NaturalWrapMode::None);
+}
+
 impl EmptySurface {
     pub(crate) fn refresh(
         &self,
@@ -210,10 +229,14 @@ fn first_run_welcome(
     content.append(&launcher_brand_tile(48, "okp-welcome-brand-tile"));
     let title = gtk::Label::new(Some("Welcome to OK Player"));
     title.add_css_class("okp-first-run-title");
+    title.set_justify(gtk::Justification::Center);
+    reflowing_copy(&title);
     content.append(&title);
 
     let copy = gtk::Label::new(Some("Open a file to start playing."));
     copy.add_css_class("okp-first-run-copy");
+    copy.set_justify(gtk::Justification::Center);
+    reflowing_copy(&copy);
     content.append(&copy);
 
     content.append(&welcome_drop_target(parent, state, status_toast, true));
@@ -235,10 +258,12 @@ fn continue_watching_welcome(
     let title = gtk::Label::new(Some("Continue watching"));
     title.add_css_class("okp-welcome-recents-title");
     title.set_xalign(0.0);
+    reflowing_copy(&title);
     content.append(&title);
     let subtitle = gtk::Label::new(Some("Pick up where you left off — or open something new."));
     subtitle.add_css_class("okp-welcome-recents-subtitle");
     subtitle.set_xalign(0.0);
+    reflowing_copy(&subtitle);
     content.append(&subtitle);
 
     let shelf = gtk::FlowBox::new();
@@ -306,7 +331,12 @@ pub(crate) fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>) -
     // the shelf's grid rests on: `scripts/smoke-linux-recents-shelf.sh` asserts it.
     button.set_size_request(RECENT_CARD_WIDTH, -1);
     button.set_hexpand(false);
-    button.set_halign(gtk::Align::Start);
+    // Centered rather than start-aligned inside that cell. The flow box hands every column
+    // on a line the same width, so at narrow widths - where only one column fits - a
+    // start-aligned card pushed all the leftover into one dead gutter on the right (#716).
+    // Centering shares it around the column instead, and at the canonical desktop width the
+    // line has no leftover at all, so the designed layout is unchanged.
+    button.set_halign(gtk::Align::Center);
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.set_size_request(RECENT_CARD_WIDTH, -1);
@@ -445,10 +475,14 @@ fn welcome_drop_target(
         "Drop a video, folder, or link"
     }));
     primary.add_css_class("okp-drop-primary");
+    primary.set_justify(gtk::Justification::Center);
+    reflowing_copy(&primary);
     content.append(&primary);
     if first_run {
         let secondary = gtk::Label::new(Some("or drop a file, folder, or link"));
         secondary.add_css_class("okp-drop-secondary");
+        secondary.set_justify(gtk::Justification::Center);
+        reflowing_copy(&secondary);
         content.append(&secondary);
     }
     button.set_child(Some(&content));
@@ -479,6 +513,10 @@ pub(crate) fn idle_footer_widgets() -> (gtk::Box, gtk::Button, gtk::Image, gtk::
     let icon = gtk::Image::from_icon_name("document-open-recent-symbolic");
     icon.set_pixel_size(13);
     let label = gtk::Label::new(Some("History"));
+    // The label swaps to "Continue watching" on the History page, so bound it: a footer
+    // whose minimum width follows its own caption pushes the settings button on the far
+    // right past the window edge at narrow widths (#716).
+    label.set_ellipsize(pango::EllipsizeMode::End);
     left_content.append(&icon);
     left_content.append(&label);
     left.set_child(Some(&left_content));
@@ -488,6 +526,9 @@ pub(crate) fn idle_footer_widgets() -> (gtk::Box, gtk::Button, gtk::Image, gtk::
     status.add_css_class("okp-idle-footer-status");
     status.set_hexpand(true);
     status.set_halign(gtk::Align::Center);
+    // Ambient status prose is the first thing that should give way when the bar runs out
+    // of room; the affordances on either side of it are not (#716).
+    status.set_ellipsize(pango::EllipsizeMode::End);
     footer.append(&status);
     (footer, left, icon, label, status)
 }
