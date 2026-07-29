@@ -23,7 +23,12 @@ Linux release evidence is package-specific and has four levels:
 1. `model-unit`: pure Rust model/schema tests.
 2. `xvfb-render`: deterministic X11 rendering and scripted mpv interaction. This can prove geometry, pixels, playback state, screenshot file creation, and X11 fullscreen transitions.
 3. `installed-package`: launch and version checks against the candidate `.deb` or AppImage.
-4. `gnome-wayland-operator`: live GNOME/Wayland acceptance. Only this level may mark chooser, drag/drop, clipboard, portal, compositor, or focus rows `PASS`.
+4. `gnome-wayland-operator`: live GNOME/Wayland acceptance signed off by a person.
+5. `gnome-wayland-automated`: the same live GNOME/Wayland session, driven by
+   `scripts/run-linux-gnome-wayland-acceptance.sh` instead of by a person. Only these two
+   levels may mark chooser, drag/drop, clipboard, portal, compositor, or focus rows
+   `PASS`, and the automated level is accepted only for the rows listed as automatable
+   below.
 
 The recurring lease-gated live-desktop waves, host ordering, artifact layout,
 and site-hook boundary are documented in
@@ -279,6 +284,39 @@ Required live rows are:
 - keyboard focus navigation
 
 Headless evidence must leave all of these `not-run`.
+
+### Automated live rows
+
+Seven of the live rows can be produced by a machine on a real GNOME/Wayland session,
+because the harness reads each outcome back out of the session rather than trusting that
+a gesture had an effect:
+
+| Row | What the harness observes |
+| --- | --- |
+| `wayland-clipboard` | a separate `wl-paste` client reads an `image/png` frame off the Wayland clipboard |
+| `desktop-portal` | the open request travels over `org.freedesktop.portal.FileChooser.OpenFile` on the session bus |
+| `gnome-file-chooser` | the native chooser returns the selected file and the player demuxes it (a non-zero duration in history) |
+| `wayland-compositor-fullscreen` | the compositor's own fullscreen configure at the monitor size, plus a composited frame |
+| `wayland-double-click-fullscreen` | two double-clicks on the video plane drive two compositor transitions |
+| `wayland-always-on-top-unavailable` | the pin control, aimed from the reported geometry, reports the state as unavailable |
+| `keyboard-focus-navigation` | the shell's focus trace shows Tab visiting distinct widgets and Shift+Tab walking back |
+
+`gnome-folder-chooser` and `wayland-drag-drop` stay operator-only: the folder action lives
+behind a popover menu item whose geometry the shell does not report, and a real drag needs
+a source holding an input serial no harness can produce without becoming the thing under
+test. `okp-acceptance-evidence` refuses those two at `gnome-wayland-automated` level.
+
+Run the harness through the **GNOME Wayland Acceptance** workflow (dispatch only; it takes
+an exclusive lease on a graphical host and moves its pointer). Merge its rows the same way
+as the deterministic ones:
+
+```bash
+./scripts/merge-linux-acceptance-evidence.sh acceptance-manifest.json gnome-wayland-rows.json acceptance-manifest.json
+```
+
+Every automated row has a demonstrated negative control: dispatching the workflow with
+`negative_control` set to a row withholds that row's stimulus while leaving its observation
+untouched, and the row must come back `fail`. A row that cannot fail is not evidence.
 
 For Flatpak, record the package identity and extension state with every live
 row: GNOME or KDE Wayland, runtime branch, codecs-extra present or masked, and
