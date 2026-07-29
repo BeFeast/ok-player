@@ -74,18 +74,43 @@ public enum UpdateStateKind
     Failed,
 }
 
+/// <summary>What a recovery from a failed step is able to do. It decides both what
+/// <see cref="UpdateLifecycle.RetryFailedUpdate"/> accepts and what the projection is allowed to
+/// call the action, so a surface cannot promise one thing and deliver another (#701). Mirrors
+/// <c>okp_core::update_lifecycle::FailureRecovery</c>.</summary>
+public enum FailureRecovery
+{
+    /// <summary>The step that failed can simply be run again: the payload is still staged, or the
+    /// offer that was discovered still stands. Repeating it is what "Try again" means.</summary>
+    RepeatTheStep,
+
+    /// <summary>The step cannot be repeated. A restart that came back on the old build is the case
+    /// (#660): the apply consumed the payload that produced it, and the process asking is a new one
+    /// that discovered nothing. Re-checking first is also what keeps the recovery from walking
+    /// straight back into the restart that just failed — one restart attempt, then the user decides.
+    /// So the recovery is a check, and the projection offers it as a check.</summary>
+    CheckAgain,
+}
+
 /// <summary>One position in the update lifecycle.
 /// <c>Idle → Checking → UpToDate | Available | Failed</c>, and from <c>Available</c>:
 /// <c>Downloading → ReadyToApply → Applying → RestartPending → Running</c>.</summary>
 public sealed record UpdateState
 {
-    private UpdateState(UpdateStateKind kind, string? version, string? reason, bool staged, UpdateState? carried)
+    private UpdateState(
+        UpdateStateKind kind,
+        string? version,
+        string? reason,
+        bool staged,
+        UpdateState? carried,
+        FailureRecovery recovery = FailureRecovery.RepeatTheStep)
     {
         Kind = kind;
         Version = version;
         Reason = reason;
         Staged = staged;
         Carried = carried;
+        Recovery = recovery;
     }
 
     public UpdateStateKind Kind { get; }
@@ -104,6 +129,10 @@ public sealed record UpdateState
     /// <summary>The offer that was on screen when a re-check started, restored intact if the check
     /// fails. <see cref="UpdateStateKind.Checking"/> only.</summary>
     public UpdateState? Carried { get; }
+
+    /// <summary>What a recovery from this failure is able to do — not always a repeat of the step
+    /// that failed (#701). <see cref="UpdateStateKind.Failed"/> only.</summary>
+    public FailureRecovery Recovery { get; }
 
     public static UpdateState Idle { get; } = new(UpdateStateKind.Idle, null, null, false, null);
     public static UpdateState UpToDate { get; } = new(UpdateStateKind.UpToDate, null, null, false, null);
@@ -134,8 +163,12 @@ public sealed record UpdateState
     public static UpdateState Running(string version) =>
         new(UpdateStateKind.Running, version, null, false, null);
 
-    public static UpdateState Failed(string reason, string? target, bool staged) =>
-        new(UpdateStateKind.Failed, target, reason, staged, null);
+    public static UpdateState Failed(
+        string reason,
+        string? target,
+        bool staged,
+        FailureRecovery recovery = FailureRecovery.RepeatTheStep) =>
+        new(UpdateStateKind.Failed, target, reason, staged, null, recovery);
 
     /// <summary>The version this state is about, when it is about one. Always the update
     /// <em>target</em> — never a claim about the binary currently executing, which is why
@@ -518,8 +551,10 @@ public sealed class UpdateLifecycle
             _ => UpdateState.Failed(
                 $"restart still runs {runningVersion.Text}; the update to {pending} did not take effect",
                 pending,
-                // The apply already consumed the payload; recovering starts over.
-                staged: false),
+                // The apply already consumed the payload; recovering starts over — and it starts
+                // with a check, never with another restart behind one press (#701).
+                staged: false,
+                recovery: FailureRecovery.CheckAgain),
         };
         return Enter(next);
     }
@@ -528,11 +563,14 @@ public sealed class UpdateLifecycle
     /// download or an apply that failed kept its target, so the same version becomes actionable
     /// again. A verified payload is not thrown away because applying it failed once — the retry
     /// re-applies rather than re-downloads. A check that failed before finding anything has nothing
-    /// to restore; <see cref="StartCheck"/> is its retry.</summary>
+    /// to restore; <see cref="StartCheck"/> is its retry. So is a failure whose recovery is
+    /// <see cref="FailureRecovery.CheckAgain"/> (#701): restoring an offer there would put a version
+    /// back on screen as actionable when nothing local backs it.</summary>
     public bool RetryFailedUpdate()
     {
         if (Capability() != UpdateCapability.SelfApply
             || _state.Kind != UpdateStateKind.Failed
+            || _state.Recovery != FailureRecovery.RepeatTheStep
             || _state.Version is not { } version)
             return false;
         return Enter(_state.Staged
@@ -632,6 +670,11 @@ public sealed class UpdateLifecycle
             UpdateStateKind.RestartUnverified =>
                 $"OK Player restarted after installing version {version}, but this build reports its version as {_runningVersion.Text} without the part that would tell the two apart, so whether the update took effect cannot be confirmed. Check for updates to settle it.",
             UpdateStateKind.Running => $"OK Player is now running version {version}.",
+            // A failure whose recovery is a check says so, because the check is what the surface is
+            // about to offer (#701).
+            UpdateStateKind.Failed
+                when state.Version is not null && state.Recovery == FailureRecovery.CheckAgain =>
+                $"The update to version {version} failed: {state.Reason}. Check for updates to try it again.",
             UpdateStateKind.Failed when state.Version is not null =>
                 $"The update to version {version} failed: {state.Reason}",
             _ => $"Update failed: {state.Reason}",
@@ -687,6 +730,11 @@ public sealed class UpdateLifecycle
             UpdateStateKind.Available => UpdateAction.DownloadUpdate,
             UpdateStateKind.ReadyToApply => UpdateAction.ApplyAndRestart,
             UpdateStateKind.RestartPending => UpdateAction.RestartToFinish,
+            // A failure the recovery cannot repeat is not a retry, and must not be offered as one:
+            // the check it really performs is what the surface says, and the install it discovers is
+            // the press after that (#701).
+            UpdateStateKind.Failed when state.Recovery == FailureRecovery.CheckAgain
+                => UpdateAction.CheckNow,
             UpdateStateKind.Failed => UpdateAction.Retry,
             // A download or an apply in flight offers nothing, and a check with no offer behind it
             // has nothing to keep on screen.
