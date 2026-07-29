@@ -82,7 +82,7 @@ impl CompactMode {
         top_bar.set_margin_start(8);
         top_bar.set_margin_end(8);
 
-        let restore_button = compact_button("view-restore-symbolic", "Restore player");
+        let restore_button = compact_button("okp-view-restore-symbolic", "Restore player");
         restore_button.add_css_class("okp-compact-restore");
 
         let title_label = gtk::Label::new(None);
@@ -93,13 +93,14 @@ impl CompactMode {
         title_label.set_width_chars(1);
         title_label.set_max_width_chars(1);
 
-        let close_button = compact_button("window-close-symbolic", "Close media");
+        let close_button = compact_button("okp-window-close-symbolic", "Close media");
         close_button.add_css_class("okp-compact-close");
         top_bar.append(&restore_button);
         top_bar.append(&title_label);
         top_bar.append(&close_button);
 
-        let play_button = compact_button("media-playback-start-symbolic", "Play / Pause (Space)");
+        let play_button =
+            compact_button("okp-media-playback-start-symbolic", "Play / Pause (Space)");
         play_button.add_css_class("okp-compact-play");
         play_button.add_css_class("okp-compact-motion");
         play_button.set_halign(gtk::Align::Center);
@@ -252,16 +253,16 @@ impl CompactMode {
         self.title_label.set_text(title);
         let Some(playback) = playback else {
             self.play_button
-                .set_icon_name("media-playback-start-symbolic");
+                .set_icon_name("okp-media-playback-start-symbolic");
             self.elapsed_label.set_text("00:00");
             self.seek.set_sensitive(false);
             return;
         };
 
         self.play_button.set_icon_name(if playback.paused {
-            "media-playback-start-symbolic"
+            "okp-media-playback-start-symbolic"
         } else {
-            "media-playback-pause-symbolic"
+            "okp-media-playback-pause-symbolic"
         });
         let duration = playback.duration.unwrap_or(0.0).max(0.0);
         let raw_time = playback.time_pos.unwrap_or(0.0).max(0.0);

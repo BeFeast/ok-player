@@ -350,7 +350,7 @@ impl VolumeControl {
         state.borrow_mut().volume_state.set_level(initial_level);
         let model = Rc::new(Cell::new(volume::VolumeState::new(initial_level)));
 
-        let icon = gtk::Image::from_icon_name("audio-volume-high-symbolic");
+        let icon = gtk::Image::from_icon_name("okp-audio-volume-high-symbolic");
         icon.add_css_class("okp-volume-icon");
 
         let wick = gtk::DrawingArea::new();
@@ -728,11 +728,11 @@ impl VolumeControl {
         self.updating.set(false);
 
         self.icon.set_icon_name(Some(if model.is_muted() {
-            "audio-volume-muted-symbolic"
+            "okp-audio-volume-muted-symbolic"
         } else if model.level() < 50.0 {
-            "audio-volume-low-symbolic"
+            "okp-audio-volume-low-symbolic"
         } else {
-            "audio-volume-high-symbolic"
+            "okp-audio-volume-high-symbolic"
         }));
         self.readout.set_label(&model.readout());
         self.button.set_tooltip_text(Some(if model.is_muted() {
@@ -1003,7 +1003,7 @@ pub(crate) fn build_controls(
     chrome: Rc<ChromeVisibility>,
 ) -> Controls {
     let play_button = gtk::Button::builder()
-        .icon_name("media-playback-start-symbolic")
+        .icon_name("okp-media-playback-start-symbolic")
         .build();
     play_button.set_has_frame(false);
     play_button.add_css_class("okp-control-button");
@@ -1012,7 +1012,7 @@ pub(crate) fn build_controls(
     play_button.set_sensitive(false);
 
     let subtitle_button = gtk::MenuButton::builder()
-        .icon_name("media-view-subtitles-symbolic")
+        .icon_name("okp-media-view-subtitles-symbolic")
         .build();
     subtitle_button.set_has_frame(false);
     subtitle_button.add_css_class("okp-control-button");
@@ -1046,7 +1046,7 @@ pub(crate) fn build_controls(
     speed_button.set_sensitive(false);
 
     let previous_button = gtk::Button::builder()
-        .icon_name("media-skip-backward-symbolic")
+        .icon_name("okp-media-skip-backward-symbolic")
         .build();
     previous_button.set_has_frame(false);
     previous_button.add_css_class("okp-control-button");
@@ -1059,7 +1059,7 @@ pub(crate) fn build_controls(
     elapsed_label.add_css_class("okp-elapsed-time");
 
     let next_button = gtk::Button::builder()
-        .icon_name("media-skip-forward-symbolic")
+        .icon_name("okp-media-skip-forward-symbolic")
         .build();
     next_button.set_has_frame(false);
     next_button.add_css_class("okp-control-button");
@@ -1068,7 +1068,7 @@ pub(crate) fn build_controls(
     next_button.set_sensitive(false);
 
     let chapters_button = gtk::Button::builder()
-        .icon_name("view-list-symbolic")
+        .icon_name("okp-view-list-symbolic")
         .build();
     chapters_button.set_has_frame(false);
     chapters_button.add_css_class("okp-control-button");
@@ -1078,7 +1078,7 @@ pub(crate) fn build_controls(
     chapters_button.set_sensitive(false);
 
     let screenshot_button = gtk::Button::builder()
-        .icon_name("camera-photo-symbolic")
+        .icon_name("okp-camera-photo-symbolic")
         .build();
     screenshot_button.set_has_frame(false);
     screenshot_button.add_css_class("okp-control-button");
@@ -1088,7 +1088,7 @@ pub(crate) fn build_controls(
     screenshot_button.set_sensitive(false);
 
     let fullscreen_button = gtk::Button::builder()
-        .icon_name("view-fullscreen-symbolic")
+        .icon_name("okp-view-fullscreen-symbolic")
         .build();
     fullscreen_button.set_has_frame(false);
     fullscreen_button.add_css_class("okp-control-button");
@@ -1098,7 +1098,7 @@ pub(crate) fn build_controls(
     fullscreen_button.set_sensitive(false);
 
     let more_button = gtk::MenuButton::builder()
-        .icon_name("view-more-symbolic")
+        .icon_name("okp-view-more-symbolic")
         .build();
     more_button.set_has_frame(false);
     more_button.add_css_class("okp-control-button");
@@ -1166,7 +1166,7 @@ pub(crate) fn build_controls(
     side_panel_tabs.append(&chapters_tab);
     side_panel_tabs.append(&up_next_tab);
 
-    let side_panel_close = gtk::Button::from_icon_name("window-close-symbolic");
+    let side_panel_close = gtk::Button::from_icon_name("okp-window-close-symbolic");
     side_panel_close.add_css_class("okp-side-panel-close");
     side_panel_close.set_has_frame(false);
     side_panel_close.set_tooltip_text(Some("Close panel"));
@@ -1659,11 +1659,11 @@ pub(crate) fn set_side_panel_user_visible(
 
 pub(crate) fn update_fullscreen_button(button: &gtk::Button, is_fullscreen: bool) {
     if is_fullscreen {
-        button.set_icon_name("view-restore-symbolic");
+        button.set_icon_name("okp-view-restore-symbolic");
         button.set_tooltip_text(Some("Exit Fullscreen (F / Esc)"));
         button.add_css_class("is-selected");
     } else {
-        button.set_icon_name("view-fullscreen-symbolic");
+        button.set_icon_name("okp-view-fullscreen-symbolic");
         button.set_tooltip_text(Some("Enter Fullscreen (F)"));
         button.remove_css_class("is-selected");
     }

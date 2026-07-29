@@ -1,6 +1,6 @@
 use super::*;
 
-const OKP_STYLESHEET: &str = "
+pub(crate) const OKP_STYLESHEET: &str = "
         /* Design tokens: one coherent OK Player palette. Every accent and state
            colour below derives from these bases via alpha()/mix(), so the whole
            shell retints from a single edit. Dark chrome and the light settings
@@ -4671,6 +4671,34 @@ const OKP_STYLESHEET: &str = "
             background: #ffffff;
             color: #000000;
             box-shadow: none;
+        }
+
+        /* #731. A widget node that takes its icon from CSS is the one kind of
+           chrome icon neither a call site nor a resource path can reach: GTK's
+           own stylesheet names the standard icon, and a selected theme outranks
+           anything the application registers. Naming the shipped icons here is
+           what makes the arrows and the spinner ours. The popover tail is also
+           an `arrow` node and is drawn, not iconised, so these selectors stay
+           inside the button. */
+        menubutton > button arrow,
+        dropdown > button arrow {
+            -gtk-icon-source: -gtk-icontheme('okp-pan-down-symbolic');
+        }
+
+        menubutton > button arrow.up {
+            -gtk-icon-source: -gtk-icontheme('okp-pan-up-symbolic');
+        }
+
+        menubutton > button arrow.left {
+            -gtk-icon-source: -gtk-icontheme('okp-pan-start-symbolic');
+        }
+
+        menubutton > button arrow.right {
+            -gtk-icon-source: -gtk-icontheme('okp-pan-end-symbolic');
+        }
+
+        spinner {
+            -gtk-icon-source: -gtk-icontheme('okp-process-working-symbolic');
         }
         ";
 

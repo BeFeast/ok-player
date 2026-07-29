@@ -1093,7 +1093,7 @@ pub(crate) fn settings_empty_state(text: &str) -> gtk::Box {
     inner.set_halign(gtk::Align::Center);
     inner.set_hexpand(true);
 
-    let icon = gtk::Image::from_icon_name("dialog-information-symbolic");
+    let icon = gtk::Image::from_icon_name("okp-dialog-information-symbolic");
     icon.set_pixel_size(14);
     icon.add_css_class("okp-empty-state-icon");
     inner.append(&icon);

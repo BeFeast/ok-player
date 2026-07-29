@@ -26,6 +26,8 @@ BuildRequires:  rust >= 1.96
 BuildRequires:  gcc
 BuildRequires:  pkgconfig
 BuildRequires:  pkgconfig(gtk4) >= 4.10
+# glib-compile-resources builds the shipped chrome icon set into the binary.
+BuildRequires:  glib2-devel
 BuildRequires:  pkgconfig(mpv) >= 1.109
 BuildRequires:  pkgconfig(x11)
 BuildRequires:  pkgconfig(wayland-client)

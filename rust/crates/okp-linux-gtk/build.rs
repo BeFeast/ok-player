@@ -1,9 +1,11 @@
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
     println!("cargo:rustc-link-lib=X11");
+    compile_chrome_icons();
     if cfg!(target_os = "linux") {
         for library in ["wayland-client", "wayland-egl", "egl"] {
             pkg_config::Config::new()
@@ -77,6 +79,69 @@ fn main() {
         })
         .unwrap_or_else(|| "unknown".to_owned());
     println!("cargo:rustc-env=OKP_BUILD_SHA={sha}");
+}
+
+/// Compile the shipped chrome icons into a `GResource`.
+///
+/// The icons travel inside the binary, so no packaging path - the .deb script,
+/// the Fedora spec, the Flatpak manifest, the AppImage tree - has to learn about
+/// a new directory, and no installed file can go missing underneath the running
+/// shell.
+fn compile_chrome_icons() {
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo must provide OUT_DIR"));
+    let icons = PathBuf::from("icons");
+    let mut names: Vec<String> = fs::read_dir(&icons)
+        .expect("the chrome icon directory must exist")
+        .map(|entry| entry.expect("reading the chrome icon directory failed"))
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with("-symbolic.svg"))
+        .collect();
+    names.sort();
+    assert!(
+        !names.is_empty(),
+        "no chrome icons found in {}",
+        icons.display()
+    );
+
+    // GResource keeps the icon-theme directory convention, because that is what
+    // GTK scans underneath a registered resource path.
+    let staging = out_dir.join("chrome-icons");
+    let scalable = staging.join("icons/scalable/actions");
+    fs::create_dir_all(&scalable).expect("staging the chrome icons must succeed");
+    for name in &names {
+        fs::copy(icons.join(name), scalable.join(name))
+            .unwrap_or_else(|error| panic!("copying {name} failed: {error}"));
+    }
+
+    let mut manifest = String::from(concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+        "<gresources>\n  <gresource prefix=\"/com/befeast/okplayer\">\n"
+    ));
+    for name in &names {
+        manifest.push_str(&format!("    <file>icons/scalable/actions/{name}</file>\n"));
+    }
+    manifest.push_str("  </gresource>\n</gresources>\n");
+    let manifest_path = staging.join("okp-chrome-icons.gresource.xml");
+    fs::write(&manifest_path, manifest).expect("writing the icon manifest must succeed");
+
+    let status = Command::new("glib-compile-resources")
+        .arg("--sourcedir")
+        .arg(&staging)
+        .arg("--target")
+        .arg(out_dir.join("okp-chrome-icons.gresource"))
+        .arg(&manifest_path)
+        .status()
+        .unwrap_or_else(|error| {
+            panic!(
+                "running glib-compile-resources failed: {error}. It ships in \
+                 libglib2.0-dev-bin on Debian and Ubuntu and in glib2-devel on Fedora."
+            )
+        });
+    assert!(
+        status.success(),
+        "glib-compile-resources failed for the chrome icons"
+    );
+    println!("cargo:rerun-if-changed={}", icons.display());
 }
 
 fn generate_wayland_protocol(xml: &Path, header: &Path, code: &Path) {

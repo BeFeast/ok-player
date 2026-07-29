@@ -879,7 +879,7 @@ fn gtk_identity_uses_vector_widgets_instead_of_host_font_marks() {
     assert!(!history.contains("gtk::Label::new(Some(\"▶\"))"));
     assert!(!history.contains("gtk::Label::new(Some(\"OK\"))"));
     assert!(window.contains("canonical_brand_mark(20, 11"));
-    assert!(!window.contains("media-playback-start-symbolic"));
+    assert!(!window.contains("okp-media-playback-start-symbolic"));
     assert!(branding.contains("full_mark_for_icon_size"));
     assert!(branding.contains("CANONICAL_FULL_MARK"));
     assert!(branding.contains("draw_launcher_brand_tile"));
@@ -3006,9 +3006,9 @@ fn video_geometry_toasts_report_the_applied_core_state() {
 fn compact_mode_keeps_the_render_surface_and_restores_standard_chrome() {
     let compact = include_str!("compact_mode.rs");
     for required in [
-        "view-restore-symbolic",
-        "window-close-symbolic",
-        "media-playback-start-symbolic",
+        "okp-view-restore-symbolic",
+        "okp-window-close-symbolic",
+        "okp-media-playback-start-symbolic",
         "okp-compact-seek",
         "COMPACT_DEFAULT_SHORT_EDGE",
         "COMPACT_MIN_SHORT_EDGE",

@@ -104,6 +104,9 @@ pub(crate) fn push_unique_playlist_item(items: &mut Vec<PlaylistItem>, item: Pla
 
 pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> AppRuntime {
     apply_gtk_theme_preview();
+    // Before any widget exists: the chrome's icons come out of the binary, and
+    // the icon theme has to know that before it resolves its first name (#731).
+    register_chrome_icons();
     install_css();
 
     let identity = AppIdentity::linux();
@@ -1308,7 +1311,7 @@ pub(crate) fn build_player_window_chrome(
     transient_controls.add_css_class("okp-top-chrome-motion");
     transient_controls.add_css_class("okp-player-transient-window-controls");
 
-    let pin = gtk::Button::from_icon_name("view-pin-symbolic");
+    let pin = gtk::Button::from_icon_name("okp-view-pin-symbolic");
     pin.add_css_class("okp-player-window-control");
     pin.add_css_class("okp-player-window-pin");
     pin.set_has_frame(false);

@@ -127,7 +127,7 @@ impl EmptySurface {
         }
         self.footer.set_visible(true);
         self.footer_left_icon
-            .set_icon_name(Some("go-previous-symbolic"));
+            .set_icon_name(Some("okp-go-previous-symbolic"));
         self.footer_left_label.set_text("Continue watching");
         self.sync_footer(state.borrow().private_session);
         replace_box_child(&self.history_host, &history_loading_page());
@@ -157,7 +157,7 @@ impl EmptySurface {
         }
         self.stack.set_visible_child_name("welcome");
         self.footer_left_icon
-            .set_icon_name(Some("document-open-recent-symbolic"));
+            .set_icon_name(Some("okp-document-open-recent-symbolic"));
         self.footer_left_label.set_text("History");
         self.footer.set_visible(!matches!(
             self.model.borrow().as_ref(),
@@ -388,7 +388,7 @@ fn recent_history_column(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) -> (gtk::FlowBoxChild, gtk::Button) {
-    let button = gtk::Button::from_icon_name("go-next-symbolic");
+    let button = gtk::Button::from_icon_name("okp-go-next-symbolic");
     button.add_css_class("okp-recents-history-button");
     button.set_tooltip_text(Some("History"));
     button.set_size_request(HISTORY_BUTTON_SIZE, HISTORY_BUTTON_SIZE);
@@ -425,7 +425,7 @@ fn open_file_button(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) -> gtk::Button {
-    let button = icon_text_button("document-open-symbolic", "Open file…");
+    let button = icon_text_button("okp-document-open-symbolic", "Open file…");
     button.add_css_class("okp-idle-primary-button");
     let parent = parent.clone();
     button.connect_clicked(move |_| {
@@ -439,7 +439,7 @@ fn open_url_button(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) -> gtk::Button {
-    let button = icon_text_button("insert-link-symbolic", "Open URL…");
+    let button = icon_text_button("okp-insert-link-symbolic", "Open URL…");
     button.add_css_class("okp-idle-secondary-button");
     let parent = parent.clone();
     button.connect_clicked(move |_| {
@@ -465,7 +465,7 @@ fn welcome_drop_target(
     content.set_halign(gtk::Align::Center);
     content.set_valign(gtk::Align::Center);
     if !first_run {
-        let icon = gtk::Image::from_icon_name("document-send-symbolic");
+        let icon = gtk::Image::from_icon_name("okp-document-send-symbolic");
         icon.set_pixel_size(22);
         content.append(&icon);
     }
@@ -510,7 +510,7 @@ pub(crate) fn idle_footer_widgets() -> (gtk::Box, gtk::Button, gtk::Image, gtk::
     let left = gtk::Button::new();
     left.add_css_class("okp-idle-footer-button");
     let left_content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let icon = gtk::Image::from_icon_name("document-open-recent-symbolic");
+    let icon = gtk::Image::from_icon_name("okp-document-open-recent-symbolic");
     icon.set_pixel_size(13);
     let label = gtk::Label::new(Some("History"));
     // The label swaps to "Continue watching" on the History page, so bound it: a footer
@@ -539,7 +539,7 @@ pub(crate) fn idle_footer_settings_button(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) {
-    let settings = gtk::Button::from_icon_name("emblem-system-symbolic");
+    let settings = gtk::Button::from_icon_name("okp-emblem-system-symbolic");
     settings.add_css_class("okp-idle-footer-button");
     settings.set_tooltip_text(Some("Settings"));
     let parent = parent.clone();
@@ -614,7 +614,7 @@ fn history_page(
 
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 11);
     header.add_css_class("okp-history-header");
-    let back = gtk::Button::from_icon_name("go-previous-symbolic");
+    let back = gtk::Button::from_icon_name("okp-go-previous-symbolic");
     back.add_css_class("okp-history-back-button");
     back.connect_clicked(move |_| surface.show_welcome());
     header.append(&back);
@@ -679,7 +679,7 @@ fn history_page(
     };
 
     if all_items.len() > HISTORY_SEARCH_THRESHOLD {
-        let search = gtk::SearchEntry::new();
+        let search = chrome_search_entry();
         search.add_css_class("okp-history-search");
         search.set_placeholder_text(Some("Search…"));
         search.set_width_chars(24);
@@ -888,7 +888,7 @@ fn history_thumbnail(item: &HistoryItem, width: i32, height: i32, finished: bool
     let frame = gtk::Box::new(gtk::Orientation::Vertical, 0);
     frame.add_css_class("okp-history-thumbnail-placeholder");
     frame.set_size_request(width, height);
-    let placeholder = gtk::Image::from_icon_name("video-x-generic-symbolic");
+    let placeholder = gtk::Image::from_icon_name("okp-video-x-generic-symbolic");
     placeholder.add_css_class("okp-history-thumbnail-icon");
     placeholder.set_pixel_size(if width <= 64 { 16 } else { 24 });
     placeholder.set_halign(gtk::Align::Center);
@@ -924,7 +924,7 @@ fn history_thumbnail(item: &HistoryItem, width: i32, height: i32, finished: bool
 
 fn history_error_state(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusToast>) -> gtk::Box {
     let card = history_state_card(
-        "dialog-warning-symbolic",
+        "okp-dialog-warning-symbolic",
         "Couldn’t read your history just now",
         "The history file may be temporarily unavailable or damaged.",
     );
@@ -941,7 +941,7 @@ fn history_error_state(state: Rc<RefCell<PlayerState>>, status_toast: Rc<StatusT
 
 fn history_empty_state(cleared: bool) -> gtk::Box {
     history_state_card(
-        "document-open-recent-symbolic",
+        "okp-document-open-recent-symbolic",
         if cleared {
             "History cleared"
         } else {
@@ -957,7 +957,7 @@ fn history_empty_state(cleared: bool) -> gtk::Box {
 
 fn history_no_matches_state() -> gtk::Box {
     history_state_card(
-        "edit-find-symbolic",
+        "okp-edit-find-symbolic",
         "No matches",
         "Nothing in your history matches this search.",
     )

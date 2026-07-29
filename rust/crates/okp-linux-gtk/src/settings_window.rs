@@ -589,7 +589,7 @@ pub(crate) fn settings_nav_rail(
 
     let buttons = Rc::new(RefCell::new(Vec::<(SettingsPage, gtk::Button)>::new()));
 
-    let search = gtk::SearchEntry::new();
+    let search = chrome_search_entry();
     search.add_css_class("okp-settings-search");
     search.set_size_request(171, 30);
     search.set_placeholder_text(Some("Search settings"));

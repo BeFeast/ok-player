@@ -414,7 +414,7 @@ pub(crate) fn about_footer(
     let footer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     footer.add_css_class("okp-about-footer");
 
-    let copy = about_action_button("Copy diagnostics", "edit-copy-symbolic");
+    let copy = about_action_button("Copy diagnostics", "okp-edit-copy-symbolic");
     let copy_snapshot = snapshot;
     copy.connect_clicked(move |_| {
         if let Some(display) = gdk::Display::default() {

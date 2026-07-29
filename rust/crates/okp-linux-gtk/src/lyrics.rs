@@ -292,7 +292,7 @@ fn lyrics_empty_row() -> gtk::Widget {
     row.set_halign(gtk::Align::Center);
     row.set_valign(gtk::Align::Center);
 
-    let icon = gtk::Image::from_icon_name("audio-x-generic-symbolic");
+    let icon = gtk::Image::from_icon_name("okp-audio-x-generic-symbolic");
     icon.add_css_class("okp-lyrics-empty-icon");
     icon.set_pixel_size(30);
     row.append(&icon);

@@ -149,6 +149,17 @@ def note():
             + poly([(6.5, 2), (13.5, 3.6), (13.5, 6), (6.5, 4.4)]))
 
 
+def spinner():
+    """A comet ring: eight dots that grow round the circle, so the CSS rotation
+    reads as motion in one direction."""
+    parts = []
+    for i in range(8):
+        a = math.radians(i * 45)
+        r = 0.7 + 0.9 * (i / 7.0)
+        parts.append(circle(8 + 5.6 * math.cos(a), 8 + 5.6 * math.sin(a), r))
+    return "".join(parts)
+
+
 def dots(count=3, r=1.4, y=8):
     xs = {3: (3.6, 8, 12.4), 2: (5, 11)}[count]
     return "".join(circle(x, y, r) for x in xs)
@@ -346,6 +357,7 @@ ICONS = {
     "pan-end": chevron("next"),
     "pan-start": chevron("previous"),
     "pan-up": chevron("up"),
+    "process-working": spinner(),
     "system-search": magnifier(),
     "user-bookmarks": bookmark(),
     "video-x-generic": film(),
