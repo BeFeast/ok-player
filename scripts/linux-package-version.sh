@@ -94,6 +94,7 @@ OKP_DEBIAN_PRE_ENCODING_VERSIONS=(
   '0.1.0-linux-alpha.110'
   '0.1.0-linux-alpha.111'
   '0.1.0-linux-alpha.112'
+  '0.11.0-beta.0.10'
   '0.11.0-beta.0.184'
   '0.11.0-beta.0.185'
   '0.11.0-beta.0.187'
