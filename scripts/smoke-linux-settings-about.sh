@@ -42,6 +42,13 @@ if [[ "${1:-}" == "--inner" ]]; then
   export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
   mkdir -p "$XDG_STATE_HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
 
+  # ImageMagick 7 renamed the entry point; the version Debian and Ubuntu package is 6.
+  if command -v magick >/dev/null 2>&1; then
+    magick_cmd=(magick)
+  else
+    magick_cmd=(convert)
+  fi
+
   xfwm4 --sm-client-disable >"$OUT_DIR/xfwm4.log" 2>&1 &
   wm_pid=$!
   app_pid=""
@@ -239,14 +246,14 @@ size $(field "$part" w "$log")x$(field "$part" h "$log") center-y=$(field "$part
   win_w="$(awk '/Width:/ { print $2; exit }' <<<"$info")"
   win_h="$(awk '/Height:/ { print $2; exit }' <<<"$info")"
   import -window root "$OUT_DIR/root.png"
-  magick "$OUT_DIR/root.png" -crop "${win_w}x${win_h}+${win_x}+${win_y}" +repage \
+  "${magick_cmd[@]}" "$OUT_DIR/root.png" -crop "${win_w}x${win_h}+${win_x}+${win_y}" +repage \
     "$OUT_DIR/settings-about.png"
   rm -f "$OUT_DIR/root.png"
 
   # A hairline is darker than the surface it separates. Six pixels above the rule is inside
   # the gap the band keeps clear, so the comparison is against blank surface either way.
   row_mean() {
-    magick "$OUT_DIR/settings-about.png" -crop "$1" +repage -colorspace gray \
+    "${magick_cmd[@]}" "$OUT_DIR/settings-about.png" -crop "$1" +repage -colorspace gray \
       -format '%[fx:mean]' info:
   }
   assert_painted_rule() {
@@ -292,12 +299,16 @@ fi
 BINARY="${1:-$ROOT/rust/target/debug/okp-linux-gtk}"
 OUT_DIR="${2:-$ROOT/artifacts/manual-ui/linux-settings-about-smoke}"
 
-for tool in xfwm4 xdotool xprop xwininfo import magick awk timeout; do
+for tool in xfwm4 xdotool xprop xwininfo import awk timeout; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "Missing required tool: $tool" >&2
     exit 127
   }
 done
+command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1 || {
+  echo "Missing required tool: magick or convert" >&2
+  exit 127
+}
 [[ -x "$BINARY" ]] || { echo "Missing executable: $BINARY" >&2; exit 127; }
 
 rm -rf "$OUT_DIR"
