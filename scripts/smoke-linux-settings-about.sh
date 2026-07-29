@@ -272,6 +272,36 @@ size $(field "$part" w "$log")x$(field "$part" h "$log") center-y=$(field "$part
   assert_painted_rule content_rule "$content_rule_x" \
     "$(field content-rule w "$OUT_DIR/app.log")" "$content_rule_y" || exit 1
 
+  # 5. A height the reader chose outranks a height a page wants. Resize the window by hand
+  #    and then page to a surface long enough to want the whole work area: the window must
+  #    not move, because automatic sizing ends for the session the moment someone else sizes
+  #    it. This is checked while the window is still shorter than that page wants, since a
+  #    window already at the work-area cap has no growth left to be caught making.
+  HAND_HEIGHT=620
+  xdotool windowsize --sync "$settings_id" 760 "$HAND_HEIGHT"
+  sleep 1
+  # Shortcuts is the sixth rail row and is longer than every work area this runs on.
+  xdotool mousemove --window "$settings_id" 90 302 click 1
+  sleep 2
+  wait_for_settled "$OUT_DIR/app.log" || {
+    echo "the Settings layout never settled after a resize by hand" >&2
+    exit 1
+  }
+  paged_page="$(awk '
+    index($0, "interaction: settings-geometry part=window ") == 1 {
+      for (i = 1; i <= NF; i++) { split($i, pair, "="); if (pair[1] == "page") { value = pair[2] } }
+    } END { print value }' "$OUT_DIR/app.log")"
+  paged_h="$(field window h "$OUT_DIR/app.log")"
+  [[ "$paged_page" != "about" ]] || {
+    echo "the rail click did not leave About; the resize regression tested nothing" >&2
+    exit 1
+  }
+  (( paged_h == HAND_HEIGHT )) || {
+    echo "a page change resized a hand-sized window from ${HAND_HEIGHT}px to ${paged_h}px" >&2
+    dump_settings_state "$OUT_DIR/app.log"
+    exit 1
+  }
+
   kill "$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
   app_pid=""
@@ -291,6 +321,8 @@ size $(field "$part" w "$log")x$(field "$part" h "$log") center-y=$(field "$part
     "rule_baseline_offset=${rule_offset}" \
     "footer_center_offset=${center_offset}" \
     "footer_left_offset=${left_offset}" \
+    "hand_sized_height_kept=${paged_h}" \
+    "hand_sized_page=${paged_page}" \
     'fatal_diagnostics=absent' \
     'status=pass' >>"$OUT_DIR/results.txt"
   exit 0

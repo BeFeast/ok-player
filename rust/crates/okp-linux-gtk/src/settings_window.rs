@@ -368,7 +368,7 @@ pub(crate) fn normalized_settings_page(page: &str) -> Option<SettingsPage> {
 /// This is the work area, not the raw monitor rectangle: a panel or a dock has to stay
 /// uncovered. It is the same rectangle every companion window is placed inside, resolved
 /// once so the cap and the placement cannot drift apart.
-pub(crate) fn settings_window_height_cap(parent: &gtk::ApplicationWindow) -> i32 {
+pub(crate) fn settings_window_height_cap(parent: &impl IsA<gtk::Window>) -> i32 {
     companion_window_work_area(parent).height.max(1)
 }
 
@@ -392,9 +392,11 @@ pub(crate) fn settings_window_height_cap_for_monitor(monitor_height: i32) -> i32
 pub(crate) struct SettingsAutoHeight {
     window: glib::WeakRef<gtk::Window>,
     content: gtk::Widget,
-    work_area_height: i32,
+    /// The cap resolved when the window opened. Only a fallback: the monitor a window is on
+    /// can change while it is open, so each fit re-reads the work area it is actually on.
+    opening_work_area_height: i32,
     applied: Cell<i32>,
-    resized_by_hand: Cell<bool>,
+    taken_over: Cell<bool>,
 }
 
 impl SettingsAutoHeight {
@@ -406,44 +408,66 @@ impl SettingsAutoHeight {
         let auto = Rc::new(Self {
             window: window.downgrade(),
             content: content.clone().upcast(),
-            work_area_height,
+            opening_work_area_height: work_area_height,
             applied: Cell::new(window.default_height()),
-            resized_by_hand: Cell::new(false),
+            taken_over: Cell::new(false),
         });
 
-        // GTK republishes the default height as the window is resized, so any height that
-        // is not the one just applied came from the reader (or the compositor acting for
-        // them) and ends automatic sizing for the rest of the session.
+        // Two ways a height can stop being the shell's. GTK republishes the default height
+        // when the size request changes, and the allocation moves when a compositor honours
+        // a resize the shell never asked for; the mapped allocation is checked at every fit
+        // as well, because the drag handles of this captionless window go through the
+        // compositor and need not touch the request property at all.
         let watched = Rc::clone(&auto);
         window.connect_default_height_notify(move |window| {
-            if window.default_height() != watched.applied.get() {
-                watched.resized_by_hand.set(true);
-            }
+            watched.observe(window.default_height());
         });
         auto
     }
 
-    /// Grow the window to the visible page, if the reader has not taken over.
-    fn fit_to_content(&self) {
-        if self.resized_by_hand.get() {
-            return;
+    /// Record a height the window has, and stop sizing it if the shell did not ask for it.
+    fn observe(&self, height: i32) {
+        if companion_window_core::companion_height_taken_over(self.applied.get(), height) {
+            self.taken_over.set(true);
         }
+    }
+
+    /// Grow the window to the visible page, if nobody else has taken its height over.
+    fn fit_to_content(&self) {
         let Some(window) = self.window.upgrade() else {
             return;
         };
-        let width = window.default_width().max(SETTINGS_REFERENCE_WIDTH);
+        if window.is_mapped() {
+            self.observe(window.height());
+        }
+        if self.taken_over.get() {
+            return;
+        }
+        // Keep whatever width the window was clamped to: a work area narrower than the
+        // reference shell is the one case where widening to it would hang off the display,
+        // and the page has to be measured at the width it will actually be laid out at.
+        let width = window.default_width().max(1);
         let (_, natural, _, _) = self.content.measure(gtk::Orientation::Vertical, width);
         let height = companion_window_core::companion_content_height(
             CompanionWindowKind::Settings,
             natural,
             self.applied.get(),
-            self.work_area_height,
+            self.work_area_height(&window),
         );
         if height == self.applied.get() {
             return;
         }
         self.applied.set(height);
         window.set_default_size(width, height);
+    }
+
+    /// The cap that applies right now: the work area of the monitor the window is on, which
+    /// is not necessarily the one the parent player was on when it opened.
+    fn work_area_height(&self, window: &gtk::Window) -> i32 {
+        if window.surface().is_some() {
+            return settings_window_height_cap(window);
+        }
+        self.opening_work_area_height
     }
 }
 

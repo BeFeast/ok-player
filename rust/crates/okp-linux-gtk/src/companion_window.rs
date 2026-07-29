@@ -225,10 +225,9 @@ pub(crate) fn close_companion_windows(state: &Rc<RefCell<PlayerState>>) {
     }
 }
 
-pub(crate) fn companion_window_work_area(
-    parent: &gtk::ApplicationWindow,
-) -> window_fit::WindowRect {
+pub(crate) fn companion_window_work_area(parent: &impl IsA<gtk::Window>) -> window_fit::WindowRect {
     parent
+        .as_ref()
         .surface()
         .and_then(|surface| surface.display().monitor_at_surface(&surface))
         .map(|monitor| companion_window_work_area_for_monitor(monitor.geometry()))
