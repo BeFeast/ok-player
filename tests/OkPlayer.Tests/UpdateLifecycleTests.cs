@@ -94,9 +94,22 @@ public class UpdateLifecycleTests
         Assert.Equal(UpdateStateKind.Failed, stayed.State.Kind);
         Assert.Equal("0.11.0-beta.0.15", stayed.State.Version);
         Assert.Equal(
-            "The update to version 0.11.0-beta.0.15 failed: restart still runs 0.11.0-beta.0.14; the update to 0.11.0-beta.0.15 did not take effect",
+            "The update to version 0.11.0-beta.0.15 failed: restart still runs 0.11.0-beta.0.14; "
+                + "the update to 0.11.0-beta.0.15 did not take effect. Check for updates to try it again.",
             stayed.Describe().UpdatesMessage);
-        Assert.Equal(UpdateAction.Retry, stayed.Describe().Action);
+        // #701: the recovery is a fresh check, so that is what the action says and what it does —
+        // the payload died with the process that applied it, and nothing here may walk straight back
+        // into another close/apply/relaunch behind one press.
+        Assert.Equal(UpdateAction.CheckNow, stayed.Describe().Action);
+        Assert.Equal("Check for updates", UpdateLifecycle.Label(stayed.Describe().Action!.Value));
+        Assert.False(stayed.Describe().ActionClosesTheApp);
+        Assert.False(stayed.RetryFailedUpdate());
+        Assert.Equal(UpdateStateKind.Failed, stayed.State.Kind);
+
+        // Taking it does what the label says, and the install it finds is a second, deliberate press.
+        Assert.True(stayed.StartCheck());
+        Assert.True(stayed.CheckFound("0.11.0-beta.0.15"));
+        Assert.Equal(UpdateAction.DownloadUpdate, stayed.Describe().Action);
 
         // Coming back on the target, or on something newer still, completes it.
         Assert.Equal(

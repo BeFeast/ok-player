@@ -550,7 +550,32 @@ pub enum UpdateState {
         /// An apply that failed leaves one behind, so retrying re-applies it
         /// rather than fetching it all over again.
         staged: bool,
+        /// What a recovery from this failure is able to do — which is not
+        /// always a repeat of the step that failed (#701).
+        recovery: FailureRecovery,
     },
+}
+
+/// What a recovery from a [`UpdateState::Failed`] is able to do. It decides
+/// both what [`UpdateLifecycle::retry_failed_update`] accepts and what the
+/// projection is allowed to call the action, so a surface cannot promise one
+/// thing and deliver another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FailureRecovery {
+    /// The step that failed can simply be run again: the payload is still
+    /// staged, or the offer that was discovered still stands. Whatever the
+    /// failed step was, repeating it is what "Try again" means.
+    RepeatTheStep,
+    /// The step cannot be repeated. A restart that came back on the old build
+    /// is the case (#660): the apply consumed the payload that produced it,
+    /// and the process asking is a *new* one that has discovered nothing, so
+    /// there is nothing left to re-apply. Re-checking first is also what keeps
+    /// the recovery from walking straight back into the restart that just
+    /// failed — one restart attempt, then the user decides — and it acts on
+    /// what is published now rather than on the payload that failed.
+    ///
+    /// So the recovery is a check, and the projection offers it as a check.
+    CheckAgain,
 }
 
 impl UpdateState {
@@ -603,11 +628,14 @@ pub enum CarriedOffer {
     },
     /// An offer that had already failed. A refresh over it must not quietly
     /// promote it back into a clean offer and drop the error that explains
-    /// what the user is looking at.
+    /// what the user is looking at — nor forget that the failure was one no
+    /// retry can repeat, which would make the refresh hand back a restart
+    /// failure dressed as a retryable one.
     Failed {
         version: String,
         reason: String,
         staged: bool,
+        recovery: FailureRecovery,
     },
     /// A restart the running version could not confirm (#694). A check is what
     /// settles it, so a check that *fails* settles nothing: the pending target
@@ -649,10 +677,12 @@ impl CarriedOffer {
                 version,
                 reason,
                 staged,
+                recovery,
             } => UpdateState::Failed {
                 reason,
                 target: Some(version),
                 staged,
+                recovery,
             },
             Self::UnverifiedRestart { target } => UpdateState::RestartUnverified { target },
         }
@@ -1024,11 +1054,13 @@ impl UpdateLifecycle {
                 reason,
                 target: Some(version),
                 staged,
+                recovery,
             } => {
                 return Some(CarriedOffer::Failed {
                     version: version.clone(),
                     reason: reason.clone(),
                     staged: *staged,
+                    recovery: *recovery,
                 });
             }
             // A failed refresh over an unconfirmed restart leaves it exactly as
@@ -1120,6 +1152,9 @@ impl UpdateLifecycle {
                 reason,
                 target: None,
                 staged: false,
+                // The step that failed was the check, and running it again is
+                // exactly what a retry from here does.
+                recovery: FailureRecovery::RepeatTheStep,
             })),
         }
     }
@@ -1243,6 +1278,7 @@ impl UpdateLifecycle {
                     reason: reason.into(),
                     target,
                     staged: true,
+                    recovery: FailureRecovery::RepeatTheStep,
                 }))
             }
             _ => Err(self.rejected()),
@@ -1262,6 +1298,7 @@ impl UpdateLifecycle {
                     target,
                     // The download is what failed; there is nothing staged.
                     staged: false,
+                    recovery: FailureRecovery::RepeatTheStep,
                 }))
             }
             _ => Err(self.rejected()),
@@ -1313,6 +1350,7 @@ impl UpdateLifecycle {
                     // `Applying` is only reachable from `ReadyToApply`, so the
                     // verified payload is still on disk: a retry applies it.
                     staged: true,
+                    recovery: FailureRecovery::RepeatTheStep,
                 }))
             }
             _ => Err(self.rejected()),
@@ -1356,6 +1394,11 @@ impl UpdateLifecycle {
                 target: Some(pending),
                 // The apply already consumed the payload; recovering starts over.
                 staged: false,
+                // And it starts over with a check: there is no payload to
+                // re-apply, this process discovered nothing, and going
+                // straight back into another restart is precisely what must
+                // not happen behind one press (#701).
+                recovery: FailureRecovery::CheckAgain,
             },
             None => UpdateState::RestartUnverified { target: pending },
         };
@@ -1429,6 +1472,12 @@ impl UpdateLifecycle {
     /// [`UpdateCapability::SelfApply`] install can reach a failure that holds a
     /// target: the download, apply and restart steps are its own, and a failed
     /// re-check restores the standing offer directly rather than failing.
+    ///
+    /// A failure whose recovery is [`FailureRecovery::CheckAgain`] is refused
+    /// too (#701): restoring an offer there would put a version back on screen
+    /// as actionable when nothing local backs it, and would let a surface
+    /// labelled as a retry walk into an apply. [`Self::start_check`] is its
+    /// recovery, and the projection offers exactly that.
     pub fn retry_failed_update(&mut self) -> Result<&UpdateState, UpdateTransitionError> {
         if self.capability() != UpdateCapability::SelfApply {
             return Err(UpdateTransitionError::CapabilityForbids(self.capability()));
@@ -1436,6 +1485,7 @@ impl UpdateLifecycle {
         let UpdateState::Failed {
             target: Some(version),
             staged,
+            recovery: FailureRecovery::RepeatTheStep,
             ..
         } = &self.state
         else {
@@ -1591,6 +1641,16 @@ impl UpdateLifecycle {
                 format!("Version {version} was skipped.")
             }
             UpdateState::ManagedExternally { hint } => hint.clone(),
+            // A failure whose recovery is a check says so, because the check
+            // is what the surface is about to offer (#701).
+            UpdateState::Failed {
+                reason,
+                target: Some(version),
+                recovery: FailureRecovery::CheckAgain,
+                ..
+            } => format!(
+                "The update to version {version} failed: {reason}. Check for updates to try it again."
+            ),
             UpdateState::Failed {
                 reason,
                 target: Some(version),
@@ -1678,6 +1738,14 @@ impl UpdateLifecycle {
             // The build is already installed; the restart is the whole of what
             // is left to do, and it installs nothing.
             UpdateState::ReplacedOnDisk { .. } => Some(UpdateAction::RestartToUseInstalled),
+            // A failure the recovery cannot repeat is not a retry, and must
+            // not be offered as one: the check it really performs is what the
+            // surface says, and the install it discovers is the press after
+            // that (#701).
+            UpdateState::Failed {
+                recovery: FailureRecovery::CheckAgain,
+                ..
+            } => Some(UpdateAction::CheckNow),
             UpdateState::Failed { .. } => Some(UpdateAction::Retry),
             // A skipped version stays installable on demand, but only where the
             // app installs anything at all.
@@ -2326,6 +2394,7 @@ mod tests {
                 reason: "disk full".to_owned(),
                 target: Some("2.0.0".to_owned()),
                 staged: true,
+                recovery: FailureRecovery::RepeatTheStep,
             }
         );
     }
@@ -2944,7 +3013,8 @@ mod tests {
         let presentation = stalled.describe();
         assert_ne!(presentation.claim, VersionClaim::Current);
         assert_eq!(presentation.version_in_use, "1.0.0");
-        assert_eq!(presentation.action, Some(UpdateAction::Retry));
+        // The recovery is a fresh check, so that is what the action says (#701).
+        assert_eq!(presentation.action, Some(UpdateAction::CheckNow));
     }
 
     #[test]
@@ -3037,6 +3107,87 @@ mod tests {
         assert_eq!(deb.describe().action, Some(UpdateAction::CheckNow));
     }
 
+    /// Invariant: after a restart that came back on the old build, the action
+    /// the projection offers is the one it performs. The recovery is
+    /// deliberately a fresh check — the payload died with the process that
+    /// applied it, and going straight back into another close/apply/relaunch
+    /// behind one press is how a player loops through restarts — so the action
+    /// is a check, says it is a check, and the install is the press after it.
+    ///
+    /// The same rule bounds the restarts: nothing the projection offers from
+    /// the failure drives a restart at all, so no path reaches a second one
+    /// without the user asking for it.
+    #[test]
+    fn a_failed_restart_offers_the_check_it_performs_and_never_a_second_restart() {
+        let mut lifecycle =
+            UpdateLifecycle::resumed_after_restart(InstallKind::AppImage, "1.0.0", "2.0.0")
+                .expect("a self-applying install can resume after a restart");
+        let failed = lifecycle.state().clone();
+        assert!(
+            matches!(
+                failed,
+                UpdateState::Failed {
+                    target: Some(_),
+                    recovery: FailureRecovery::CheckAgain,
+                    ..
+                }
+            ),
+            "the restart ran the old binary, and its recovery is a check: {failed:?}"
+        );
+
+        let presentation = lifecycle.describe();
+        let action = presentation.action.expect("the failure offers a way out");
+        assert_eq!(action, UpdateAction::CheckNow);
+        assert_eq!(action.label(), "Check for updates");
+        assert!(
+            !action.applies_update_in_app(),
+            "the offered action installs nothing"
+        );
+        assert!(
+            !presentation.action_closes_the_app,
+            "and it cannot end the session on the one-call lane either"
+        );
+        assert!(
+            presentation.updates_message.contains("Check for updates"),
+            "the message describes the same recovery, got {}",
+            presentation.updates_message
+        );
+
+        // The model itself refuses the in-place retry that would put the
+        // version back as actionable and let a surface apply it from here.
+        assert_eq!(
+            lifecycle.retry_failed_update(),
+            Err(UpdateTransitionError::NotAllowedFrom(failed.clone()))
+        );
+        assert_eq!(lifecycle.state(), &failed, "a refusal changes nothing");
+
+        // Taking the offered action does what the label says, and while it
+        // runs the failure it is refreshing is still the thing on screen.
+        lifecycle.start_check().unwrap();
+        assert!(matches!(lifecycle.state(), UpdateState::Checking { .. }));
+        let refreshing = lifecycle.describe();
+        assert_eq!(refreshing.action, Some(UpdateAction::CheckNow));
+        assert!(!refreshing.action_closes_the_app);
+
+        // A refresh that fails hands the failure back as the one it was: still
+        // no retry, still the check.
+        let mut interrupted = lifecycle.clone();
+        interrupted.check_failed("network unreachable").unwrap();
+        assert_eq!(interrupted.describe().action, Some(UpdateAction::CheckNow));
+        assert!(interrupted.retry_failed_update().is_err());
+
+        // And what the check finds is an offer the user takes deliberately:
+        // the install is a second press, and it is the one that says it closes
+        // the player.
+        lifecycle.check_found("2.0.0").unwrap();
+        let rediscovered = lifecycle.describe();
+        assert_eq!(rediscovered.action, Some(UpdateAction::DownloadUpdate));
+        assert!(
+            rediscovered.action_closes_the_app,
+            "the install the user chooses is the one that restarts the player"
+        );
+    }
+
     /// Invariant: a failure after discovery keeps the offer. The version stays
     /// known and the same update can be retried without waiting for another
     /// check to rediscover it.
@@ -3106,6 +3257,7 @@ mod tests {
                 reason: "network unreachable".to_owned(),
                 target: None,
                 staged: false,
+                recovery: FailureRecovery::RepeatTheStep,
             }))
         );
         assert_eq!(lifecycle.start_check().unwrap(), &checking(None));
@@ -3200,6 +3352,7 @@ mod tests {
                 reason: "network unreachable".to_owned(),
                 target: None,
                 staged: false,
+                recovery: FailureRecovery::RepeatTheStep,
             }
         );
         assert_eq!(lifecycle.describe().action, Some(UpdateAction::Retry));
@@ -3802,6 +3955,7 @@ mod tests {
                 reason: "permission denied".to_owned(),
                 target: Some("2.0.0".to_owned()),
                 staged: true,
+                recovery: FailureRecovery::RepeatTheStep,
             },
             "the apply failure must survive the refresh intact"
         );
@@ -3833,6 +3987,7 @@ mod tests {
                 reason: "could not replace the image".to_owned(),
                 target: Some("2.0.0".to_owned()),
                 staged: true,
+                recovery: FailureRecovery::RepeatTheStep,
             }
         );
         assert_eq!(

@@ -979,12 +979,23 @@ pub(crate) fn update_surface_title(presentation: &UpdatePresentation) -> String 
     }
 }
 
-/// The action the primary button offers, if any. `CheckNow` is the Settings
-/// page's own dedicated button, so it never doubles as the offer's action.
+/// The action the Settings page's primary button offers, if any. `CheckNow` is
+/// that page's own dedicated button, so it never doubles as the offer's action
+/// there.
 pub(crate) fn primary_update_action(presentation: &UpdatePresentation) -> Option<UpdateAction> {
     presentation
         .action
         .filter(|action| *action != UpdateAction::CheckNow)
+}
+
+/// The action the offer banner's button offers. The banner carries no check
+/// control of its own, so unlike the Settings page it shows the check when the
+/// check is what the state offers — a restart that came back on the old build
+/// recovers by re-checking, and its button says so (#701).
+pub(crate) fn offer_primary_update_action(
+    presentation: &UpdatePresentation,
+) -> Option<UpdateAction> {
+    presentation.action
 }
 
 pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
@@ -996,7 +1007,8 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
             state.linux_update.is_busy(),
         )
     };
-    let primary_action = primary_update_action(&presentation);
+    let settings_primary_action = primary_update_action(&presentation);
+    let offer_primary_action = offer_primary_update_action(&presentation);
     let checks_possible = update_checks_are_possible(presentation.install_kind);
     let system_updater = system_software_surface();
     let system_visible = presentation.capability == UpdateCapability::SystemManaged
@@ -1027,6 +1039,11 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
         title.set_text(&title_text);
         status.set_text(&presentation.updates_message);
 
+        let primary_action = if view.kind == LinuxUpdateViewKind::Settings {
+            settings_primary_action
+        } else {
+            offer_primary_action
+        };
         primary.set_visible(primary_action.is_some());
         if let Some(action) = primary_action {
             primary.set_label(action.label());
@@ -1367,7 +1384,10 @@ pub(crate) fn take_primary_update_action(
     if !presentation.actions_enabled {
         return;
     }
-    match primary_update_action(&presentation) {
+    // The button may be either surface's, and the offer banner shows the check
+    // when that is the action, so the dispatch reads the projection's own
+    // action rather than the Settings page's filtered view of it.
+    match presentation.action {
         Some(UpdateAction::DownloadUpdate) => start_update_download(state, status_toast),
         Some(UpdateAction::InstallAnyway) => {
             if transition_update(&state, "install anyway", UpdateLifecycle::install_anyway) {
@@ -1389,7 +1409,11 @@ pub(crate) fn take_primary_update_action(
                 start_update_check_for_ui(state, status_toast, true);
             }
         }
-        Some(UpdateAction::CheckNow) | Some(UpdateAction::SkipVersion) | None => {}
+        // The check the projection offers is a check and nothing more — after
+        // a restart that came back on the old build it is the recovery, and
+        // what it finds is a fresh offer the user takes on purpose (#701).
+        Some(UpdateAction::CheckNow) => start_update_check_for_ui(state, status_toast, true),
+        Some(UpdateAction::SkipVersion) | None => {}
     }
 }
 

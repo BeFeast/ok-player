@@ -4552,11 +4552,12 @@ fn a_dropped_download_is_not_recorded_as_a_staged_payload() {
     );
 }
 
-/// A retry in the process that came back from a failed restart has no payload
-/// left — it died with the previous process — so it re-discovers rather than
-/// reporting the payload missing.
+/// The process that came back from a failed restart has no payload left — it
+/// died with the previous process — so its recovery is a fresh check, and the
+/// button the offer banner shows is that check rather than a retry that would
+/// have to become one behind the user's back (#701).
 #[test]
-fn a_retry_after_a_failed_restart_rediscovers_the_offer() {
+fn a_failed_restart_recovers_by_re_checking_and_the_button_says_so() {
     let session = LinuxUpdateSession::resumed(InstallKind::AppImage, Some("99.0.0".to_owned()));
     let state = Rc::new(RefCell::new(PlayerState {
         linux_update: session,
@@ -4566,14 +4567,29 @@ fn a_retry_after_a_failed_restart_rediscovers_the_offer() {
         state.borrow().linux_update.lifecycle.state(),
         UpdateState::Failed { staged: false, .. }
     ));
-
-    state
-        .borrow_mut()
-        .linux_update
-        .lifecycle
-        .retry_failed_update()
-        .expect("a restart that did not take effect is retryable");
     assert!(update_needs_rediscovery(&state));
+
+    let presentation = state.borrow().linux_update.describe();
+    // The banner carries no check control of its own, so it shows this one.
+    assert_eq!(
+        offer_primary_update_action(&presentation),
+        Some(UpdateAction::CheckNow),
+        "the recovery is a check, and the offer surface offers it"
+    );
+    assert_eq!(
+        presentation.action.map(UpdateAction::label),
+        Some("Check for updates")
+    );
+    // Nothing here can be retried in place: the payload is gone.
+    assert!(
+        state
+            .borrow_mut()
+            .linux_update
+            .lifecycle
+            .retry_failed_update()
+            .is_err(),
+        "the model refuses an in-place retry that has nothing to repeat"
+    );
     assert!(
         state
             .borrow_mut()
