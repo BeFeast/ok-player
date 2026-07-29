@@ -64,6 +64,8 @@ jobs:
           python3 scripts/check-source-grep-tests.py --root .
           ${{ github.event_name == 'pull_request' && '--require-base-ref' || '' }}
 
+      - name: Narrow-width seam aiming tests
+        run: ./scripts/tests/narrow-width-seam.Tests.sh
       - name: Lane split policy tests
         run: ./scripts/tests/lane-split.Tests.sh
       - name: Night GUI QA driver policy tests

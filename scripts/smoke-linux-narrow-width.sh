@@ -301,11 +301,49 @@ panel_header_x=$((panel_left + 28))
 panel_header_w=$((panel_right - panel_header_x))
 # Overflow entry (issue #328): the adaptive OSC folds lower-priority controls
 # into the `…` menu, keeping the overflow entry as the final in-flow action at
-# the far right, ~30 px in from the edge; the seam is the ~16 px gap to its left.
-overflow_w=34
-overflow_x=$((width - 14 - overflow_w))
-seam_w=8
-seam_x=$((overflow_x - seam_w - 4))
+# the far right; a dark seam must separate it from its neighbour.
+#
+# Both the entry and the seam are read from the rectangles the bar publishes,
+# not computed from the window width. The bar spends two levers as the window
+# narrows - gaps 16->8 and pill inset 14->8 (#730) - so an offset measured from
+# the right edge lands on a glyph rather than in the gap at exactly the widths
+# this smoke exercises, and then reports a missing seam that is really a
+# mis-aimed crop.
+overflow_x="$(geometry_field osc-overflow x)"
+overflow_w="$(geometry_field osc-overflow width)"
+if [[ -z "$overflow_x" || -z "$overflow_w" ]]; then
+  echo "the bar published no osc-overflow rectangle; the overflow entry cannot be located" >&2
+  exit 1
+fi
+
+# The seam is the gap the bar actually left: from the right edge of the nearest
+# control left of the overflow entry to the entry itself, sampled in the middle.
+neighbour_right=0
+for plane in osc-play osc-timeline osc-volume osc-slot; do
+  nx="$(geometry_field "$plane" x)"
+  nw="$(geometry_field "$plane" width)"
+  [[ -n "$nx" && -n "$nw" ]] || continue
+  right=$((nx + nw))
+  if (( right <= overflow_x && right > neighbour_right )); then
+    neighbour_right=$right
+  fi
+done
+if (( neighbour_right == 0 )); then
+  echo "no control left of the overflow entry published a rectangle" >&2
+  exit 1
+fi
+gap=$((overflow_x - neighbour_right))
+if (( gap < 4 )); then
+  echo "the overflow entry shares bounds with its neighbour: gap=${gap}px" >&2
+  exit 1
+fi
+if (( gap >= 8 )); then
+  seam_w=4
+else
+  seam_w=2
+fi
+seam_x=$(( neighbour_right + (gap - seam_w) / 2 ))
+echo "overflow=${overflow_x}+${overflow_w} neighbour-right=${neighbour_right} gap=${gap}px seam=${seam_x}+${seam_w}"
 
 # --- The narrow-width acceptance, over one capture ----------------------------
 #
