@@ -189,7 +189,7 @@ assert_idle_capture() {
   done
 
   [[ "$ready" == "1" ]] || {
-    echo "$label did not become a complete Welcome surface: alpha minimum=$alpha_min residual=$identity_residual magenta mean=$magenta_mean" >&2
+    echo "$label did not become a complete Welcome surface over $identity_crop: alpha minimum=$alpha_min residual=$identity_residual magenta mean=$magenta_mean" >&2
     exit 1
   }
 
@@ -252,7 +252,10 @@ wait_for_log_marker() {
 
 launch_fixture() {
   local log_name="$1"
-  setsid env OKP_DEBUG_IDLE_RETURN_SMOKE=1 \
+  # OKP_DEBUG_INTERACTIONS makes the shell publish every surface's rectangle on the
+  # interaction stream (#690). The Close Media phase reads it to prove which welcome
+  # state it is looking at before measuring that state's identity.
+  setsid env OKP_DEBUG_IDLE_RETURN_SMOKE=1 OKP_DEBUG_INTERACTIONS=1 \
     "$BINARY" "$FIXTURE" >"$OUT_DIR/$log_name.log" 2>&1 &
   app_pid=$!
   app_pgid="$app_pid"
@@ -603,7 +606,24 @@ fi
 xdotool windowfocus "$window_id"
 xdotool key --clearmodifiers x
 wait_for_log_marker 'idle-return-smoke: close-idle' "$close_log" close_media_transition
-assert_idle_capture "$window_id" close-media-idle "Close Media idle canvas"
+# Closing part-way through leaves the fixture partially watched, so the canvas this
+# phase returns to is the *populated* Continue-watching welcome - a shelf of cards
+# at the top left - and not the empty hero the initial and EOF phases return to.
+# Wait for the shelf's own plane to be published, which is the state itself saying
+# it is on screen, then measure the identity over the region that state owns.
+#
+# This assertion used to read the empty-welcome crop, and passed only because the
+# cards were sized by their text: the over-wide card and the block-sized "more"
+# affordance of #702 reached into the empty hero's region and left 0.0137 of
+# residual detail there - a 14% margin over the 0.012 threshold. Laying the shelf
+# out on a grid (#703) pulled them back into their own column and the same crop fell
+# to 0.0068, so a fixed layout read as a broken canvas. Over the region this state
+# owns the measurement is 0.0698 both before and after that fix: unchanged by the
+# layout, and 5.8x the threshold.
+wait_for_log_marker 'interaction: geometry part=recent-card-0 ' \
+  "$close_log" close_media_shelf_reported
+assert_idle_capture "$window_id" close-media-idle "Close Media idle canvas" \
+  "$CONTINUE_WATCHING_IDENTITY_CROP"
 stop_app
 
 for name in eof-idle; do

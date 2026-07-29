@@ -5711,6 +5711,7 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
     assert!(smoke.contains("residual_shutdown_decoder_retired"));
     assert!(smoke.contains("OKP_DEBUG_WINDOW_FIT=1"));
     assert!(smoke.contains("CONTINUE_WATCHING_IDENTITY_CROP='300x170+210+60'"));
+    assert!(smoke.contains("OKP_DEBUG_IDLE_RETURN_SMOKE=1 OKP_DEBUG_INTERACTIONS=1"));
     assert!(smoke.contains("Residual initial Continue Watching"));
     assert!(smoke.contains("export GSK_RENDERER=cairo"));
     assert!(smoke.contains("-crop 1120x638+0+42"));
@@ -5758,6 +5759,15 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
         1
     );
     assert_eq!(close_flow.matches("assert_idle_capture").count(), 1);
+    // Closing part-way through leaves the fixture partially watched, so this phase
+    // returns to the populated Continue-watching welcome and not the empty hero the
+    // other two phases return to. The capture waits for the shelf's own plane to be
+    // published and is measured over the crop that state owns - reading the empty
+    // hero's crop there made a shelf laid out on a grid look like a broken canvas
+    // (#702, #703).
+    assert!(close_flow.contains("interaction: geometry part=recent-card-0 "));
+    assert!(close_flow.contains("close_media_shelf_reported"));
+    assert!(close_flow.contains("\"$CONTINUE_WATCHING_IDENTITY_CROP\""));
 
     let residual_flow = smoke
         .split_once("run_residual_open_regression() {")
@@ -5807,6 +5817,7 @@ OUT_DIR={out}
 mkdir -p "$OUT_DIR"
 app_pid=4242
 window_id=17
+CONTINUE_WATCHING_IDENTITY_CROP='300x170+210+60'
 launch_count=0
 stop_count=0
 launch_fixture() {{
@@ -5814,6 +5825,7 @@ launch_fixture() {{
   : >"$OUT_DIR/$1.log"
   if (( launch_count == 2 )); then
     printf '%s\n' 'idle-return-smoke: file-loaded' 'idle-return-smoke: close-idle' \
+      'interaction: geometry part=recent-card-0 reason=layout seq=9 local-x=220.0 local-y=145.0 w=194.0 h=110.0 interactive=1' \
       >"$OUT_DIR/$1.log"
   fi
 }}
@@ -5878,6 +5890,7 @@ OUT_DIR={out}
 mkdir -p "$OUT_DIR"
 app_pid=4242
 window_id=17
+CONTINUE_WATCHING_IDENTITY_CROP='300x170+210+60'
 launch_count=0
 stop_count=0
 launch_fixture() {{

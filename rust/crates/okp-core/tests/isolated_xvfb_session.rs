@@ -346,14 +346,32 @@ fn night_gui_runs_headless_window_regressions_before_the_live_seat_gate() {
 fn narrow_width_portability_capture_uses_a_long_lived_dark_fixture() {
     let narrow = include_str!("../../../../scripts/smoke-linux-narrow-width.sh");
     assert!(narrow.contains("FIXTURE=\"${3:-}\""));
-    assert!(narrow.contains("color=c=0x101010:s=640x360:r=2:d=30"));
-    let delayed_capture = narrow.find("sleep 6").expect("delayed capture wait");
+    // The fixture has to outlast the readiness wait and the bounded re-captures, in
+    // the smoke's own default and in the caller that hands it a clip of its own.
+    assert!(narrow.contains("color=c=0x101010:s=640x360:r=2:d=120"));
+
+    // Readiness is a condition the shell publishes (#690), not a sleep. A capture is
+    // taken only once the record has settled at the narrow width, and a capture the
+    // assertions reject is retried a bounded number of times so an unpainted window
+    // costs a moment rather than reading as a layout failure (#704).
+    assert!(!narrow.contains("sleep 6"));
+    let settled = narrow
+        .find("wait_for_geometry \"narrow reflow\" narrow_chrome_is_laid_out")
+        .expect("narrow reflow readiness wait");
     let screenshot = narrow.find("import -window").expect("window screenshot");
-    assert!(delayed_capture < screenshot);
+    assert!(settled < screenshot);
+    assert!(narrow.contains("CAPTURE_ATTEMPTS=15"));
+    assert!(narrow.contains("plane_is_current osc"));
+    assert!(narrow.contains("plane_is_current side-panel"));
+    // Every assertion is about the OSC over a video plane, so the smoke checks it is
+    // still on the playback surface rather than trusting the clip to outlast it.
+    assert!(narrow.contains("playback_surface_is_live"));
+    // A failure ships its captures: each attempt is kept under its own name.
+    assert!(narrow.contains("narrow-attempt-${attempt}.png"));
 
     let portability = include_str!("../../../../scripts/verify-linux-package-portability.sh");
     assert!(portability.contains("\"$scratch/dark.mkv\""));
-    assert!(portability.contains("color=c=0x101010:s=640x360:r=2:d=30"));
+    assert!(portability.contains("color=c=0x101010:s=640x360:r=2:d=120"));
 }
 
 #[test]
