@@ -319,6 +319,11 @@ public static class VersionOrder
 /// with their kinds.</summary>
 public sealed class UpdateLifecycle
 {
+    /// <summary>What the Updates surface says while a check is in flight. A refresh over a standing
+    /// offer appends it to that offer's own message instead of replacing it, so the offer stays
+    /// legible while it is being refreshed.</summary>
+    private const string CheckingMessage = "Checking for updates…";
+
     private readonly InstallKind _installKind;
     private ReportedVersion _runningVersion;
     private UpdateState _state;
@@ -595,15 +600,28 @@ public sealed class UpdateLifecycle
         };
     }
 
+    /// <summary>The Updates message for the current state. A refresh over a standing offer
+    /// describes both: the offer is what the surface is showing — with its own controls, kept by
+    /// <see cref="Action"/> — and the check is a status on top of it. Replacing the offer's message
+    /// with the check's would hide what the carried version was. Mirrors
+    /// <c>okp_core::update_lifecycle</c>.</summary>
     private string UpdatesMessage(VersionClaim claim)
     {
         if (claim == VersionClaim.NotApplicable)
             return "Updates are disabled for development builds.";
-        string version = _state.Version ?? string.Empty;
-        return _state.Kind switch
+        if (_state.Kind == UpdateStateKind.Checking && _state.Carried is { } carried)
+            return $"{MessageFor(carried)} {CheckingMessage}";
+        return MessageFor(_state);
+    }
+
+    /// <summary>The message for one state on its own, with no check in flight over it.</summary>
+    private string MessageFor(UpdateState state)
+    {
+        string version = state.Version ?? string.Empty;
+        return state.Kind switch
         {
             UpdateStateKind.Idle => "OK Player has not checked for updates yet.",
-            UpdateStateKind.Checking => "Checking for updates…",
+            UpdateStateKind.Checking => CheckingMessage,
             UpdateStateKind.UpToDate => "OK Player is up to date.",
             UpdateStateKind.Available => $"Version {version} is available.",
             UpdateStateKind.Downloading => $"Downloading version {version}…",
@@ -614,9 +632,9 @@ public sealed class UpdateLifecycle
             UpdateStateKind.RestartUnverified =>
                 $"OK Player restarted after installing version {version}, but this build reports its version as {_runningVersion.Text} without the part that would tell the two apart, so whether the update took effect cannot be confirmed. Check for updates to settle it.",
             UpdateStateKind.Running => $"OK Player is now running version {version}.",
-            UpdateStateKind.Failed when _state.Version is not null =>
-                $"The update to version {version} failed: {_state.Reason}",
-            _ => $"Update failed: {_state.Reason}",
+            UpdateStateKind.Failed when state.Version is not null =>
+                $"The update to version {version} failed: {state.Reason}",
+            _ => $"Update failed: {state.Reason}",
         };
     }
 

@@ -37,10 +37,16 @@
 //! Network access, package downloads, process restarts and every other side
 //! effect stay in the shells; this module only decides.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt;
 
 use crate::update_selection::compare_versions;
+
+/// What the Updates surface says while a check is in flight. A refresh over a
+/// standing offer appends it to that offer's own message instead of replacing
+/// it, so the offer stays legible while it is being refreshed.
+const CHECKING_MESSAGE: &str = "Checking for updates…";
 
 /// How the running copy of OK Player was installed.
 ///
@@ -1523,13 +1529,34 @@ impl UpdateLifecycle {
         }
     }
 
+    /// The Updates message for the current state.
+    ///
+    /// A refresh over a standing offer describes *both*: the offer is what the
+    /// surface is showing — with its own controls, kept by [`Self::action`] —
+    /// and the check is a status on top of it. Replacing the offer's message
+    /// with the check's would hide whether the carried version is available,
+    /// skipped, staged or failed, and leave a shell no way to say it except by
+    /// keeping a second offer model of its own.
     fn updates_message(&self, claim: &VersionClaim) -> String {
         if matches!(claim, VersionClaim::NotApplicable) {
             return "Updates are disabled for development builds.".to_owned();
         }
         match &self.state {
+            UpdateState::Checking {
+                carried: Some(offer),
+            } => format!(
+                "{} {CHECKING_MESSAGE}",
+                self.message_for(&offer.clone().into_state())
+            ),
+            state => self.message_for(state),
+        }
+    }
+
+    /// The message for one state on its own, with no check in flight over it.
+    fn message_for(&self, state: &UpdateState) -> String {
+        match state {
             UpdateState::Idle => "OK Player has not checked for updates yet.".to_owned(),
-            UpdateState::Checking { .. } => "Checking for updates…".to_owned(),
+            UpdateState::Checking { .. } => CHECKING_MESSAGE.to_owned(),
             UpdateState::UpToDate => "OK Player is up to date.".to_owned(),
             UpdateState::Available { version } => format!("Version {version} is available."),
             UpdateState::AvailableExternally { version, hint } => {
@@ -1609,19 +1636,24 @@ impl UpdateLifecycle {
         }
     }
 
+    /// The state the surface is presenting controls for. A refresh keeps the
+    /// offer it is refreshing on screen, controls and all — `actions_enabled`
+    /// says they cannot be pressed yet — so everything derived from the offer
+    /// reads it here rather than each deriving it again.
+    fn presented_state(&self) -> Cow<'_, UpdateState> {
+        match &self.state {
+            UpdateState::Checking {
+                carried: Some(offer),
+            } => Cow::Owned(offer.clone().into_state()),
+            state => Cow::Borrowed(state),
+        }
+    }
+
     fn action(&self) -> Option<UpdateAction> {
         if self.capability() == UpdateCapability::Unmanaged {
             return None;
         }
-        // A refresh keeps the offer it is refreshing on screen, controls and
-        // all; `actions_enabled` says they cannot be pressed yet.
-        if let UpdateState::Checking {
-            carried: Some(offer),
-        } = &self.state
-        {
-            return self.action_for(&offer.clone().into_state());
-        }
-        self.action_for(&self.state)
+        self.action_for(&self.presented_state())
     }
 
     fn action_for(&self, state: &UpdateState) -> Option<UpdateAction> {
@@ -1659,18 +1691,34 @@ impl UpdateLifecycle {
 
     /// Whether the offered action ends the session. An action that always
     /// restarts does; so does accepting an offer on a lane that applies while
-    /// it downloads.
+    /// it downloads — but only where accepting it really is the one call that
+    /// downloads, applies and relaunches.
     fn action_closes_the_app(&self) -> bool {
+        let presented = self.presented_state();
         let Some(action) = self.action() else {
             return false;
         };
         if action.closes_the_app() {
             return true;
         }
-        matches!(
-            action,
-            UpdateAction::DownloadUpdate | UpdateAction::InstallAnyway
-        ) && self.install_kind.applies_while_downloading()
+        if !self.install_kind.applies_while_downloading() {
+            return false;
+        }
+        match action {
+            // Accepting a live offer on the one-call lane is the download,
+            // the apply and the relaunch in one step.
+            UpdateAction::DownloadUpdate => true,
+            // Installing a skipped version is that same one call only when
+            // there is nothing staged. A skip that kept a verified payload
+            // sends `install_anyway` to `ReadyToApply` and stops there —
+            // nothing is applied and nothing closes until the user takes the
+            // `ApplyAndRestart` that follows, which says so itself.
+            UpdateAction::InstallAnyway => !matches!(
+                presented.as_ref(),
+                UpdateState::Skipped { staged: true, .. }
+            ),
+            _ => false,
+        }
     }
 
     /// The secondary action beside [`Self::action`]. A live offer — discovered,
@@ -1679,13 +1727,7 @@ impl UpdateLifecycle {
         if self.capability() == UpdateCapability::Unmanaged {
             return None;
         }
-        if let UpdateState::Checking {
-            carried: Some(offer),
-        } = &self.state
-        {
-            return self.secondary_action_for(&offer.clone().into_state());
-        }
-        self.secondary_action_for(&self.state)
+        self.secondary_action_for(&self.presented_state())
     }
 
     fn secondary_action_for(&self, state: &UpdateState) -> Option<UpdateAction> {
@@ -3660,6 +3702,77 @@ mod tests {
         );
     }
 
+    /// Invariant: on the one-call lane, installing a *staged* skipped version
+    /// does not close the player — `install_anyway` only makes the payload it
+    /// kept ready to apply, and the apply after it is what relaunches. The
+    /// warning belongs to the action that really ends the session.
+    #[test]
+    fn a_staged_skip_does_not_announce_that_installing_it_closes_the_app() {
+        let mut staged = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        staged.start_check().unwrap();
+        staged.check_found("2.0.0").unwrap();
+        staged.start_download().unwrap();
+        staged.download_finished().unwrap();
+        staged.start_apply().unwrap();
+        staged.apply_failed("permission denied").unwrap();
+        staged.skip_offer().unwrap();
+        assert_eq!(
+            staged.state(),
+            &UpdateState::Skipped {
+                version: "2.0.0".to_owned(),
+                hint: None,
+                staged: true,
+            },
+            "the skip kept the verified payload"
+        );
+
+        let presentation = staged.describe();
+        assert_eq!(presentation.action, Some(UpdateAction::InstallAnyway));
+        assert!(
+            !presentation.action_closes_the_app,
+            "installing a staged skip only stages it for the apply that follows"
+        );
+
+        // And that is the truth about the transition, not a guess about it.
+        let mut accepted = staged.clone();
+        assert_eq!(
+            accepted.install_anyway().unwrap(),
+            &UpdateState::ReadyToApply {
+                version: "2.0.0".to_owned()
+            },
+            "nothing was applied and nothing closed"
+        );
+        let next = accepted.describe();
+        assert_eq!(next.action, Some(UpdateAction::ApplyAndRestart));
+        assert!(
+            next.action_closes_the_app,
+            "the apply the user takes next is what ends the session"
+        );
+
+        // A skip with nothing staged is the single call that downloads,
+        // applies and relaunches, and still says so.
+        let mut unstaged = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        unstaged.start_check().unwrap();
+        unstaged.check_found("2.0.0").unwrap();
+        unstaged.skip_offer().unwrap();
+        let presentation = unstaged.describe();
+        assert_eq!(presentation.action, Some(UpdateAction::InstallAnyway));
+        assert!(
+            presentation.action_closes_the_app,
+            "an unstaged skip is downloaded, applied and relaunched in one step"
+        );
+
+        // The distinction survives a refresh, which keeps the skipped offer's
+        // control on screen and must describe the same consequence.
+        staged.start_check().unwrap();
+        let refreshing = staged.describe();
+        assert_eq!(refreshing.action, Some(UpdateAction::InstallAnyway));
+        assert!(
+            !refreshing.action_closes_the_app,
+            "a carried staged skip closes nothing either"
+        );
+    }
+
     /// Invariant: a refresh over a failed offer restores the failure, not a
     /// tidied-up version of it. The reason is what the surface is showing.
     #[test]
@@ -3863,6 +3976,76 @@ mod tests {
         // Everything settled is pressable.
         let idle = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
         assert!(idle.describe().actions_enabled);
+    }
+
+    /// Invariant: a check running over a standing offer still describes that
+    /// offer. The check is a status on top of what the surface is showing, not
+    /// a replacement for it — a message that only said "checking" would hide
+    /// whether the carried version is available, skipped, staged or failed,
+    /// and every shell would need its own offer rendering to get it back.
+    #[test]
+    fn a_check_over_a_carried_offer_still_describes_that_offer() {
+        // A refresh over each kind of standing offer, with the words that
+        // distinguish that offer from the others.
+        let refreshing_available = {
+            let mut life = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+            life.start_check().unwrap();
+            life.check_found("2.0.0").unwrap();
+            life.start_check().unwrap();
+            life
+        };
+        let refreshing_skipped = {
+            let mut life = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+            life.start_check().unwrap();
+            life.check_found("2.0.0").unwrap();
+            life.skip_offer().unwrap();
+            life.start_check().unwrap();
+            life
+        };
+        let refreshing_staged = {
+            let mut life = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+            life.start_check().unwrap();
+            life.check_found("2.0.0").unwrap();
+            life.start_download().unwrap();
+            life.download_finished().unwrap();
+            life.start_apply().unwrap();
+            life.apply_failed("permission denied").unwrap();
+            life.start_check().unwrap();
+            life
+        };
+        let refreshing_external = {
+            let mut life = UpdateLifecycle::new(InstallKind::Deb, "1.0.0");
+            life.start_check().unwrap();
+            life.check_found("2.0.0").unwrap();
+            life.start_check().unwrap();
+            life
+        };
+
+        for (life, expected) in [
+            (&refreshing_available, "is available"),
+            (&refreshing_skipped, "was skipped"),
+            (&refreshing_staged, "failed: permission denied"),
+            (&refreshing_external, "apt"),
+        ] {
+            let message = life.describe().updates_message;
+            assert!(
+                message.contains(expected),
+                "a refresh must keep saying what the carried offer is; wanted {expected:?} in {message:?}"
+            );
+            assert!(
+                message.contains("2.0.0"),
+                "and which version it is about, got {message:?}"
+            );
+            assert!(
+                message.contains("Checking for updates…"),
+                "while still saying a check is running, got {message:?}"
+            );
+        }
+
+        // A check with no offer behind it has only itself to report.
+        let mut first = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        first.start_check().unwrap();
+        assert_eq!(first.describe().updates_message, "Checking for updates…");
     }
 
     /// Invariant: a prerelease tail is ordered stage first, counter second, so
