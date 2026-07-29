@@ -20,7 +20,7 @@ fail() { printf 'FAIL %s: %s\n' "$1" "$2"; fail_count=$((fail_count + 1)); }
 
 # The block under test, lifted from the smoke so the arithmetic runs without a
 # built binary or a display.
-block="$(sed -n '/^overflow_x="\$(geometry_field osc-overflow x)"/,/^echo "overflow=/p' "$SMOKE")"
+block="$(sed -n '/^overflow_x="\$(geometry_field osc-overflow-0 local-x)"/,/^echo "overflow=/p' "$SMOKE")"
 if [[ -z "$block" ]]; then
   fail "the smoke still derives the overflow entry from published geometry" "block not found"
   exit 1
@@ -39,12 +39,17 @@ run_case() {
   local label="$1" volume_right="$2" overflow="$3" want_gap="$4" want_seam_x="$5" want_seam_w="$6"
   local T; T="$(mktemp -d)"
   local OUT_DIR="$T"
+  # The shape the shell really publishes: indexed plane names, window-local
+  # `local-x`, and `w`/`h` rather than `width`/`height`. Getting these wrong is
+  # what made the first attempt at this fix report "no osc-overflow rectangle"
+  # in the lane, so the fixture mirrors a real record line for line.
   {
-    printf 'interaction: geometry part=window x=0 y=0 width=480 height=540 seq=3\n'
-    printf 'interaction: geometry part=osc-play x=16 y=481 width=34 height=34 seq=3\n'
-    printf 'interaction: geometry part=osc-volume x=%s y=481 width=34 height=34 seq=3\n' \
-      "$((volume_right - 34))"
-    printf 'interaction: geometry part=osc-overflow x=%s y=481 width=34 height=34 seq=3\n' "$overflow"
+    printf 'interaction: geometry part=window reason=configure seq=3 origin=window x=0 y=0 w=480 h=540 scale=1 fullscreen=false maximized=false compact=false\n'
+    printf 'interaction: geometry part=osc-play-0 reason=configure seq=3 local-x=16 local-y=481 w=34 h=34 x=16 y=481 interactive=true\n'
+    printf 'interaction: geometry part=osc-volume-0 reason=configure seq=3 local-x=%s local-y=481 w=34 h=34 x=%s y=481 interactive=true\n' \
+      "$((volume_right - 34))" "$((volume_right - 34))"
+    printf 'interaction: geometry part=osc-overflow-0 reason=configure seq=3 local-x=%s local-y=481 w=34 h=34 x=%s y=481 interactive=true\n' \
+      "$overflow" "$overflow"
   } >"$T/app.log"
 
   geometry_field() {
