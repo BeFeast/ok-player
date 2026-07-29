@@ -28,6 +28,12 @@
 //!   guessing, because a real prerelease-to-stable upgrade and a truncated
 //!   prerelease have exactly the same shape.
 //!
+//! * **The disk can move without us.** A package manager upgrades a
+//!   system-managed install while the player runs, so "what is installed" is
+//!   an observation the shell makes, not something the app did
+//!   ([`UpdateLifecycle::installed_version_observed`]). Core decides whether
+//!   that observation establishes anything.
+//!
 //! Network access, package downloads, process restarts and every other side
 //! effect stay in the shells; this module only decides.
 
@@ -506,6 +512,18 @@ pub enum UpdateState {
     /// `version` is installed on disk but this process still runs the old
     /// binary. Never a "you are on `version`" state — that conflation is #660.
     RestartPending { version: String },
+    /// `version` is installed on disk, this process still runs the build it
+    /// started with, and nothing this process did put the new one there: a
+    /// package manager upgraded the install while the player was running
+    /// (#707), which the APT channel makes routine.
+    ///
+    /// The same truth as [`Self::RestartPending`] — the disk is ahead of the
+    /// process — reached without an apply of our own, which is why it is a
+    /// state of its own rather than a reuse of that one: no payload was
+    /// staged, there is nothing to retry or to skip, and the only thing that
+    /// resolves it is the restart the user is being asked for. Reached only
+    /// through [`UpdateLifecycle::installed_version_observed`].
+    ReplacedOnDisk { version: String },
     /// The process restarted, and the version it can report about itself is too
     /// coarse to tell whether it came up on `target` (#694): a truncated
     /// running version shares its whole string with the prerelease it may still
@@ -540,6 +558,7 @@ impl UpdateState {
             | Self::ReadyToApply { version }
             | Self::Applying { version }
             | Self::RestartPending { version }
+            | Self::ReplacedOnDisk { version }
             | Self::Skipped { version, .. } => Some(version),
             // The version the restart was meant to land on, still the only
             // build this state is about — the running one is unknown.
@@ -646,6 +665,11 @@ pub enum UpdateTransitionError {
     /// combined download-and-apply step exists only where accepting an offer
     /// does both.
     NotThisLane(InstallKind),
+    /// An observed installed version does not establish that this process is
+    /// behind it: it is the build already running, an older one, or a version
+    /// the strings on hand cannot order at all (#694). Distinct from a refused
+    /// transition — the observation was understood, and it says nothing.
+    NotBehindInstalled { installed: String },
 }
 
 /// What a surface may tell the user about the binary that is executing right
@@ -676,6 +700,10 @@ pub enum UpdateAction {
     ApplyAndRestart,
     /// Restart to start running the applied version.
     RestartToFinish,
+    /// Restart to start running a version that is already installed — put
+    /// there by a package manager, not by this app (#707). Nothing is applied:
+    /// the new build is on disk either way, and only the process is stale.
+    RestartToUseInstalled,
     /// Retry after a failure.
     Retry,
     /// Suppress this exact version so nothing prompts for it again.
@@ -692,6 +720,7 @@ impl UpdateAction {
             Self::DownloadUpdate => "Update now",
             Self::ApplyAndRestart => "Install and restart",
             Self::RestartToFinish => "Restart now",
+            Self::RestartToUseInstalled => "Restart OK Player",
             Self::Retry => "Try again",
             Self::SkipVersion => "Skip this version",
             Self::InstallAnyway => "Install anyway",
@@ -701,6 +730,11 @@ impl UpdateAction {
     /// Whether the action makes the app itself change the installed bits. Only
     /// a [`UpdateCapability::SelfApply`] install ever reaches a state that
     /// offers one.
+    ///
+    /// [`Self::RestartToUseInstalled`] is deliberately not one: a package
+    /// manager already wrote the new build, and restarting into it installs
+    /// nothing. That is what lets a system-managed install offer the restart
+    /// #707 asks for without acquiring an in-app install it must never have.
     pub const fn applies_update_in_app(self) -> bool {
         matches!(
             self,
@@ -716,7 +750,10 @@ impl UpdateAction {
     /// app, and so does finishing an applied one — so a surface can warn before
     /// it happens instead of closing the player out from under the user.
     pub const fn closes_the_app(self) -> bool {
-        matches!(self, Self::ApplyAndRestart | Self::RestartToFinish)
+        matches!(
+            self,
+            Self::ApplyAndRestart | Self::RestartToFinish | Self::RestartToUseInstalled
+        )
     }
 }
 
@@ -751,6 +788,11 @@ pub struct UpdatePresentation {
     /// relaunches in one step — a surface must be able to warn before that,
     /// whatever the action is called.
     pub action_closes_the_app: bool,
+    /// Whether a check would be accepted from this state. A state that has
+    /// already been told what is on disk — or one with a step in flight — has
+    /// nothing to discover, and a surface with its own dedicated check control
+    /// disables it rather than offering a button that does nothing.
+    pub check_available: bool,
     /// The secondary action offered beside the primary one — today only
     /// "Skip this version" on a live offer. Kept in the projection so a shell
     /// never has to maintain its own parallel offer model.
@@ -933,24 +975,35 @@ impl UpdateLifecycle {
         if self.capability() == UpdateCapability::Unmanaged {
             return Err(UpdateTransitionError::CapabilityForbids(self.capability()));
         }
-        match self.state {
-            UpdateState::Idle
-            | UpdateState::UpToDate
-            | UpdateState::Available { .. }
-            | UpdateState::AvailableExternally { .. }
-            | UpdateState::Skipped { .. }
-            | UpdateState::Running { .. }
-            // A check is exactly how an unverifiable restart gets settled: the
-            // feed knows whether the target is still on offer.
-            | UpdateState::RestartUnverified { .. }
-            | UpdateState::Failed { .. } => {
-                // A re-check must not lose the offer already on screen: if it
-                // fails, that offer comes back exactly as it was.
-                let carried = self.carried_offer();
-                Ok(self.enter(UpdateState::Checking { carried }))
-            }
-            _ => Err(self.rejected()),
+        if !self.check_is_allowed() {
+            return Err(self.rejected());
         }
+        // A re-check must not lose the offer already on screen: if it fails,
+        // that offer comes back exactly as it was.
+        let carried = self.carried_offer();
+        Ok(self.enter(UpdateState::Checking { carried }))
+    }
+
+    /// Whether [`Self::start_check`] would be accepted right now. Projected
+    /// into [`UpdatePresentation::check_available`] so a surface with its own
+    /// check control reads the rule instead of keeping a second copy of it.
+    fn check_is_allowed(&self) -> bool {
+        if self.capability() == UpdateCapability::Unmanaged {
+            return false;
+        }
+        matches!(
+            self.state,
+            UpdateState::Idle
+                | UpdateState::UpToDate
+                | UpdateState::Available { .. }
+                | UpdateState::AvailableExternally { .. }
+                | UpdateState::Skipped { .. }
+                | UpdateState::Running { .. }
+                // A check is exactly how an unverifiable restart gets settled:
+                // the feed knows whether the target is still on offer.
+                | UpdateState::RestartUnverified { .. }
+                | UpdateState::Failed { .. }
+        )
     }
 
     /// The offer currently on screen, in the form a failed refresh would put
@@ -1303,6 +1356,64 @@ impl UpdateLifecycle {
         Ok(self.enter(next))
     }
 
+    /// The shell observed which version is *installed* — the package the
+    /// running process was started from, as its package manager or its on-disk
+    /// layout now reports it.
+    ///
+    /// This is the system-managed counterpart of [`Self::apply_needs_restart`]
+    /// (#707). A `.deb`, `.rpm` or Flatpak install can be upgraded by its
+    /// package manager *while the player runs*: the process keeps executing
+    /// the binary it started with, About keeps reporting that build, and
+    /// nothing in the app ever put the new one there, so no transition of the
+    /// self-applying lane can describe it. It is not a Linux-only situation
+    /// either — an MSI-style install replaced underneath a running process is
+    /// the same thing — so the state lives here rather than in a shell.
+    ///
+    /// The observation becomes a claim only when the versions on hand
+    /// *establish* that this process is behind:
+    ///
+    /// * strictly newer than the running build — the restart is real, and
+    ///   [`UpdateState::ReplacedOnDisk`] says so;
+    /// * the same build or an older one — nothing to act on, and
+    ///   [`UpdateTransitionError::NotBehindInstalled`] reports that without
+    ///   touching the state. A package manager rewriting the same version is
+    ///   routine (it changes the file, not the build).
+    /// * not orderable at all, because a truncated version cannot decide it
+    ///   (#694) — refused for the same reason. Announcing a restart onto a
+    ///   version that may well be the one already running is the #660 lie from
+    ///   the other side, and this state exists to end that class, not to add a
+    ///   new instance of it.
+    ///
+    /// A step already in flight keeps its own truth: a check, a download or an
+    /// apply is refused here, and so is a restart this process has already
+    /// asked for. What is on disk is a standing fact rather than an event, so
+    /// the shell simply offers the observation again once the step settles.
+    pub fn installed_version_observed(
+        &mut self,
+        installed_version: impl Into<ReportedVersion>,
+    ) -> Result<&UpdateState, UpdateTransitionError> {
+        if self.capability() == UpdateCapability::Unmanaged {
+            return Err(UpdateTransitionError::CapabilityForbids(self.capability()));
+        }
+        let installed_version = installed_version.into();
+        if compare_reported_build_order(&installed_version, &self.running_version)
+            != Some(Ordering::Greater)
+        {
+            return Err(UpdateTransitionError::NotBehindInstalled {
+                installed: installed_version.text,
+            });
+        }
+        match self.state {
+            UpdateState::Checking { .. }
+            | UpdateState::Downloading { .. }
+            | UpdateState::Applying { .. }
+            | UpdateState::RestartPending { .. } => Err(self.rejected()),
+            _ => Ok(self.enter(UpdateState::ReplacedOnDisk {
+                version: installed_version.text,
+            })),
+        }
+    }
+
     /// Restores the offer a failure interrupted, without a fresh discovery
     /// round: a download, an apply, or a re-check that failed after discovery
     /// kept its target, so the same version becomes actionable again instead of
@@ -1356,6 +1467,7 @@ impl UpdateLifecycle {
             about_message,
             action: self.action(),
             actions_enabled: !matches!(self.state, UpdateState::Checking { .. }),
+            check_available: self.check_is_allowed(),
             action_closes_the_app: self.action_closes_the_app(),
             secondary_action: self.secondary_action(),
             notice: self.notice.clone(),
@@ -1376,7 +1488,10 @@ impl UpdateLifecycle {
             | UpdateState::Applying { version }
             // The applied bits are on disk, but this process is still the old
             // binary: superseded, not current (#660).
-            | UpdateState::RestartPending { version } => VersionClaim::Superseded {
+            | UpdateState::RestartPending { version }
+            // Same again for bits a package manager wrote (#707): whoever put
+            // the newer build on disk, this process is not running it.
+            | UpdateState::ReplacedOnDisk { version } => VersionClaim::Superseded {
                 newer: version.clone(),
             },
             // A failure that kept its target still knows a newer build exists
@@ -1429,6 +1544,10 @@ impl UpdateLifecycle {
                 "Version {version} is installed. Restart OK Player to start running it — this session is still on {}.",
                 self.running_version
             ),
+            UpdateState::ReplacedOnDisk { version } => format!(
+                "Version {version} is installed — restart OK Player to use it. This session is still on {}.",
+                self.running_version
+            ),
             UpdateState::Running { version } => {
                 format!("OK Player is now running version {version}.")
             }
@@ -1463,7 +1582,11 @@ impl UpdateLifecycle {
         match claim {
             VersionClaim::Current => format!("OK Player {running} — up to date."),
             VersionClaim::Superseded { newer } => {
-                if matches!(self.state, UpdateState::RestartPending { .. }) {
+                if matches!(self.state, UpdateState::ReplacedOnDisk { .. }) {
+                    format!(
+                        "OK Player {running} — version {newer} is installed; restart to use it."
+                    )
+                } else if matches!(self.state, UpdateState::RestartPending { .. }) {
                     format!("OK Player {running} — restart to finish updating to {newer}.")
                 } else if matches!(self.state, UpdateState::Failed { .. }) {
                     format!("OK Player {running} — updating to {newer} failed.")
@@ -1512,6 +1635,9 @@ impl UpdateLifecycle {
             UpdateState::Available { .. } => Some(UpdateAction::DownloadUpdate),
             UpdateState::ReadyToApply { .. } => Some(UpdateAction::ApplyAndRestart),
             UpdateState::RestartPending { .. } => Some(UpdateAction::RestartToFinish),
+            // The build is already installed; the restart is the whole of what
+            // is left to do, and it installs nothing.
+            UpdateState::ReplacedOnDisk { .. } => Some(UpdateAction::RestartToUseInstalled),
             UpdateState::Failed { .. } => Some(UpdateAction::Retry),
             // A skipped version stays installable on demand, but only where the
             // app installs anything at all.
@@ -1599,6 +1725,9 @@ mod tests {
     type Drive = Box<dyn Fn(&mut UpdateLifecycle)>;
     /// A transition attempt whose refusal the caller inspects.
     type Attempt = Box<dyn Fn(&mut UpdateLifecycle) -> Result<(), UpdateTransitionError>>;
+    /// A transition taken by name, for tables of steps a state must refuse.
+    type Transition =
+        for<'a> fn(&'a mut UpdateLifecycle) -> Result<&'a UpdateState, UpdateTransitionError>;
 
     const SELF_APPLY_KINDS: [InstallKind; 2] =
         [InstallKind::WindowsVelopack, InstallKind::AppImage];
@@ -1680,6 +1809,15 @@ mod tests {
             }),
             Box::new(|life: &mut UpdateLifecycle| {
                 let _ = life.retry_failed_update();
+            }),
+            // Last, because a package manager replacing the install underneath
+            // the process outranks whatever the session was doing: every state
+            // reachable after it is reachable from here.
+            Box::new(|life: &mut UpdateLifecycle| {
+                let _ = life.installed_version_observed("4.0.0");
+            }),
+            Box::new(|life: &mut UpdateLifecycle| {
+                let _ = life.start_check();
             }),
         ];
         for attempt in attempts {
@@ -2251,6 +2389,342 @@ mod tests {
                 assert!(
                     !action.is_some_and(UpdateAction::applies_update_in_app),
                     "{kind} offered {action:?} in state {:?}",
+                    life.state()
+                );
+            });
+        }
+    }
+
+    /// Invariant: the sweep the capability tests run actually walks through
+    /// [`UpdateState::ReplacedOnDisk`]. Without this, adding the state would
+    /// leave every sweep-based invariant green for the worst possible reason —
+    /// never having reached it.
+    #[test]
+    fn the_state_sweep_reaches_a_replaced_install() {
+        for kind in SELF_APPLY_KINDS.iter().chain(&SYSTEM_MANAGED_KINDS) {
+            let mut seen = false;
+            sweep_reachable_states(*kind, |life| {
+                seen |= matches!(life.state(), UpdateState::ReplacedOnDisk { .. });
+            });
+            assert!(seen, "{kind} never reached ReplacedOnDisk in the sweep");
+        }
+    }
+
+    /// A package manager can upgrade a system-managed install while the player
+    /// runs (#707). The process keeps executing the old build, so the surfaces
+    /// must say so — the same class as #660, arriving from the other side.
+    #[test]
+    fn a_package_upgrade_under_a_running_player_asks_for_the_restart() {
+        for kind in SYSTEM_MANAGED_KINDS {
+            let mut lifecycle = UpdateLifecycle::new(kind, "0.11.0-beta.0.197");
+            lifecycle.start_check().unwrap();
+            lifecycle.check_found_none().unwrap();
+            assert_eq!(
+                lifecycle.describe().claim,
+                VersionClaim::Current,
+                "{kind} starts out believing it is current"
+            );
+
+            lifecycle
+                .installed_version_observed("0.11.0-beta.0.208")
+                .expect("a newer installed build is a restart this session must mention");
+
+            assert_eq!(
+                lifecycle.state(),
+                &UpdateState::ReplacedOnDisk {
+                    version: "0.11.0-beta.0.208".to_owned()
+                }
+            );
+            let presentation = lifecycle.describe();
+            assert_eq!(
+                presentation.claim,
+                VersionClaim::Superseded {
+                    newer: "0.11.0-beta.0.208".to_owned()
+                },
+                "{kind} may not keep claiming the running build is current"
+            );
+            assert_eq!(presentation.version_in_use, "0.11.0-beta.0.197");
+            assert_eq!(
+                presentation.target_version.as_deref(),
+                Some("0.11.0-beta.0.208")
+            );
+
+            for message in [&presentation.updates_message, &presentation.about_message] {
+                assert!(
+                    message.contains("0.11.0-beta.0.208")
+                        && message.to_lowercase().contains("restart"),
+                    "{kind} should name the installed build and the restart, got {message}"
+                );
+                assert!(
+                    !message.contains("up to date"),
+                    "{kind} must not still read as current: {message}"
+                );
+            }
+            assert!(
+                presentation.updates_message.contains("0.11.0-beta.0.197"),
+                "the Updates surface should say which build this session is on: {}",
+                presentation.updates_message
+            );
+
+            assert_eq!(
+                presentation.action,
+                Some(UpdateAction::RestartToUseInstalled),
+                "{kind} should offer the restart"
+            );
+            assert!(
+                !UpdateAction::RestartToUseInstalled.applies_update_in_app(),
+                "{kind} must not acquire an in-app install by offering a restart"
+            );
+            assert!(presentation.action_closes_the_app);
+            assert!(presentation.actions_enabled);
+            assert_eq!(
+                presentation.secondary_action, None,
+                "a build already on disk cannot be skipped"
+            );
+        }
+    }
+
+    /// The state is not a Linux special case: an install replaced underneath a
+    /// self-applying process — an MSI-style upgrade of the Windows install —
+    /// reaches exactly the same place (#707).
+    #[test]
+    fn a_self_applying_install_replaced_underneath_reports_the_same_restart() {
+        for kind in SELF_APPLY_KINDS {
+            let mut lifecycle = UpdateLifecycle::new(kind, "1.0.0");
+            lifecycle
+                .installed_version_observed("1.1.0")
+                .expect("an install replaced on disk is observable on every lane");
+
+            let presentation = lifecycle.describe();
+            assert_eq!(
+                presentation.claim,
+                VersionClaim::Superseded {
+                    newer: "1.1.0".to_owned()
+                }
+            );
+            assert_eq!(
+                presentation.action,
+                Some(UpdateAction::RestartToUseInstalled),
+                "{kind} should offer the restart rather than re-download what is installed"
+            );
+        }
+    }
+
+    /// The other half of the contract: an installed version that is not newer
+    /// says nothing at all. A package manager rewriting the same version is
+    /// routine, and a restart prompt for it would be noise.
+    #[test]
+    fn an_installed_version_that_is_not_newer_is_never_announced() {
+        for installed in ["0.11.0-beta.0.197", "0.11.0-beta.0.196", "0.10.0"] {
+            let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "0.11.0-beta.0.197");
+            lifecycle.start_check().unwrap();
+            lifecycle.check_found_none().unwrap();
+
+            assert_eq!(
+                lifecycle.installed_version_observed(installed),
+                Err(UpdateTransitionError::NotBehindInstalled {
+                    installed: installed.to_owned()
+                }),
+                "{installed} is not ahead of the running build"
+            );
+            assert_eq!(
+                lifecycle.state(),
+                &UpdateState::UpToDate,
+                "a refused observation leaves the state alone"
+            );
+            assert_eq!(lifecycle.describe().claim, VersionClaim::Current);
+            assert_eq!(lifecycle.describe().action, Some(UpdateAction::CheckNow));
+        }
+    }
+
+    /// And the version the model cannot order is never announced either (#694,
+    /// #697): a truncated string is equally consistent with the build already
+    /// running, so "restart to use it" would be a guess about the one thing
+    /// this state exists to be honest about.
+    #[test]
+    fn an_unorderable_installed_version_is_never_announced_as_a_restart() {
+        // The running build is only known truncated, so an installed
+        // prerelease of the same core could be the build already executing.
+        let mut truncated_running = UpdateLifecycle::new(
+            InstallKind::WindowsVelopack,
+            ReportedVersion::truncated("0.11.0"),
+        );
+        assert_eq!(
+            truncated_running
+                .installed_version_observed(ReportedVersion::complete("0.11.0-beta.0.208")),
+            Err(UpdateTransitionError::NotBehindInstalled {
+                installed: "0.11.0-beta.0.208".to_owned()
+            })
+        );
+        assert_eq!(truncated_running.state(), &UpdateState::Idle);
+
+        // And the same when it is the installed version that came back
+        // truncated.
+        let mut truncated_installed =
+            UpdateLifecycle::new(InstallKind::WindowsVelopack, "0.11.0-beta.0.197");
+        assert_eq!(
+            truncated_installed.installed_version_observed(ReportedVersion::truncated("0.11.0")),
+            Err(UpdateTransitionError::NotBehindInstalled {
+                installed: "0.11.0".to_owned()
+            })
+        );
+
+        // A truncated string still decides a different numeric core, because
+        // no missing prerelease tail could close that gap.
+        let mut higher_core =
+            UpdateLifecycle::new(InstallKind::WindowsVelopack, "0.11.0-beta.0.197");
+        higher_core
+            .installed_version_observed(ReportedVersion::truncated("0.12.0"))
+            .expect("a higher core is decided with or without the tail");
+        assert_eq!(
+            higher_core.state(),
+            &UpdateState::ReplacedOnDisk {
+                version: "0.12.0".to_owned()
+            }
+        );
+    }
+
+    /// A step in flight is not overwritten by the observation, and the
+    /// observation is not lost: it is a standing fact about the disk, so the
+    /// shell offers it again once the step settles.
+    #[test]
+    fn an_upgrade_observed_mid_step_is_refused_and_still_lands_afterwards() {
+        let mut checking = UpdateLifecycle::new(InstallKind::Deb, "1.0.0");
+        checking.start_check().unwrap();
+        assert_eq!(
+            checking.installed_version_observed("2.0.0"),
+            Err(UpdateTransitionError::NotAllowedFrom(
+                UpdateState::Checking { carried: None }
+            ))
+        );
+        checking.check_found_none().unwrap();
+        checking
+            .installed_version_observed("2.0.0")
+            .expect("the same observation lands once the check settles");
+        assert_eq!(
+            checking.state(),
+            &UpdateState::ReplacedOnDisk {
+                version: "2.0.0".to_owned()
+            }
+        );
+
+        // A restart this process already asked for is left alone: it is
+        // already telling the user the only thing there is to do.
+        let mut applying = UpdateLifecycle::new(InstallKind::AppImage, "1.0.0");
+        applying.start_check().unwrap();
+        applying.check_found("1.5.0").unwrap();
+        applying.start_download().unwrap();
+        assert!(matches!(
+            applying.installed_version_observed("2.0.0"),
+            Err(UpdateTransitionError::NotAllowedFrom(_))
+        ));
+        applying.download_and_apply_needs_restart().unwrap();
+        assert!(matches!(
+            applying.installed_version_observed("2.0.0"),
+            Err(UpdateTransitionError::NotAllowedFrom(_))
+        ));
+        assert_eq!(
+            applying.state(),
+            &UpdateState::RestartPending {
+                version: "1.5.0".to_owned()
+            }
+        );
+    }
+
+    /// Once the disk is ahead, the restart is the only thing on offer — and a
+    /// second upgrade landing before the user gets round to it re-points the
+    /// state at the build that is actually installed.
+    #[test]
+    fn a_replaced_install_offers_the_restart_and_nothing_else() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "1.0.0");
+        lifecycle.installed_version_observed("2.0.0").unwrap();
+
+        let refusals: [Transition; 6] = [
+            UpdateLifecycle::start_check,
+            UpdateLifecycle::skip_offer,
+            UpdateLifecycle::start_download,
+            UpdateLifecycle::install_anyway,
+            UpdateLifecycle::start_apply,
+            UpdateLifecycle::retry_failed_update,
+        ];
+        for refused in refusals {
+            assert!(
+                refused(&mut lifecycle).is_err(),
+                "nothing but the restart is available from {:?}",
+                lifecycle.state()
+            );
+        }
+        assert_eq!(
+            lifecycle.state(),
+            &UpdateState::ReplacedOnDisk {
+                version: "2.0.0".to_owned()
+            }
+        );
+
+        lifecycle
+            .installed_version_observed("3.0.0")
+            .expect("a further upgrade is still an observation about the disk");
+        assert_eq!(
+            lifecycle.state(),
+            &UpdateState::ReplacedOnDisk {
+                version: "3.0.0".to_owned()
+            },
+            "the state must name the build that is on disk now"
+        );
+    }
+
+    /// A dev build has no install for anything to replace, and no update lane
+    /// to report one on.
+    #[test]
+    fn a_dev_build_never_reports_a_replaced_install() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::DevBuild, "0.0.0-dev");
+        assert_eq!(
+            lifecycle.installed_version_observed("9.9.9"),
+            Err(UpdateTransitionError::CapabilityForbids(
+                UpdateCapability::Unmanaged
+            ))
+        );
+        assert_eq!(lifecycle.state(), &UpdateState::Idle);
+    }
+
+    /// A surface that keeps its own check control must be told when pressing
+    /// it would be refused — a build already installed has nothing left to
+    /// discover, and a control that silently does nothing is its own small lie.
+    #[test]
+    fn the_projection_says_when_a_check_would_be_refused() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "1.0.0");
+        assert!(lifecycle.describe().check_available);
+        lifecycle.start_check().unwrap();
+        assert!(
+            !lifecycle.describe().check_available,
+            "a check in flight is not a state to start another from"
+        );
+        lifecycle.check_found_none().unwrap();
+        assert!(lifecycle.describe().check_available);
+
+        lifecycle.installed_version_observed("2.0.0").unwrap();
+        assert!(
+            !lifecycle.describe().check_available,
+            "the answer is already on disk"
+        );
+        assert!(lifecycle.start_check().is_err());
+
+        assert!(
+            !UpdateLifecycle::new(InstallKind::DevBuild, "0.0.0-dev")
+                .describe()
+                .check_available
+        );
+
+        // The projection and the transition cannot drift: whatever the state,
+        // the flag is exactly whether the transition is accepted.
+        for kind in SELF_APPLY_KINDS.iter().chain(&SYSTEM_MANAGED_KINDS) {
+            sweep_reachable_states(*kind, |life| {
+                let claimed = life.describe().check_available;
+                let accepted = life.clone().start_check().is_ok();
+                assert_eq!(
+                    claimed,
+                    accepted,
+                    "{kind} projected check_available={claimed} in state {:?}",
                     life.state()
                 );
             });

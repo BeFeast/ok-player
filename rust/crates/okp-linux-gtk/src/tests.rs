@@ -4772,6 +4772,329 @@ fn install_evidence_is_gathered_from_the_process() {
     assert_eq!(detect_install_kind(&packaged), InstallKind::Deb);
 }
 
+/// The operator's report (#707): a package manager upgraded the running `.deb`
+/// install, and the session went on saying it was up to date. The surface now
+/// says which build is installed, that this session is not it, and offers the
+/// restart — without acquiring an in-app install on a lane that must never
+/// have one.
+#[test]
+fn a_deb_install_replaced_underneath_the_session_asks_for_the_restart() {
+    let mut session = LinuxUpdateSession::for_install_kind(InstallKind::Deb);
+    session.lifecycle.start_check().expect("check starts");
+    session
+        .lifecycle
+        .check_found_none()
+        .expect("the feed had nothing newer at the time");
+    assert!(!session.offer_surface_visible());
+    assert!(session.describe().updates_message.contains("up to date"));
+
+    session
+        .lifecycle
+        .installed_version_observed("99.0.0")
+        .expect("a newer installed build is a restart this session must mention");
+
+    let presentation = session.describe();
+    assert_eq!(
+        presentation.claim,
+        VersionClaim::Superseded {
+            newer: "99.0.0".to_owned()
+        }
+    );
+    assert_eq!(presentation.version_in_use, APP_BUILD_VERSION);
+    assert!(
+        presentation.updates_message.contains("99.0.0")
+            && presentation.updates_message.contains("restart"),
+        "unexpected message: {}",
+        presentation.updates_message
+    );
+    assert!(
+        presentation.about_message.contains("99.0.0")
+            && presentation.about_message.contains("restart"),
+        "About must agree with the Updates surface: {}",
+        presentation.about_message
+    );
+    assert_eq!(
+        primary_update_action(&presentation),
+        Some(UpdateAction::RestartToUseInstalled)
+    );
+    assert!(presentation.action_closes_the_app);
+    assert!(
+        session.offer_surface_visible(),
+        "a stale session is worth saying over the video"
+    );
+
+    // Still nothing this lane installs itself.
+    assert!(session.lifecycle.start_download().is_err());
+    assert!(session.lifecycle.start_apply().is_err());
+    assert!(
+        !UpdateAction::RestartToUseInstalled.applies_update_in_app(),
+        "restarting into an installed build installs nothing"
+    );
+}
+
+/// The reverse: the package manager rewrote the same version — a reinstall, or
+/// a repository that re-published the build — and nothing is said.
+#[test]
+fn a_deb_install_rewritten_at_the_same_version_says_nothing() {
+    let mut session = LinuxUpdateSession::for_install_kind(InstallKind::Deb);
+    session.lifecycle.start_check().expect("check starts");
+    session.lifecycle.check_found_none().expect("nothing newer");
+
+    assert!(
+        session
+            .lifecycle
+            .installed_version_observed(APP_BUILD_VERSION)
+            .is_err(),
+        "the build already running is not a restart to ask for"
+    );
+    let presentation = session.describe();
+    assert_eq!(presentation.claim, VersionClaim::Current);
+    assert!(presentation.updates_message.contains("up to date"));
+    assert!(!session.offer_surface_visible());
+    assert_eq!(primary_update_action(&presentation), None);
+}
+
+/// Which lanes the shell can actually observe being replaced underneath a
+/// running process, and why the others are not guessed at.
+#[test]
+fn only_the_deb_lane_can_observe_its_own_replacement() {
+    assert!(install_replacement_is_observable(InstallKind::Deb));
+    for kind in [
+        // rpm reports a mangled version and flatpak keeps the running
+        // deployment mounted, so neither can be answered from this file.
+        InstallKind::Rpm,
+        InstallKind::Flatpak,
+        // The self-applying lanes record their own pending restart.
+        InstallKind::AppImage,
+        InstallKind::WindowsVelopack,
+        InstallKind::DevBuild,
+    ] {
+        assert!(
+            !install_replacement_is_observable(kind),
+            "{kind} has no replacement signal in the executable's own path"
+        );
+    }
+}
+
+/// The owning package is read out of dpkg's answer rather than assumed.
+#[test]
+fn the_owning_package_is_parsed_out_of_the_dpkg_answer() {
+    let binary = Path::new("/usr/lib/ok-player/ok-player");
+    assert_eq!(
+        owning_package_name("ok-player: /usr/lib/ok-player/ok-player\n", binary),
+        Some("ok-player".to_owned())
+    );
+    assert_eq!(
+        owning_package_name(
+            "ok-player, ok-player-data: /usr/lib/ok-player/ok-player",
+            binary
+        ),
+        Some("ok-player".to_owned())
+    );
+    // A diverted file is answered with the diversion first; the package that
+    // owns the path is the line that names one.
+    assert_eq!(
+        owning_package_name(
+            "diversion by okp-local from: /usr/lib/ok-player/ok-player\n\
+             ok-player: /usr/lib/ok-player/ok-player\n",
+            binary
+        ),
+        Some("ok-player".to_owned())
+    );
+    // An answer about some other path says nothing about this one.
+    assert_eq!(
+        owning_package_name("ok-player: /usr/bin/ok-player\n", binary),
+        None
+    );
+    assert_eq!(owning_package_name("", binary), None);
+}
+
+/// The cheap half of the watch. dpkg unpacks the new file beside the old one
+/// and renames it over the top, so the path keeps resolving and the inode
+/// behind it moves; the size and the timestamp come out of the package and can
+/// be identical (measured on the Debian QA host, reinstalling the very same
+/// package left both untouched and moved the inode from 622920 to 623163).
+/// A trigger that only looked at size and time would have watched that happen
+/// and said nothing.
+#[test]
+fn a_binary_replaced_by_rename_is_a_different_file_at_the_same_size_and_time() {
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let installed = dir.path().join("ok-player");
+    fs::write(&installed, b"the build that is running").expect("write the original");
+    let before = InstalledFileIdentity::of(&installed).expect("the original is stat-able");
+
+    // Same content, same length, same modification time — a new file all the
+    // same, exactly as dpkg leaves one.
+    let replacement = dir.path().join("ok-player.dpkg-new");
+    fs::write(&replacement, b"the build that is running").expect("write the replacement");
+    let original_times = fs::metadata(&installed).expect("the original still stats");
+    fs::File::options()
+        .write(true)
+        .open(&replacement)
+        .expect("open the replacement")
+        .set_times(
+            fs::FileTimes::new()
+                .set_accessed(original_times.accessed().expect("an access time"))
+                .set_modified(original_times.modified().expect("a modification time")),
+        )
+        .expect("carry the timestamps over, as dpkg does");
+    fs::rename(&replacement, &installed).expect("rename over the running binary");
+
+    let after = InstalledFileIdentity::of(&installed).expect("the new file is stat-able");
+    assert_ne!(before, after, "a replaced binary is a different file");
+    assert_eq!(
+        (
+            before.size,
+            before.modified_seconds,
+            before.modified_nanoseconds
+        ),
+        (
+            after.size,
+            after.modified_seconds,
+            after.modified_nanoseconds
+        ),
+        "size and timestamp cannot be what tells the two apart"
+    );
+    assert_ne!(before.inode, after.inode, "the inode is what moved");
+
+    // And an untouched file keeps its identity, so the watch stays quiet.
+    assert_eq!(
+        InstalledFileIdentity::of(&installed).expect("still stat-able"),
+        after
+    );
+}
+
+/// dpkg writes the new binary before it records the new version, so the first
+/// answer about a file it is still unpacking can be the version being replaced.
+/// Taking that at face value would adopt the new file as the one this session
+/// is running and swallow the upgrade for the rest of the session — which is
+/// exactly the silence #707 is about, reintroduced one layer down.
+#[test]
+fn a_package_database_that_has_not_caught_up_is_asked_again() {
+    let not_behind = Err(UpdateTransitionError::NotBehindInstalled {
+        installed: "0.11.0-beta.0.707.1".to_owned(),
+    });
+    assert_eq!(
+        classify_replacement_answer(&Ok(()), 0),
+        ReplacementAnswer::Behind
+    );
+    assert_eq!(
+        classify_replacement_answer(&not_behind, 0),
+        ReplacementAnswer::AskAgain,
+        "the first not-ahead answer about a replaced file is not the last word"
+    );
+    assert_eq!(
+        classify_replacement_answer(&not_behind, INSTALLED_VERSION_CONFIRMATIONS - 1),
+        ReplacementAnswer::Settled,
+        "re-asking is bounded: a version that is still not newer is not newer"
+    );
+    assert_eq!(
+        classify_replacement_answer(&not_behind, u8::MAX),
+        ReplacementAnswer::Settled,
+        "the attempt count cannot wrap back into asking forever"
+    );
+
+    // A step in flight is neither: the observation stands and is re-offered.
+    let in_flight = Err(UpdateTransitionError::NotAllowedFrom(
+        UpdateState::Checking { carried: None },
+    ));
+    assert_eq!(
+        classify_replacement_answer(&in_flight, INSTALLED_VERSION_CONFIRMATIONS),
+        ReplacementAnswer::Deferred
+    );
+}
+
+/// A `dpkg` query outstanding when the file is replaced *again* answers about
+/// the file it asked about, not the one on disk now. Counting that answer
+/// against the newer file would spend a budget that was never about it — after
+/// a few of them the newer file would be adopted as the build this session
+/// runs without its version ever being resolved, and that upgrade would never
+/// be announced.
+#[test]
+fn answers_about_a_replaced_file_do_not_spend_the_next_files_budget() {
+    let first = InstalledFileIdentity {
+        device: 28,
+        inode: 622920,
+        size: 12_720_896,
+        modified_seconds: 1_785_294_909,
+        modified_nanoseconds: 0,
+    };
+    let second = InstalledFileIdentity {
+        inode: 623_163,
+        ..first
+    };
+
+    let mut answers = UnconfirmedAnswers::default();
+    assert_eq!(answers.about(first), 0);
+    for expected in 1..=3 {
+        answers.count(first);
+        assert_eq!(answers.about(first), expected);
+    }
+
+    // The file moved on: the next file is asked about from scratch, however
+    // many answers the previous one collected.
+    assert_eq!(
+        answers.about(second),
+        0,
+        "a budget spent on one file cannot settle another"
+    );
+    answers.count(second);
+    assert_eq!(answers.about(second), 1);
+    assert_eq!(
+        answers.about(first),
+        0,
+        "and counting the new file forgets the old one rather than keeping both"
+    );
+
+    answers.clear();
+    assert_eq!(answers.about(second), 0);
+}
+
+/// The `.deb` lane hands `dpkg-query`'s version string to the shared ordering,
+/// which is only sound while the two comparators agree about the shapes this
+/// packaging emits. `scripts/package-linux-deb.sh` sets `Version:` to the build
+/// version verbatim, so every comparison is between two `X.Y.Z-<tail>` strings
+/// of the same family; the expected answers below are `dpkg --compare-versions`'
+/// own, taken from dpkg 1.22 on the Debian QA host.
+///
+/// They part company as soon as one side has no tail at all: dpkg reads
+/// everything after the last `-` as a Debian revision, so it ranks
+/// `0.11.0-beta.0.208` *above* `0.11.0`, where the shared ordering ranks a
+/// release above the prereleases that led to it. That shape cannot come out of
+/// this packaging today — and the same rule is why apt would refuse the stable
+/// release as a downgrade — so it is tracked as a packaging question in #709
+/// rather than papered over in the watch.
+#[test]
+fn the_deb_lane_orders_its_own_version_shapes_the_way_dpkg_does() {
+    use okp_core::update_lifecycle::{ReportedVersion, compare_reported_build_order};
+
+    for (older, newer) in [
+        ("0.11.0-beta.0.208", "0.11.0-beta.0.209"),
+        ("0.11.0-beta.0.208", "0.11.0-beta.0.1000"),
+        ("0.11.0-beta.0.9", "0.11.0-beta.0.10"),
+        ("0.11.0-beta.1", "0.11.0-beta.2"),
+        ("0.11.0-beta.0.208", "0.12.0-beta.0.1"),
+        ("0.11.0-alpha.109", "0.11.0-beta.1"),
+    ] {
+        assert_eq!(
+            compare_reported_build_order(
+                &ReportedVersion::complete(newer),
+                &ReportedVersion::complete(older),
+            ),
+            Some(std::cmp::Ordering::Greater),
+            "{newer} is newer than {older} to dpkg; the watch must agree"
+        );
+        assert_eq!(
+            compare_reported_build_order(
+                &ReportedVersion::complete(older),
+                &ReportedVersion::complete(newer),
+            ),
+            Some(std::cmp::Ordering::Less),
+            "and {older} must not be announced as a restart onto {newer}"
+        );
+    }
+}
+
 /// Every preview state is reached by walking real transitions, so the visual
 /// smoke fixtures cannot show a state the lifecycle cannot produce.
 #[test]
@@ -4790,6 +5113,13 @@ fn update_previews_walk_real_transitions() {
     assert_eq!(
         primary_update_action(&appimage.describe()),
         Some(UpdateAction::RestartToFinish)
+    );
+
+    let replaced = build_linux_update_preview(InstallKind::Deb, "replaced-on-disk")
+        .expect("a package upgrade under the session previews on the deb lane");
+    assert_eq!(
+        primary_update_action(&replaced.describe()),
+        Some(UpdateAction::RestartToUseInstalled)
     );
 
     // A state a lane cannot reach is not previewable there either.

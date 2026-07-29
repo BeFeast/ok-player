@@ -170,6 +170,517 @@ pub(crate) fn persistent_update_surface(
     surface
 }
 
+/// The executable this process was started from, and what the file behind that
+/// path looked like at the time, resolved once before anything can replace it.
+///
+/// Both halves have to be taken early. After a package manager replaces the
+/// file, `/proc/self/exe` — which [`env::current_exe`] reads — resolves to
+/// `<path> (deleted)` (measured on a Debian host: a rename over a running
+/// binary turns the link into `/tmp/…/t1 (deleted)`), so asking later yields a
+/// path that stats nothing; and an upgrade that landed between startup and the
+/// first watch tick would otherwise be adopted as the baseline and never
+/// mentioned.
+static STARTUP_INSTALL: OnceLock<Option<(PathBuf, InstalledFileIdentity)>> = OnceLock::new();
+
+/// Resolves the executable path and its identity. Called first thing in
+/// `main`, so "before anything can replace it" is true by construction.
+pub(crate) fn record_startup_install() {
+    let _ = STARTUP_INSTALL.get_or_init(|| {
+        let path = env::current_exe().ok()?;
+        let identity = InstalledFileIdentity::of(&path)?;
+        Some((path, identity))
+    });
+}
+
+fn startup_install() -> Option<&'static (PathBuf, InstalledFileIdentity)> {
+    STARTUP_INSTALL.get_or_init(|| None).as_ref()
+}
+
+pub(crate) fn startup_executable_path() -> Option<&'static Path> {
+    startup_install().map(|(path, _)| path.as_path())
+}
+
+/// What identifies the file the process was started from, for the one question
+/// the watch asks: is this still the same file?
+///
+/// dpkg unpacks a new file and renames it over the old one, so the path keeps
+/// resolving while the inode behind it changes. Measured on the Debian QA host,
+/// reinstalling the very same package left the size and the timestamp
+/// untouched — dpkg restores the archive's mtime — and moved the inode from
+/// 622920 to 623163, so the inode is the signal that actually fires. Size and
+/// timestamp are compared too, for the in-place rewrite that keeps the inode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct InstalledFileIdentity {
+    pub(crate) device: u64,
+    pub(crate) inode: u64,
+    pub(crate) size: u64,
+    pub(crate) modified_seconds: i64,
+    pub(crate) modified_nanoseconds: i64,
+}
+
+impl InstalledFileIdentity {
+    /// Reads the identity of `path`, or nothing when the file cannot be
+    /// stat'ed — a package being removed is not an upgrade to announce.
+    pub(crate) fn of(path: &Path) -> Option<Self> {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = fs::metadata(path).ok()?;
+        Some(Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            size: metadata.size(),
+            modified_seconds: metadata.mtime(),
+            modified_nanoseconds: metadata.mtime_nsec(),
+        })
+    }
+}
+
+/// How often the shell asks whether the file it was started from is still the
+/// same file.
+///
+/// The question is one `stat`, measured at 2 µs on the Debian QA host, so the
+/// interval is set by how long a stale session may go unmentioned rather than
+/// by what asking costs. The package database — 25 ms for `dpkg-query`, 190 ms
+/// for `dpkg -S` on the same host — is never touched here: those run on a
+/// worker thread, and only after the `stat` says the install actually changed.
+const INSTALL_WATCH_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Whether a replacement of this install *under a running process* is
+/// observable from the executable's own path.
+///
+/// Only the `.deb` lane is watched today, and each exclusion is a fact rather
+/// than a shortcut:
+///
+/// * `rpm` reports a mangled version — `0.11.0~beta.1` where the build calls
+///   itself `0.11.0-beta.1`, because rpm forbids `-` in a version — and
+///   nothing in this repository owns the inverse mapping. Feeding the mangled
+///   string to the model would announce a version the user cannot recognise.
+/// * A Flatpak update does not touch the deployment the running sandbox is on;
+///   the old one stays mounted until the app restarts, so this file never
+///   changes and the watch would never fire. That lane needs the deploy
+///   directory, not the executable.
+/// * The self-applying lanes reach the same truth through their own apply,
+///   which already records a pending restart.
+pub(crate) fn install_replacement_is_observable(kind: InstallKind) -> bool {
+    matches!(kind, InstallKind::Deb)
+}
+
+/// What the watch is holding between ticks.
+struct InstallWatch {
+    kind: InstallKind,
+    path: PathBuf,
+    /// The file the session is running out of. Advanced whenever an
+    /// observation has been dealt with, so one upgrade is reported once.
+    baseline: InstalledFileIdentity,
+    /// The version resolved for a replacement, kept with the identity it was
+    /// resolved for so a version is never attributed to a different file.
+    resolved: Option<(InstalledFileIdentity, String)>,
+    /// A worker resolving the version for the identity it was started for.
+    resolving: Option<(InstalledFileIdentity, mpsc::Receiver<Option<String>>)>,
+    /// Whether a poller is already waiting on that worker, so a replacement
+    /// landing mid-query does not leave two of them running.
+    following: bool,
+    /// How many times the replaced file has been answered with a version that
+    /// is not ahead of the running one. dpkg writes the new file before it
+    /// records the new version, so the first answer about a file it is still
+    /// unpacking can be the *old* version; adopting that as settled would
+    /// swallow the upgrade for the rest of the session.
+    unconfirmed: UnconfirmedAnswers,
+}
+
+/// How many times the file at the watched path has been answered with a
+/// version that is not ahead — together with *which* file those answers were
+/// about.
+///
+/// The two belong together. A query outstanding when the file is replaced again
+/// answers about the file it asked about, not the one on disk now; counting it
+/// against the newer file — or settling the newer file on the strength of it —
+/// would spend a budget that was never about it and lose that upgrade for good.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct UnconfirmedAnswers(Option<(InstalledFileIdentity, u8)>);
+
+impl UnconfirmedAnswers {
+    /// Answers so far about `identity`. A different file starts from zero.
+    pub(crate) fn about(self, identity: InstalledFileIdentity) -> u8 {
+        match self.0 {
+            Some((counted, answers)) if counted == identity => answers,
+            _ => 0,
+        }
+    }
+
+    /// Records one more answer about `identity`, dropping any count that was
+    /// about a different file.
+    pub(crate) fn count(&mut self, identity: InstalledFileIdentity) {
+        let answers = self.about(identity).saturating_add(1);
+        self.0 = Some((identity, answers));
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.0 = None;
+    }
+}
+
+/// How many times a replaced file may be answered with a version that is not
+/// ahead before the watch takes that for the truth.
+///
+/// A package transaction records its new version seconds after it writes the
+/// file, so a couple of re-asks — one per [`INSTALL_WATCH_INTERVAL`] — cover
+/// the lag comfortably; past that, a version that is still not newer is not
+/// newer. Re-asking is bounded because it costs a subprocess, and a genuine
+/// reinstall of the same version would otherwise re-ask for as long as the
+/// player runs.
+pub(crate) const INSTALLED_VERSION_CONFIRMATIONS: u8 = 4;
+
+/// What a watch tick does with the answer it got about a replaced file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReplacementAnswer {
+    /// The session is behind the installed build; the state now says so.
+    Behind,
+    /// Not ahead, and the packaging tool has had enough chances to say
+    /// otherwise: this file is what the session is running.
+    Settled,
+    /// Not ahead *yet*. dpkg writes the new file before it records the new
+    /// version, so an answer about a file it is still unpacking can be the old
+    /// version; taking that as settled would swallow the upgrade for the rest
+    /// of the session.
+    AskAgain,
+    /// A check, a download or an apply is in flight. What is on disk is a
+    /// standing fact rather than an event, so it is offered again.
+    Deferred,
+}
+
+/// Decides what a tick makes of one answer, given how many times this file has
+/// already been answered with a version that is not ahead.
+pub(crate) fn classify_replacement_answer(
+    outcome: &Result<(), UpdateTransitionError>,
+    answers_so_far: u8,
+) -> ReplacementAnswer {
+    match outcome {
+        Ok(()) => ReplacementAnswer::Behind,
+        Err(UpdateTransitionError::NotBehindInstalled { .. }) => {
+            if answers_so_far.saturating_add(1) >= INSTALLED_VERSION_CONFIRMATIONS {
+                ReplacementAnswer::Settled
+            } else {
+                ReplacementAnswer::AskAgain
+            }
+        }
+        Err(_) => ReplacementAnswer::Deferred,
+    }
+}
+
+/// Watches for the install being replaced underneath this process (#707).
+///
+/// A package manager can upgrade a `.deb` install while the player runs — the
+/// APT channel makes it routine — and nothing in the app puts the new build
+/// there. The session keeps executing the old binary, and until this watch
+/// noticed it, it also kept saying it was up to date.
+pub(crate) fn start_install_replacement_watch(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    kind: InstallKind,
+) {
+    if !install_replacement_is_observable(kind) {
+        return;
+    }
+    let Some((path, baseline)) = startup_install() else {
+        return;
+    };
+    let watch = Rc::new(RefCell::new(InstallWatch {
+        kind,
+        path: path.clone(),
+        baseline: *baseline,
+        resolved: None,
+        resolving: None,
+        following: false,
+        unconfirmed: UnconfirmedAnswers::default(),
+    }));
+    glib::timeout_add_local(INSTALL_WATCH_INTERVAL, move || {
+        poll_install_replacement(&watch, &state, &status_toast);
+        glib::ControlFlow::Continue
+    });
+}
+
+/// One tick of the watch: a `stat`, and nothing else unless the file moved.
+fn poll_install_replacement(
+    watch: &Rc<RefCell<InstallWatch>>,
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &Rc<StatusToast>,
+) {
+    let shared = Rc::clone(watch);
+    let mut watch = watch.borrow_mut();
+    let Some(current) = InstalledFileIdentity::of(&watch.path) else {
+        // The path stopped resolving: the package is mid-transaction or gone.
+        // Neither is an upgrade this session can ask the user to restart into.
+        return;
+    };
+    if current == watch.baseline {
+        watch.resolved = None;
+        watch.resolving = None;
+        watch.unconfirmed.clear();
+        return;
+    }
+
+    if let Some((identity, receiver)) = watch.resolving.take() {
+        match receiver.try_recv() {
+            Ok(Some(version)) => watch.resolved = Some((identity, version)),
+            // The package manager could not name a version — it may be
+            // mid-transaction, holding its own database. Saying nothing is the
+            // honest answer for now, but adopting this file as the one the
+            // session runs would lose the upgrade for good, so the question is
+            // re-asked on the same budget as an answer that is not ahead. An
+            // answer about a file that has since been replaced again is about
+            // neither: it is dropped, and the file on disk now is asked about
+            // from scratch.
+            Ok(None) if identity == current => {
+                watch.unconfirmed.count(current);
+                if watch.unconfirmed.about(current) >= INSTALLED_VERSION_CONFIRMATIONS {
+                    watch.baseline = current;
+                    watch.unconfirmed.clear();
+                }
+                return;
+            }
+            Ok(None) => {}
+            Err(mpsc::TryRecvError::Empty) => {
+                watch.resolving = Some((identity, receiver));
+                return;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+    }
+
+    match watch.resolved.clone() {
+        Some((identity, version)) if identity == current => {
+            eprintln!(
+                "Installed build observed: installed={version} running={}",
+                state.borrow().linux_update.lifecycle.running_version()
+            );
+            let outcome = state
+                .borrow_mut()
+                .linux_update
+                .lifecycle
+                .installed_version_observed(version)
+                .map(|_| ());
+            watch.resolved = None;
+            match classify_replacement_answer(&outcome, watch.unconfirmed.about(current)) {
+                ReplacementAnswer::Behind => {
+                    watch.baseline = current;
+                    watch.unconfirmed.clear();
+                    eprintln!(
+                        "Update session: {}",
+                        state.borrow().linux_update.describe().updates_message
+                    );
+                    refresh_linux_update_views(state);
+                    status_toast.show("Update installed — restart to use it");
+                }
+                ReplacementAnswer::Settled => {
+                    watch.baseline = current;
+                    watch.unconfirmed.clear();
+                    eprintln!("Installed build is not ahead of this session");
+                }
+                ReplacementAnswer::AskAgain => {
+                    watch.unconfirmed.count(current);
+                    eprintln!("Installed build is not ahead of this session; asking again");
+                }
+                ReplacementAnswer::Deferred => {
+                    eprintln!("Update lifecycle deferred the installed version: {outcome:?}");
+                }
+            }
+        }
+        _ => {
+            // A different file than anything resolved so far: ask the package
+            // manager which version it is, off the main thread.
+            let (sender, receiver) = mpsc::channel();
+            let kind = watch.kind;
+            let path = watch.path.clone();
+            std::thread::spawn(move || {
+                let _ = sender.send(installed_package_version(kind, &path));
+            });
+            watch.resolved = None;
+            watch.resolving = Some((current, receiver));
+            drop(watch);
+            follow_the_running_resolver(shared, state, status_toast);
+        }
+    }
+}
+
+/// Picks the resolver's answer up as soon as it lands.
+///
+/// The query takes a couple of hundred milliseconds; waiting for the next slow
+/// tick to collect it would mean a stale session goes unmentioned for two
+/// intervals rather than one, which is what the first live run on the Debian
+/// QA host showed. This polls only while a query is outstanding, so it costs
+/// nothing when nothing is happening.
+fn follow_the_running_resolver(
+    watch: Rc<RefCell<InstallWatch>>,
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &Rc<StatusToast>,
+) {
+    if watch.borrow().following {
+        return;
+    }
+    watch.borrow_mut().following = true;
+    let state = Rc::clone(state);
+    let status_toast = Rc::clone(status_toast);
+    glib::timeout_add_local(Duration::from_millis(250), move || {
+        if watch.borrow().resolving.is_none() {
+            watch.borrow_mut().following = false;
+            return glib::ControlFlow::Break;
+        }
+        poll_install_replacement(&watch, &state, &status_toast);
+        glib::ControlFlow::Continue
+    });
+}
+
+/// The version of the package that owns `path`, as its packaging tool reports
+/// it.
+///
+/// Only the `.deb` lane is answered — see
+/// [`install_replacement_is_observable`] — and that answer is exact: the deb's
+/// `Version:` field *is* the version the build stamped into itself (both come
+/// from the same argument in `scripts/package-linux-deb.sh`), so it can be
+/// ordered against the running version without inventing a mapping. The owning
+/// package is looked up rather than assumed, so a renamed or derived package
+/// is still answered correctly.
+fn installed_package_version(kind: InstallKind, path: &Path) -> Option<String> {
+    use std::ffi::OsStr;
+    if kind != InstallKind::Deb {
+        return None;
+    }
+    let dpkg = find_executable("dpkg")?;
+    let dpkg_query = find_executable("dpkg-query")?;
+    let owner = command_output(&dpkg, &[OsStr::new("-S"), path.as_os_str()])?;
+    let package = owning_package_name(&owner, path)?;
+    let version = command_output(
+        &dpkg_query,
+        &[
+            OsStr::new("-W"),
+            OsStr::new("-f=${Version}"),
+            OsStr::new(&package),
+        ],
+    )?;
+    let version = version.trim().to_owned();
+    (!version.is_empty()).then_some(version)
+}
+
+/// The package name out of a `dpkg -S` answer (`ok-player: /usr/bin/…`).
+///
+/// The line is matched against the path that was asked about, because `dpkg`
+/// answers a diverted file with the diversion first — prose on the left of the
+/// colon and the same path on the right — and the package that owns the file
+/// somewhere further down. A path several packages claim is reported as a
+/// comma-separated list, whose first entry is the one whose version describes
+/// the file.
+pub(crate) fn owning_package_name(dpkg_search_output: &str, path: &Path) -> Option<String> {
+    dpkg_search_output.lines().find_map(|line| {
+        let (packages, owned) = line.rsplit_once(':')?;
+        if Path::new(owned.trim()) != path {
+            return None;
+        }
+        let name = packages.split(',').next()?.trim();
+        // A diversion line has a sentence where a package name would be.
+        (!name.is_empty() && !name.contains(char::is_whitespace)).then(|| name.to_owned())
+    })
+}
+
+fn command_output(program: &Path, args: &[&std::ffi::OsStr]) -> Option<String> {
+    let output = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Set on the process a restart starts, telling it to wait for this one to let
+/// go of the application's bus name before it registers its own.
+const RESTART_AWAIT_PRIMARY: &str = "OKP_RESTART_AWAIT_PRIMARY";
+
+/// Restarts into the build a package manager installed underneath this process
+/// (#707).
+///
+/// Nothing else is going to relaunch the player here: the self-applying lane
+/// hands off to an updater that waits for this process to exit, and a package
+/// manager finished long before the user pressed anything. So the replacement
+/// is started from the path this process was launched from — which now holds
+/// the new build — and only then is the window closed. A window that declines
+/// to close leaves the replacement waiting on a bus name that is never given
+/// up; it stops waiting after ten seconds, finds this process still primary,
+/// and hands over to it rather than opening a second player.
+pub(crate) fn restart_into_installed_build(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+) {
+    let Some(path) = startup_executable_path() else {
+        status_toast.show("Could not restart OK Player");
+        return;
+    };
+    save_current_progress(state, false);
+    let spawned = Command::new(path)
+        .env(RESTART_AWAIT_PRIMARY, "1")
+        .stdin(Stdio::null())
+        .spawn();
+    if let Err(error) = spawned {
+        eprintln!("Could not start the installed build at {path:?}: {error}");
+        status_toast.show("Could not restart OK Player");
+        return;
+    }
+    if !close_player_window() {
+        eprintln!("Could not close the player window to restart into the installed build");
+        status_toast.show("Could not restart OK Player");
+    }
+}
+
+/// Held at startup by the process a restart started, until the process it
+/// replaces has let go of the application's bus name.
+///
+/// GTK routes a second instance to the primary one, so a replacement that
+/// registered while the outgoing process still owned the name would hand its
+/// command line to the process it exists to replace and exit — the restart
+/// would silently do nothing. The bus is asked directly rather than timed,
+/// and the wait is bounded: after ten seconds the replacement starts anyway
+/// rather than never appearing.
+pub(crate) fn await_replaced_instance_shutdown(application_id: &str) {
+    if env::var_os(RESTART_AWAIT_PRIMARY).is_none() {
+        return;
+    }
+    let Ok(connection) =
+        gtk::gio::bus_get_sync(gtk::gio::BusType::Session, None::<&gtk::gio::Cancellable>)
+    else {
+        return;
+    };
+    let Ok(reply_type) = glib::VariantTy::new("(b)") else {
+        return;
+    };
+    for _ in 0..200 {
+        let owned = connection.call_sync(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "NameHasOwner",
+            Some(&(application_id,).to_variant()),
+            Some(reply_type),
+            gtk::gio::DBusCallFlags::NONE,
+            1_000,
+            None::<&gtk::gio::Cancellable>,
+        );
+        match owned {
+            Ok(reply) => {
+                if !reply.child_value(0).get::<bool>().unwrap_or(false) {
+                    return;
+                }
+            }
+            // Without an answer there is nothing to wait for; starting is
+            // better than hanging on the way to a window.
+            Err(_) => return,
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    eprintln!("The outgoing instance still owns {application_id}; starting anyway");
+}
+
 /// The install kind of this process, decided by `okp_core` from evidence this
 /// shell gathers. Resolved once: the package-ownership question costs a
 /// subprocess, and the answer cannot change while the process runs.
@@ -188,8 +699,9 @@ pub(crate) fn install_kind() -> InstallKind {
 /// all: it costs a subprocess, and the cheap signals settle Flatpak and a
 /// mounted AppImage without it.
 pub(crate) fn process_install_evidence(ask_package_manager: bool) -> InstallEvidence {
-    let executable_path = env::current_exe()
-        .ok()
+    let executable_path = startup_executable_path()
+        .map(Path::to_path_buf)
+        .or_else(|| env::current_exe().ok())
         .map(|path| path.to_string_lossy().into_owned());
     let package_ownership = if ask_package_manager {
         query_package_ownership(executable_path.as_deref())
@@ -309,6 +821,7 @@ pub(crate) fn start_install_kind_probe(
             Ok((kind, pending)) => {
                 adopt_detected_install_kind(&state, kind, pending);
                 refresh_linux_update_views(&state);
+                start_install_replacement_watch(Rc::clone(&state), Rc::clone(&status_toast), kind);
                 if then_check && update_checks_are_possible(kind) {
                     check_updates_on_startup(Rc::clone(&state), Rc::clone(&status_toast));
                 }
@@ -545,7 +1058,7 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
 
         if let Some(check) = view.check.as_ref().and_then(glib::WeakRef::upgrade) {
             check.set_visible(checks_possible);
-            check.set_sensitive(checks_possible && presentation.actions_enabled && !busy);
+            check.set_sensitive(checks_possible && presentation.check_available && !busy);
         }
         true
     });
@@ -761,6 +1274,11 @@ pub(crate) fn build_linux_update_preview(
                 .download_failed("the package download was interrupted")
                 .ok()?;
         }
+        "replaced-on-disk" => {
+            lifecycle
+                .installed_version_observed(PREVIEW_UPDATE_VERSION)
+                .ok()?;
+        }
         "restart-pending" => {
             lifecycle.start_check().ok()?;
             lifecycle.check_found(PREVIEW_UPDATE_VERSION).ok()?;
@@ -858,6 +1376,9 @@ pub(crate) fn take_primary_update_action(
         }
         Some(UpdateAction::ApplyAndRestart) => start_update_apply(state, status_toast),
         Some(UpdateAction::RestartToFinish) => restart_for_pending_update(&state, &status_toast),
+        Some(UpdateAction::RestartToUseInstalled) => {
+            restart_into_installed_build(&state, &status_toast)
+        }
         Some(UpdateAction::Retry) => {
             // A failure that kept its target is retried where it failed; a
             // check that failed before finding anything is retried by checking
