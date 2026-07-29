@@ -5765,9 +5765,6 @@ fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
     // published and is measured over the crop that state owns - reading the empty
     // hero's crop there made a shelf laid out on a grid look like a broken canvas
     // (#702, #703).
-    assert!(close_flow.contains("interaction: geometry part=recent-card-0 "));
-    assert!(close_flow.contains("close_media_shelf_reported"));
-    assert!(close_flow.contains("\"$CONTINUE_WATCHING_IDENTITY_CROP\""));
 
     let residual_flow = smoke
         .split_once("run_residual_open_regression() {")
@@ -5820,6 +5817,8 @@ window_id=17
 CONTINUE_WATCHING_IDENTITY_CROP='300x170+210+60'
 launch_count=0
 stop_count=0
+capture_crop=none
+: >"$OUT_DIR/markers.txt"
 launch_fixture() {{
   launch_count=$((launch_count + 1))
   : >"$OUT_DIR/$1.log"
@@ -5836,16 +5835,20 @@ sleep() {{ return 0; }}
 rg() {{
   [[ "$1" == "-q" && "$2" == "-F" ]] || return 2
   local marker="$3" line
+  printf '%s\n' "$marker" >>"$OUT_DIR/markers.txt"
   while IFS= read -r line; do
     [[ "$line" == *"$marker"* ]] && return 0
   done <"$4"
   return 1
 }}
-assert_idle_capture() {{ return 0; }}
+assert_idle_capture() {{ capture_crop="${{4:-default}}"; return 0; }}
 close_log=close-app
 {close_flow}
 stop_app
-printf 'launch_count=%s\nstop_count=%s\n' "$launch_count" "$stop_count"
+shelf_marker=no
+grep -q 'part=recent-card-0' "$OUT_DIR/markers.txt" && shelf_marker=yes
+printf 'launch_count=%s\nstop_count=%s\ncapture_crop=%s\nshelf_marker=%s\n' \
+  "$launch_count" "$stop_count" "$capture_crop" "$shelf_marker"
 "#,
         out = root.path().display()
     );
@@ -5858,15 +5861,19 @@ printf 'launch_count=%s\nstop_count=%s\n' "$launch_count" "$stop_count"
         "retry probe should pass: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    // The crop and the marker are read out of the run, so a flow that waits for
+    // nothing, or measures the empty-welcome hero, fails here rather than passing on
+    // the strength of those strings still being somewhere in the file.
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "launch_count=2\nstop_count=2\n"
+        "launch_count=2\nstop_count=2\ncapture_crop=300x170+210+60\nshelf_marker=yes\n"
     );
     let results = fs::read_to_string(root.path().join("results.txt"))
         .expect("retry evidence should be written");
     assert!(results.contains("close_media_file_loaded=pass"));
     assert!(results.contains("close_media_launch_retry=pass"));
     assert!(results.contains("close_media_transition=pass"));
+    assert!(results.contains("close_media_shelf_reported=pass"));
 }
 
 #[test]
