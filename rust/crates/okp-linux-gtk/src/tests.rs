@@ -5645,10 +5645,17 @@ fn windows_installed_tree_assertion_keeps_a_size_floor_under_every_required_file
     );
     // And it must cover every project the installer contains, not only the two
     // the app references directly.
+    // The Windows lane is a deep-lane workflow: it no longer runs on pull requests,
+    // so `push` is the only filter left and it must still cover everything the
+    // installer contains.
+    assert!(
+        !workflow.contains("pull_request:"),
+        "the Windows lane is a deep lane; a pull_request trigger would put half an hour back in front of every fix"
+    );
     assert_eq!(
         workflow.matches("- 'src/**'").count(),
-        2,
-        "both the pull_request and push path filters must cover all of src/**"
+        1,
+        "the push path filter must cover all of src/**"
     );
     // installer/build-velopack.ps1 copies both of these into the publish tree
     // with an unconditional Copy-Item, so renaming or deleting either breaks the
@@ -5656,8 +5663,8 @@ fn windows_installed_tree_assertion_keeps_a_size_floor_under_every_required_file
     for input in ["- 'LICENSE'", "- 'THIRD-PARTY-NOTICES.md'"] {
         assert_eq!(
             workflow.matches(input).count(),
-            2,
-            "both path filters must include {input}, which the pack copies unconditionally"
+            1,
+            "the push path filter must include {input}, which the pack copies unconditionally"
         );
     }
 }
