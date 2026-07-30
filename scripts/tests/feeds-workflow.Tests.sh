@@ -183,7 +183,9 @@ for name, job in refreshers.items():
 #    evaluated instead, against the states this lane actually reaches. That job outputs survive
 #    a failed job — the premise the fix rests on — was confirmed empirically on this repo before
 #    this check was written.
-STATUS_FUNCS = {"success", "failure", "cancelled", "canceled", "always"}
+# GitHub spells it cancelled(); canceled() is not a real function, so it must not be
+# accepted here. An expression GitHub would reject has to fail this check, not pass it.
+STATUS_FUNCS = {"success", "failure", "cancelled", "always"}
 
 
 class ExprError(Exception):
@@ -325,7 +327,7 @@ def evaluate(node, ctx):
         name = node[1]
         if name == "always":
             return True
-        if name in ("cancelled", "canceled"):
+        if name == "cancelled":
             return ctx["cancelled"]
         if name == "success":
             return not ctx["cancelled"] and all(r == "success" for r in ctx["results"].values())
