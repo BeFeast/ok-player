@@ -4357,11 +4357,26 @@ fn playlist_drop_target_index_rejects_self_or_existing_slot() {
     assert_eq!(Playlist::drop_target_index(2, 1, true), None);
 }
 
+/// A `.deb` on a machine that subscribes to the OK Player archive. Since #725 that is
+/// something the shell establishes by running `apt-cache policy` rather than something the
+/// install kind implies, so a test about a subscribed machine has to say it is one — the
+/// unsubscribed machine is a different capability with a different surface.
+fn subscribed_deb_session() -> LinuxUpdateSession {
+    let mut session = LinuxUpdateSession::for_install_kind(InstallKind::Deb);
+    session
+        .lifecycle
+        .package_source_observed(PackageSourceEvidence::Source {
+            suite: "stable".to_owned(),
+            deliverable: Some("0.12.0".to_owned()),
+        });
+    session
+}
+
 /// The `.deb` lane is system-managed end to end: the check still discovers a
 /// release, but nothing in the app installs it and the surface says who does.
 #[test]
 fn a_deb_install_announces_the_package_manager_and_offers_no_in_app_install() {
-    let mut session = LinuxUpdateSession::for_install_kind(InstallKind::Deb);
+    let mut session = subscribed_deb_session();
     session
         .lifecycle
         .start_check()
@@ -4379,9 +4394,17 @@ fn a_deb_install_announces_the_package_manager_and_offers_no_in_app_install() {
         "a system-managed install must not offer an in-app install"
     );
     assert!(presentation.updates_message.contains("0.12.0"));
+    // The tool by the name the user knows it by, and the suite it will fetch from. Naming the
+    // suite is what makes the sentence answerable: a machine told "apt has it" and then told
+    // by its own updater that there is nothing can at least see which channel it is on (#725).
     assert!(
-        presentation.updates_message.contains("package manager"),
+        presentation.updates_message.contains("apt"),
         "unexpected message: {}",
+        presentation.updates_message
+    );
+    assert!(
+        presentation.updates_message.contains("stable"),
+        "the message should name the suite that carries it: {}",
         presentation.updates_message
     );
     assert!(!presentation.action_closes_the_app);
@@ -4404,7 +4427,7 @@ fn a_deb_install_announces_the_package_manager_and_offers_no_in_app_install() {
 /// just stops occupying the player surface.
 #[test]
 fn a_skipped_deb_offer_keeps_its_instructions_but_leaves_the_player_surface() {
-    let mut session = LinuxUpdateSession::for_install_kind(InstallKind::Deb);
+    let mut session = subscribed_deb_session();
     session.lifecycle.start_check().expect("check starts");
     session.lifecycle.check_found("0.12.0").expect("found");
     session.lifecycle.skip_offer().expect("offer is skippable");
@@ -5368,6 +5391,22 @@ fn update_previews_walk_real_transitions() {
         primary_update_action(&replaced.describe()),
         Some(UpdateAction::RestartToUseInstalled)
     );
+
+    // The machine the operator was on: a published build, no way to fetch it, and the
+    // repository instructions instead of an updater that would disagree (#725).
+    let no_source = build_linux_update_preview(InstallKind::Deb, "no-apt-source")
+        .expect("a machine with no apt source previews on the deb lane");
+    let no_source = no_source.describe();
+    assert_eq!(
+        primary_update_action(&no_source),
+        Some(UpdateAction::CopyRepositorySetup)
+    );
+    assert!(no_source.repository_setup.is_some());
+    assert!(!no_source.system_updater_offered);
+    assert!(no_source.updates_message.contains(PREVIEW_UPDATE_VERSION));
+
+    // ...and it is a different picture from the subscribed machine's.
+    assert!(deb.describe().repository_setup.is_none());
 
     // A state a lane cannot reach is not previewable there either.
     assert!(build_linux_update_preview(InstallKind::Deb, "restart-pending").is_none());

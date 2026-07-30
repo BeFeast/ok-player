@@ -15,6 +15,7 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
+use okp_core::apt_policy::package_source_from_policy;
 use okp_core::candidate_channel::{
     self, CandidateAppImage, CandidateAppImageCheck, CandidateFeed, CandidateInstallLane,
     CandidateUpdate, CandidateUpdateRoute,
@@ -38,9 +39,9 @@ use okp_core::shortcuts::{
     self, ShortcutAction, ShortcutBinding, ShortcutChord, ShortcutModifiers, ShortcutSlot,
 };
 use okp_core::update_lifecycle::{
-    CarriedOffer, InstallEvidence, InstallKind, PackageOwnership, ReportedVersion, UpdateAction,
-    UpdateCapability, UpdateLifecycle, UpdatePresentation, UpdateState, UpdateTransitionError,
-    detect_install_kind,
+    CarriedOffer, InstallEvidence, InstallKind, PackageOwnership, PackageSourceEvidence,
+    ReportedVersion, RepositorySetup, UpdateAction, UpdateCapability, UpdateLifecycle,
+    UpdatePresentation, UpdateState, UpdateTransitionError, detect_install_kind,
 };
 use okp_core::update_selection::{self, DebFeed, DebUpdate};
 use okp_core::video_geometry::{VideoGeometry, VideoGeometryAction};
@@ -1001,6 +1002,10 @@ struct LinuxUpdateView {
     /// Opens the desktop's own software surface. Offered only where a system
     /// tool owns the payload, and disabled when this desktop has none.
     system: glib::WeakRef<gtk::Button>,
+    /// The commands that give a `.deb` install an update path, shown only when
+    /// it has none (#725). Selectable, so a user can copy them by hand as well
+    /// as with the button.
+    setup: glib::WeakRef<gtk::Label>,
     check: Option<glib::WeakRef<gtk::Button>>,
 }
 
@@ -2199,6 +2204,10 @@ impl LinuxUpdateSession {
         match self.lifecycle.state() {
             UpdateState::Available { .. }
             | UpdateState::AvailableExternally { .. }
+            // A published build this machine has no way to fetch is worth
+            // interrupting for exactly once: it is the only place the user is
+            // told why, and how to fix it (#725).
+            | UpdateState::AvailableWithoutSource { .. }
             | UpdateState::Downloading { .. }
             | UpdateState::ReadyToApply { .. }
             | UpdateState::Applying { .. }
@@ -2212,6 +2221,9 @@ impl LinuxUpdateSession {
             } => true,
             // A refresh keeps the offer it is refreshing on screen; a skipped
             // one was not on screen and does not appear because of a re-check.
+            // The machine is current on the channel it subscribes to. That is
+            // an up-to-date verdict, not an offer, and it never covers video.
+            UpdateState::WithheldBySuite { .. } => false,
             UpdateState::Checking {
                 carried: Some(carried),
             } => !matches!(carried, CarriedOffer::Skipped { .. }),

@@ -1705,6 +1705,19 @@ pub(crate) const OKP_STYLESHEET: &str = "
             font-size: 12px;
         }
 
+        /* The repository setup commands (#725). Monospaced because they are
+           commands to be read and pasted, not prose, and boxed so it is
+           obvious where the block a user has to copy begins and ends. */
+        .okp-update-setup-commands {
+            color: rgba(0, 0, 0, 0.72);
+            font-family: 'Cascadia Mono', 'Consolas', monospace;
+            font-size: 11px;
+            padding: 8px 10px;
+            margin-top: 4px;
+            border-radius: 6px;
+            background: rgba(0, 0, 0, 0.04);
+        }
+
         button.okp-update-primary-button {
             min-height: 30px;
             padding: 5px 14px;
@@ -4472,6 +4485,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-dark .okp-about-row-label,
         window.okp-settings-window.is-dark .okp-info-label,
         window.okp-settings-window.is-dark .okp-update-status,
+        window.okp-settings-window.is-dark .okp-update-setup-commands,
         window.okp-settings-window.is-dark .okp-update-action-detail,
         window.okp-settings-window.is-dark .okp-info-track-detail {
             color: rgba(255, 255, 255, 0.56);
@@ -4642,6 +4656,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-high-contrast .okp-info-value,
         window.okp-settings-window.is-high-contrast .okp-update-status,
         window.okp-settings-window.is-high-contrast .okp-update-action-title,
+        window.okp-settings-window.is-high-contrast .okp-update-setup-commands,
         window.okp-settings-window.is-high-contrast .okp-update-action-detail,
         window.okp-settings-window.is-high-contrast .okp-shortcut-action-title,
         window.okp-settings-window.is-high-contrast .okp-shortcut-action-id {

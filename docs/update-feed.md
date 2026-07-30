@@ -66,6 +66,47 @@ portable `okp-core` state:
 The skip is a user preference, not feed metadata. Feed generators and release
 workflows therefore do not encode, upload, or infer skip state.
 
+## What apt can actually deliver (issue #725)
+
+`UpdateCapability::SystemManaged` used to be derived from the install kind alone: a `.deb`
+install was told to update through apt, whether or not apt had ever heard of OK Player. On the
+machine that reported #725 it had not — the package came from a downloaded file, `apt-cache
+policy ok-player` listed only `/var/lib/dpkg/status` — so the app named a version, pointed at a
+delivery path that could not carry it, and offered **Open software updater**, which then
+correctly answered that the machine was up to date. Every button in the product led nowhere,
+and the operator sat on a stale build for three days.
+
+The delivery path is now established rather than assumed. At check time the shell runs
+`apt-cache policy ok-player` and hands the output to `okp_core::apt_policy`, which reads three
+things off apt's own answer:
+
+* **A source is a version-table origin that is not dpkg's status file.** dpkg's status records
+  what is installed; it delivers nothing. A package known only through it has no source.
+* **What apt would install is `Candidate:`** — by definition the version `apt-get install`
+  resolves to, pins and all.
+* **A candidate equal to what is installed delivers nothing**, decided by apt's own comparator.
+
+That produces one of three states, and each gets a different surface:
+
+| Machine | Capability | What the surface says |
+|---|---|---|
+| No OK Player source | `SystemUnreachable` | Names the published build, says no repository is configured, and offers the commands to add one (or the direct download). Never the system updater. |
+| Subscribed, suite carries the build | `SystemManaged` | Names the build and the suite it comes from, and may offer the system updater — which reads the same package data and will agree. |
+| Subscribed, suite does not carry it | `SystemManaged`, state `WithheldBySuite` | Says the machine is up to date **on its channel**, and which channel that is. A `stable` subscriber is never shown a candidate build (#689), because apt would refuse it. |
+
+"Could not ask" — no `apt-cache`, or a failed run — is its own state and is not read as evidence
+that a source exists. It gets the same actionable surface as "no source", because the remedy is
+the same even though the claim is weaker.
+
+The app hands over the setup commands; it never runs them. Adding an archive and its signing key
+is a privileged, system-wide change the user makes deliberately, and the privileged install path
+was removed in #698.
+
+`scripts/verify-apt-source-instructions.sh` is the live check: it reproduces the operator's
+machine in a clean container, asks the surface what it says about it, then takes the commands
+out of the app, requires the README to publish exactly them, and follows them end to end until
+`apt-cache policy` shows the archive and the package installs from it.
+
 ## Who writes the feeds
 
 `.github/workflows/publish-update-feeds.yml` is the only writer of the Pages site. It runs both
