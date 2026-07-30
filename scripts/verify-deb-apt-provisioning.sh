@@ -88,6 +88,12 @@ GNUPGHOME="$KEY_HOME" gpg --batch --quiet --pinentry-mode loopback --passphrase 
 GNUPGHOME="$KEY_HOME" gpg --batch --quiet --armor --export \
   --output "$WORK/public.asc" "$FINGERPRINT"
 
+# One key, in the packages and signing the archive — which is the property the production
+# constant exists to guarantee. Both sides are held to OKP_APT_SIGNING_FINGERPRINT (#726), so
+# this run says which key it is about. By assignment, since the generator is sourced here:
+# there is no environment override a release build could take.
+OKP_APT_SIGNING_FINGERPRINT="$FINGERPRINT"
+
 SECRET_DIR="$WORK/secrets"
 mkdir -p "$SECRET_DIR"
 cp "$WORK/private.asc" "$SECRET_DIR/gpg-private-key"

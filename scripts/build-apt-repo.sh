@@ -276,6 +276,16 @@ okp_apt_import_signing_key() {
   if [[ "$imported" != "$expected" ]]; then
     okp_apt_fail "signing key fingerprint mismatch: imported ${imported}, but $(okp_apt_secret_reference gpg-fingerprint) expects ${expected}. Refusing to sign the APT repository with an unexpected key."
   fi
+  # ...and the same key the packaging ships. The Infisical secret and the committed key are
+  # two independently editable values, and a rotation that moves one without the other leaves
+  # both builds green while the archive is signed by a key that is absent from the keyring
+  # every package-installed client has — `apt-get update` rejects the repository for all of
+  # them. Checking both here makes a half-done rotation stop the lane instead (#726).
+  local committed
+  committed="$(okp_apt_normalize_fingerprint "$OKP_APT_SIGNING_FINGERPRINT")"
+  if [[ "$imported" != "$committed" ]]; then
+    okp_apt_fail "signing key fingerprint mismatch: imported ${imported}, but the key shipped in every .deb is ${committed} (OKP_APT_SIGNING_FINGERPRINT in scripts/apt-archive-identity.sh, and rust/packaging/linux/ok-player-archive-keyring.asc). Rotate both in one change."
+  fi
   printf '%s' "$imported"
 }
 

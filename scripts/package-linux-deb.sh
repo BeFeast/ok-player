@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# candidate-required-tools: cargo chmod cp dpkg-deb gpg install ln mkdir rm
+# candidate-required-tools: awk cargo chmod cp dpkg-deb gpg install ln mkdir rm
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export OKP_CANDIDATE_TOOLCHAIN_GATE_SCRIPTS="$ROOT/scripts/package-linux-deb.sh
@@ -154,17 +154,45 @@ root="${DPKG_ROOT:-}"
 # Any configured source that names the OK Player archive — whichever file it
 # lives in, and whatever it is called. Both maintainer scripts need the same
 # answer: postinst must not overwrite a subscription the user chose, and postrm
-# must not delete a keyring a surviving source still names. Commented-out lines
-# are not sources.
+# must not delete a keyring a surviving source still names.
+#
+# "Configured" means apt would actually fetch from it. A one-line entry is
+# disabled by commenting it out; a deb822 stanza is disabled by `Enabled: no`,
+# which apt honours by producing no update target at all. Reading either as a
+# subscription would leave a machine with a disabled source and no working one,
+# which is the state this whole change exists to prevent.
+okp_apt_enabled_deb822_stanza() {
+  awk -v url="$OKP_APT_BASE_URL" '
+    BEGIN { enabled = 1 }
+    function settle() {
+      if (names_url && enabled) { found = 1 }
+      names_url = 0
+      enabled = 1
+    }
+    /^[[:space:]]*$/ { settle(); next }
+    /^[[:space:]]*#/ { next }
+    index($0, url) { names_url = 1 }
+    tolower($0) ~ /^[[:space:]]*enabled:[[:space:]]*(no|false|0)[[:space:]]*$/ { enabled = 0 }
+    END { settle(); exit found ? 0 : 1 }
+  ' "$1"
+}
+
 okp_apt_source_configured() {
   for okp_candidate in \
     "$root/etc/apt/sources.list" \
-    "$root"/etc/apt/sources.list.d/*.sources \
     "$root"/etc/apt/sources.list.d/*.list; do
-    [ -f "$okp_candidate" ] || continue
-    if grep -v '^[[:space:]]*#' "$okp_candidate" 2>/dev/null |
-      grep -qF "$OKP_APT_BASE_URL"; then
-      return 0
+    if [ -f "$okp_candidate" ]; then
+      if grep -v '^[[:space:]]*#' "$okp_candidate" 2>/dev/null |
+        grep -qF "$OKP_APT_BASE_URL"; then
+        return 0
+      fi
+    fi
+  done
+  for okp_candidate in "$root"/etc/apt/sources.list.d/*.sources; do
+    if [ -f "$okp_candidate" ]; then
+      if okp_apt_enabled_deb822_stanza "$okp_candidate"; then
+        return 0
+      fi
     fi
   done
   return 1

@@ -35,10 +35,12 @@ OKP_APT_CARRIED_DIR='/usr/share/ok-player/apt'
 # real archive it built locally; production packages get this value.
 OKP_APT_BASE_URL_DEFAULT='https://befeast.github.io/ok-player/apt'
 
-# The archive signing key, by fingerprint. scripts/package-linux-deb.sh refuses to ship any
-# other key, which is what stops a package from carrying a key that cannot verify the archive
-# it points at. Rotating the key means changing this line and the committed public key below
-# in the same commit — see docs/apt-repository.md.
+# The archive signing key, by fingerprint. Both sides are held to it:
+# scripts/package-linux-deb.sh refuses to ship any other key, and scripts/build-apt-repo.sh
+# refuses to sign with any other key. Either check alone would leave a rotation able to move
+# one side and not the other, publishing an archive no installed keyring can verify. Rotating
+# means changing this line, the committed public key below, and the Infisical secrets in one
+# change — see docs/apt-repository.md.
 OKP_APT_SIGNING_FINGERPRINT='77D0FCDEB0D594E13E50F43A9337815EB0F78C63'
 
 # The committed armored public key, relative to the repository root. Armored on purpose: it is

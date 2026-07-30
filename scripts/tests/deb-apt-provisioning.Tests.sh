@@ -326,6 +326,20 @@ else
   fail 'commented source' 'the package treated a commented-out line as a configured source'
 fi
 
+DISABLED="$(maintainer_root "$STABLE_DEB")"
+mkdir -p "$DISABLED$OKP_APT_SOURCES_DIR"
+{
+  okp_apt_write_sources_stanza /dev/stdout "$OKP_APT_BASE_URL_DEFAULT" "$OKP_APT_CANDIDATE_SUITE"
+  printf 'Enabled: no\n'
+} >"$DISABLED$OKP_APT_SOURCES_DIR/ok-player-candidate.sources"
+run_script "$STABLE_DEB" "$DISABLED" postinst configure
+if [[ -f "$DISABLED$OKP_APT_SOURCES_DIR/$OKP_APT_SOURCES_BASENAME" ]]; then
+  pass 'a deb822 stanza turned off with Enabled: no is not a subscription'
+else
+  fail 'disabled stanza' \
+    'the package read a disabled stanza as a working source and configured nothing'
+fi
+
 LEGACY="$(maintainer_root "$CANDIDATE_DEB")"
 mkdir -p "$LEGACY$OKP_APT_SOURCES_DIR"
 printf 'deb [signed-by=%s/%s.gpg] %s stable main\n' \
