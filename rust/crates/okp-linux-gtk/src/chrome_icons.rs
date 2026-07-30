@@ -82,6 +82,10 @@ pub(crate) const CHROME_ICONS: &[&str] = &[
 /// The shipped icons that `scripts/generate-chrome-icons.py` still draws, by
 /// stem. Everything else in the set is Adwaita artwork under LGPL-3 (see
 /// THIRD-PARTY-NOTICES.md), so the generator must not write it.
+///
+/// Nothing at runtime resolves icons by provenance - this records the split for
+/// the tests that hold the generator and the shipped set to it.
+#[cfg(test)]
 pub(crate) const GENERATED_CHROME_ICON_STEMS: &[&str] = &["process-working"];
 
 /// Names the chrome still resolves through the host theme and GTK's own builtin
