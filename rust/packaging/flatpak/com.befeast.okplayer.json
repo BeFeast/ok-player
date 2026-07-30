@@ -76,6 +76,11 @@
                     "type": "patch",
                     "path": "ok-player-flatpak.patch"
                 },
+                {
+                    "comment": "The application source is a pinned commit that predates this file, so it reaches the build tree as a source rather than from the pin (issue #743).",
+                    "type": "file",
+                    "path": "../../../LICENSE.LGPL-3.0"
+                },
                 "cargo-sources.json"
             ],
             "modules": [

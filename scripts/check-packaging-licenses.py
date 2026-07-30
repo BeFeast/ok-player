@@ -14,7 +14,8 @@ are installed at the path that ecosystem looks for them at:
 
   deb       /usr/share/doc/ok-player/{copyright,LICENSE,LICENSE.LGPL-3.0,
             THIRD-PARTY-NOTICES.md}   (Debian policy §12.5)
-  appimage  usr/share/doc/ok-player/ inside the AppDir payload
+  appimage  usr/bin/usr/share/doc/ok-player/ inside the extracted AppDir -
+            Velopack maps the pack directory onto the AppDir's usr/bin
   rpm       %license / %doc under %{_licensedir}/%{_docdir}
   flatpak   /app/share/licenses/com.befeast.okplayer/
   windows   next to the app in the Velopack publish directory
@@ -172,6 +173,11 @@ def check_appimage(root: Path) -> LaneResult:
         DEB_DOC_DIR in text,
         f"{recipe} no longer stages the documents under the AppDir's {DEB_DOC_DIR}",
     )
+    # Staging into a directory proves nothing about the image built from it.
+    result.require(
+        f"squashfs-root/usr/bin/{DEB_DOC_DIR}/$document" in text,
+        f"{recipe} no longer asserts the documents inside the extracted AppImage",
+    )
     result.shipped = list(SHARED_DOCUMENTS)
     return result
 
@@ -235,7 +241,11 @@ def section_of(text: str, header: str) -> str:
 def check_flatpak(root: Path) -> LaneResult:
     recipe = "rust/packaging/flatpak/com.befeast.okplayer.json"
     result = LaneResult("flatpak", recipe)
-    manifest = json.loads((root / recipe).read_text(encoding="utf-8"))
+    try:
+        manifest = json.loads((root / recipe).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        result.require(False, f"{recipe} is not parseable JSON: {error}")
+        return result
     app_id = manifest.get("app-id", "com.befeast.okplayer")
     commands: list[str] = []
     for module in manifest.get("modules", []):
@@ -251,6 +261,27 @@ def check_flatpak(root: Path) -> LaneResult:
             is not None,
             f"{recipe} no longer installs {name} into /app/share/licenses/{app_id}/",
         )
+    # The application source is a pinned commit that predates LICENSE.LGPL-3.0,
+    # so an install command alone breaks the offline build. It has to arrive as
+    # a declared source.
+    provided = set()
+    for module in manifest.get("modules", []):
+        if not isinstance(module, dict):
+            continue
+        for source in module.get("sources", []):
+            if isinstance(source, dict) and source.get("type") in {"file", "inline"}:
+                provided.add(source.get("dest-filename") or Path(source["path"]).name)
+    result.require(
+        "LICENSE.LGPL-3.0" in provided,
+        f"{recipe} installs LICENSE.LGPL-3.0 without declaring a source for it; "
+        "the pinned application commit predates the file",
+    )
+    smoke = "scripts/smoke-linux-flatpak.sh"
+    smoke_text = (root / smoke).read_text(encoding="utf-8")
+    result.require(
+        "/app/share/licenses/" in smoke_text and "pinned" in smoke_text,
+        f"{smoke} no longer resolves the installed documents against the tree it builds",
+    )
     result.shipped = list(SHARED_DOCUMENTS)
     return result
 

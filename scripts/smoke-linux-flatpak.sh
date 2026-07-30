@@ -401,6 +401,44 @@ fi
 # The vendor set is generated from one lockfile; the pin can move across a
 # lockfile change without it. Catch that here rather than inside the offline
 # build.
+# Issue #743: every licence document the manifest installs must exist in the
+# tree flatpak-builder actually builds. The application source is a pinned
+# commit, so a document added to the repository after the pin reaches the build
+# only as a declared source - an install command on its own turns the offline
+# build into a "cannot stat" failure, which nothing here would have noticed.
+python3 - "$MANIFEST" "$PINNED_TREE" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+manifest_path, pinned_tree = Path(sys.argv[1]), Path(sys.argv[2])
+app = json.loads(manifest_path.read_text())["modules"][0]
+
+provided = set()
+for source in app["sources"]:
+    if isinstance(source, dict) and source.get("type") in {"file", "inline"}:
+        provided.add(source.get("dest-filename") or Path(source["path"]).name)
+
+installed, unresolved = [], []
+for command in app["build-commands"]:
+    match = re.match(r"install -Dm\d+ (\S+) /app/share/licenses/", command)
+    if not match:
+        continue
+    document = match.group(1)
+    installed.append(document)
+    if document not in provided and not (pinned_tree / document).is_file():
+        unresolved.append(document)
+
+assert installed, "the Flatpak manifest installs no licence document at all"
+if unresolved:
+    raise SystemExit(
+        "the Flatpak installs licence documents that are in neither the pinned "
+        f"and patched tree nor a declared source: {sorted(unresolved)}"
+    )
+print(f"Flatpak licence documents resolve in the built tree: {sorted(installed)}")
+PY
+
 python3 "$CARGO_SOURCES_CHECKER" "$PINNED_TREE/rust/Cargo.lock" "$CARGO_SOURCES"
 
 schema_version="$(sed -n 's/^pub const FLATPAK_LIFECYCLE_EVIDENCE_SCHEMA_VERSION: u32 = \([0-9]\+\);$/\1/p' \

@@ -56,8 +56,11 @@ for size in 16 24 32 48 64; do
 done
 
 # The AppImage carries its whole payload, so the licence documents have to be
-# inside it. The pack directory becomes the AppDir's usr/bin, which is where
-# this lane already puts its usr/share tree.
+# inside it. Velopack maps this pack directory onto the AppDir's usr/bin, so
+# these land at usr/bin/usr/share/doc/ok-player inside the extracted image -
+# one level deeper than the path below reads, and the same nesting this lane
+# already gives its metainfo and icons. The extraction check further down
+# asserts them at that real path.
 "$ROOT/scripts/stage-license-documents.sh" appimage "$PACK_DIR/usr/share/doc/ok-player"
 
 "$ROOT/scripts/verify-linux-bundled-mpv.sh" \
@@ -91,6 +94,16 @@ trap 'rm -rf "$APPIMAGE_INSPECT"' EXIT
   "$ROOT/scripts/verify-linux-bundled-mpv.sh" \
     squashfs-root/usr/bin/ok-player \
     squashfs-root/usr/bin
+  # Asked of the image that was produced, not of the directory it was packed
+  # from: this is the only step that proves a user unpacking the AppImage finds
+  # the licence documents in it (issue #743).
+  for document in LICENSE LICENSE.LGPL-3.0 THIRD-PARTY-NOTICES.md; do
+    [[ -s "squashfs-root/usr/bin/usr/share/doc/ok-player/$document" ]] || {
+      echo "AppImage payload carries no $document" >&2
+      exit 1
+    }
+  done
+  echo "Licence documents verified inside the AppImage payload"
 )
 rm -rf "$APPIMAGE_INSPECT"
 trap - EXIT
