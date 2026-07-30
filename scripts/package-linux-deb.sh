@@ -156,23 +156,48 @@ root="${DPKG_ROOT:-}"
 # answer: postinst must not overwrite a subscription the user chose, and postrm
 # must not delete a keyring a surviving source still names.
 #
-# "Configured" means apt would actually fetch from it. A one-line entry is
-# disabled by commenting it out; a deb822 stanza is disabled by `Enabled: no`,
-# which apt honours by producing no update target at all. Reading either as a
-# subscription would leave a machine with a disabled source and no working one,
-# which is the state this whole change exists to prevent.
-okp_apt_enabled_deb822_stanza() {
+# "Configured" means apt would actually fetch **packages** from it. Three ways
+# an entry naming this archive can fail to be that, and each has been a real
+# apt configuration rather than a hypothetical one:
+#
+#   * it is commented out (one-line format), or turned off with `Enabled: no`
+#     (deb822) — apt builds no update target from it at all;
+#   * it is source-only — `deb-src`, or a deb822 stanza whose `Types` does not
+#     include `deb` — so apt fetches a Sources index and never a Packages one,
+#     and `apt-cache policy ok-player` still has no repository version.
+#
+# Reading any of those as a subscription would leave the machine with an entry
+# that delivers nothing and no working source beside it, which is the state
+# this whole change exists to prevent.
+okp_apt_binary_one_line_source() {
   awk -v url="$OKP_APT_BASE_URL" '
-    BEGIN { enabled = 1 }
+    /^[[:space:]]*#/ { next }
+    $1 == "deb" && index($0, url) { found = 1 }
+    END { exit found ? 0 : 1 }
+  ' "$1"
+}
+
+okp_apt_binary_deb822_stanza() {
+  awk -v url="$OKP_APT_BASE_URL" '
+    BEGIN { enabled = 1; binary = 0 }
     function settle() {
-      if (names_url && enabled) { found = 1 }
+      if (names_url && enabled && binary) { found = 1 }
       names_url = 0
       enabled = 1
+      binary = 0
     }
     /^[[:space:]]*$/ { settle(); next }
     /^[[:space:]]*#/ { next }
     index($0, url) { names_url = 1 }
     tolower($0) ~ /^[[:space:]]*enabled:[[:space:]]*(no|false|0)[[:space:]]*$/ { enabled = 0 }
+    tolower($0) ~ /^[[:space:]]*types:/ {
+      types = tolower($0)
+      sub(/^[[:space:]]*types:/, "", types)
+      count = split(types, kinds, /[[:space:]]+/)
+      for (i = 1; i <= count; i++) {
+        if (kinds[i] == "deb") { binary = 1 }
+      }
+    }
     END { settle(); exit found ? 0 : 1 }
   ' "$1"
 }
@@ -182,15 +207,14 @@ okp_apt_source_configured() {
     "$root/etc/apt/sources.list" \
     "$root"/etc/apt/sources.list.d/*.list; do
     if [ -f "$okp_candidate" ]; then
-      if grep -v '^[[:space:]]*#' "$okp_candidate" 2>/dev/null |
-        grep -qF "$OKP_APT_BASE_URL"; then
+      if okp_apt_binary_one_line_source "$okp_candidate"; then
         return 0
       fi
     fi
   done
   for okp_candidate in "$root"/etc/apt/sources.list.d/*.sources; do
     if [ -f "$okp_candidate" ]; then
-      if okp_apt_enabled_deb822_stanza "$okp_candidate"; then
+      if okp_apt_binary_deb822_stanza "$okp_candidate"; then
         return 0
       fi
     fi

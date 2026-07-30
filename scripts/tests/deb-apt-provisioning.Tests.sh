@@ -340,6 +340,27 @@ else
     'the package read a disabled stanza as a working source and configured nothing'
 fi
 
+# A source-only entry fetches a Sources index and never a Packages one, so
+# `apt-cache policy ok-player` would still have no repository version. Both
+# shapes of it, since both are configurations a user can end up with.
+SOURCE_ONLY="$(maintainer_root "$STABLE_DEB")"
+mkdir -p "$SOURCE_ONLY$OKP_APT_SOURCES_DIR"
+{
+  printf 'Types: deb-src\n'
+  printf 'URIs: %s\n' "$OKP_APT_BASE_URL_DEFAULT"
+  printf 'Suites: %s\n' "$OKP_APT_CANDIDATE_SUITE"
+  printf 'Components: main\n'
+} >"$SOURCE_ONLY$OKP_APT_SOURCES_DIR/ok-player-src.sources"
+printf 'deb-src %s stable main\n' "$OKP_APT_BASE_URL_DEFAULT" \
+  >"$SOURCE_ONLY$OKP_APT_SOURCES_DIR/ok-player-src.list"
+run_script "$STABLE_DEB" "$SOURCE_ONLY" postinst configure
+if [[ -f "$SOURCE_ONLY$OKP_APT_SOURCES_DIR/$OKP_APT_SOURCES_BASENAME" ]]; then
+  pass 'a source-only entry is not a subscription that can deliver packages'
+else
+  fail 'source-only entry' \
+    'the package read a deb-src entry as a working source and configured nothing'
+fi
+
 LEGACY="$(maintainer_root "$CANDIDATE_DEB")"
 mkdir -p "$LEGACY$OKP_APT_SOURCES_DIR"
 printf 'deb [signed-by=%s/%s.gpg] %s stable main\n' \
