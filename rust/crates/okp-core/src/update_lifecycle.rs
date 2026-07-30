@@ -1457,10 +1457,14 @@ impl UpdateLifecycle {
                 | UpdateState::UpToDate
                 | UpdateState::Available { .. }
                 | UpdateState::AvailableExternally { .. }
-                // Both settle nothing on their own: a check is how a machine
-                // that has just been given a source, or whose suite has moved,
-                // finds that out.
+                // None of these settles anything on its own: a check is how a
+                // machine that has just been given a source, or whose suite has
+                // moved, or that has just refreshed its package lists, finds
+                // that out. The last one especially — the surface hands the user
+                // one command to run outside the app, so the app has to be able
+                // to see them run it (#726).
                 | UpdateState::AvailableWithoutSource { .. }
+                | UpdateState::AvailableButSourceUnread { .. }
                 | UpdateState::WithheldBySuite { .. }
                 | UpdateState::Skipped { .. }
                 | UpdateState::Running { .. }
@@ -3815,6 +3819,29 @@ mod tests {
             presentation.updates_message
         );
         assert!(!UpdateAction::CopyRefreshCommand.applies_update_in_app());
+
+        // The remedy is a command the user runs outside the app, so the app has to be able to
+        // observe them running it. A state that offered an instruction and then refused to
+        // look again would need a restart to clear a message it had told the user how to fix.
+        assert!(
+            presentation.check_available,
+            "the surface tells the user to refresh, so it must be able to check afterwards"
+        );
+        lifecycle
+            .start_check()
+            .expect("a refreshed machine can be looked at again");
+        lifecycle.package_source_observed(PackageSourceEvidence::Source {
+            suite: "candidate".to_owned(),
+            deliverable: Some("0.11.0-beta.0.210".to_owned()),
+        });
+        lifecycle.check_found("0.11.0-beta.0.210").unwrap();
+        let after = lifecycle.describe();
+        assert!(
+            after.refresh_command.is_none(),
+            "the refresh offer survived the refresh: {}",
+            after.updates_message
+        );
+        assert!(after.updates_message.contains("0.11.0-beta.0.210"));
     }
 
     /// Setup instructions take their suite from the build, never from a constant. A tester who
