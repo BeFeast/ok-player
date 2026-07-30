@@ -309,8 +309,12 @@ panel_header_w=$((panel_right - panel_header_x))
 # the right edge lands on a glyph rather than in the gap at exactly the widths
 # this smoke exercises, and then reports a missing seam that is really a
 # mis-aimed crop.
-overflow_x="$(geometry_field osc-overflow x)"
-overflow_w="$(geometry_field osc-overflow width)"
+#
+# The record publishes window-local `local-x` and `w` (not `x`/`width`, which are
+# screen coordinates), and the planes are indexed - `osc-overflow-0`. The capture
+# below is `import -window`, so window-local is the frame the crops need.
+overflow_x="$(geometry_field osc-overflow-0 local-x)"
+overflow_w="$(geometry_field osc-overflow-0 w)"
 if [[ -z "$overflow_x" || -z "$overflow_w" ]]; then
   echo "the bar published no osc-overflow rectangle; the overflow entry cannot be located" >&2
   exit 1
@@ -319,9 +323,9 @@ fi
 # The seam is the gap the bar actually left: from the right edge of the nearest
 # control left of the overflow entry to the entry itself, sampled in the middle.
 neighbour_right=0
-for plane in osc-play osc-timeline osc-volume osc-slot; do
-  nx="$(geometry_field "$plane" x)"
-  nw="$(geometry_field "$plane" width)"
+for plane in osc-play-0 osc-timeline-0 osc-volume-0 osc-slot-0; do
+  nx="$(geometry_field "$plane" local-x)"
+  nw="$(geometry_field "$plane" w)"
   [[ -n "$nx" && -n "$nw" ]] || continue
   right=$((nx + nw))
   if (( right <= overflow_x && right > neighbour_right )); then
