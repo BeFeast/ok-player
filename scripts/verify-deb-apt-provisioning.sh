@@ -385,6 +385,14 @@ if [ -e /etc/apt/sources.list.d/ok-player.sources ]; then
 fi
 apt-get update -qq
 assert_subscribed_to candidate stable
+
+echo "--- purging with that subscription in place leaves apt working ---"
+apt-get purge -y -qq ok-player >/dev/null
+test -f /usr/share/keyrings/ok-player-archive-keyring.gpg || {
+  echo "purge removed a keyring the surviving source still names" >&2
+  exit 1
+}
+apt-get update -qq
 echo OK
 EXISTING
   run_scenario existing-choice "$WORK/scenarios/existing-choice"

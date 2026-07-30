@@ -148,26 +148,14 @@ apt_script_prologue() {
   printf "OKP_APT_KEYRING='%s/%s.gpg'\n" "$OKP_APT_KEYRING_DIR" "$OKP_APT_KEYRING_BASENAME"
   printf "OKP_APT_SOURCES='%s/%s'\n" "$OKP_APT_SOURCES_DIR" "$OKP_APT_SOURCES_BASENAME"
   printf '\n'
-}
-
-{
-  apt_script_prologue
-  cat <<'POSTINST'
+  cat <<'PROLOGUE'
 root="${DPKG_ROOT:-}"
 
-# --- Provision the OK Player APT repository (issue #726) ---------------------
-# Everything this needs travels inside the package, so it works on a machine
-# with no network at all.
-
-# Any configured source that names the OK Player archive is the user's own
-# choice of suite — whichever file it lives in, and whatever it is called. A
-# reinstall must not move a `candidate` subscriber back to `stable`, so an
-# existing source is left exactly as it is. Commented-out lines are not
-# sources. This is also why neither file is a dpkg conffile: dpkg compares a
-# conffile against the md5 of what the *previous package* shipped, so an
-# untouched stanza is replaced silently, which is precisely the move this
-# has to prevent (Debian Policy 10.7.3 covers config files a maintainer
-# script owns instead).
+# Any configured source that names the OK Player archive — whichever file it
+# lives in, and whatever it is called. Both maintainer scripts need the same
+# answer: postinst must not overwrite a subscription the user chose, and postrm
+# must not delete a keyring a surviving source still names. Commented-out lines
+# are not sources.
 okp_apt_source_configured() {
   for okp_candidate in \
     "$root/etc/apt/sources.list" \
@@ -181,6 +169,24 @@ okp_apt_source_configured() {
   done
   return 1
 }
+
+PROLOGUE
+}
+
+{
+  apt_script_prologue
+  cat <<'POSTINST'
+# --- Provision the OK Player APT repository (issue #726) ---------------------
+# Everything this needs travels inside the package, so it works on a machine
+# with no network at all.
+#
+# An existing source is the user's own choice of suite and is left exactly as
+# it is: a reinstall must not move a `candidate` subscriber back to `stable`.
+# That is also why neither file is a dpkg conffile — dpkg compares a conffile
+# against the md5 of what the *previous package* shipped, so an untouched
+# stanza is replaced silently, which is precisely the move this has to
+# prevent (Debian Policy 10.7.3 covers config files a maintainer script owns
+# instead).
 
 # The keyring is refreshed unconditionally. It is this package's copy of the key
 # the archive is signed with, and a machine that missed a rotation would stop
@@ -215,14 +221,20 @@ POSTINST
 {
   apt_script_prologue
   cat <<'POSTRM'
-root="${DPKG_ROOT:-}"
-
 # `purge` removes the repository this package configured; a plain `remove` leaves
 # it, which is how apt-repository-shipping packages behave and is what lets a
 # reinstall not have to re-add the source. postinst owns both files rather than
 # dpkg, so postrm is what has to remove them.
 if [ "$1" = purge ]; then
-  rm -f "$root$OKP_APT_SOURCES" "$root$OKP_APT_KEYRING"
+  rm -f "$root$OKP_APT_SOURCES"
+  # The keyring is only this package's to remove while nothing else needs it. A
+  # user who subscribed through a file of their own — ok-player-candidate.sources,
+  # say — keeps a source whose `Signed-By` names this keyring, and taking it out
+  # from under them breaks `apt update` for the whole machine rather than just
+  # for OK Player.
+  if ! okp_apt_source_configured; then
+    rm -f "$root$OKP_APT_KEYRING"
+  fi
 fi
 
 if command -v update-desktop-database >/dev/null 2>&1; then

@@ -174,12 +174,61 @@ else
 fi
 
 # ...which only holds because the release lane declares itself. A release that stopped saying
-# so would publish `linux-v*` packages subscribing every user to the QA channel.
-if grep -q 'OKP_DEB_APT_SUITE: stable' "$ROOT/.github/workflows/release-linux.yml"; then
-  pass 'the versioned release lane declares the stable suite'
+# so would publish `linux-v*` packages subscribing every user to the QA channel. Two things
+# have to be true for that not to happen, and neither is a string appearing somewhere in a
+# file: the step that builds the Debian package must carry the variable in the environment it
+# runs with, and the script it runs must pass it on to the packaging.
+cat >"$WORK/release-lane.py" <<'PYTHON'
+import sys
+
+import yaml
+
+workflow = yaml.safe_load(open(sys.argv[1]))
+building = [
+    step
+    for job in workflow["jobs"].values()
+    for step in job.get("steps", [])
+    if "build-linux-portable-package.sh deb" in (step.get("run") or "")
+]
+if not building:
+    sys.exit("no step in release-linux.yml builds the Debian package lane")
+for step in building:
+    suite = (step.get("env") or {}).get("OKP_DEB_APT_SUITE")
+    if suite != "stable":
+        sys.exit(
+            "the step %r builds the release .deb with OKP_DEB_APT_SUITE=%r, so it would "
+            "subscribe every user to the QA channel" % (step.get("name"), suite)
+        )
+PYTHON
+if python3 "$WORK/release-lane.py" "$ROOT/.github/workflows/release-linux.yml"; then
+  pass 'the step that builds the release .deb runs with the stable suite in its environment'
 else
-  fail 'release lane' \
-    'release-linux.yml does not set OKP_DEB_APT_SUITE: stable, so its .deb would provision candidate'
+  fail 'release lane' 'see above'
+fi
+
+# The other half: the script that step runs has to carry the variable through to the
+# packaging. Asked by running it, with the packaging replaced by something that reports the
+# environment it was handed.
+LANE_FIXTURE="$WORK/lane"
+mkdir -p "$LANE_FIXTURE/scripts"
+cp "$ROOT/scripts/build-linux-portable-package.sh" "$LANE_FIXTURE/scripts/"
+cat >"$LANE_FIXTURE/scripts/package-linux-deb.sh" <<'REPORTER'
+#!/usr/bin/env bash
+printf 'OKP_DEB_APT_SUITE=%s
+' "${OKP_DEB_APT_SUITE-<unset>}"
+REPORTER
+chmod 755 "$LANE_FIXTURE/scripts/package-linux-deb.sh"
+git -C "$LANE_FIXTURE" init --quiet
+git -C "$LANE_FIXTURE" -c user.email=t@example.invalid -c user.name=t commit \
+  --quiet --allow-empty -m fixture
+LANE_OUT="$(
+  OKP_PORTABLE_PACKAGE_MODE=native OKP_DEB_APT_SUITE=stable \
+    bash "$LANE_FIXTURE/scripts/build-linux-portable-package.sh" deb 0.0.0-test.1 2>&1 || true
+)"
+if [[ "$LANE_OUT" == *'OKP_DEB_APT_SUITE=stable'* ]]; then
+  pass 'the packaging lane carries the declared suite through to the packaging'
+else
+  fail 'lane plumbing' "build-linux-portable-package.sh dropped the suite: $LANE_OUT"
 fi
 
 # --- 4. What the maintainer scripts do ----------------------------------------------------
@@ -248,6 +297,18 @@ if [[ "$BEFORE" == "$AFTER" ]] &&
 else
   fail 'existing subscription' \
     'installing a stable package moved a candidate subscriber, or added a stable source beside theirs'
+fi
+
+# ...and purging then leaves that source pointing at a keyring that must still be there. It
+# names the keyring in `Signed-By`, so removing it would break `apt update` for the whole
+# machine rather than only for OK Player.
+run_script "$STABLE_DEB" "$SUBSCRIBED" postrm purge
+if [[ -f "$SUBSCRIBED$OKP_APT_KEYRING_DIR/$OKP_APT_KEYRING_BASENAME.gpg" ]] &&
+  [[ -f "$SUBSCRIBED$OKP_APT_SOURCES_DIR/ok-player-candidate.sources" ]]; then
+  pass 'purge keeps the keyring a surviving source still names'
+else
+  fail 'purge with a surviving source' \
+    'purge left a source whose Signed-By names a keyring that is no longer there'
 fi
 
 # The same holds for a source the user wrote by hand into the one-line format, and for one

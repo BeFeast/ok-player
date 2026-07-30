@@ -137,7 +137,11 @@ Four rules carry it:
   archive is signed with, and a machine that missed a rotation could not verify the archive at
   all.
 * **`purge` removes both, `remove` does not.** That is how apt-repository-shipping packages
-  behave, and it is what lets a reinstall skip re-adding the source.
+  behave, and it is what lets a reinstall skip re-adding the source. The keyring is the
+  exception to the exception: `purge` removes the package's own stanza first and then keeps the
+  keyring if any OK Player source is still configured. A user who subscribed through a file of
+  their own keeps a source whose `Signed-By` names it, and taking it out from under them would
+  fail `apt update` for the whole machine rather than only for OK Player.
 
 **Neither file is a dpkg conffile, deliberately.** A conffile would give "local edits survive an
 upgrade", but it cannot give what matters more here. dpkg compares a conffile against the md5 of
