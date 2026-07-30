@@ -24,10 +24,18 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf -- "$WORK"' EXIT
 
-for tool in gpg dpkg-deb; do
+for tool in gpg dpkg-deb python3; do
   command -v "$tool" >/dev/null 2>&1 ||
     { printf 'Debian APT provisioning tests require %s, which is not on PATH\n' "$tool" >&2; exit 1; }
 done
+# The release-lane assertion parses the workflow rather than grepping it, which needs a YAML
+# parser. Named here with the other prerequisites so a runner without it says so, instead of
+# failing several assertions later with a traceback.
+python3 -c 'import yaml' 2>/dev/null || {
+  echo 'Debian APT provisioning tests require PyYAML (python3-yaml), which is not importable' >&2
+  echo 'It parses .github/workflows/release-linux.yml to check the suite the release lane declares.' >&2
+  exit 1
+}
 
 failures=0
 pass() { printf 'PASS %s\n' "$1"; }
