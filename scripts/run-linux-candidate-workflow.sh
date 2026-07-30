@@ -18,7 +18,17 @@ DECISION_REACHED=false
 export OKP_PORTABILITY_EVIDENCE_DIR="${OKP_PORTABILITY_EVIDENCE_DIR:-$ROOT/artifacts/linux/portability-smoke-evidence}"
 mkdir -p "$OKP_PORTABILITY_EVIDENCE_DIR"
 
-"$ROOT/scripts/build-linux-candidate.sh"
+# See scripts/build-linux-candidate.sh; the two must agree.
+ADVISORY_EXIT_STATUS=78
+BUILD_STATUS=0
+"$ROOT/scripts/build-linux-candidate.sh" || BUILD_STATUS=$?
+if ((BUILD_STATUS != 0 && BUILD_STATUS != ADVISORY_EXIT_STATUS)); then
+  # The build stopped before it staged a bundle, so last-bundle.path still names
+  # an *earlier* run. Publishing that would hand the operator an older package
+  # under this run's name. There is nothing to deliver.
+  echo "candidate build failed before staging a bundle; nothing to publish" >&2
+  exit "$BUILD_STATUS"
+fi
 
 BUNDLE="$(cat "$STATE_DIR/last-bundle.path")"
 SOURCE_SHA="$(jq -r '.source_sha' "$BUNDLE/candidate-build.json")"
@@ -55,5 +65,13 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
       echo "published_build=$published_build"
       echo "stale_reasons=$(jq -c '.stale_reasons // []' "$DECISION_OUTPUT")"
     fi
+    echo "advisory_failed=$( ((BUILD_STATUS != 0)) && echo true || echo false )"
   } >> "$GITHUB_OUTPUT"
+fi
+
+# The package has been published. Only now does the advisory failure turn the
+# run red: a red run that still delivered the package is the point of the split.
+if ((BUILD_STATUS != 0)); then
+  echo "advisory gates failed; the package above was published and the run is red" >&2
+  exit "$BUILD_STATUS"
 fi

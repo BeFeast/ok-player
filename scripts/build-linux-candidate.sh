@@ -42,6 +42,13 @@ HEARTBEAT="$STATE_DIR/heartbeat.jsonl"
 LAST_BUNDLE="$STATE_DIR/last-bundle.path"
 OUT_RETAIN="${OKP_CANDIDATE_OUT_RETAIN:-3}"
 
+# Exit status meaning "the bundle is staged and available, but an advisory gate
+# failed". It is distinct from 1 so scripts/run-linux-candidate-workflow.sh can
+# tell this from a failure that happened before there was anything to hand off:
+# the first must still publish, the second must not. Keep the two in sync -
+# scripts/tests/candidate-gate-split.Tests.sh asserts they agree.
+ADVISORY_EXIT_STATUS=78
+
 mkdir -p "$STATE_DIR"
 
 # Direct invocations acquire through the Rust coordinator. Its descriptor is
@@ -361,5 +368,5 @@ if ((${#ADVISORY_FAILURES[@]} > 0)); then
   printf 'candidate %s built and staged, with advisory gates failed: %s\n' \
     "$VERSION" "${ADVISORY_FAILURES[*]}" >&2
   echo "The package is available; it is not vouched for until these pass." >&2
-  exit 1
+  exit "$ADVISORY_EXIT_STATUS"
 fi
