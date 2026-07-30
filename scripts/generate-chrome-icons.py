@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Generate the OK Player symbolic chrome icon set.
+"""Generate the icons Adwaita has no counterpart for.
+
+The shipped chrome set is Adwaita artwork renamed into the okp- namespace
+(see THIRD-PARTY-NOTICES.md). Script-drawn icons were tried first to avoid
+establishing provenance, and they looked script-drawn: generating SVG paths
+is not design. Only okp-process-working-symbolic still comes from here.
+
+Original notes follow.
+
 
 One 16x16 grid, fills only (GTK's symbolic recolour rewrites `fill`, never
 `stroke`), 2px primary weight so a 1.5x scale lands on whole pixels.
@@ -373,9 +381,15 @@ HEADER = ('<?xml version="1.0" encoding="UTF-8"?>\n'
           ' viewBox="0 0 16 16">\n  <g fill="%s">\n    ' % FILL)
 FOOTER = "\n  </g>\n</svg>\n"
 
-for name, body in sorted(ICONS.items()):
+# ICONS above is kept whole as the record of the script-drawn set that Adwaita
+# replaced, but only these are still written. Emitting the rest would overwrite
+# the shipped Adwaita artwork with the very artwork it was replaced for looking
+# script-drawn, and the header would relabel LGPL-3 files as first-party.
+GENERATED = ("process-working",)
+
+for name in sorted(GENERATED):
     path = os.path.join(OUT, "okp-%s-symbolic.svg" % name)
     with open(path, "w") as handle:
-        handle.write(HEADER + body + FOOTER)
+        handle.write(HEADER + ICONS[name] + FOOTER)
 
-print("wrote %d icons to %s" % (len(ICONS), OUT))
+print("wrote %d icon(s) to %s" % (len(GENERATED), OUT))

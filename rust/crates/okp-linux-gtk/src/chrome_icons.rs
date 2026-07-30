@@ -79,6 +79,15 @@ pub(crate) const CHROME_ICONS: &[&str] = &[
     "okp-window-close-symbolic",
 ];
 
+/// The shipped icons that `scripts/generate-chrome-icons.py` still draws, by
+/// stem. Everything else in the set is Adwaita artwork under LGPL-3 (see
+/// THIRD-PARTY-NOTICES.md), so the generator must not write it.
+///
+/// Nothing at runtime resolves icons by provenance - this records the split for
+/// the tests that hold the generator and the shipped set to it.
+#[cfg(test)]
+pub(crate) const GENERATED_CHROME_ICON_STEMS: &[&str] = &["process-working"];
+
 /// Names the chrome still resolves through the host theme and GTK's own builtin
 /// icons, each with the reason it is not ours to own.
 pub(crate) const THEME_ONLY_ICONS: &[(&str, &str)] = &[
@@ -423,9 +432,25 @@ mod tests {
                 "{name} is not named as a symbolic icon"
             );
             let svg = std::fs::read_to_string(&path).expect("an icon must be readable");
+            // The grid is the rule, not the literal string: upstream artwork can
+            // carry a rounded extent (`0 0 16 15.980469`) from the tool that drew
+            // it, which is the same 16px grid and renders identically.
+            let box_attr = svg
+                .split_once("viewBox=\"")
+                .and_then(|(_, rest)| rest.split_once('"'))
+                .map(|(value, _)| value.to_string())
+                .unwrap_or_default();
+            let extent: Vec<f64> = box_attr
+                .split_whitespace()
+                .filter_map(|value| value.parse::<f64>().ok())
+                .collect();
             assert!(
-                svg.contains("viewBox=\"0 0 16 16\""),
-                "{name} is not drawn on the 16px grid"
+                extent.len() == 4
+                    && extent[0] == 0.0
+                    && extent[1] == 0.0
+                    && (extent[2] - 16.0).abs() < 0.05
+                    && (extent[3] - 16.0).abs() < 0.05,
+                "{name} is not drawn on the 16px grid: viewBox=\"{box_attr}\""
             );
         }
     }
@@ -438,20 +463,47 @@ mod tests {
         }
     }
 
+    /// The generator used to own the whole chrome set. Now that the set is
+    /// Adwaita artwork apart from one icon, running it must no longer write the
+    /// rest: it would overwrite LGPL-3 files with GPL-3-headered script drawings
+    /// and silently contradict THIRD-PARTY-NOTICES.md. The old assertion here
+    /// required the opposite - that it draws every shipped name - so it is
+    /// replaced rather than relaxed.
     #[test]
-    fn the_generator_writes_exactly_the_shipped_set() {
+    fn the_generator_writes_only_the_still_first_party_icon() {
         let generator = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../scripts/generate-chrome-icons.py"),
         )
         .expect("the icon generator must be readable");
-        for name in CHROME_ICONS {
-            let stem = name
-                .strip_prefix(CHROME_ICON_PREFIX)
-                .and_then(|name| name.strip_suffix("-symbolic"))
-                .expect("a shipped name is prefixed and symbolic");
+
+        for stem in GENERATED_CHROME_ICON_STEMS {
             assert!(
                 generator.contains(&format!("\"{stem}\":")),
-                "the generator does not draw {name}"
+                "the generator does not draw {stem}"
+            );
+            assert!(
+                generator.contains(&format!("GENERATED = (\"{stem}\",)")),
+                "the generator does not declare {stem} as written"
+            );
+        }
+
+        assert!(
+            generator.contains("for name in sorted(GENERATED):"),
+            "the write loop must iterate the written set"
+        );
+        assert!(
+            !generator.contains("for name, body in sorted(ICONS.items()):"),
+            "the write loop must not iterate the whole retired set"
+        );
+    }
+
+    #[test]
+    fn every_generated_icon_stem_is_actually_shipped() {
+        for stem in GENERATED_CHROME_ICON_STEMS {
+            let name = format!("{CHROME_ICON_PREFIX}{stem}-symbolic");
+            assert!(
+                CHROME_ICONS.contains(&name.as_str()),
+                "{name} is generated but not shipped"
             );
         }
     }
