@@ -27,7 +27,11 @@ BUILD_SHA="${SOURCE_SHA:0:7}"
 case "$MODE" in
   native)
     if [[ "$LANE" == deb ]]; then
+      # OKP_DEB_APT_SUITE decides which APT suite the package provisions (#726). Empty is not
+      # "stable": the packaging treats an undeclared build as a rolling one, and only the
+      # versioned release lane declares itself.
       exec env OKP_BUILD_SHA="$BUILD_SHA" \
+        OKP_DEB_APT_SUITE="${OKP_DEB_APT_SUITE:-}" \
         "$ROOT/scripts/package-linux-deb.sh" "$VERSION"
     fi
     exec env OKP_BUILD_SHA="$BUILD_SHA" \
@@ -62,6 +66,7 @@ fi
   -e CARGO_TARGET_DIR=/workspace/rust/target/portable \
   -e OKP_BUNDLED_MPV_ROOT=/workspace/rust/target/portable/okp-bundled-mpv \
   -e OKP_LINUX_CHANNEL="${OKP_LINUX_CHANNEL:-linux}" \
+  -e OKP_DEB_APT_SUITE="${OKP_DEB_APT_SUITE:-}" \
   -e OKP_BUILD_SHA="$BUILD_SHA" \
   -e LANE="$LANE" \
   -e VERSION="$VERSION" \

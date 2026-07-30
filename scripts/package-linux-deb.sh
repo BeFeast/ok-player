@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# candidate-required-tools: cargo chmod cp dpkg-deb install ln mkdir rm
+# candidate-required-tools: cargo chmod cp dpkg-deb gpg install ln mkdir rm
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export OKP_CANDIDATE_TOOLCHAIN_GATE_SCRIPTS="$ROOT/scripts/package-linux-deb.sh
@@ -24,6 +24,35 @@ FIXED_ICONS="$ROOT/rust/packaging/linux/icons/hicolor"
 DESKTOP="$ROOT/rust/packaging/linux/com.befeast.okplayer.desktop"
 METAINFO="$ROOT/rust/packaging/linux/com.befeast.okplayer.metainfo.xml"
 
+# --- Which archive this package provisions (issue #726) --------------------------------
+# Until now a .deb installed a player that could never update itself: postinst refreshed the
+# desktop and icon caches and nothing else, so the machine ended up with OK Player installed
+# and no OK Player apt source. The suite has to match the artifact — a package cut from a
+# linux-v* release subscribes the machine to `stable`, one from the rolling candidate lane to
+# `candidate`. Getting that wrong is not cosmetic: a tester who installed a candidate .deb and
+# was quietly put on `stable` would stop receiving the builds they installed it for.
+#
+# The default is `candidate` because that is the honest description of an undeclared build. A
+# release is a deliberate act and declares itself — release-linux.yml sets this explicitly,
+# and scripts/tests/deb-apt-provisioning.Tests.sh fails if that line ever disappears. Every
+# other lane, including a local build, is a rolling build.
+source "$ROOT/scripts/apt-archive-identity.sh"
+APT_SUITE="${OKP_DEB_APT_SUITE:-$OKP_APT_CANDIDATE_SUITE}"
+# The three below are overridable only so scripts/verify-deb-apt-provisioning.sh can point a
+# real package at a real archive it built locally with a throwaway key. A production build
+# takes the committed key and the published archive.
+APT_BASE_URL="${OKP_DEB_APT_BASE_URL:-$OKP_APT_BASE_URL_DEFAULT}"
+APT_PUBLIC_KEY="${OKP_DEB_APT_PUBLIC_KEY:-$ROOT/$OKP_APT_PUBLIC_KEY_RELATIVE}"
+APT_EXPECT_FINGERPRINT="${OKP_DEB_APT_FINGERPRINT:-$OKP_APT_SIGNING_FINGERPRINT}"
+
+case "$APT_SUITE" in
+  "$OKP_APT_STABLE_SUITE" | "$OKP_APT_CANDIDATE_SUITE") ;;
+  *)
+    echo "OKP_DEB_APT_SUITE must be $OKP_APT_STABLE_SUITE or $OKP_APT_CANDIDATE_SUITE, not '$APT_SUITE'" >&2
+    exit 2
+    ;;
+esac
+
 source "$ROOT/scripts/linux-bundled-mpv-env.sh"
 okp_use_linux_bundled_mpv package
 
@@ -37,6 +66,7 @@ mkdir -p "$BUILD_ROOT/usr/bin"
 mkdir -p "$BUILD_ROOT/usr/share/applications"
 mkdir -p "$BUILD_ROOT/usr/share/metainfo"
 mkdir -p "$BUILD_ROOT/usr/share/icons/hicolor/scalable/apps"
+mkdir -p "$BUILD_ROOT$OKP_APT_CARRIED_DIR"
 
 install -Dm755 "$TARGET_DIR/release/okp-linux-gtk" "$BUILD_ROOT/usr/lib/ok-player/ok-player"
 cp -a "$OKP_BUNDLED_MPV_RUNTIME_DIR/." "$BUILD_ROOT/usr/lib/ok-player/"
@@ -53,6 +83,39 @@ done
 # GPLv3 §4 and LGPLv3 §4(b): the licence documents have to travel with the
 # package. Debian policy §12.5 puts them in /usr/share/doc/<package>.
 "$ROOT/scripts/stage-license-documents.sh" deb "$BUILD_ROOT/usr/share/doc/ok-player"
+# --- The repository material the package carries (issue #726) --------------------------
+# Both files travel inside the package, so provisioning needs no network at install time — a
+# package that had to fetch a key would fail on exactly the machines that are offline or
+# behind a proxy. The key is asserted before it is packaged: a package shipping some other key
+# would install a keyring that cannot verify the archive its own stanza points at, which is a
+# hard `apt-get update` failure on the user's machine, worse than the silence being fixed here
+# and far harder to diagnose.
+[[ -f "$APT_PUBLIC_KEY" ]] || {
+  echo "APT archive public key not found: $APT_PUBLIC_KEY" >&2
+  exit 1
+}
+APT_GNUPGHOME="$(mktemp -d)"
+trap 'rm -rf -- "$APT_GNUPGHOME"' EXIT
+chmod 700 "$APT_GNUPGHOME"
+export GNUPGHOME="$APT_GNUPGHOME"
+
+APT_ACTUAL_FINGERPRINT="$(okp_apt_key_fingerprint "$APT_PUBLIC_KEY")"
+if [[ "$APT_ACTUAL_FINGERPRINT" != "$APT_EXPECT_FINGERPRINT" ]]; then
+  echo "Refusing to ship an APT key the archive is not signed with." >&2
+  echo "  key:      $APT_PUBLIC_KEY" >&2
+  echo "  expected: $APT_EXPECT_FINGERPRINT" >&2
+  echo "  found:    ${APT_ACTUAL_FINGERPRINT:-<not an OpenPGP public key>}" >&2
+  exit 1
+fi
+
+gpg --batch --yes --no-tty --dearmor \
+  --output "$BUILD_ROOT$OKP_APT_CARRIED_DIR/${OKP_APT_KEYRING_BASENAME}.gpg" \
+  <"$APT_PUBLIC_KEY"
+okp_apt_write_sources_stanza \
+  "$BUILD_ROOT$OKP_APT_CARRIED_DIR/$OKP_APT_SOURCES_BASENAME" "$APT_BASE_URL" "$APT_SUITE"
+chmod 644 \
+  "$BUILD_ROOT$OKP_APT_CARRIED_DIR/${OKP_APT_KEYRING_BASENAME}.gpg" \
+  "$BUILD_ROOT$OKP_APT_CARRIED_DIR/$OKP_APT_SOURCES_BASENAME"
 
 "$ROOT/scripts/verify-linux-bundled-mpv.sh" \
   "$BUILD_ROOT/usr/lib/ok-player/ok-player" \
@@ -73,11 +136,69 @@ Description: Elegant mpv-based media player
  This Linux package is an early GTK4/Rust alpha.
 CONTROL
 
-cat > "$BUILD_ROOT/DEBIAN/postinst" <<'POSTINST'
-#!/bin/sh
-set -e
+# The archive coordinates are written in as a prologue so the maintainer-script bodies below
+# stay literal: nothing in them is expanded at build time, and every `$` they contain is the
+# installing machine's.
+apt_script_prologue() {
+  printf '#!/bin/sh\n'
+  printf 'set -e\n'
+  printf '\n'
+  printf "OKP_APT_BASE_URL='%s'\n" "$APT_BASE_URL"
+  printf "OKP_APT_CARRIED='%s'\n" "$OKP_APT_CARRIED_DIR"
+  printf "OKP_APT_KEYRING='%s/%s.gpg'\n" "$OKP_APT_KEYRING_DIR" "$OKP_APT_KEYRING_BASENAME"
+  printf "OKP_APT_SOURCES='%s/%s'\n" "$OKP_APT_SOURCES_DIR" "$OKP_APT_SOURCES_BASENAME"
+  printf '\n'
+}
 
+{
+  apt_script_prologue
+  cat <<'POSTINST'
 root="${DPKG_ROOT:-}"
+
+# --- Provision the OK Player APT repository (issue #726) ---------------------
+# Everything this needs travels inside the package, so it works on a machine
+# with no network at all.
+
+# Any configured source that names the OK Player archive is the user's own
+# choice of suite — whichever file it lives in, and whatever it is called. A
+# reinstall must not move a `candidate` subscriber back to `stable`, so an
+# existing source is left exactly as it is. Commented-out lines are not
+# sources. This is also why neither file is a dpkg conffile: dpkg compares a
+# conffile against the md5 of what the *previous package* shipped, so an
+# untouched stanza is replaced silently, which is precisely the move this
+# has to prevent (Debian Policy 10.7.3 covers config files a maintainer
+# script owns instead).
+okp_apt_source_configured() {
+  for okp_candidate in \
+    "$root/etc/apt/sources.list" \
+    "$root"/etc/apt/sources.list.d/*.sources \
+    "$root"/etc/apt/sources.list.d/*.list; do
+    [ -f "$okp_candidate" ] || continue
+    if grep -v '^[[:space:]]*#' "$okp_candidate" 2>/dev/null |
+      grep -qF "$OKP_APT_BASE_URL"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# The keyring is refreshed unconditionally. It is this package's copy of the key
+# the archive is signed with, and a machine that missed a rotation would stop
+# being able to verify the archive at all — a hard `apt-get update` failure
+# rather than a missed update.
+if [ -f "$root$OKP_APT_CARRIED/ok-player-archive-keyring.gpg" ]; then
+  mkdir -p "$root${OKP_APT_KEYRING%/*}"
+  cp -f "$root$OKP_APT_CARRIED/ok-player-archive-keyring.gpg" "$root$OKP_APT_KEYRING.dpkg-tmp"
+  chmod 644 "$root$OKP_APT_KEYRING.dpkg-tmp"
+  mv -f "$root$OKP_APT_KEYRING.dpkg-tmp" "$root$OKP_APT_KEYRING"
+fi
+
+if [ -f "$root$OKP_APT_CARRIED/ok-player.sources" ] && ! okp_apt_source_configured; then
+  mkdir -p "$root${OKP_APT_SOURCES%/*}"
+  cp -f "$root$OKP_APT_CARRIED/ok-player.sources" "$root$OKP_APT_SOURCES.dpkg-tmp"
+  chmod 644 "$root$OKP_APT_SOURCES.dpkg-tmp"
+  mv -f "$root$OKP_APT_SOURCES.dpkg-tmp" "$root$OKP_APT_SOURCES"
+fi
 
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database -q "$root/usr/share/applications" || true
@@ -89,12 +210,20 @@ fi
 
 exit 0
 POSTINST
+} > "$BUILD_ROOT/DEBIAN/postinst"
 
-cat > "$BUILD_ROOT/DEBIAN/postrm" <<'POSTRM'
-#!/bin/sh
-set -e
-
+{
+  apt_script_prologue
+  cat <<'POSTRM'
 root="${DPKG_ROOT:-}"
+
+# `purge` removes the repository this package configured; a plain `remove` leaves
+# it, which is how apt-repository-shipping packages behave and is what lets a
+# reinstall not have to re-add the source. postinst owns both files rather than
+# dpkg, so postrm is what has to remove them.
+if [ "$1" = purge ]; then
+  rm -f "$root$OKP_APT_SOURCES" "$root$OKP_APT_KEYRING"
+fi
 
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database -q "$root/usr/share/applications" || true
@@ -106,10 +235,12 @@ fi
 
 exit 0
 POSTRM
+} > "$BUILD_ROOT/DEBIAN/postrm"
 
 chmod 755 "$BUILD_ROOT/DEBIAN/postinst" "$BUILD_ROOT/DEBIAN/postrm"
 chmod -R u+rwX,go+rX,go-w "$BUILD_ROOT"
 dpkg-deb --root-owner-group --build "$BUILD_ROOT" "$DEB_DIR/${PACKAGE}_${VERSION}_${ARCH}.deb"
 
 echo "Debian package written to $DEB_DIR/${PACKAGE}_${VERSION}_${ARCH}.deb (Version: $DEB_VERSION)"
+echo "It provisions $APT_BASE_URL suite $APT_SUITE, signed by $APT_EXPECT_FINGERPRINT."
 echo "Run write-linux-acceptance-template.sh after both package lanes complete; publishing requires evidence for this exact artifact hash."

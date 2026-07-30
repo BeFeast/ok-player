@@ -68,12 +68,13 @@ set -euo pipefail
 # --- Archive identity -----------------------------------------------------------------
 OKP_APT_ORIGIN='OK Player'
 OKP_APT_LABEL='OK Player'
-OKP_APT_STABLE_SUITE='stable'
-OKP_APT_CANDIDATE_SUITE='candidate'
-OKP_APT_COMPONENT='main'
-OKP_APT_ARCH='amd64'
 OKP_APT_POOL_SUBDIR='pool/main/o/ok-player'
-OKP_APT_KEYRING_BASENAME='ok-player-archive-keyring'
+# The suites, the component, the architecture, the keyring path and the deb822 stanza writer
+# are shared with scripts/package-linux-deb.sh, which since #726 ships that stanza and this
+# archive's key inside every .deb. One definition is what keeps the file a package installs
+# identical to the file this archive publishes for the same suite.
+# shellcheck source=/dev/null
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/apt-archive-identity.sh"
 
 # The rolling candidate release and the pointer asset that names its current build. The pointer
 # is the single source of truth for "which candidate is live" (okp-core::candidate_build writes
@@ -503,17 +504,8 @@ okp_apt_sign_repo() {
 # One stanza per suite, and deliberately one FILE per suite: subscribing to the QA channel has
 # to be a separate, deliberate act, and dropping ok-player.sources into sources.list.d must
 # never silently enrol a machine in candidate builds.
-okp_apt_write_sources_stanza() {
-  local destination="$1" base_url="$2" suite="$3"
-  {
-    printf 'Types: deb\n'
-    printf 'URIs: %s\n' "$base_url"
-    printf 'Suites: %s\n' "$suite"
-    printf 'Components: %s\n' "$OKP_APT_COMPONENT"
-    printf 'Architectures: %s\n' "$OKP_APT_ARCH"
-    printf 'Signed-By: /usr/share/keyrings/%s.gpg\n' "$OKP_APT_KEYRING_BASENAME"
-  } >"$destination"
-}
+# okp_apt_write_sources_stanza lives in scripts/apt-archive-identity.sh, sourced above,
+# because the .deb has to install exactly this file (#726).
 
 okp_apt_write_client_material() {
   local repo_root="$1" home="$2" public_key_file="$3" base_url="$4"

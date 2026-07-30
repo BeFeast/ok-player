@@ -187,6 +187,12 @@ cp "$ROOT/scripts/package-linux-deb.sh" "$ROOT/scripts/linux-package-version.sh"
 # artifact carries them (issue #743).
 cp "$ROOT/LICENSE" "$ROOT/LICENSE.LGPL-3.0" "$ROOT/THIRD-PARTY-NOTICES.md" "$FIXTURE/"
 cp "$ROOT/rust/packaging/linux/copyright" "$FIXTURE/rust/packaging/linux/copyright"
+  "$ROOT/scripts/apt-archive-identity.sh" "$FIXTURE/scripts/"
+# Since #726 the packaging also ships the APT archive key, and asserts its fingerprint before
+# packaging it. The fixture points at the committed key so this suite exercises the same path
+# a release build takes.
+mkdir -p "$FIXTURE/rust/packaging/linux"
+cp "$ROOT/rust/packaging/linux/ok-player-archive-keyring.asc" "$FIXTURE/rust/packaging/linux/"
 cat >"$FIXTURE/scripts/linux-bundled-mpv-env.sh" <<'STUB'
 okp_use_linux_bundled_mpv() { export OKP_BUNDLED_MPV_RUNTIME_DIR="$OKP_TEST_MPV_RUNTIME"; }
 STUB

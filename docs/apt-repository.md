@@ -97,6 +97,73 @@ budget charges each distinct pool file once for the same reason; counting a shar
 would shrink both windows for bytes that are not there. A pool file no suite indexes aborts the
 lane: it is dead weight against the budget and invisible to apt.
 
+## The package provisions the repository (issue #726)
+
+Publishing an archive is only half of it. A `.deb` downloaded from the releases page used to
+install a player that could never update itself: its `postinst` refreshed the desktop and icon
+caches and nothing else, so the machine ended with OK Player installed and **no OK Player apt
+source**. That is not a hypothetical — it is what the operator measured in #725, where
+`apt-cache policy ok-player` listed exactly one origin, `/var/lib/dpkg/status`, while the app
+advised updating through apt and the desktop updater it offered correctly answered that
+everything was up to date. Three days were spent on a stale build pressing buttons that could
+not work.
+
+So the package provisions the repository itself, the way Chrome, VS Code and Docker's `.deb`
+files do, because asking a user to add a source after installing is a step most will never take
+and the ones who do will still land on the wrong suite.
+
+`scripts/package-linux-deb.sh` carries two files under `/usr/share/ok-player/apt/`: the archive
+key, dearmored from the committed `rust/packaging/linux/ok-player-archive-keyring.asc`, and the
+deb822 stanza for this artifact's suite. `postinst` copies them to
+`/usr/share/keyrings/ok-player-archive-keyring.gpg` and
+`/etc/apt/sources.list.d/ok-player.sources`. Nothing is fetched at install time — a package that
+had to reach the network for a key would fail on exactly the machines that cannot.
+
+Four rules carry it:
+
+* **The suite matches the artifact.** `OKP_DEB_APT_SUITE` decides, `release-linux.yml` sets it
+  to `stable`, and everything else defaults to `candidate`. The default is the honest
+  description of an undeclared build, and defaulting the other way would silently move a tester
+  who installed a candidate `.deb` onto `stable` — the same class of failure as #725, from the
+  other side. `scripts/tests/deb-apt-provisioning.Tests.sh` fails if the release lane ever stops
+  declaring itself.
+* **The key is asserted at build time.** The committed key's fingerprint must equal
+  `77D0FCDEB0D594E13E50F43A9337815EB0F78C63` or the packaging aborts, so a package can never
+  ship a key that cannot verify the archive it points at. That would be worse than shipping no
+  key: apt would fail `update` outright rather than merely not update.
+* **An existing choice is never overwritten.** If any configured source names the archive — this
+  file, the candidate stanza, or a hand-written one-line entry — `postinst` leaves it alone. The
+  keyring, by contrast, is refreshed unconditionally: it is this package's copy of the key the
+  archive is signed with, and a machine that missed a rotation could not verify the archive at
+  all.
+* **`purge` removes both, `remove` does not.** That is how apt-repository-shipping packages
+  behave, and it is what lets a reinstall skip re-adding the source.
+
+**Neither file is a dpkg conffile, deliberately.** A conffile would give "local edits survive an
+upgrade", but it cannot give what matters more here. dpkg compares a conffile against the md5 of
+what the *previous package* shipped, so a stanza the user never edited is replaced silently —
+which is exactly a `candidate` subscriber being put back on `stable` by their next stable
+install. The files are therefore owned by the maintainer scripts (Debian Policy 10.7.3), which
+preserves both a local edit and an untouched deliberate choice.
+
+### Verifying it
+
+`scripts/verify-deb-apt-provisioning.sh` is the acceptance, and it asserts apt's own answer on a
+real machine: install the `.deb` from a file in a clean `debian:13-slim` container, run
+`apt-get update`, and require `apt-cache policy ok-player` to name the archive as a source and
+offer a newer build, with no step in between. It runs four scenarios — `stable`, `candidate`, an
+existing subscription surviving a stable install, and the negative control — against a real
+signed archive built by the generator above and served over `file://` from a bind mount. The
+negative control is not a package with a broken `postinst`: it is the pre-#726 package, its
+carried files removed and its `postinst` put back to the cache refresh it used to be, and it
+must leave `/var/lib/dpkg/status` as the only origin — the exact state the operator was in.
+
+`scripts/tests/deb-apt-provisioning.Tests.sh` is the fast half, with no container and no
+network: it runs the packaging for real against a fixture root and asks the produced packages
+and their maintainer scripts what they carry and what they do. It also compares the stanza the
+package installs against the one this generator publishes for the same suite, byte for byte, by
+sourcing the generator and asking it to write one — which is what keeps the two from drifting.
+
 ## The version scheme (issue #709)
 
 A `.deb` does not carry the build version. It carries the **Debian encoding** of it:
@@ -332,8 +399,12 @@ that distinguishes a working archive from a plausible-looking one.
   of** `ok-player.sources`, not beside it: with both files present apt sees both suites and will
   offer the candidate anyway, which makes "I am on stable" untrue without saying so. Both stanzas
   point at the same keyring, so switching channels never means re-trusting a key.
-* Rotating the signing key means updating the four Infisical secrets and letting the next run
-  republish `ok-player-archive-keyring.{asc,gpg}`. Existing installs need the new key before the
+* Rotating the signing key means updating the four Infisical secrets **and** the two committed
+  values the packaging asserts against — `rust/packaging/linux/ok-player-archive-keyring.asc`
+  and `OKP_APT_SIGNING_FINGERPRINT` in `scripts/apt-archive-identity.sh` — in the same change,
+  then letting the next run republish `ok-player-archive-keyring.{asc,gpg}`. The packaging
+  refuses to build a `.deb` whose key does not match that fingerprint, so a half-done rotation
+  stops the Linux lane rather than shipping a package that cannot verify the archive. Existing installs need the new key before the
   first archive signed with it is served, so publish a run with the *old* key still in place
   after users have fetched the new keyring, or accept that clients must re-fetch it.
 * `scripts/tests/apt-repo-generator.Tests.sh` runs in the *Rust* workflow next to the other
