@@ -131,11 +131,16 @@ Four rules carry it:
   `77D0FCDEB0D594E13E50F43A9337815EB0F78C63` or the packaging aborts, so a package can never
   ship a key that cannot verify the archive it points at. That would be worse than shipping no
   key: apt would fail `update` outright rather than merely not update.
-* **An existing choice is never overwritten.** If any configured source names the archive — this
-  file, the candidate stanza, or a hand-written one-line entry — `postinst` leaves it alone. The
-  keyring, by contrast, is refreshed unconditionally: it is this package's copy of the key the
-  archive is signed with, and a machine that missed a rotation could not verify the archive at
-  all.
+* **An existing choice is never overwritten.** If any configured source can deliver packages
+  from the archive — this file, the candidate stanza, or a hand-written one-line entry —
+  `postinst` leaves it alone. "Can deliver" is the whole test, and it is narrower than "mentions
+  the URL": an entry that is commented out, one turned off with `Enabled: no`, and a source-only
+  entry (`deb-src`, or a stanza whose `Types` omits `deb`) all build no Packages index, so none
+  of them counts. Treating one as a subscription would leave the machine with an entry that
+  delivers nothing and no working source beside it — the state this whole change exists to
+  prevent. The keyring, by contrast, is refreshed unconditionally: it is this package's copy of
+  the key the archive is signed with, and a machine that missed a rotation could not verify the
+  archive at all.
 * **`purge` removes both, `remove` does not.** That is how apt-repository-shipping packages
   behave, and it is what lets a reinstall skip re-adding the source. The keyring is the
   exception to the exception: `purge` removes the package's own stanza first and then keeps the
