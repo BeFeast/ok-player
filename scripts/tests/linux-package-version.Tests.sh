@@ -181,13 +181,13 @@ mkdir -p \
   "$FIXTURE/mpv-runtime" \
   "$STUB_BIN"
 cp "$ROOT/scripts/package-linux-deb.sh" "$ROOT/scripts/linux-package-version.sh" \
-  "$ROOT/scripts/stage-license-documents.sh" "$FIXTURE/scripts/"
+  "$ROOT/scripts/stage-license-documents.sh" "$ROOT/scripts/apt-archive-identity.sh" \
+  "$FIXTURE/scripts/"
 # The real licence documents, not stubs: this fixture runs the real packaging
 # and the real dpkg-deb, so it is also the cheapest place to prove the shipped
 # artifact carries them (issue #743).
 cp "$ROOT/LICENSE" "$ROOT/LICENSE.LGPL-3.0" "$ROOT/THIRD-PARTY-NOTICES.md" "$FIXTURE/"
 cp "$ROOT/rust/packaging/linux/copyright" "$FIXTURE/rust/packaging/linux/copyright"
-  "$ROOT/scripts/apt-archive-identity.sh" "$FIXTURE/scripts/"
 # Since #726 the packaging also ships the APT archive key, and asserts its fingerprint before
 # packaging it. The fixture points at the committed key so this suite exercises the same path
 # a release build takes.

@@ -118,7 +118,13 @@ mkdir -p \
   "$FIXTURE/mpv-runtime" \
   "$STUB_BIN"
 cp "$ROOT/scripts/package-linux-deb.sh" "$ROOT/scripts/apt-archive-identity.sh" \
-  "$ROOT/scripts/linux-package-version.sh" "$FIXTURE/scripts/"
+  "$ROOT/scripts/linux-package-version.sh" "$ROOT/scripts/stage-license-documents.sh" \
+  "$FIXTURE/scripts/"
+# The packaging stages the licence documents into every package (#752), so the fixture carries
+# the real ones — this suite runs the real packaging script, not a copy of part of it.
+cp "$ROOT/LICENSE" "$ROOT/LICENSE.LGPL-3.0" "$ROOT/THIRD-PARTY-NOTICES.md" "$FIXTURE/"
+mkdir -p "$FIXTURE/rust/packaging/linux"
+cp "$ROOT/rust/packaging/linux/copyright" "$FIXTURE/rust/packaging/linux/copyright"
 cat >"$FIXTURE/scripts/linux-bundled-mpv-env.sh" <<'STUB'
 okp_use_linux_bundled_mpv() { export OKP_BUNDLED_MPV_RUNTIME_DIR="$OKP_TEST_MPV_RUNTIME"; }
 STUB
