@@ -48,6 +48,21 @@ $required = @(
         Path     = 'ffmpeg.exe'
         MinBytes = 1MB
         Reason   = 'media processing (subtitle auto-sync); fetch-natives.ps1 treats the ffmpeg download as best-effort, so a failed fetch ships an installer without it'
+    },
+    @{
+        Path     = 'LICENSE.txt'
+        MinBytes = 1KB
+        Reason   = "the application's own GPL-3.0-or-later terms; GPLv3 section 4 requires them to accompany the package"
+    },
+    @{
+        Path     = 'LICENSE.LGPL-3.0.txt'
+        MinBytes = 1KB
+        Reason   = 'the LGPL-3 the bundled Adwaita chrome artwork is taken under; LGPLv3 section 4(b) requires this text alongside the GPL one'
+    },
+    @{
+        Path     = 'THIRD-PARTY-NOTICES.md'
+        MinBytes = 1KB
+        Reason   = 'the notices for the bundled libmpv, FFmpeg and managed runtime, including where to obtain their source'
     }
 )
 

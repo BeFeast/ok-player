@@ -9,7 +9,8 @@ mirrors mpv.net and IINA.
 ## libmpv (mpv)
 
 - **Project:** mpv — <https://mpv.io> · <https://github.com/mpv-player/mpv>
-- **Components bundled:** `libmpv-2.dll` in Windows packages and a source-built
+- **Components bundled:** `libmpv-2.dll` in Windows packages, a patched
+  `libmpv.so.2` in the Linux `.deb` and AppImage packages, and a source-built
   `libmpv.so` in the Flatpak beta package.
 - **License:** GPL-2.0-or-later when built with GPL components (as bundled here); core mpv is
   otherwise LGPL-2.1-or-later. Full text: <https://github.com/mpv-player/mpv/blob/master/LICENSE.GPL>
@@ -17,8 +18,9 @@ mirrors mpv.net and IINA.
 
 The native Fedora RPM does **not** bundle libmpv or FFmpeg libraries. It
 dynamically links Fedora's `mpv-libs` package and therefore uses the codec set
-provided by the repositories the user has explicitly enabled. The Windows
-distribution details below describe the bundled Windows runtime only.
+provided by the repositories the user has explicitly enabled. Every other lane
+— Windows, the Linux `.deb`, the AppImage and the Flatpak — ships libmpv and
+the FFmpeg libraries inside the artifact.
 
 mpv in turn incorporates or links, among others, FFmpeg, libass, libplacebo,
 and zlib. The dominant licenses of the bundled build are listed below; the
@@ -81,7 +83,11 @@ distributed and licensed independently by Freedesktop/Flathub.
   - **License:** Adwaita is dual licensed **"either the GNU LGPL v3 or
     CC-BY-SA 3.0"**, with newer icons under CC-BY-SA 4.0. This project takes
     the **LGPL-3 option**, which is compatible with its own GPL-3.0-or-later
-    terms.
+    terms. LGPLv3 §4(b) requires the combined work to be accompanied by both
+    licence documents, so every package ships the full text as
+    [`LICENSE.LGPL-3.0`](LICENSE.LGPL-3.0) next to [`LICENSE`](LICENSE) —
+    see [`scripts/stage-license-documents.sh`](scripts/stage-license-documents.sh)
+    for where each lane installs them.
 - **`okp-process-working-symbolic.svg` (first-party)** — Adwaita has no
   counterpart for it, so it remains original work drawn for OK Player by
   [`scripts/generate-chrome-icons.py`](scripts/generate-chrome-icons.py).

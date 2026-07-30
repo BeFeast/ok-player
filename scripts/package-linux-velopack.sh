@@ -55,6 +55,11 @@ for size in 16 24 32 48 64; do
     "$PACK_DIR/usr/share/icons/hicolor/${size}x${size}/apps/com.befeast.okplayer.svg"
 done
 
+# The AppImage carries its whole payload, so the licence documents have to be
+# inside it. The pack directory becomes the AppDir's usr/bin, which is where
+# this lane already puts its usr/share tree.
+"$ROOT/scripts/stage-license-documents.sh" appimage "$PACK_DIR/usr/share/doc/ok-player"
+
 "$ROOT/scripts/verify-linux-bundled-mpv.sh" \
   "$PACK_DIR/ok-player" \
   "$PACK_DIR"

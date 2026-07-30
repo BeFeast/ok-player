@@ -101,6 +101,7 @@ for size in 16 24 32 48 64; do
     "%{buildroot}%{_datadir}/icons/hicolor/${size}x${size}/apps/com.befeast.okplayer.svg"
 done
 install -Dm0644 LICENSE %{buildroot}%{_licensedir}/%{name}/LICENSE
+install -Dm0644 LICENSE.LGPL-3.0 %{buildroot}%{_licensedir}/%{name}/LICENSE.LGPL-3.0
 install -Dm0644 THIRD-PARTY-NOTICES.md \
   %{buildroot}%{_docdir}/%{name}/THIRD-PARTY-NOTICES.md
 
@@ -123,6 +124,7 @@ appstreamcli validate --no-net --pedantic \
 
 %files
 %license %{_licensedir}/%{name}/LICENSE
+%license %{_licensedir}/%{name}/LICENSE.LGPL-3.0
 %doc %{_docdir}/%{name}/THIRD-PARTY-NOTICES.md
 %{_bindir}/ok-player
 %{_datadir}/applications/com.befeast.okplayer.desktop

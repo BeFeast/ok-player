@@ -19,11 +19,21 @@ New-Item -ItemType Directory -Path $work -Force | Out-Null
 # Sizes a real installed tree comfortably exceeds, used for the "healthy" case.
 # Written with SetLength so the tests stay cheap on disk and fast.
 $plausibleSizes = @{
-    'OkPlayer.exe'  = 256KB
-    'libmpv-2.dll'  = 4MB
-    'ffmpeg.exe'    = 4MB
+    'OkPlayer.exe'             = 256KB
+    'libmpv-2.dll'             = 4MB
+    'ffmpeg.exe'               = 4MB
+    'LICENSE.txt'              = 32KB
+    'LICENSE.LGPL-3.0.txt'     = 7KB
+    'THIRD-PARTY-NOTICES.md'   = 4KB
 }
-$allFiles = @('OkPlayer.exe', 'libmpv-2.dll', 'ffmpeg.exe')
+$allFiles = @(
+    'OkPlayer.exe',
+    'libmpv-2.dll',
+    'ffmpeg.exe',
+    'LICENSE.txt',
+    'LICENSE.LGPL-3.0.txt',
+    'THIRD-PARTY-NOTICES.md'
+)
 $failures = 0
 
 function New-SizedFile {
@@ -113,6 +123,23 @@ try {
     Assert-Rejects -Label 'a tree without the application is rejected' `
         -Root (New-InstallRoot -Name 'no-exe' -Omit @('OkPlayer.exe')) `
         -Expected @('OkPlayer.exe', 'missing')
+
+    # Issue #743. The installer can be built, signed and run with no licence
+    # document in it, and nothing about the running app says so. GPLv3 section 4
+    # and LGPLv3 section 4(b) both require these to accompany the package, so
+    # the assertion has to name them the same way it names the natives.
+    Assert-Rejects -Label 'a tree without the GPL text is rejected' `
+        -Root (New-InstallRoot -Name 'no-gpl' -Omit @('LICENSE.txt')) `
+        -Expected @('LICENSE.txt', 'missing')
+    Assert-Rejects -Label 'a tree without the LGPL text is rejected' `
+        -Root (New-InstallRoot -Name 'no-lgpl' -Omit @('LICENSE.LGPL-3.0.txt')) `
+        -Expected @('LICENSE.LGPL-3.0.txt', 'missing')
+    Assert-Rejects -Label 'a tree without the third-party notices is rejected' `
+        -Root (New-InstallRoot -Name 'no-notices' -Omit @('THIRD-PARTY-NOTICES.md')) `
+        -Expected @('THIRD-PARTY-NOTICES.md', 'missing')
+    Assert-Rejects -Label 'a zero-byte LGPL text is rejected' `
+        -Root (New-InstallRoot -Name 'empty-lgpl' -Truncate @{ 'LICENSE.LGPL-3.0.txt' = 0 }) `
+        -Expected @('LICENSE.LGPL-3.0.txt', 'truncated')
 
     # Present but empty or truncated. A failed or interrupted best-effort fetch
     # leaves exactly this behind, and an existence-only assertion accepts it.
