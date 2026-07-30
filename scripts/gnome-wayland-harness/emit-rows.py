@@ -93,7 +93,17 @@ def main() -> int:
                 print(f"emit-rows: {state}: unusable status {status!r}", file=sys.stderr)
                 return 3
 
-        captured = sorted(p for p in artifacts.glob(f"{state}.*") if p.is_file())
+        # Captures are named "<state>.<ext>", and rows that record more than one frame
+        # add "<state>-<n>.<ext>" - the double-click row's two compositor transitions are
+        # why that form exists. Globbing "<state>.*" silently dropped those frames, so the
+        # images the row rests on were never checksummed into the evidence and could not
+        # be authenticated from the manifest. No automatable state name is a prefix of
+        # another, so matching the "-" form cannot capture a neighbouring row's frames.
+        captured = sorted(
+            p
+            for p in artifacts.glob(f"{state}*")
+            if p.is_file() and p.name[len(state) :].startswith((".", "-"))
+        )
         row = {
             "id": state,
             "level": "gnome-wayland-automated",

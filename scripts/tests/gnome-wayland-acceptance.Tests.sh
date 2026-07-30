@@ -293,6 +293,64 @@ else
   fail "the harness must require the package digest (status=$status): $output"
 fi
 
+#-- every capture a row rests on is bound to it -------------------------------------
+
+# The double-click row records two compositor transitions, so its frames are numbered.
+# A glob that demanded a dot after the state name digested neither of them, and evidence
+# whose images are not checksummed cannot be authenticated from the manifest.
+numbered_results="$WORK/numbered-results"; numbered_artifacts="$WORK/numbered-artifacts"
+mkdir -p "$numbered_results" "$numbered_artifacts"
+printf 'pass\ntwo transitions\n' >"$numbered_results/wayland-double-click-fullscreen.result"
+printf 'first\n' >"$numbered_artifacts/wayland-double-click-fullscreen-1.png"
+printf 'second\n' >"$numbered_artifacts/wayland-double-click-fullscreen-2.png"
+printf 'log\n' >"$numbered_artifacts/wayland-double-click-fullscreen.log"
+printf 'elsewhere\n' >"$numbered_artifacts/wayland-clipboard.png"
+emit "$numbered_results" "$numbered_artifacts" "$WORK/numbered.json" \
+  --rows wayland-double-click-fullscreen >/dev/null
+
+python3 - "$WORK/numbered.json" <<'PY'
+import json, sys
+rows = json.load(open(sys.argv[1]))
+assert len(rows) == 1, rows
+names = {artifact["file_name"] for artifact in rows[0]["artifacts"]}
+assert names == {
+    "wayland-double-click-fullscreen-1.png",
+    "wayland-double-click-fullscreen-2.png",
+    "wayland-double-click-fullscreen.log",
+}, names
+assert all(len(artifact["sha256"]) == 64 for artifact in rows[0]["artifacts"])
+PY
+if [[ $? -eq 0 ]]; then
+  ok "numbered captures are digested into the row they belong to, and no others"
+else
+  fail "a row must bind every capture it rests on"
+fi
+
+#-- merging into the manifest it reads ----------------------------------------------
+
+# The documented release step merges the live rows back into the manifest the
+# deterministic pass produced, so input and output are the same path.
+merge_dir="$WORK/merge"; mkdir -p "$merge_dir"
+cat >"$merge_dir/manifest.json" <<'JSON'
+{"rows": [
+  {"state": "wayland-clipboard", "automated_status": "not-run"},
+  {"state": "desktop-portal", "automated_status": "not-run"}
+]}
+JSON
+cat >"$merge_dir/live.json" <<'JSON'
+[{"state": "wayland-clipboard", "automated_status": "pass"}]
+JSON
+if "$ROOT/scripts/merge-linux-acceptance-evidence.sh" \
+    "$merge_dir/manifest.json" "$merge_dir/live.json" "$merge_dir/manifest.json" >/dev/null 2>&1 \
+  && [[ -s "$merge_dir/manifest.json" ]] \
+  && [[ "$(jq -r '.rows | length' "$merge_dir/manifest.json")" == "2" ]] \
+  && [[ "$(jq -r '.rows[] | select(.state == "wayland-clipboard") | .automated_status' \
+        "$merge_dir/manifest.json")" == "pass" ]]; then
+  ok "merging live rows into the manifest in place keeps the manifest"
+else
+  fail "an in-place merge must not truncate the manifest it is reading"
+fi
+
 if (( failures == 0 )); then
   echo "gnome-wayland-acceptance: all checks passed"
 else

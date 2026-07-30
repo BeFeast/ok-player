@@ -120,17 +120,22 @@ for _ in $(seq 1 40); do [[ -S "$YDOTOOL_SOCKET" ]] && break; sleep 0.1; done
 [[ -S "$YDOTOOL_SOCKET" ]] || { echo "ydotoold never created its socket" >&2; exit 75; }
 YDOTOOLD_PID="$(cat "$RUN/ydotoold.pid")"
 
+# Read both desktop settings and arm the restoration before touching either of them.
+# This host is a persistent logged-in desktop: under `set -e`, a failure between the first
+# mutation and the trap would have left the operator's pointer profile on `flat` for good,
+# and every later run would inherit it.
 # Absolute injection is only faithful with a flat pointer profile; ydotool says so itself.
 PREVIOUS_ACCEL="$(gsettings get org.gnome.desktop.peripherals.mouse accel-profile)"
-gsettings set org.gnome.desktop.peripherals.mouse accel-profile flat
 # A deterministic double-click window, or the double-click row races the GTK default.
 PREVIOUS_A11Y="$(gsettings get org.gnome.desktop.interface toolkit-accessibility)"
-gsettings set org.gnome.desktop.interface toolkit-accessibility true
 restore_desktop() {
   gsettings set org.gnome.desktop.peripherals.mouse accel-profile "$PREVIOUS_ACCEL" || true
   gsettings set org.gnome.desktop.interface toolkit-accessibility "$PREVIOUS_A11Y" || true
 }
 trap 'restore_desktop; cleanup' EXIT
+
+gsettings set org.gnome.desktop.peripherals.mouse accel-profile flat
+gsettings set org.gnome.desktop.interface toolkit-accessibility true
 
 say "portal monitor"
 dbus-monitor --session "interface='org.freedesktop.portal.FileChooser'" >"$PORTAL_LOG" 2>&1 &
