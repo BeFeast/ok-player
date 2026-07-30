@@ -92,3 +92,7 @@ run_case "the tightened bar" 430 438 8 432 4
 run_case "the roomy bar" 422 438 16 428 4
 # Controls flush against each other: that is the defect the seam exists to catch.
 run_case "a bar whose controls share bounds" 438 438 reject "" ""
+
+printf '\n%s passed, %s failed\n' "$pass_count" "$fail_count"
+((fail_count == 0)) || exit 1
+echo "Narrow-width seam aiming tests passed"
