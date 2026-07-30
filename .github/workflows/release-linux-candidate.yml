@@ -206,7 +206,13 @@ jobs:
   publish-feed:
     name: Refresh update feeds
     needs: build-and-publish
-    if: needs.build-and-publish.outputs.publish_result == 'published'
+    # `needs` alone also gates on the build job *succeeding*, which since the gate
+    # split is no longer the same question: an advisory failure reddens the job
+    # after the package is published, and a bare `needs` gate would skip the
+    # refresh and strand that package outside the APT archive. The publication
+    # itself is the condition - publish_result is only 'published' once the
+    # publisher has run - so key off that and let the red build through.
+    if: ${{ !cancelled() && needs.build-and-publish.outputs.publish_result == 'published' }}
     permissions:
       contents: read
       pages: write

@@ -95,6 +95,17 @@ else
     "staged=${staged_line:-none} verdict=${verdict_line:-none}"
 fi
 
+# The feed refresh is where the package reaches apt subscribers. It `needs` the
+# build job, so a bare gate skips it whenever that job is red - including the
+# red-but-published state this split exists to produce.
+WORKFLOW=.github/workflows/release-linux-candidate.yml
+if grep -q "cancelled() && needs.build-and-publish.outputs.publish_result == 'published'" "$WORKFLOW"; then
+  pass "the feed refresh survives a red-but-published build"
+else
+  fail "the feed refresh must survive a red-but-published build" \
+    "a bare needs: gate skips delivery, so the package never reaches the archive"
+fi
+
 printf '\n%s passed, %s failed\n' "$pass_count" "$fail_count"
 ((fail_count == 0)) || exit 1
 echo "Candidate gate split tests passed"
