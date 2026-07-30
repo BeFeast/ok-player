@@ -49,10 +49,14 @@ OKP_APT_SIGNING_FINGERPRINT='77D0FCDEB0D594E13E50F43A9337815EB0F78C63'
 # a key nobody trusts yet strands every installed machine with no way to self-heal. A rotation
 # is therefore three changes, in this order, each published before the next:
 #
-#   1. Add the new fingerprint here and the new public key to the committed keyring. Clients
-#      now trust both; the archive is still signed by the old key.
-#   2. Once that keyring has reached clients, move the Infisical secrets to the new key and
-#      make it OKP_APT_SIGNING_FINGERPRINT, leaving the old fingerprint here.
+#   1. Add the new fingerprint here and the new public key to the committed keyring, then
+#      publish that package to BOTH suites — a linux-v* release for `stable` and an accepted
+#      candidate for `candidate`. The suites are deliberately separate (#689), so a release
+#      alone never reaches candidate subscribers, and they are the testers most likely to be
+#      the first to see a broken archive. Clients then trust both keys; the archive is still
+#      signed by the old one.
+#   2. Once that keyring has reached the installs on both suites, move the Infisical secrets to
+#      the new key and make it OKP_APT_SIGNING_FINGERPRINT, leaving the old fingerprint here.
 #   3. When no supported install can still be carrying only the old key, drop it from here and
 #      from the committed keyring.
 #

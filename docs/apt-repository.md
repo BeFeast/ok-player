@@ -418,12 +418,18 @@ that distinguishes a working archive from a plausible-looking one.
 
   1. Add the new public key to `rust/packaging/linux/ok-player-archive-keyring.asc` and its
      fingerprint to `OKP_APT_ADDITIONAL_TRUSTED_FINGERPRINTS` in
-     `scripts/apt-archive-identity.sh`. Release it. Clients now trust both keys; the archive is
-     still signed by the old one.
-  2. Once that keyring has reached the installs you intend to keep working, move the four
-     Infisical secrets to the new key and make its fingerprint `OKP_APT_SIGNING_FINGERPRINT`,
-     leaving the old one in the additional list. The next archive run signs with the new key,
-     and every client from step 1 verifies it.
+     `scripts/apt-archive-identity.sh`, then publish that package **to both suites** — a
+     `linux-v*` release for `stable`, and an accepted rolling build for `candidate`. This is
+     the step that is easy to get wrong: the two suites are deliberately separate, and the
+     generator's own tests enforce that `candidate` never carries a stable-only release, so a
+     versioned release alone leaves every candidate subscriber trusting only the old key.
+     Clients on both suites then trust both keys; the archive is still signed by the old one.
+  2. Once that keyring has reached the installs you intend to keep working — **on both
+     suites** — move the four Infisical secrets to the new key and make its fingerprint
+     `OKP_APT_SIGNING_FINGERPRINT`, leaving the old one in the additional list. The next
+     archive run signs with the new key, and every client from step 1 verifies it. A client
+     that missed step 1 cannot be repaired by the archive: apt must authenticate `InRelease`
+     before it can download the package that would carry the new key.
   3. When no supported install can still be carrying only the old key, drop it from both the
      committed keyring and the additional list.
 
