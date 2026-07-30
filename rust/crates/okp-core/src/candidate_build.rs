@@ -44,18 +44,48 @@ pub const CANDIDATE_CHANNEL: &str = "linux-candidate";
 
 /// Gates that must all pass before a build is promotable. Order matches the
 /// pipeline the builder runs (fast, cheap gates first).
+///
+/// This is the *blocking* set, and it is deliberately short: without these there
+/// is either no artifact at all or one that cannot start. Everything else the
+/// builder runs is advisory (see [`ADVISORY_CANDIDATE_GATES`]).
+///
+/// The split exists because the alternative cost a full night. A screenshot
+/// check that was aiming at the wrong eight pixels aborted the build *after*
+/// packaging, so a correct, installable `.deb` sat finished on the builder while
+/// nothing reached the operator waiting for it. A deep check must be able to say
+/// "this build is not vouched for" without being able to say "this build does
+/// not exist".
 pub const REQUIRED_CANDIDATE_GATES: &[&str] = &[
     "fmt",
     "clippy",
     "workspace-tests",
     "deb-package",
     "appimage-package",
-    "portability-package-smoke",
     "package-identity",
-    "install-upgrade-uninstall-smoke",
-    "deb-screenshot-smoke",
     "headless-launch-smoke",
 ];
+
+/// Gates whose failure is reported and recorded but does not block promotion.
+///
+/// These are the pedantic ones: foreign-distro portability, install/upgrade in a
+/// disposable root, and the pixel-level screenshot acceptances. They earn their
+/// keep — each has caught a real regression — but they are also the ones that
+/// break on a legitimate layout change, and a candidate is a build offered to
+/// testers who opted in, not a release.
+///
+/// A failure here still makes the run red and travels in the record, so the
+/// morning report names it. It just no longer withholds the package.
+pub const ADVISORY_CANDIDATE_GATES: &[&str] = &[
+    "portability-package-smoke",
+    "install-upgrade-uninstall-smoke",
+    "deb-screenshot-smoke",
+    "deb-idle-return-smoke",
+];
+
+/// Whether a gate's failure withholds the build from the feed.
+pub fn gate_blocks_promotion(name: &str) -> bool {
+    !ADVISORY_CANDIDATE_GATES.contains(&name)
+}
 
 /// Optional gate name. Its evidence is only enforced when the operator marks a
 /// build as requiring native-hardware acceptance.
@@ -721,10 +751,11 @@ impl CandidateBuild {
             }
         }
 
-        // A failed gate anywhere in the record blocks promotion even if it is
-        // not in the required set.
+        // A failed gate outside the required set still blocks promotion unless it
+        // is advisory: an unknown gate that failed is an unknown risk, while an
+        // advisory one has been weighed already.
         for gate in &self.gates {
-            if gate.status == GateStatus::Failed {
+            if gate.status == GateStatus::Failed && gate_blocks_promotion(&gate.name) {
                 errors.push(format!("gate {} failed", gate.name));
             }
         }
@@ -1136,6 +1167,57 @@ mod tests {
         );
         assert_eq!(plan, vec![obsolete, obsolete_full]);
         root.close().unwrap();
+    }
+
+    #[test]
+    fn an_advisory_gate_failure_does_not_withhold_the_package() {
+        // The night this split exists for: a deep check failed after packaging,
+        // and a correct .deb never reached the operator waiting for it.
+        for name in ADVISORY_CANDIDATE_GATES {
+            let mut build = candidate(42);
+            build.gates.push(GateResult {
+                name: (*name).to_string(),
+                status: GateStatus::Failed,
+                detail: String::new(),
+            });
+            assert_eq!(
+                build.promotable(),
+                Ok(()),
+                "advisory gate {name} must not withhold the build"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_gate_failure_still_withholds_the_package() {
+        // Only the gates weighed as advisory are waived. Anything else that
+        // failed is an unknown risk, and silence about it would be the old
+        // "green because nobody looked" failure in a new place.
+        let mut build = candidate(42);
+        build.gates.push(GateResult {
+            name: "some-new-gate".to_string(),
+            status: GateStatus::Failed,
+            detail: String::new(),
+        });
+        let errors = build.promotable().unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.contains("some-new-gate")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn the_two_gate_sets_do_not_overlap() {
+        for advisory in ADVISORY_CANDIDATE_GATES {
+            assert!(
+                !REQUIRED_CANDIDATE_GATES.contains(advisory),
+                "{advisory} cannot be both blocking and advisory"
+            );
+            assert!(!gate_blocks_promotion(advisory));
+        }
+        for required in REQUIRED_CANDIDATE_GATES {
+            assert!(gate_blocks_promotion(required));
+        }
     }
 
     #[test]
