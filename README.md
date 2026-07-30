@@ -92,7 +92,21 @@ sha256sum -c SHA256SUMS
 sudo apt install ./ok-player_<version>_amd64.deb
 ```
 
-A `.deb` installed this way self-updates through the static feed: it fetches the newest
+This is the same package the repository serves, and it **arrives with the repository already
+configured**: installing it writes the signing key to
+`/usr/share/keyrings/ok-player-archive-keyring.gpg` and the source to
+`/etc/apt/sources.list.d/ok-player.sources`, both from files carried inside the package, so no
+network access and no extra step are involved. The first `sudo apt update` afterwards sees OK
+Player, and `apt upgrade` carries it from then on. A `.deb` from a `linux-v*` release subscribes
+you to `stable`; one from the rolling candidate subscribes you to `candidate`, matching the
+build you installed.
+
+If you already have an OK Player source configured, installing a `.deb` leaves it alone — the
+suite you chose is yours, and a reinstall never moves you between channels. `sudo apt purge
+ok-player` removes the source and the keyring; `sudo apt remove ok-player` leaves them, so you
+can reinstall without adding the repository again.
+
+A `.deb` installed this way also self-updates through the static feed: it fetches the newest
 release's `.deb`, verifies it against the release's `SHA256SUMS`, and installs it via `pkexec`.
 
 **AppImage (distro-independent)**

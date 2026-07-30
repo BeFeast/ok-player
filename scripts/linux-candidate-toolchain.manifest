@@ -22,6 +22,7 @@ command|dpkg-deb|dpkg-deb|dpkg
 command|dpkg-query|dpkg-query|dpkg
 command|ffmpeg|ffmpeg|ffmpeg
 command|git|git|git
+command|gpg|gpg|gnupg
 command|install|install|coreutils
 command|ldd|ldd|libc-bin
 command|ln|ln|coreutils

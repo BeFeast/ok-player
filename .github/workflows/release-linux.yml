@@ -113,6 +113,10 @@ jobs:
         env:
           OKP_PORTABLE_PACKAGE_MODE: container
           OKP_PORTABLE_BUILDER_IMAGE: ok-player-linux-builder:debian-13-v1
+          # This package subscribes the machine that installs it to the stable suite (#726).
+          # Only the versioned release lane may say this; scripts/tests/deb-apt-provisioning.Tests.sh
+          # fails if the line disappears, and every other lane's .deb provisions candidate.
+          OKP_DEB_APT_SUITE: stable
         run: ./scripts/build-linux-portable-package.sh deb "${{ steps.release.outputs.version }}"
 
       - name: Cross-distro package portability
