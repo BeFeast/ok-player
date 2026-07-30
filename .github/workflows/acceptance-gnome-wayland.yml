@@ -78,12 +78,18 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          # Dispatch inputs reach Bash as environment variables, never as text pasted
+          # into the script: this job runs on a persistent self-hosted graphical host,
+          # where a value like $(...) substituted before Bash parses the line would
+          # execute on that host.
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          PACKAGE_VERSION: ${{ inputs.package_version }}
         run: |
           set -euo pipefail
           mkdir -p artifacts/candidate
-          gh run download "${{ inputs.candidate_run_id }}" --repo "$GITHUB_REPOSITORY" --dir artifacts/candidate
-          deb="$(find artifacts/candidate -name "ok-player_${{ inputs.package_version }}_amd64.deb" | head -n1)"
-          [[ -n "$deb" ]] || { echo "the run holds no Debian package for ${{ inputs.package_version }}" >&2; exit 1; }
+          gh run download "$CANDIDATE_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir artifacts/candidate
+          deb="$(find artifacts/candidate -name "ok-player_${PACKAGE_VERSION}_amd64.deb" | head -n1)"
+          [[ -n "$deb" ]] || { echo "the run holds no Debian package for $PACKAGE_VERSION" >&2; exit 1; }
           # Extract rather than install: the rows are about the packaged binary's behaviour
           # on this desktop, not about touching the host's package database.
           rm -rf artifacts/extracted
@@ -110,6 +116,7 @@ jobs:
         shell: bash
         env:
           OKP_ACCEPTANCE_NEGATIVE_CONTROL: ${{ inputs.negative_control }}
+          ROWS: ${{ inputs.rows }}
         run: |
           set -euo pipefail
           ./scripts/run-linux-gnome-wayland-acceptance.sh \
@@ -117,7 +124,7 @@ jobs:
             --fixture "$PWD/artifacts/fixture/acceptance.mp4" \
             --out "$PWD/artifacts/gnome-wayland" \
             --package-sha256 "$OKP_TEST_PACKAGE_SHA256" \
-            --rows "${{ inputs.rows }}"
+            --rows "$ROWS"
 
       - name: Check the rows against the evidence contract
         if: always() && steps.harness.outcome == 'success'
