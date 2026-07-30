@@ -629,13 +629,22 @@ pub(crate) fn observe_package_source(install_kind: InstallKind) -> PackageSource
     if !install_kind.delivery_must_be_established() {
         return PackageSourceEvidence::Unestablished;
     }
-    let Some(output) = command_output(
-        Path::new("apt-cache"),
-        &[
-            std::ffi::OsStr::new("policy"),
-            std::ffi::OsStr::new(APT_PACKAGE_NAME),
-        ],
-    ) else {
+    // In the C locale, because `Installed:` and `Candidate:` are prose and apt translates
+    // them. On a machine whose session is not English the version table would still parse —
+    // the origins are URLs — but the candidate line would not, and a subscribed machine with
+    // an update waiting would be reported as current on its suite. That is #725 again, in the
+    // half of the world that does not run in English.
+    let output = Command::new("apt-cache")
+        .args(["policy", APT_PACKAGE_NAME])
+        .env("LC_ALL", "C")
+        .env("LANGUAGE", "C")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned());
+    let Some(output) = output else {
         return PackageSourceEvidence::Unestablished;
     };
     package_source_from_policy(&output)
@@ -1870,8 +1879,20 @@ pub(crate) fn apply_update_check_outcome(
     let mut toast = None;
     match outcome {
         LinuxUpdateCheckOutcome::UpToDate => {
-            transition_update(&state, "up to date", UpdateLifecycle::check_found_none);
-            toast = Some("OK Player is up to date");
+            if transition_update(&state, "up to date", UpdateLifecycle::check_found_none) {
+                // "The feed has nothing newer" is not the same answer as "there is
+                // nothing to do": apt may already be holding a build the feed has
+                // moved past, and the lifecycle turns that into an offer. The toast
+                // follows the state so it cannot contradict the surface behind it,
+                // or hide a release apt can actually deliver (#725).
+                toast = Some(match found_offer_target(&state) {
+                    None => "OK Player is up to date",
+                    Some(target) if skip_persisted_version(&state, channel, &target) => {
+                        "This version was skipped"
+                    }
+                    Some(_) => "Update available",
+                });
+            }
         }
         LinuxUpdateCheckOutcome::Failed(error) => {
             transition_update(&state, "check failed", |lifecycle| {

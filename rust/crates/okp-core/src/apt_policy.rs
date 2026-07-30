@@ -192,11 +192,17 @@ enum TableRow {
 /// the priority: an origin row leads with it (`500 https://… candidate/main …`,
 /// `100 /var/lib/dpkg/status`), a version row follows its version with it
 /// (`0.11.0-beta.0.210 500`).
+///
+/// Priorities are signed. `apt_preferences(5)` defines a priority below zero as
+/// one that prevents a version from being installed, and apt prints the negative
+/// number in both row kinds. Dropping those rows would read a machine that has
+/// deliberately pinned this archive down as having no repository at all, and the
+/// surface would offer to add the one it already has.
 fn parse_table_row(trimmed: &str) -> Option<TableRow> {
     let row = trimmed.strip_prefix("***").unwrap_or(trimmed).trim_start();
     let mut fields = row.split_whitespace();
     let first = fields.next()?;
-    if first.parse::<u32>().is_ok() {
+    if first.parse::<i64>().is_ok() {
         let origin = fields.next()?;
         if origin == DPKG_STATUS_ORIGIN {
             return Some(TableRow::Origin(None));
@@ -213,7 +219,7 @@ fn parse_table_row(trimmed: &str) -> Option<TableRow> {
     // A version row is exactly the version and its priority; anything else is a
     // heading ("Version table:") or prose.
     let priority = fields.next()?;
-    if priority.parse::<u32>().is_err() || fields.next().is_some() {
+    if priority.parse::<i64>().is_err() || fields.next().is_some() {
         return None;
     }
     Some(TableRow::Version(first.to_owned()))
@@ -352,6 +358,35 @@ ok-player:
             PackageSourceEvidence::Source {
                 suite: "candidate".to_owned(),
                 deliverable: Some("0.11.0-beta.0.210".to_owned()),
+            }
+        );
+    }
+
+    /// A machine that has pinned this archive down still has it configured.
+    /// `apt_preferences(5)` defines a negative priority as one that prevents a
+    /// version from being installed, and apt prints it in both row kinds;
+    /// dropping those rows would report no repository at all, and the surface
+    /// would offer to add the one that is already there — which is not what
+    /// would fix a pin.
+    #[test]
+    fn a_negatively_pinned_source_is_still_a_source() {
+        let pinned = "\
+ok-player:
+  Installed: 0.11.0-beta.0.208
+  Candidate: 0.11.0-beta.0.208
+  Version table:
+     0.11.0-beta.0.210 -1
+        -1 https://befeast.github.io/ok-player/apt candidate/main amd64 Packages
+ *** 0.11.0-beta.0.208 100
+        100 /var/lib/dpkg/status
+";
+        assert_eq!(
+            package_source_from_policy(pinned),
+            PackageSourceEvidence::Source {
+                suite: "candidate".to_owned(),
+                // apt has chosen the installed version over the pinned one, and
+                // that judgement is apt's to make: there is nothing to deliver.
+                deliverable: None,
             }
         );
     }
