@@ -689,12 +689,23 @@ pub enum UpdateState {
     /// [`UpdatePresentation::repository_setup`].
     AvailableWithoutSource { version: String, gap: SourceGap },
     /// A newer version is published and the suite this machine subscribes to
-    /// does not carry it (#689, #725).
+    /// is not currently offering it (#689, #725).
     ///
     /// The `stable` subscriber's state. `stable` deliberately never carries a
     /// candidate build, so announcing one would name a version apt refuses to
     /// install. The machine is up to date *on its channel*, which is what it
     /// says, and it says which channel that is.
+    ///
+    /// It is deliberately phrased as "not offering" rather than "does not
+    /// carry", because `apt-cache` answers from the package lists as they were
+    /// last fetched and says so itself. A machine that has not run `apt update`
+    /// since a release was published reaches this state too, and the honest
+    /// difference between the two is a refresh this app is not privileged to
+    /// perform. So the desktop updater — which *is* the thing that refreshes
+    /// them — stays on offer here. It cannot contradict this state the way it
+    /// contradicted the one #725 reported: either it refreshes and finds the
+    /// release, which is strictly better than what the app could say, or it
+    /// reports the machine current, which is what this state already says.
     WithheldBySuite { version: String, suite: String },
     /// A discovered version the user chose to skip. The offer is remembered in
     /// full — nothing prompts for it, but everything needed to act on it later
@@ -1923,6 +1934,11 @@ impl UpdateLifecycle {
         matches!(
             self.presented_state().as_ref(),
             UpdateState::AvailableExternally { .. }
+                // The tool that refreshes the package lists this verdict was read
+                // from. It is the only thing that can settle whether the suite is
+                // really not carrying the build or whether apt simply has not
+                // looked lately, and it agrees with this state either way.
+                | UpdateState::WithheldBySuite { .. }
                 | UpdateState::Skipped { hint: Some(_), .. }
                 | UpdateState::Failed {
                     target: Some(_),
@@ -2050,7 +2066,7 @@ impl UpdateLifecycle {
                 )
             }
             UpdateState::WithheldBySuite { version, suite } => format!(
-                "Version {version} is published, but the {suite} suite this system subscribes to does not carry it. OK Player is up to date on {suite}."
+                "Version {version} is published, but the {suite} suite this system subscribes to is not offering it. OK Player is up to date on {suite}; refreshing this system's package lists is what would change that answer."
             ),
             UpdateState::Downloading { version } => format!("Downloading version {version}…"),
             UpdateState::ReadyToApply { version } => {
@@ -3430,6 +3446,35 @@ mod tests {
     /// deliberately never carries a candidate build, so a `stable` subscriber
     /// must never be told about one — apt would refuse to install it, and the
     /// desktop updater would say there is nothing to do.
+    /// The feed's version and the offer's version differ by design on a system-managed
+    /// install: what the surface names is what apt would install. Anything that records a
+    /// decision about the offer — a skip, above all — has to use that version, or it will
+    /// look the decision up under a name it was never stored under and the offer will come
+    /// straight back.
+    #[test]
+    fn the_offer_names_what_apt_would_install_rather_than_what_the_feed_published() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "0.11.0-beta.0.208");
+        lifecycle.package_source_observed(subscribed("candidate", Some("0.11.0-beta.0.209")));
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("0.11.0-beta.0.210").unwrap();
+
+        let presentation = lifecycle.describe();
+        assert_eq!(
+            presentation.target_version.as_deref(),
+            Some("0.11.0-beta.0.209"),
+            "the surface names the version apt would install"
+        );
+
+        // And a state with nothing to act on names no target at all, so a caller that keys a
+        // decision off the target has nothing to key it off — rather than the feed's version,
+        // which is exactly the version this machine must not be offered.
+        let mut withheld = UpdateLifecycle::new(InstallKind::Deb, "0.11.0-beta.0.208");
+        withheld.package_source_observed(subscribed("stable", None));
+        withheld.start_check().unwrap();
+        withheld.check_found("0.11.0-beta.0.210").unwrap();
+        assert_eq!(withheld.describe().target_version, None);
+    }
+
     #[test]
     fn a_stable_subscriber_is_never_shown_a_build_its_suite_does_not_carry() {
         let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "0.11.0-beta.0.208");
@@ -3452,8 +3497,8 @@ mod tests {
         );
         assert_eq!(presentation.claim, VersionClaim::Current);
         assert!(
-            !presentation.system_updater_offered,
-            "the updater has nothing for this machine either"
+            presentation.system_updater_offered,
+            "the updater refreshes the lists this verdict was read from, and agrees either way"
         );
         assert_eq!(
             presentation.repository_setup, None,
@@ -3476,6 +3521,43 @@ mod tests {
     /// The subscriber the archive was built for: the suite carries the build,
     /// so the app names it, points at apt, and the desktop updater — reading
     /// the same package data — will agree.
+    /// A machine whose apt lists are simply out of date reaches the same state as a `stable`
+    /// subscriber that will never be offered a candidate — `apt-cache` answers from the last
+    /// fetch and says so itself, and this app is not privileged to refresh it. So the state
+    /// must not claim the suite *cannot* carry the build, and must keep on offer the one tool
+    /// that can settle it. The desktop updater cannot contradict this state the way it
+    /// contradicted the one #725 reported: refreshing either finds the release, or confirms
+    /// what this state already says.
+    #[test]
+    fn a_suite_that_is_not_offering_a_build_keeps_the_tool_that_could_refresh_it() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "0.11.0-beta.0.208");
+        lifecycle.package_source_observed(subscribed("stable", None));
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("0.11.0-beta.0.210").unwrap();
+
+        let presentation = lifecycle.describe();
+        assert!(
+            presentation.system_updater_offered,
+            "the tool that refreshes the package lists this verdict was read from stays on offer"
+        );
+        assert!(
+            presentation.repository_setup.is_none(),
+            "a subscribed machine is not told to add a repository it already has"
+        );
+        // The claim is about what the suite is offering now, not about what it can ever hold:
+        // the app cannot tell a genuinely withheld candidate from a stale list.
+        assert!(
+            !presentation.updates_message.contains("does not carry"),
+            "the message overstates what apt's cached answer establishes: {}",
+            presentation.updates_message
+        );
+        assert!(
+            presentation.updates_message.contains("package lists"),
+            "the message says what would change the answer: {}",
+            presentation.updates_message
+        );
+    }
+
     #[test]
     fn a_candidate_subscriber_is_offered_the_build_its_suite_carries() {
         let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "0.11.0-beta.0.208");
@@ -3544,11 +3626,14 @@ mod tests {
 
             let presentation = lifecycle.describe();
             // The one rule that spans all three: a surface may only send the
-            // user to the system updater when a source carries the version the
-            // surface is naming.
+            // user to the system updater when a source was established. That is
+            // what makes the tool agree — it reads the same package data, and
+            // refreshing it is the only thing that could change this answer.
+            // Where no source was established it would contradict the surface
+            // that sent the user to it, which is the #725 defect.
             assert_eq!(
                 presentation.system_updater_offered,
-                source.deliverable().is_some(),
+                source.carries_the_package(),
                 "for {source:?}"
             );
             // And nothing anywhere may offer to install it in the app.
@@ -3567,7 +3652,7 @@ mod tests {
     /// that #725's dead end violated — the shell used to decide it from the
     /// capability and the presence of a version alone.
     #[test]
-    fn the_software_updater_is_offered_only_where_a_source_can_deliver() {
+    fn the_software_updater_is_offered_only_where_a_source_is_established() {
         for kind in SELF_APPLY_KINDS
             .iter()
             .chain(&SYSTEM_MANAGED_KINDS)
@@ -3588,11 +3673,6 @@ mod tests {
                     life.package_source().carries_the_package()
                         || !kind.delivery_must_be_established(),
                     "{kind} offered the updater with no established source, in {:?}",
-                    life.state()
-                );
-                assert!(
-                    presentation.target_version.is_some(),
-                    "{kind} offered the updater with no version to deliver, in {:?}",
                     life.state()
                 );
             });

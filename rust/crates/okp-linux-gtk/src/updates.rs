@@ -1884,10 +1884,18 @@ pub(crate) fn apply_update_check_outcome(
                 lifecycle.check_found(version.clone())
             }) {
                 state.borrow_mut().linux_update.payload = payload;
-                toast = Some(if skip_persisted_version(&state, channel, &version) {
-                    "This version was skipped"
-                } else {
-                    "Update available"
+                // What the check found and what it means for this machine are
+                // different questions (#725): a `stable` subscriber told about a
+                // candidate build ends up current on its own channel, and a toast
+                // saying "Update available" would contradict the surface behind
+                // it. Both the toast and the skip are therefore about the state
+                // the transition produced.
+                toast = Some(match found_offer_target(&state) {
+                    None => "OK Player is up to date",
+                    Some(target) if skip_persisted_version(&state, channel, &target) => {
+                        "This version was skipped"
+                    }
+                    Some(_) => "Update available",
                 });
             }
         }
@@ -1901,10 +1909,14 @@ pub(crate) fn apply_update_check_outcome(
                 state.borrow_mut().linux_update.payload = Some(payload);
                 transition_update(&state, "staged download", UpdateLifecycle::start_download);
                 transition_update(&state, "staged payload", UpdateLifecycle::download_finished);
-                toast = Some(if skip_persisted_version(&state, channel, &version) {
-                    "This version was skipped"
-                } else {
-                    "Update ready to install"
+                // Same rule as above: the skip is looked up under the version the
+                // surface names, which is the one it was recorded against.
+                toast = Some(match found_offer_target(&state) {
+                    None => "OK Player is up to date",
+                    Some(target) if skip_persisted_version(&state, channel, &target) => {
+                        "This version was skipped"
+                    }
+                    Some(_) => "Update ready to install",
                 });
             }
         }
@@ -1913,6 +1925,16 @@ pub(crate) fn apply_update_check_outcome(
     if let Some(message) = toast.filter(|_| show_toast) {
         status_toast.show(message);
     }
+}
+
+/// The version a completed check is offering, or nothing when it produced a verdict with no
+/// target — `WithheldBySuite`, where the machine is current on its own channel (#725).
+///
+/// The feed's version and the offer's version are not always the same. A system-managed
+/// install announces what its own source can deliver, so a skip recorded against what the
+/// surface named has to be looked up under that same version or it will not be found again.
+fn found_offer_target(state: &Rc<RefCell<PlayerState>>) -> Option<String> {
+    state.borrow().linux_update.describe().target_version
 }
 
 /// Re-applies a skip the user already made for this exact version, so a
