@@ -149,8 +149,6 @@ apt_script_prologue() {
   printf "OKP_APT_SOURCES='%s/%s'\n" "$OKP_APT_SOURCES_DIR" "$OKP_APT_SOURCES_BASENAME"
   printf '\n'
   cat <<'PROLOGUE'
-root="${DPKG_ROOT:-}"
-
 # Any configured source that names the OK Player archive — whichever file it
 # lives in, and whatever it is called. Both maintainer scripts need the same
 # answer: postinst must not overwrite a subscription the user chose, and postrm
@@ -228,6 +226,8 @@ PROLOGUE
 {
   apt_script_prologue
   cat <<'POSTINST'
+root="${DPKG_ROOT:-}"
+
 # --- Provision the OK Player APT repository (issue #726) ---------------------
 # Everything this needs travels inside the package, so it works on a machine
 # with no network at all.
@@ -273,6 +273,8 @@ POSTINST
 {
   apt_script_prologue
   cat <<'POSTRM'
+root="${DPKG_ROOT:-}"
+
 # `purge` removes the repository this package configured; a plain `remove` leaves
 # it, which is how apt-repository-shipping packages behave and is what lets a
 # reinstall not have to re-add the source. postinst owns both files rather than
