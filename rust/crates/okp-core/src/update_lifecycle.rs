@@ -70,12 +70,64 @@ pub enum InstallKind {
 }
 
 impl InstallKind {
-    /// What this install kind is allowed to do about updates.
+    /// What this install kind's packaging *implies* about updates.
+    ///
+    /// Implies, not establishes: a `.deb` is updated by apt only if apt has a
+    /// source that carries OK Player, which is a fact about the machine rather
+    /// than about the packaging (#725). [`UpdateLifecycle::capability`] narrows
+    /// this by what the shell observed; that is the one a surface must read.
     pub const fn capability(self) -> UpdateCapability {
         match self {
             Self::WindowsVelopack | Self::AppImage => UpdateCapability::SelfApply,
             Self::Deb | Self::Rpm | Self::Flatpak => UpdateCapability::SystemManaged,
             Self::DevBuild => UpdateCapability::Unmanaged,
+        }
+    }
+
+    /// Whether this kind's update path is a repository the machine subscribes
+    /// to — something that may not be configured at all, and that the app must
+    /// therefore establish rather than assume (#725).
+    ///
+    /// Only the apt lane is. `dnf` and `flatpak` own the install *because* they
+    /// performed it: a Flatpak came from a remote that is still configured, and
+    /// an `.rpm` from `dnf` leaves its repository behind. A `.deb` is the one
+    /// lane a user routinely installs by downloading a file, which leaves dpkg
+    /// owning the package and apt with nothing to fetch it from — the #725
+    /// machine exactly.
+    pub const fn delivery_must_be_established(self) -> bool {
+        matches!(self, Self::Deb)
+    }
+
+    /// The tool that owns updates for this kind, named as the user knows it.
+    pub const fn system_update_tool(self) -> &'static str {
+        match self {
+            Self::Deb => "apt",
+            Self::Rpm => "dnf",
+            Self::Flatpak => "Flatpak",
+            Self::WindowsVelopack | Self::AppImage | Self::DevBuild => "your system update tool",
+        }
+    }
+
+    /// Whether the project publishes a repository a user of this kind could subscribe
+    /// to. Only the apt lane does: an `.rpm` or a Flatpak install came from a repository
+    /// the user already has, and the AppImage and Velopack lanes update themselves.
+    ///
+    /// What the instructions *say* is not decided here, because it cannot be: they name a
+    /// suite, and the suite is a property of the build the user installed rather than of
+    /// the packaging format (#726).
+    pub const fn publishes_a_repository(self) -> bool {
+        matches!(self, Self::Deb)
+    }
+
+    /// The command that makes this kind's packaging tool read a source it has been given
+    /// but has not fetched — the whole remedy for
+    /// [`UpdateState::AvailableButSourceUnread`].
+    pub const fn refresh_command(self) -> Option<&'static str> {
+        match self {
+            Self::Deb => Some("sudo apt update"),
+            Self::Rpm | Self::Flatpak | Self::WindowsVelopack | Self::AppImage | Self::DevBuild => {
+                None
+            }
         }
     }
 
@@ -108,19 +160,196 @@ impl InstallKind {
         }
     }
 
-    /// How the user updates a [`UpdateCapability::SystemManaged`] install. The
-    /// hint travels inside [`UpdateState::AvailableExternally`] so no shell has
-    /// to invent one.
-    const fn system_update_hint_text(self) -> &'static str {
-        match self {
-            Self::Deb => "Update OK Player with your package manager (apt).",
-            Self::Rpm => "Update OK Player with your package manager (dnf).",
-            Self::Flatpak => "Update OK Player with Flatpak (flatpak update).",
-            Self::WindowsVelopack | Self::AppImage | Self::DevBuild => {
-                "Update OK Player with your system update tool."
+    /// How the user updates an install whose payload a system tool owns *and*
+    /// can actually reach. The hint travels inside
+    /// [`UpdateState::AvailableExternally`] so no shell has to invent one.
+    ///
+    /// `suite` is the source the machine was observed to subscribe to, when the
+    /// shell established one. Naming it is what keeps the sentence true: it is
+    /// the suite that carries the version being announced, and it is the answer
+    /// to "your updater says there is nothing" — a `stable` machine is never
+    /// offered a candidate, and now it can see which channel it is on (#725).
+    fn system_update_hint_text(self, suite: Option<&str>) -> String {
+        match (self, suite) {
+            (Self::Deb, Some(suite)) => {
+                format!("Update OK Player with apt — it is in the {suite} suite you subscribe to.")
+            }
+            (Self::Deb, None) => "Update OK Player with your package manager (apt).".to_owned(),
+            (Self::Rpm, _) => "Update OK Player with your package manager (dnf).".to_owned(),
+            (Self::Flatpak, _) => "Update OK Player with Flatpak (flatpak update).".to_owned(),
+            (Self::WindowsVelopack | Self::AppImage | Self::DevBuild, _) => {
+                "Update OK Player with your system update tool.".to_owned()
             }
         }
     }
+}
+
+/// What the shell observed when it asked the packaging tool what it can deliver
+/// for OK Player (#725).
+///
+/// The same shape as [`InstallEvidence`], for the same reason: establishing it
+/// means running `apt-cache policy`, which core must not do, so the shell
+/// observes and core decides. [`crate::apt_policy`] turns the command's output
+/// into one of these without touching a live system, so every rule below stays
+/// testable against captured output.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PackageSourceEvidence {
+    /// Nobody asked, or the question could not be answered — the tool is
+    /// absent, or it failed. An honest state of its own: it is *not* evidence
+    /// that a source exists, and the surface may not act as though it were.
+    #[default]
+    Unestablished,
+    /// The tool answered and nothing this machine subscribes to carries OK
+    /// Player. The #725 machine: a package installed from a downloaded file,
+    /// known to apt only through dpkg's status.
+    NoSource,
+    /// A source for OK Player is configured, and the packaging tool has not read it yet
+    /// (#725/#726).
+    ///
+    /// Every `.deb` install passes through this state. `postinst` writes
+    /// `/etc/apt/sources.list.d/ok-player.sources` and stops there — running `apt update` is
+    /// not a maintainer script's business — so on first launch the stanza is on disk and
+    /// `apt-cache policy` still knows the package only through dpkg's status. Reading that
+    /// as [`Self::NoSource`] made the app deny the existence of a file its own packaging had
+    /// just written, and offer setup commands for a suite that might not be the user's.
+    ///
+    /// It is emphatically not a gap: the delivery path exists, it has simply not been read.
+    /// The remedy is a refresh, and it is one command.
+    ConfiguredButUnread { suite: Option<String> },
+    /// A configured source carries OK Player. `suite` is what the machine
+    /// subscribes to; `deliverable` is the version the tool would install now,
+    /// or nothing when that suite has nothing beyond what is installed.
+    Source {
+        suite: String,
+        deliverable: Option<String>,
+    },
+}
+
+impl PackageSourceEvidence {
+    /// Whether a delivery path was established at all — a source exists, whether or not the
+    /// tool has read it yet.
+    ///
+    /// This is the condition the whole surface turns on, and the reason it is not
+    /// [`Self::carries_the_package`]: a machine that has a source apt has not fetched has a
+    /// delivery path, and telling it to add one would be false. An unanswered question is
+    /// still not an answer, so [`Self::Unestablished`] is not one of these.
+    pub fn source_established(&self) -> bool {
+        matches!(self, Self::Source { .. } | Self::ConfiguredButUnread { .. })
+    }
+
+    /// Whether a source the tool has actually read can fetch OK Player. Narrower than
+    /// [`Self::source_established`], and the one that decides what may be announced.
+    pub fn carries_the_package(&self) -> bool {
+        matches!(self, Self::Source { .. })
+    }
+
+    /// The suite the machine subscribes to, when one was established.
+    pub fn suite(&self) -> Option<&str> {
+        match self {
+            Self::Source { suite, .. } => Some(suite.as_str()),
+            Self::ConfiguredButUnread { suite } => suite.as_deref(),
+            Self::Unestablished | Self::NoSource => None,
+        }
+    }
+
+    /// The version the packaging tool would install now, when it has one.
+    pub fn deliverable(&self) -> Option<&str> {
+        match self {
+            Self::Source { deliverable, .. } => deliverable.as_deref(),
+            Self::Unestablished | Self::NoSource | Self::ConfiguredButUnread { .. } => None,
+        }
+    }
+
+    /// Why an install a packaging tool owns has no delivery path, when it has
+    /// none. A source that has merely not been read is not one of these.
+    const fn gap(&self) -> Option<SourceGap> {
+        match self {
+            Self::Unestablished => Some(SourceGap::Unestablished),
+            Self::NoSource => Some(SourceGap::NoSource),
+            Self::Source { .. } | Self::ConfiguredButUnread { .. } => None,
+        }
+    }
+}
+
+/// Why a system-managed install cannot be updated by its packaging tool (#725).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SourceGap {
+    /// The tool answered, and no configured source carries OK Player.
+    NoSource,
+    /// The tool could not be asked. Distinct from [`Self::NoSource`] because
+    /// the remedy is the same but the claim is not: the app does not know that
+    /// nothing is configured, only that it could not find out.
+    Unestablished,
+}
+
+/// How a user puts a packaging tool's delivery path in place, for a surface
+/// that has to show it (#700, #725).
+///
+/// The commands are the README's, verbatim, and they are known to work:
+/// `scripts/verify-apt-source-instructions.sh` reads them out of the app, requires the README
+/// to publish exactly them, and then follows them end to end in a clean Debian container.
+/// Neither half is worth much alone — text that matches a document nobody ran, or a container
+/// run of commands the user is never shown.
+///
+/// The app never runs them. Adding an archive and its signing key is a
+/// system-wide, privileged change a user makes deliberately; the privileged
+/// install path was removed in #698 and this does not bring it back.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct RepositorySetup {
+    /// The suite these commands subscribe to. Named because it is the one thing about them
+    /// the user must be able to check before pasting: the channels are separate on purpose.
+    pub suite: String,
+    /// One line saying what taking these commands achieves.
+    pub summary: String,
+    /// The commands, as one copyable block.
+    pub commands: String,
+    /// The signing key's fingerprint, so the archive can be verified against
+    /// something the app did not fetch.
+    pub key_fingerprint: &'static str,
+    /// Where a package can be downloaded instead, for a user who does not want
+    /// a repository at all.
+    pub downloads_url: &'static str,
+}
+
+/// The signing key fingerprint the README publishes, as apt prints it.
+pub const APT_ARCHIVE_KEY_FINGERPRINT: &str = "77D0 FCDE B0D5 94E1 3E50  F43A 9337 815E B0F7 8C63";
+/// Where a package can be downloaded instead of subscribing to anything.
+pub const OK_PLAYER_DOWNLOADS_URL: &str = "https://github.com/BeFeast/ok-player/releases";
+
+/// What it takes to subscribe to `suite` of the signed APT repository OK Player publishes.
+///
+/// **The suite is a parameter and never a constant.** The archive publishes two, deliberately
+/// separate, and the app is shown these commands by a user who is on one of them: handing a
+/// `candidate` tester the `stable` block moves them off the channel they installed for, which
+/// is the failure #726 exists to prevent, done by the app's own advice. `None` for a suite the
+/// archive does not publish — a build whose channel cannot be established is told so rather
+/// than guessed at.
+pub fn apt_repository_setup(suite: &str) -> Option<RepositorySetup> {
+    let stanza = match suite {
+        "stable" => "ok-player.sources",
+        "candidate" => "ok-player-candidate.sources",
+        _ => return None,
+    };
+    let qualifier = if suite == "stable" {
+        "and apt updates OK Player with the rest of your system"
+    } else {
+        "and apt updates OK Player with the rest of your system — this is the QA channel, and its builds are not releases"
+    };
+    Some(RepositorySetup {
+        suite: suite.to_owned(),
+        summary: format!("Add the signed OK Player repository once, {qualifier}:"),
+        commands: format!(
+            "sudo install -d -m 0755 /usr/share/keyrings\n\
+curl -fsSL https://befeast.github.io/ok-player/apt/ok-player-archive-keyring.gpg \\\n  \
+| sudo tee /usr/share/keyrings/ok-player-archive-keyring.gpg >/dev/null\n\
+curl -fsSL https://befeast.github.io/ok-player/apt/{stanza} \\\n  \
+| sudo tee /etc/apt/sources.list.d/ok-player.sources >/dev/null\n\
+sudo apt update\n\
+sudo apt install ok-player"
+        ),
+        key_fingerprint: APT_ARCHIVE_KEY_FINGERPRINT,
+        downloads_url: OK_PLAYER_DOWNLOADS_URL,
+    })
 }
 
 impl fmt::Display for InstallKind {
@@ -134,11 +363,29 @@ impl fmt::Display for InstallKind {
 pub enum UpdateCapability {
     /// The app downloads and applies the update itself.
     SelfApply,
-    /// A system update tool owns the payload; the app may only report.
+    /// A system update tool owns the payload *and* was observed to be able to
+    /// fetch it; the app may only report, and may point at that tool.
     SystemManaged,
+    /// A system update tool owns the install, but nothing it can reach carries
+    /// OK Player, so it can deliver nothing (#725).
+    ///
+    /// Distinct from [`Self::SystemManaged`] because the app must say something
+    /// different: naming a version and sending the user to a tool that has
+    /// never heard of it is the dead end #725 reported. Distinct from
+    /// [`Self::Unmanaged`] too — the packaging is real, the payload is real,
+    /// and the missing piece is a repository the user can add in one paste.
+    SystemUnreachable,
     /// Nothing updates this install; the app says so instead of claiming to be
     /// current.
     Unmanaged,
+}
+
+impl UpdateCapability {
+    /// Whether a packaging tool owns this install's updates, reachable or not.
+    /// The lanes that never apply an update in the app.
+    pub const fn is_system_owned(self) -> bool {
+        matches!(self, Self::SystemManaged | Self::SystemUnreachable)
+    }
 }
 
 /// The shell's answer to "does a package manager own the running executable?".
@@ -492,8 +739,48 @@ pub enum UpdateState {
     /// A newer version exists and this install can apply it itself.
     Available { version: String },
     /// A newer version exists but a system update tool owns it; `hint` says
-    /// which one.
+    /// which one. Only reached once a source was observed to carry `version`,
+    /// so the hint is a path that exists (#725).
     AvailableExternally { version: String, hint: String },
+    /// A newer version exists, a packaging tool owns this install, and nothing
+    /// the machine subscribes to can deliver it (#725).
+    ///
+    /// The version is still named — it is published, and the user is entitled
+    /// to know — but nothing here points at a package manager or at a desktop
+    /// updater, because both would answer that there is nothing to do. What the
+    /// surface offers instead is the way to make the delivery path exist:
+    /// [`UpdatePresentation::repository_setup`].
+    AvailableWithoutSource { version: String, gap: SourceGap },
+    /// A newer version is published, this machine has a source configured for it, and the
+    /// packaging tool has not read that source yet (#725/#726).
+    ///
+    /// The state every `.deb` install is in on first launch. Nothing here offers to add a
+    /// repository: there is one, written by this project's own `postinst`, and saying
+    /// otherwise would be false about the machine and would hand the user commands for a
+    /// suite that may not be theirs. What it offers is the one command that settles it.
+    AvailableButSourceUnread {
+        version: String,
+        suite: Option<String>,
+    },
+    /// A newer version is published and the suite this machine subscribes to
+    /// is not currently offering it (#689, #725).
+    ///
+    /// The `stable` subscriber's state. `stable` deliberately never carries a
+    /// candidate build, so announcing one would name a version apt refuses to
+    /// install. The machine is up to date *on its channel*, which is what it
+    /// says, and it says which channel that is.
+    ///
+    /// It is deliberately phrased as "not offering" rather than "does not
+    /// carry", because `apt-cache` answers from the package lists as they were
+    /// last fetched and says so itself. A machine that has not run `apt update`
+    /// since a release was published reaches this state too, and the honest
+    /// difference between the two is a refresh this app is not privileged to
+    /// perform. So the desktop updater — which *is* the thing that refreshes
+    /// them — stays on offer here. It cannot contradict this state the way it
+    /// contradicted the one #725 reported: either it refreshes and finds the
+    /// release, which is strictly better than what the app could say, or it
+    /// reports the machine current, which is what this state already says.
+    WithheldBySuite { version: String, suite: String },
     /// A discovered version the user chose to skip. The offer is remembered in
     /// full — nothing prompts for it, but everything needed to act on it later
     /// survives: `hint` keeps telling a system-managed install how to get the
@@ -585,6 +872,11 @@ impl UpdateState {
         match self {
             Self::Available { version }
             | Self::AvailableExternally { version, .. }
+            // Published, named, and not deliverable here: still the version
+            // every control on the surface is about.
+            | Self::AvailableWithoutSource { version, .. }
+            // Published, and reachable as soon as the lists are read.
+            | Self::AvailableButSourceUnread { version, .. }
             | Self::Downloading { version }
             | Self::ReadyToApply { version }
             | Self::Applying { version }
@@ -596,6 +888,10 @@ impl UpdateState {
             Self::RestartUnverified { target } => Some(target),
             Self::Failed { target, .. } => target.as_deref(),
             Self::Checking { carried } => carried.as_ref().map(CarriedOffer::version),
+            // The build this machine's suite does not carry is not a target:
+            // nothing on the surface acts on it, and calling it one would put
+            // it on controls ("Update · X") that cannot reach it.
+            Self::WithheldBySuite { .. } => None,
             Self::Idle | Self::UpToDate | Self::ManagedExternally { .. } => None,
             // `Running` carries the version that is executing, which is the
             // running version rather than a target still to be reached.
@@ -616,6 +912,22 @@ pub enum CarriedOffer {
     AvailableExternally {
         version: String,
         hint: String,
+    },
+    /// An announcement with no delivery path (#725). A refresh that fails must
+    /// leave it exactly as it was: the version is still published and the
+    /// machine still cannot fetch it, and demoting it to a generic failure
+    /// would take the repository instructions off the surface.
+    WithoutSource {
+        version: String,
+        gap: SourceGap,
+    },
+    /// An announcement whose delivery path exists but has not been read (#726). A refresh
+    /// that fails must leave it as it was: the source is still configured and the lists are
+    /// still unread, and demoting it would put repository instructions on a machine that
+    /// already has a repository.
+    SourceUnread {
+        version: String,
+        suite: Option<String>,
     },
     /// A payload already downloaded and verified, waiting to be applied.
     ReadyToApply {
@@ -650,6 +962,8 @@ impl CarriedOffer {
         match self {
             Self::Available { version }
             | Self::AvailableExternally { version, .. }
+            | Self::WithoutSource { version, .. }
+            | Self::SourceUnread { version, .. }
             | Self::ReadyToApply { version }
             | Self::Skipped { version, .. }
             | Self::Failed { version, .. } => version,
@@ -662,6 +976,12 @@ impl CarriedOffer {
             Self::Available { version } => UpdateState::Available { version },
             Self::AvailableExternally { version, hint } => {
                 UpdateState::AvailableExternally { version, hint }
+            }
+            Self::WithoutSource { version, gap } => {
+                UpdateState::AvailableWithoutSource { version, gap }
+            }
+            Self::SourceUnread { version, suite } => {
+                UpdateState::AvailableButSourceUnread { version, suite }
             }
             Self::ReadyToApply { version } => UpdateState::ReadyToApply { version },
             Self::Skipped {
@@ -746,6 +1066,22 @@ pub enum UpdateAction {
     SkipVersion,
     /// Install a version the user previously skipped.
     InstallAnyway,
+    /// Put the commands that add the package repository on the clipboard, so
+    /// the user can paste them into a terminal (#725).
+    ///
+    /// The app deliberately does not run them: adding an archive and its
+    /// signing key is a privileged, system-wide change, and the privileged
+    /// install path was removed in #698. Copying is the whole of what the app
+    /// does — which is also why it is safe to offer from a state that can
+    /// deliver nothing else.
+    CopyRepositorySetup,
+    /// Put the command that makes the packaging tool read a source it already has on the
+    /// clipboard (#726).
+    ///
+    /// Separate from [`Self::CopyRepositorySetup`] because the situations are opposites and
+    /// the wrong one is harmful: this machine has a repository, and handing it setup commands
+    /// would overwrite the suite it is subscribed to.
+    CopyRefreshCommand,
 }
 
 impl UpdateAction {
@@ -760,6 +1096,8 @@ impl UpdateAction {
             Self::Retry => "Try again",
             Self::SkipVersion => "Skip this version",
             Self::InstallAnyway => "Install anyway",
+            Self::CopyRepositorySetup => "Copy setup commands",
+            Self::CopyRefreshCommand => "Copy refresh command",
         }
     }
 
@@ -833,6 +1171,24 @@ pub struct UpdatePresentation {
     /// "Skip this version" on a live offer. Kept in the projection so a shell
     /// never has to maintain its own parallel offer model.
     pub secondary_action: Option<UpdateAction>,
+    /// Whether the surface may offer to open the desktop's software updater
+    /// (#725).
+    ///
+    /// True only where a packaging tool owns the payload **and** a source was
+    /// observed to carry the version being named. The updater reads the same
+    /// package data the app just read, so offering it anywhere else is offering
+    /// a tool that is guaranteed to disagree: on the #725 machine it opened and
+    /// correctly reported that everything was up to date, next to an app naming
+    /// a version.
+    pub system_updater_offered: bool,
+    /// How to give this install a delivery path, when it has none and the
+    /// project publishes one (#700, #725). The surface shows the commands and
+    /// the key fingerprint; nothing in the app runs them.
+    pub repository_setup: Option<RepositorySetup>,
+    /// The command that makes the packaging tool read a source this machine already has,
+    /// when that is what stands between it and the update (#726). Never shown beside
+    /// [`Self::repository_setup`]: a machine either has a repository or does not.
+    pub refresh_command: Option<&'static str>,
     /// What went wrong with the last attempt while the state carried on — a
     /// refresh that failed over a standing offer. Already folded into
     /// [`Self::updates_message`]; exposed separately for surfaces that render
@@ -849,6 +1205,15 @@ pub struct UpdatePresentation {
 pub struct UpdateLifecycle {
     install_kind: InstallKind,
     running_version: ReportedVersion,
+    /// What the shell established about the packaging tool's ability to
+    /// deliver OK Player on *this* machine (#725). Unestablished until a shell
+    /// says otherwise, which is why nothing derived from it may assert that a
+    /// delivery path exists.
+    package_source: PackageSourceEvidence,
+    /// The suite this build was packaged to subscribe to, read by the shell off the stanza
+    /// the package carries (#726). The only honest source for the suite in setup
+    /// instructions: a constant would hand a candidate tester the stable block.
+    packaged_suite: Option<String>,
     state: UpdateState,
     /// What went wrong with the last attempt, when the state itself carried on
     /// regardless — a failed refresh that restored the offer it was
@@ -866,6 +1231,8 @@ impl UpdateLifecycle {
             install_kind,
             running_version: running_version.into(),
             state: UpdateState::Idle,
+            package_source: PackageSourceEvidence::Unestablished,
+            packaged_suite: None,
             notice: None,
         }
     }
@@ -895,8 +1262,12 @@ impl UpdateLifecycle {
             install_kind,
             running_version: running_version.into(),
             state: UpdateState::ManagedExternally {
-                hint: install_kind.system_update_hint_text().to_owned(),
+                // A lane that never discovers a version has no suite to name:
+                // the tool it points at is the whole answer.
+                hint: install_kind.system_update_hint_text(None),
             },
+            package_source: PackageSourceEvidence::Unestablished,
+            packaged_suite: None,
             notice: None,
         })
     }
@@ -942,6 +1313,8 @@ impl UpdateLifecycle {
             install_kind,
             running_version,
             state,
+            package_source: PackageSourceEvidence::Unestablished,
+            packaged_suite: None,
             notice: None,
         })
     }
@@ -975,6 +1348,8 @@ impl UpdateLifecycle {
             state: UpdateState::RestartPending {
                 version: pending_version.into(),
             },
+            package_source: PackageSourceEvidence::Unestablished,
+            packaged_suite: None,
             notice: None,
         };
         lifecycle.restarted_into(running_version)?;
@@ -985,8 +1360,57 @@ impl UpdateLifecycle {
         self.install_kind
     }
 
-    pub const fn capability(&self) -> UpdateCapability {
-        self.install_kind.capability()
+    /// What this install can do about updates *here*, which is the packaging's
+    /// implied capability narrowed by what the shell established about the
+    /// machine (#725).
+    ///
+    /// A lane whose delivery path is a repository the user subscribes to — the
+    /// apt lane — is [`UpdateCapability::SystemManaged`] only once a source was
+    /// observed to carry OK Player. An unanswered question is not that
+    /// observation: "apt-cache could not be run" is not evidence that apt can
+    /// deliver anything, and the whole of #725 is the app asserting a delivery
+    /// path it had never established.
+    pub fn capability(&self) -> UpdateCapability {
+        let implied = self.install_kind.capability();
+        if implied == UpdateCapability::SystemManaged
+            && self.install_kind.delivery_must_be_established()
+            && !self.package_source.source_established()
+        {
+            return UpdateCapability::SystemUnreachable;
+        }
+        implied
+    }
+
+    /// What the shell established about this machine's delivery path.
+    pub const fn package_source(&self) -> &PackageSourceEvidence {
+        &self.package_source
+    }
+
+    /// Records what the shell observed about the packaging tool's ability to
+    /// deliver OK Player. Taken at check time, before the check's own outcome
+    /// is reported, so the state a check produces is decided against a current
+    /// observation rather than a stale one.
+    ///
+    /// It settles no state by itself: what a machine can fetch is a standing
+    /// fact, and what to *say* about it depends on what the check found.
+    pub fn package_source_observed(&mut self, package_source: PackageSourceEvidence) {
+        self.package_source = package_source;
+    }
+
+    /// Records the channel this build was packaged for, read off the stanza the package
+    /// carries at `/usr/share/ok-player/apt/ok-player.sources` (#726).
+    ///
+    /// It settles nothing by itself. It is what setup instructions take their suite from, so
+    /// that a machine being told how to subscribe is told how to subscribe to *its own*
+    /// channel. A build that carries no stanza — anything published before #726 — leaves this
+    /// unset, and the surface says the channel is unknown rather than inventing one.
+    pub fn packaged_suite_observed(&mut self, suite: Option<String>) {
+        self.packaged_suite = suite;
+    }
+
+    /// The channel this build was packaged for, when the shell could establish it.
+    pub fn packaged_suite(&self) -> Option<&str> {
+        self.packaged_suite.as_deref()
     }
 
     pub const fn state(&self) -> &UpdateState {
@@ -1033,6 +1457,15 @@ impl UpdateLifecycle {
                 | UpdateState::UpToDate
                 | UpdateState::Available { .. }
                 | UpdateState::AvailableExternally { .. }
+                // None of these settles anything on its own: a check is how a
+                // machine that has just been given a source, or whose suite has
+                // moved, or that has just refreshed its package lists, finds
+                // that out. The last one especially — the surface hands the user
+                // one command to run outside the app, so the app has to be able
+                // to see them run it (#726).
+                | UpdateState::AvailableWithoutSource { .. }
+                | UpdateState::AvailableButSourceUnread { .. }
+                | UpdateState::WithheldBySuite { .. }
                 | UpdateState::Skipped { .. }
                 | UpdateState::Running { .. }
                 // A check is exactly how an unverifiable restart gets settled:
@@ -1071,6 +1504,15 @@ impl UpdateLifecycle {
                     target: target.clone(),
                 });
             }
+            // An announcement with no delivery path comes back with its gap
+            // intact: a failed refresh has established nothing new about what
+            // this machine can fetch.
+            UpdateState::AvailableWithoutSource { version, gap } => {
+                return Some(CarriedOffer::WithoutSource {
+                    version: version.clone(),
+                    gap: *gap,
+                });
+            }
             UpdateState::Available { version }
             | UpdateState::AvailableExternally { version, .. } => version.clone(),
             UpdateState::Skipped {
@@ -1091,24 +1533,59 @@ impl UpdateLifecycle {
         } else {
             CarriedOffer::AvailableExternally {
                 version,
-                hint: self.install_kind.system_update_hint_text().to_owned(),
+                hint: self
+                    .install_kind
+                    .system_update_hint_text(self.package_source.suite()),
             }
         })
     }
 
-    /// The check completed and found nothing newer.
+    /// The check completed and the feed had nothing newer.
+    ///
+    /// The feed is not the last word for a system-managed install: its own
+    /// source can carry a build the feed does not name — the archive is a
+    /// rolling window rebuilt from releases, and a machine on the candidate
+    /// suite is served by a different lane than the one it polls. What apt can
+    /// deliver is an upgrade whoever published it, so it is announced rather
+    /// than covered by an "up to date" the package manager would contradict
+    /// from the other direction (#725).
     pub fn check_found_none(&mut self) -> Result<&UpdateState, UpdateTransitionError> {
-        match self.state {
-            UpdateState::Checking { .. } => Ok(self.enter(UpdateState::UpToDate)),
-            _ => Err(self.rejected()),
+        if !matches!(self.state, UpdateState::Checking { .. }) {
+            return Err(self.rejected());
         }
+        if self.capability() == UpdateCapability::SystemManaged
+            && let Some(deliverable) = self.package_source.deliverable()
+        {
+            let next = UpdateState::AvailableExternally {
+                version: deliverable.to_owned(),
+                hint: self
+                    .install_kind
+                    .system_update_hint_text(self.package_source.suite()),
+            };
+            return Ok(self.enter(next));
+        }
+        Ok(self.enter(UpdateState::UpToDate))
     }
 
-    /// The check found `version`. A [`UpdateCapability::SelfApply`] install
-    /// gets an actionable [`UpdateState::Available`]; a
-    /// [`UpdateCapability::SystemManaged`] install gets
-    /// [`UpdateState::AvailableExternally`] with the hint for its packaging and
-    /// goes no further.
+    /// The check found `version` published.
+    ///
+    /// What that means for this machine is decided here, never by a shell:
+    ///
+    /// * A [`UpdateCapability::SelfApply`] install gets an actionable
+    ///   [`UpdateState::Available`]: it fetches its own payload, so what is
+    ///   published is what it can have.
+    /// * A [`UpdateCapability::SystemManaged`] install announces **what its own
+    ///   source can deliver**, not what the feed published (#725). The feed is
+    ///   a list of what exists in the world; apt's answer is what exists for
+    ///   this machine, and the two differ by design — a `stable` subscriber is
+    ///   deliberately never offered a candidate build (#689). So a source with
+    ///   something newer produces [`UpdateState::AvailableExternally`] naming
+    ///   *its* version, and a source with nothing produces
+    ///   [`UpdateState::WithheldBySuite`], which announces no version to act on
+    ///   and says which channel that verdict is about.
+    /// * A [`UpdateCapability::SystemUnreachable`] install names the published
+    ///   version and offers the way to make it reachable — never a package
+    ///   manager that has never heard of it.
     pub fn check_found(
         &mut self,
         version: impl Into<String>,
@@ -1119,14 +1596,68 @@ impl UpdateLifecycle {
         if !matches!(self.state, UpdateState::Checking { .. }) {
             return Err(self.rejected());
         }
-        let version = version.into();
-        let next = if self.capability() == UpdateCapability::SelfApply {
-            UpdateState::Available { version }
-        } else {
-            UpdateState::AvailableExternally {
-                version,
-                hint: self.install_kind.system_update_hint_text().to_owned(),
+        let published = version.into();
+        let next = match self.capability() {
+            UpdateCapability::SelfApply => UpdateState::Available { version: published },
+            // A source exists but has not been read: what the feed published is reachable,
+            // and one command makes it so (#726).
+            UpdateCapability::SystemManaged
+                if matches!(
+                    self.package_source,
+                    PackageSourceEvidence::ConfiguredButUnread { .. }
+                ) =>
+            {
+                UpdateState::AvailableButSourceUnread {
+                    version: published,
+                    suite: self.package_source.suite().map(str::to_owned),
+                }
             }
+            // A source exists but has not been read: what the feed published is reachable,
+            // and one command makes it so (#726).
+            UpdateCapability::SystemManaged
+                if matches!(
+                    self.package_source,
+                    PackageSourceEvidence::ConfiguredButUnread { .. }
+                ) =>
+            {
+                UpdateState::AvailableButSourceUnread {
+                    version: published,
+                    suite: self.package_source.suite().map(str::to_owned),
+                }
+            }
+            UpdateCapability::SystemManaged => match self.package_source.deliverable() {
+                Some(deliverable) => UpdateState::AvailableExternally {
+                    version: deliverable.to_owned(),
+                    hint: self
+                        .install_kind
+                        .system_update_hint_text(self.package_source.suite()),
+                },
+                None => match self.package_source.suite() {
+                    Some(suite) => UpdateState::WithheldBySuite {
+                        version: published,
+                        suite: suite.to_owned(),
+                    },
+                    // No suite and no deliverable, on a lane whose delivery is
+                    // not the kind that has to be established — rpm and flatpak
+                    // never discover a version at all, so this is unreachable
+                    // today; announcing the published version with the tool's
+                    // own hint is what the lane would mean if one ever did.
+                    None => UpdateState::AvailableExternally {
+                        version: published,
+                        hint: self.install_kind.system_update_hint_text(None),
+                    },
+                },
+            },
+            UpdateCapability::SystemUnreachable => UpdateState::AvailableWithoutSource {
+                version: published,
+                gap: self
+                    .package_source
+                    .gap()
+                    // A reachable source cannot produce this capability.
+                    .unwrap_or(SourceGap::Unestablished),
+            },
+            // Refused above.
+            UpdateCapability::Unmanaged => return Err(self.rejected()),
         };
         Ok(self.enter(next))
     }
@@ -1165,7 +1696,12 @@ impl UpdateLifecycle {
     pub fn skip_offer(&mut self) -> Result<&UpdateState, UpdateTransitionError> {
         let (version, staged) = match &self.state {
             UpdateState::Available { version }
-            | UpdateState::AvailableExternally { version, .. } => (version.clone(), false),
+            | UpdateState::AvailableExternally { version, .. }
+            // An announcement the machine cannot act on is still one the user
+            // may silence; the instructions for making it actionable stay on
+            // the surface, because they come from the capability rather than
+            // from the offer.
+            | UpdateState::AvailableWithoutSource { version, .. } => (version.clone(), false),
             UpdateState::ReadyToApply { version } => (version.clone(), true),
             UpdateState::Failed {
                 target: Some(version),
@@ -1175,9 +1711,14 @@ impl UpdateLifecycle {
             _ => return Err(self.rejected()),
         };
         // Skipping silences the prompt, not the instructions: a system-managed
-        // install must keep being told how to get the release it skipped.
-        let hint = (self.capability() == UpdateCapability::SystemManaged)
-            .then(|| self.install_kind.system_update_hint_text().to_owned());
+        // install must keep being told how to get the release it skipped. An
+        // install whose packaging tool cannot reach the release gets no such
+        // hint — pointing at apt is exactly the claim #725 is about — and keeps
+        // the repository instructions instead.
+        let hint = (self.capability() == UpdateCapability::SystemManaged).then(|| {
+            self.install_kind
+                .system_update_hint_text(self.package_source.suite())
+        });
         Ok(self.enter(UpdateState::Skipped {
             version,
             hint,
@@ -1526,8 +2067,76 @@ impl UpdateLifecycle {
             check_available: self.check_is_allowed(),
             action_closes_the_app: self.action_closes_the_app(),
             secondary_action: self.secondary_action(),
+            system_updater_offered: self.system_updater_offered(),
+            repository_setup: self.repository_setup(),
+            refresh_command: self.refresh_command(),
             notice: self.notice.clone(),
         }
+    }
+
+    /// Whether the desktop's software updater is a tool that could act on what
+    /// this state says.
+    ///
+    /// It can only agree with the app when the app's claim came from the same
+    /// package data the updater reads — that is, [`UpdateCapability::SystemManaged`], which
+    /// is reached only once a source was *established*. Every other combination sends the
+    /// user to a tool that will contradict the surface that sent them (#725).
+    ///
+    /// Established, not readable-right-now: the three states this covers are a source with
+    /// something to deliver, a source whose suite is not offering the build, and a source the
+    /// tool has not read yet (#726). In all three the updater agrees or does better, because
+    /// what it does is read the very lists the verdict came from. Where no source exists at
+    /// all it would flatly contradict, which is the dead end #725 reported.
+    fn system_updater_offered(&self) -> bool {
+        if self.capability() != UpdateCapability::SystemManaged {
+            return false;
+        }
+        matches!(
+            self.presented_state().as_ref(),
+            UpdateState::AvailableExternally { .. }
+                // The tool that refreshes the package lists this verdict was read
+                // from. It is the only thing that can settle whether the suite is
+                // really not carrying the build or whether apt simply has not
+                // looked lately, and it agrees with this state either way.
+                | UpdateState::WithheldBySuite { .. }
+                // And the state where reading the lists is the entire remedy: the
+                // updater does exactly that, so it can only improve on this verdict.
+                | UpdateState::AvailableButSourceUnread { .. }
+                | UpdateState::Skipped { hint: Some(_), .. }
+                | UpdateState::Failed {
+                    target: Some(_),
+                    ..
+                }
+        )
+    }
+
+    /// The instructions for giving this install a delivery path, shown only
+    /// where it has none and a version is in play — the moment the user is
+    /// being told about something they cannot otherwise get.
+    fn repository_setup(&self) -> Option<RepositorySetup> {
+        if self.capability() != UpdateCapability::SystemUnreachable {
+            return None;
+        }
+        if !self.install_kind.publishes_a_repository() {
+            return None;
+        }
+        self.presented_state().target_version()?;
+        // The suite comes from the channel this build was packaged for, read off the stanza
+        // the package carries — never from a constant. A machine with no source still has a
+        // channel: the one it was installed from. Where even that cannot be established the
+        // commands are withheld, because the only alternative is to guess, and a wrong guess
+        // here silently moves the user to another channel (#726).
+        apt_repository_setup(self.packaged_suite.as_deref()?)
+    }
+
+    /// The command that reads a configured-but-unfetched source, when that is the state.
+    fn refresh_command(&self) -> Option<&'static str> {
+        matches!(
+            self.presented_state().as_ref(),
+            UpdateState::AvailableButSourceUnread { .. }
+        )
+        .then(|| self.install_kind.refresh_command())
+        .flatten()
     }
 
     fn version_claim(&self) -> VersionClaim {
@@ -1535,9 +2144,18 @@ impl UpdateLifecycle {
             return VersionClaim::NotApplicable;
         }
         match &self.state {
-            UpdateState::UpToDate | UpdateState::Running { .. } => VersionClaim::Current,
+            UpdateState::UpToDate
+            | UpdateState::Running { .. }
+            // The newest build the machine's own channel carries *is* what it
+            // is running: current, on the only channel the verdict is about.
+            | UpdateState::WithheldBySuite { .. } => VersionClaim::Current,
             UpdateState::Available { version }
             | UpdateState::AvailableExternally { version, .. }
+            // A published build this machine cannot fetch is still a build this
+            // session is behind; what it can do about it is the part that
+            // differs.
+            | UpdateState::AvailableWithoutSource { version, .. }
+            | UpdateState::AvailableButSourceUnread { version, .. }
             | UpdateState::Skipped { version, .. }
             | UpdateState::Downloading { version }
             | UpdateState::ReadyToApply { version }
@@ -1612,6 +2230,45 @@ impl UpdateLifecycle {
             UpdateState::AvailableExternally { version, hint } => {
                 format!("Version {version} is available. {hint}")
             }
+            UpdateState::AvailableWithoutSource { version, gap } => {
+                let tool = self.install_kind.system_update_tool();
+                let observation = match gap {
+                    SourceGap::NoSource => format!(
+                        "No OK Player repository is configured on this system, so {tool} has nothing to install it from."
+                    ),
+                    SourceGap::Unestablished => format!(
+                        "OK Player could not ask {tool} what it can install, so it cannot say whether {tool} would deliver it."
+                    ),
+                };
+                // The instructions are only offered when the channel to offer is known.
+                // Guessing one would move the user's subscription, so the alternative is
+                // saying so and pointing at the download.
+                let remedy = if self.repository_setup().is_some() {
+                    format!("Add the repository to get it with {tool}, or download the package.")
+                } else {
+                    format!(
+                        "OK Player cannot tell which channel this build came from, so it will not guess at {tool} commands that could move you to another one — download the package instead."
+                    )
+                };
+                format!("Version {version} is published. {observation} {remedy}")
+            }
+            UpdateState::AvailableButSourceUnread { version, suite } => {
+                let tool = self.install_kind.system_update_tool();
+                let subscription = match suite {
+                    Some(suite) => format!("the {suite} OK Player repository"),
+                    None => "an OK Player repository".to_owned(),
+                };
+                let refresh = match self.install_kind.refresh_command() {
+                    Some(command) => format!(" Run {command} to read it."),
+                    None => String::new(),
+                };
+                format!(
+                    "Version {version} is published. This system subscribes to {subscription}, but {tool} has not read it yet, so it cannot install it.{refresh}"
+                )
+            }
+            UpdateState::WithheldBySuite { version, suite } => format!(
+                "Version {version} is published, but the {suite} suite this system subscribes to is not offering it. OK Player is up to date on {suite}; refreshing this system's package lists is what would change that answer."
+            ),
             UpdateState::Downloading { version } => format!("Downloading version {version}…"),
             UpdateState::ReadyToApply { version } => {
                 format!("Version {version} is ready to install.")
@@ -1675,7 +2332,15 @@ impl UpdateLifecycle {
         let running = &self.running_version;
         let presented = self.presented_state();
         match claim {
-            VersionClaim::Current => format!("OK Player {running} — up to date."),
+            VersionClaim::Current => match presented.as_ref() {
+                // "Up to date" alone would hide which channel that is true of,
+                // next to an Updates line naming a build this one does not
+                // carry (#725).
+                UpdateState::WithheldBySuite { suite, .. } => {
+                    format!("OK Player {running} — up to date on {suite}.")
+                }
+                _ => format!("OK Player {running} — up to date."),
+            },
             VersionClaim::Superseded { newer } => {
                 if matches!(presented.as_ref(), UpdateState::ReplacedOnDisk { .. }) {
                     format!(
@@ -1687,6 +2352,13 @@ impl UpdateLifecycle {
                     format!("OK Player {running} — updating to {newer} failed.")
                 } else if matches!(presented.as_ref(), UpdateState::Skipped { .. }) {
                     format!("OK Player {running} — version {newer} was skipped.")
+                } else if matches!(
+                    presented.as_ref(),
+                    UpdateState::AvailableWithoutSource { .. }
+                ) {
+                    format!(
+                        "OK Player {running} — version {newer} is published; this install has no repository to get it from."
+                    )
                 } else {
                     format!("OK Player {running} — version {newer} is available.")
                 }
@@ -1733,6 +2405,16 @@ impl UpdateLifecycle {
             // only a check can say which build is running.
             | UpdateState::RestartUnverified { .. } => Some(UpdateAction::CheckNow),
             UpdateState::Available { .. } => Some(UpdateAction::DownloadUpdate),
+            // Nothing here can install anything. What the surface can offer is
+            // the one step that turns the announcement into something the
+            // machine could act on (#725).
+            UpdateState::AvailableWithoutSource { .. } => Some(UpdateAction::CopyRepositorySetup),
+            // The repository is already there. One command reads it, and that is the whole
+            // of what this machine needs (#726).
+            UpdateState::AvailableButSourceUnread { .. } => Some(UpdateAction::CopyRefreshCommand),
+            // Up to date on this machine's channel: the same offer as any other
+            // settled state, which is to look again.
+            UpdateState::WithheldBySuite { .. } => Some(UpdateAction::CheckNow),
             UpdateState::ReadyToApply { .. } => Some(UpdateAction::ApplyAndRestart),
             UpdateState::RestartPending { .. } => Some(UpdateAction::RestartToFinish),
             // The build is already installed; the restart is the whole of what
@@ -1751,6 +2433,9 @@ impl UpdateLifecycle {
             // app installs anything at all.
             UpdateState::Skipped { .. } => match self.capability() {
                 UpdateCapability::SelfApply => Some(UpdateAction::InstallAnyway),
+                // An install with no delivery path keeps the one action it has:
+                // the setup that would give it one (#725).
+                UpdateCapability::SystemUnreachable => Some(UpdateAction::CopyRepositorySetup),
                 UpdateCapability::SystemManaged | UpdateCapability::Unmanaged => None,
             },
             // A system-managed update is announced, never actioned in-app; an
@@ -1810,6 +2495,9 @@ impl UpdateLifecycle {
         match state {
             UpdateState::Available { .. }
             | UpdateState::AvailableExternally { .. }
+            // An announcement with no delivery path is still an announcement
+            // the user may silence — the more so, since acting on it takes work.
+            | UpdateState::AvailableWithoutSource { .. }
             | UpdateState::Failed {
                 target: Some(_), ..
             } => Some(UpdateAction::SkipVersion),
@@ -1856,6 +2544,27 @@ mod tests {
         InstallEvidence::default()
     }
 
+    /// A machine subscribed to `suite`, whose packaging tool would install
+    /// `deliverable` next.
+    fn subscribed(suite: &str, deliverable: Option<&str>) -> PackageSourceEvidence {
+        PackageSourceEvidence::Source {
+            suite: suite.to_owned(),
+            deliverable: deliverable.map(str::to_owned),
+        }
+    }
+
+    /// A lifecycle whose delivery path is established wherever the kind has one
+    /// to establish (#725): the apt lane is only `SystemManaged` once a source
+    /// was observed to carry OK Player, so every invariant about the
+    /// system-managed lane has to start from a machine that has one.
+    fn system_managed_lifecycle(kind: InstallKind, running: &str) -> UpdateLifecycle {
+        let mut lifecycle = UpdateLifecycle::new(kind, running);
+        if kind.delivery_must_be_established() {
+            lifecycle.package_source_observed(subscribed("stable", Some("2.0.0")));
+        }
+        lifecycle
+    }
+
     fn checking(carried: Option<CarriedOffer>) -> UpdateState {
         UpdateState::Checking { carried }
     }
@@ -1870,7 +2579,32 @@ mod tests {
     /// after every attempted transition so an invariant can be checked over the
     /// whole reachable state space instead of one hand-picked state.
     fn sweep_reachable_states(kind: InstallKind, mut observe: impl FnMut(&UpdateLifecycle)) {
+        // A lane whose delivery has to be established reaches a different half
+        // of the state space depending on the answer (#725), and an invariant
+        // about "every reachable state" has to mean both halves.
+        let sources = if kind.delivery_must_be_established() {
+            vec![
+                PackageSourceEvidence::Unestablished,
+                PackageSourceEvidence::NoSource,
+                subscribed("stable", Some("2.0.0")),
+                subscribed("stable", None),
+            ]
+        } else {
+            vec![PackageSourceEvidence::Unestablished]
+        };
+        for source in sources {
+            sweep_reachable_states_from(kind, source, &mut observe);
+        }
+    }
+
+    /// One sweep, for one answer about what the packaging tool can deliver.
+    fn sweep_reachable_states_from(
+        kind: InstallKind,
+        package_source: PackageSourceEvidence,
+        observe: &mut impl FnMut(&UpdateLifecycle),
+    ) {
         let mut lifecycle = UpdateLifecycle::new(kind, "1.0.0");
+        lifecycle.package_source_observed(package_source);
         observe(&lifecycle);
 
         let attempts: Vec<Drive> = vec![
@@ -2405,7 +3139,7 @@ mod tests {
     #[test]
     fn system_managed_never_offers_an_in_app_update_action() {
         for kind in SYSTEM_MANAGED_KINDS {
-            let mut lifecycle = UpdateLifecycle::new(kind, "1.0.0");
+            let mut lifecycle = system_managed_lifecycle(kind, "1.0.0");
             lifecycle.start_check().unwrap();
             let state = lifecycle.check_found("2.0.0").unwrap().clone();
             assert!(
@@ -2450,7 +3184,7 @@ mod tests {
                 "{kind} must refuse an in-app restart handoff"
             );
 
-            let mut failed_recheck = UpdateLifecycle::new(kind, "1.0.0");
+            let mut failed_recheck = system_managed_lifecycle(kind, "1.0.0");
             failed_recheck.start_check().unwrap();
             failed_recheck.check_found("2.0.0").unwrap();
             failed_recheck.start_check().unwrap();
@@ -2464,7 +3198,7 @@ mod tests {
             );
             assert_eq!(failed_recheck.describe().action, None);
 
-            let mut failed_check = UpdateLifecycle::new(kind, "1.0.0");
+            let mut failed_check = system_managed_lifecycle(kind, "1.0.0");
             failed_check.start_check().unwrap();
             failed_check.check_failed("network unreachable").unwrap();
             assert_eq!(
@@ -2475,7 +3209,7 @@ mod tests {
                 "{kind} resumes no in-app offer of its own"
             );
 
-            let mut restored = UpdateLifecycle::new(kind, "1.0.0");
+            let mut restored = system_managed_lifecycle(kind, "1.0.0");
             restored.start_check().unwrap();
             restored.check_found("2.0.0").unwrap();
             restored.start_check().unwrap();
@@ -2487,7 +3221,7 @@ mod tests {
             );
             assert_eq!(restored.describe().action, None);
 
-            let mut skipped = UpdateLifecycle::new(kind, "1.0.0");
+            let mut skipped = system_managed_lifecycle(kind, "1.0.0");
             skipped.start_check().unwrap();
             skipped.check_found("2.0.0").unwrap();
             skipped.skip_offer().unwrap();
@@ -2850,6 +3584,522 @@ mod tests {
         }
     }
 
+    /// #725, the machine that reported it: a `.deb` installed from a
+    /// downloaded file, with no OK Player apt source anywhere. The surface may
+    /// still name the published build — it exists — but everything it offers
+    /// has to be something that can actually happen from here.
+    #[test]
+    fn a_deb_with_no_apt_source_offers_the_repository_and_never_the_updater() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "0.11.0-beta.0.208");
+        lifecycle.packaged_suite_observed(Some("candidate".to_owned()));
+        lifecycle.package_source_observed(PackageSourceEvidence::NoSource);
+        assert_eq!(
+            lifecycle.capability(),
+            UpdateCapability::SystemUnreachable,
+            "a package manager with nothing to fetch from does not manage this install"
+        );
+
+        lifecycle.start_check().unwrap();
+        assert_eq!(
+            lifecycle.check_found("0.11.0-beta.0.210").unwrap(),
+            &UpdateState::AvailableWithoutSource {
+                version: "0.11.0-beta.0.210".to_owned(),
+                gap: SourceGap::NoSource,
+            }
+        );
+
+        let presentation = lifecycle.describe();
+        assert!(
+            presentation.updates_message.contains("0.11.0-beta.0.210"),
+            "the published build is still named: {}",
+            presentation.updates_message
+        );
+        assert!(
+            !presentation.system_updater_offered,
+            "the desktop updater reads the same package data and would contradict this"
+        );
+        // The exact sentence #725 is about must not survive anywhere.
+        assert!(
+            !presentation
+                .updates_message
+                .contains("Update OK Player with your package manager"),
+            "an unreachable apt must not be presented as the update path: {}",
+            presentation.updates_message
+        );
+        let setup = presentation
+            .repository_setup
+            .expect("the actionable path is the repository the project publishes");
+        // The channel is the one this build came from, never a constant (#726).
+        assert_eq!(setup, apt_repository_setup("candidate").unwrap());
+        assert!(
+            presentation.updates_message.contains("repository"),
+            "the message says what is missing: {}",
+            presentation.updates_message
+        );
+        assert_eq!(
+            presentation.action,
+            Some(UpdateAction::CopyRepositorySetup),
+            "the only thing the app can do here is hand over the commands"
+        );
+        assert!(
+            !UpdateAction::CopyRepositorySetup.applies_update_in_app(),
+            "copying commands installs nothing — the privileged path stays removed (#698)"
+        );
+        assert!(!presentation.action_closes_the_app);
+    }
+
+    /// #725 defect 2, which is #689's design working as intended: `stable`
+    /// deliberately never carries a candidate build, so a `stable` subscriber
+    /// must never be told about one — apt would refuse to install it, and the
+    /// desktop updater would say there is nothing to do.
+    /// The feed's version and the offer's version differ by design on a system-managed
+    /// install: what the surface names is what apt would install. Anything that records a
+    /// decision about the offer — a skip, above all — has to use that version, or it will
+    /// look the decision up under a name it was never stored under and the offer will come
+    /// straight back.
+    #[test]
+    fn the_offer_names_what_apt_would_install_rather_than_what_the_feed_published() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "0.11.0-beta.0.208");
+        lifecycle.package_source_observed(subscribed("candidate", Some("0.11.0-beta.0.209")));
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("0.11.0-beta.0.210").unwrap();
+
+        let presentation = lifecycle.describe();
+        assert_eq!(
+            presentation.target_version.as_deref(),
+            Some("0.11.0-beta.0.209"),
+            "the surface names the version apt would install"
+        );
+
+        // And a state with nothing to act on names no target at all, so a caller that keys a
+        // decision off the target has nothing to key it off — rather than the feed's version,
+        // which is exactly the version this machine must not be offered.
+        let mut withheld = UpdateLifecycle::new(InstallKind::Deb, "0.11.0-beta.0.208");
+        withheld.package_source_observed(subscribed("stable", None));
+        withheld.start_check().unwrap();
+        withheld.check_found("0.11.0-beta.0.210").unwrap();
+        assert_eq!(withheld.describe().target_version, None);
+    }
+
+    #[test]
+    fn a_stable_subscriber_is_never_shown_a_build_its_suite_does_not_carry() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "0.11.0-beta.0.208");
+        lifecycle.package_source_observed(subscribed("stable", None));
+        lifecycle.start_check().unwrap();
+
+        // The feed publishes a rolling candidate; the suite does not carry it.
+        assert_eq!(
+            lifecycle.check_found("0.11.0-beta.0.210").unwrap(),
+            &UpdateState::WithheldBySuite {
+                version: "0.11.0-beta.0.210".to_owned(),
+                suite: "stable".to_owned(),
+            }
+        );
+
+        let presentation = lifecycle.describe();
+        assert_eq!(
+            presentation.target_version, None,
+            "a build this machine cannot install is not an update target"
+        );
+        assert_eq!(presentation.claim, VersionClaim::Current);
+        assert!(
+            presentation.system_updater_offered,
+            "the updater refreshes the lists this verdict was read from, and agrees either way"
+        );
+        assert_eq!(
+            presentation.repository_setup, None,
+            "a source is configured"
+        );
+        assert!(
+            presentation.updates_message.contains("stable"),
+            "the verdict says which channel it is about: {}",
+            presentation.updates_message
+        );
+        assert!(
+            presentation.about_message.contains("stable"),
+            "About agrees with it: {}",
+            presentation.about_message
+        );
+        assert_eq!(presentation.action, Some(UpdateAction::CheckNow));
+        assert_eq!(presentation.secondary_action, None);
+    }
+
+    /// The subscriber the archive was built for: the suite carries the build,
+    /// so the app names it, points at apt, and the desktop updater — reading
+    /// the same package data — will agree.
+    /// A machine whose apt lists are simply out of date reaches the same state as a `stable`
+    /// subscriber that will never be offered a candidate — `apt-cache` answers from the last
+    /// fetch and says so itself, and this app is not privileged to refresh it. So the state
+    /// must not claim the suite *cannot* carry the build, and must keep on offer the one tool
+    /// that can settle it. The desktop updater cannot contradict this state the way it
+    /// contradicted the one #725 reported: refreshing either finds the release, or confirms
+    /// what this state already says.
+    #[test]
+    fn a_suite_that_is_not_offering_a_build_keeps_the_tool_that_could_refresh_it() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "0.11.0-beta.0.208");
+        lifecycle.package_source_observed(subscribed("stable", None));
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("0.11.0-beta.0.210").unwrap();
+
+        let presentation = lifecycle.describe();
+        assert!(
+            presentation.system_updater_offered,
+            "the tool that refreshes the package lists this verdict was read from stays on offer"
+        );
+        assert!(
+            presentation.repository_setup.is_none(),
+            "a subscribed machine is not told to add a repository it already has"
+        );
+        // The claim is about what the suite is offering now, not about what it can ever hold:
+        // the app cannot tell a genuinely withheld candidate from a stale list.
+        assert!(
+            !presentation.updates_message.contains("does not carry"),
+            "the message overstates what apt's cached answer establishes: {}",
+            presentation.updates_message
+        );
+        assert!(
+            presentation.updates_message.contains("package lists"),
+            "the message says what would change the answer: {}",
+            presentation.updates_message
+        );
+    }
+
+    /// The state every `.deb` install is in on first launch (#726): `postinst` has written
+    /// the stanza and nothing has run `apt update`, so `apt-cache policy` still shows only
+    /// dpkg's status. Read as `NoSource` this made the app deny a file its own packaging had
+    /// just written, and offer commands for a channel that might not be the user's.
+    #[test]
+    fn a_source_apt_has_not_read_yet_is_offered_a_refresh_and_never_setup() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "0.11.0-beta.0.208");
+        lifecycle.packaged_suite_observed(Some("candidate".to_owned()));
+        lifecycle.package_source_observed(PackageSourceEvidence::ConfiguredButUnread {
+            suite: Some("candidate".to_owned()),
+        });
+        assert_eq!(
+            lifecycle.capability(),
+            UpdateCapability::SystemManaged,
+            "a source that exists is a delivery path, read or not"
+        );
+
+        lifecycle.start_check().unwrap();
+        assert_eq!(
+            lifecycle.check_found("0.11.0-beta.0.210").unwrap(),
+            &UpdateState::AvailableButSourceUnread {
+                version: "0.11.0-beta.0.210".to_owned(),
+                suite: Some("candidate".to_owned()),
+            }
+        );
+
+        let presentation = lifecycle.describe();
+        assert_eq!(
+            presentation.action,
+            Some(UpdateAction::CopyRefreshCommand),
+            "the repository is there; reading it is the whole remedy"
+        );
+        assert_eq!(presentation.refresh_command, Some("sudo apt update"));
+        assert!(
+            presentation.repository_setup.is_none(),
+            "offering setup here would overwrite the subscription this machine already has"
+        );
+        assert!(
+            presentation.system_updater_offered,
+            "the updater reads the very lists this verdict is about"
+        );
+        // The sentence must not deny the source, which is the defect this state exists for.
+        assert!(
+            !presentation
+                .updates_message
+                .contains("No OK Player repository"),
+            "the surface denied a repository the machine has: {}",
+            presentation.updates_message
+        );
+        assert!(
+            presentation.updates_message.contains("candidate"),
+            "the message names the channel this machine is on: {}",
+            presentation.updates_message
+        );
+        assert!(!UpdateAction::CopyRefreshCommand.applies_update_in_app());
+
+        // The remedy is a command the user runs outside the app, so the app has to be able to
+        // observe them running it. A state that offered an instruction and then refused to
+        // look again would need a restart to clear a message it had told the user how to fix.
+        assert!(
+            presentation.check_available,
+            "the surface tells the user to refresh, so it must be able to check afterwards"
+        );
+        lifecycle
+            .start_check()
+            .expect("a refreshed machine can be looked at again");
+        lifecycle.package_source_observed(PackageSourceEvidence::Source {
+            suite: "candidate".to_owned(),
+            deliverable: Some("0.11.0-beta.0.210".to_owned()),
+        });
+        lifecycle.check_found("0.11.0-beta.0.210").unwrap();
+        let after = lifecycle.describe();
+        assert!(
+            after.refresh_command.is_none(),
+            "the refresh offer survived the refresh: {}",
+            after.updates_message
+        );
+        assert!(after.updates_message.contains("0.11.0-beta.0.210"));
+    }
+
+    /// Setup instructions take their suite from the build, never from a constant. A tester who
+    /// installed a candidate `.deb` and pasted a hard-coded `stable` block would be moved off
+    /// the channel they installed for — by the app's own advice, and silently.
+    #[test]
+    fn setup_instructions_name_the_channel_the_build_came_from() {
+        let mut candidate = UpdateLifecycle::new(InstallKind::Deb, "0.11.0-beta.0.208");
+        candidate.packaged_suite_observed(Some("candidate".to_owned()));
+        candidate.package_source_observed(PackageSourceEvidence::NoSource);
+        candidate.start_check().unwrap();
+        candidate.check_found("0.11.0-beta.0.210").unwrap();
+        let setup = candidate
+            .describe()
+            .repository_setup
+            .expect("a machine with no source is told how to get one");
+        assert_eq!(setup.suite, "candidate");
+        assert!(
+            setup.commands.contains("ok-player-candidate.sources"),
+            "the commands subscribe to the wrong channel: {}",
+            setup.commands
+        );
+
+        let mut stable = UpdateLifecycle::new(InstallKind::Deb, "0.11.0");
+        stable.packaged_suite_observed(Some("stable".to_owned()));
+        stable.package_source_observed(PackageSourceEvidence::NoSource);
+        stable.start_check().unwrap();
+        stable.check_found("0.12.0").unwrap();
+        let setup = stable.describe().repository_setup.expect("same for stable");
+        assert_eq!(setup.suite, "stable");
+        assert!(setup.commands.contains("ok-player.sources"));
+        assert!(!setup.commands.contains("ok-player-candidate.sources"));
+
+        // A build that does not record its channel — anything from before #726 — is told so.
+        // Guessing would be the same silent channel move, done on less evidence.
+        let mut unknown = UpdateLifecycle::new(InstallKind::Deb, "0.11.0-beta.0.208");
+        unknown.package_source_observed(PackageSourceEvidence::NoSource);
+        unknown.start_check().unwrap();
+        unknown.check_found("0.11.0-beta.0.210").unwrap();
+        let presentation = unknown.describe();
+        assert!(
+            presentation.repository_setup.is_none(),
+            "a build with no known channel must not be handed one"
+        );
+        assert!(
+            presentation
+                .updates_message
+                .contains("cannot tell which channel"),
+            "the surface should say what it does not know: {}",
+            presentation.updates_message
+        );
+    }
+
+    #[test]
+    fn a_candidate_subscriber_is_offered_the_build_its_suite_carries() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "0.11.0-beta.0.208");
+        lifecycle.package_source_observed(subscribed("candidate", Some("0.11.0-beta.0.210")));
+        assert_eq!(lifecycle.capability(), UpdateCapability::SystemManaged);
+
+        lifecycle.start_check().unwrap();
+        let state = lifecycle.check_found("0.11.0-beta.0.210").unwrap().clone();
+        let UpdateState::AvailableExternally { version, hint } = state else {
+            panic!("a subscribed machine gets the ordinary system-managed offer, got {state:?}");
+        };
+        assert_eq!(version, "0.11.0-beta.0.210");
+        assert!(
+            hint.contains("apt") && hint.contains("candidate"),
+            "the hint names the tool and the suite that carries it: {hint}"
+        );
+
+        let presentation = lifecycle.describe();
+        assert!(presentation.system_updater_offered);
+        assert_eq!(presentation.repository_setup, None);
+        assert_eq!(presentation.action, None, "apt installs it, not the app");
+        assert_eq!(
+            presentation.secondary_action,
+            Some(UpdateAction::SkipVersion)
+        );
+    }
+
+    /// The three answers apt can give produce three distinct states, and none
+    /// of them offers a way to the named version that this machine does not
+    /// have.
+    #[test]
+    fn each_delivery_answer_produces_its_own_state_and_offers_only_what_it_has() {
+        let cases = [
+            (
+                PackageSourceEvidence::NoSource,
+                UpdateState::AvailableWithoutSource {
+                    version: "2.0.0".to_owned(),
+                    gap: SourceGap::NoSource,
+                },
+            ),
+            (
+                subscribed("stable", None),
+                UpdateState::WithheldBySuite {
+                    version: "2.0.0".to_owned(),
+                    suite: "stable".to_owned(),
+                },
+            ),
+            (
+                subscribed("candidate", Some("2.0.0")),
+                UpdateState::AvailableExternally {
+                    version: "2.0.0".to_owned(),
+                    hint: InstallKind::Deb.system_update_hint_text(Some("candidate")),
+                },
+            ),
+        ];
+
+        let mut seen: Vec<UpdateState> = Vec::new();
+        for (source, expected) in cases {
+            let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "1.0.0");
+            lifecycle.package_source_observed(source.clone());
+            lifecycle.start_check().unwrap();
+            let state = lifecycle.check_found("2.0.0").unwrap().clone();
+            assert_eq!(state, expected, "for {source:?}");
+            assert!(!seen.contains(&state), "{source:?} must not repeat a state");
+            seen.push(state);
+
+            let presentation = lifecycle.describe();
+            // The one rule that spans all three: a surface may only send the
+            // user to the system updater when a source was established. That is
+            // what makes the tool agree — it reads the same package data, and
+            // refreshing it is the only thing that could change this answer.
+            // Where no source was established it would contradict the surface
+            // that sent the user to it, which is the #725 defect.
+            assert_eq!(
+                presentation.system_updater_offered,
+                source.carries_the_package(),
+                "for {source:?}"
+            );
+            // And nothing anywhere may offer to install it in the app.
+            assert!(
+                presentation
+                    .action
+                    .is_none_or(|action| !action.applies_update_in_app()),
+                "for {source:?}"
+            );
+        }
+    }
+
+    /// Invariant, over every reachable state of every install kind: the desktop
+    /// software updater is offered only where a packaging tool owns the payload
+    /// *and* a source was established to carry it. This is the projection rule
+    /// that #725's dead end violated — the shell used to decide it from the
+    /// capability and the presence of a version alone.
+    #[test]
+    fn the_software_updater_is_offered_only_where_a_source_is_established() {
+        for kind in SELF_APPLY_KINDS
+            .iter()
+            .chain(&SYSTEM_MANAGED_KINDS)
+            .chain(&[InstallKind::DevBuild])
+        {
+            sweep_reachable_states(*kind, |life| {
+                let presentation = life.describe();
+                if !presentation.system_updater_offered {
+                    return;
+                }
+                assert_eq!(
+                    presentation.capability,
+                    UpdateCapability::SystemManaged,
+                    "{kind} offered the updater without a package manager owning it, in {:?}",
+                    life.state()
+                );
+                assert!(
+                    life.package_source().carries_the_package()
+                        || !kind.delivery_must_be_established(),
+                    "{kind} offered the updater with no established source, in {:?}",
+                    life.state()
+                );
+            });
+        }
+    }
+
+    /// A question that could not be asked is not an answer. `apt-cache` absent
+    /// or failing leaves the app knowing nothing about the delivery path, and
+    /// knowing nothing may not be rendered as "use your package manager".
+    #[test]
+    fn an_unanswered_delivery_question_never_becomes_a_delivery_claim() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "1.0.0");
+        lifecycle.packaged_suite_observed(Some("stable".to_owned()));
+        assert_eq!(
+            *lifecycle.package_source(),
+            PackageSourceEvidence::Unestablished,
+            "nothing is assumed before a shell has asked"
+        );
+        assert_eq!(lifecycle.capability(), UpdateCapability::SystemUnreachable);
+
+        lifecycle.start_check().unwrap();
+        assert_eq!(
+            lifecycle.check_found("2.0.0").unwrap(),
+            &UpdateState::AvailableWithoutSource {
+                version: "2.0.0".to_owned(),
+                gap: SourceGap::Unestablished,
+            }
+        );
+        let presentation = lifecycle.describe();
+        assert!(!presentation.system_updater_offered);
+        assert!(presentation.repository_setup.is_some());
+        assert!(
+            presentation.updates_message.contains("could not ask"),
+            "an unanswered question says so rather than claiming either way: {}",
+            presentation.updates_message
+        );
+    }
+
+    /// What the surface announces to a subscribed machine is what its own
+    /// packaging tool would install, not what the feed published. The two
+    /// differ by design — a rolling candidate is published to everyone and
+    /// carried only by the suite that subscribes to it (#689) — and only one of
+    /// them is a version this machine can actually get.
+    #[test]
+    fn the_version_announced_is_the_one_the_package_manager_would_install() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "1.0.0");
+        lifecycle.package_source_observed(subscribed("candidate", Some("2.5.0")));
+        lifecycle.start_check().unwrap();
+        // The feed knows about 3.0.0; this machine's suite carries 2.5.0.
+        lifecycle.check_found("3.0.0").unwrap();
+        assert_eq!(
+            lifecycle.describe().target_version.as_deref(),
+            Some("2.5.0")
+        );
+
+        // And the other way round: a feed with nothing newer does not hide an
+        // upgrade the suite is already serving.
+        let mut behind = UpdateLifecycle::new(InstallKind::Deb, "1.0.0");
+        behind.package_source_observed(subscribed("stable", Some("2.0.0")));
+        behind.start_check().unwrap();
+        behind.check_found_none().unwrap();
+        assert_eq!(behind.describe().target_version.as_deref(), Some("2.0.0"));
+    }
+
+    /// A refresh that fails over an announcement with no delivery path leaves
+    /// it exactly as it was — the instructions the user was reading do not
+    /// vanish because the network did.
+    #[test]
+    fn a_failed_refresh_keeps_an_announcement_that_has_no_delivery_path() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "1.0.0");
+        lifecycle.packaged_suite_observed(Some("stable".to_owned()));
+        lifecycle.package_source_observed(PackageSourceEvidence::NoSource);
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+
+        lifecycle.start_check().unwrap();
+        lifecycle.check_failed("network unreachable").unwrap();
+        assert_eq!(
+            lifecycle.state(),
+            &UpdateState::AvailableWithoutSource {
+                version: "2.0.0".to_owned(),
+                gap: SourceGap::NoSource,
+            }
+        );
+        let presentation = lifecycle.describe();
+        assert!(presentation.repository_setup.is_some());
+        assert!(!presentation.system_updater_offered);
+        assert!(presentation.updates_message.contains("network unreachable"));
+    }
+
     #[test]
     fn system_managed_hint_names_the_packaging_tool() {
         for (kind, expected) in [
@@ -2857,7 +4107,7 @@ mod tests {
             (InstallKind::Rpm, "dnf"),
             (InstallKind::Flatpak, "flatpak"),
         ] {
-            let mut lifecycle = UpdateLifecycle::new(kind, "1.0.0");
+            let mut lifecycle = system_managed_lifecycle(kind, "1.0.0");
             lifecycle.start_check().unwrap();
             lifecycle.check_found("2.0.0").unwrap();
             let UpdateState::AvailableExternally { hint, .. } = lifecycle.state() else {
@@ -3637,7 +4887,7 @@ mod tests {
             (InstallKind::Rpm, "dnf"),
             (InstallKind::Flatpak, "flatpak"),
         ] {
-            let mut lifecycle = UpdateLifecycle::new(kind, "1.0.0");
+            let mut lifecycle = system_managed_lifecycle(kind, "1.0.0");
             lifecycle.start_check().unwrap();
             lifecycle.check_found("2.0.0").unwrap();
             lifecycle.skip_offer().unwrap();

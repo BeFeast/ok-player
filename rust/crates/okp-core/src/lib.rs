@@ -1,5 +1,7 @@
 pub mod acceptance_evidence;
 pub mod app;
+pub mod apt_policy;
+pub mod apt_sources;
 pub mod aspect_resize;
 pub mod bookmarks;
 pub mod branding;

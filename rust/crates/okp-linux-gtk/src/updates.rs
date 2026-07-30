@@ -610,6 +610,116 @@ pub(crate) fn owning_package_name(dpkg_search_output: &str, path: &Path) -> Opti
     })
 }
 
+/// The package name the archive publishes, and the one `apt-cache policy` is asked about.
+pub(crate) const APT_PACKAGE_NAME: &str = "ok-player";
+
+/// What apt can actually deliver for OK Player on this machine (#725).
+///
+/// `UpdateCapability::SystemManaged` used to be derived from the install kind alone, so the
+/// app told every `.deb` install to update through apt without ever asking whether apt had
+/// heard of the package. On the machine that reported #725 it had not: the package came from
+/// a downloaded file, `apt-cache policy ok-player` listed only `/var/lib/dpkg/status`, and the
+/// desktop updater the app offered correctly answered that everything was up to date.
+///
+/// So the question is put to apt, and the answer is apt's own. A missing `apt-cache`, or one
+/// that fails, is [`PackageSourceEvidence::Unestablished`] — not evidence that no source
+/// exists, only that the app could not find out, which is a state of its own that still must
+/// not claim a delivery path.
+/// Where the package carries its own source stanza, and where apt keeps the ones in force.
+const CARRIED_SOURCES_PATH: &str = "/usr/share/ok-player/apt/ok-player.sources";
+const APT_SOURCES_LIST: &str = "/etc/apt/sources.list";
+const APT_SOURCES_DIR: &str = "/etc/apt/sources.list.d";
+
+/// The channel this build was packaged for, read off the stanza the package carries (#726).
+///
+/// This is what setup instructions take their suite from. The alternative — a constant — is
+/// what would hand a tester who installed a candidate `.deb` the `stable` block and move them
+/// off the channel they installed for. A build from before #726 carries no stanza, and then
+/// the answer is "unknown", which the surface says rather than guessing.
+pub(crate) fn observe_packaged_suite(install_kind: InstallKind) -> Option<String> {
+    if !install_kind.delivery_must_be_established() {
+        return None;
+    }
+    apt_sources::stanza_suite(&fs::read_to_string(CARRIED_SOURCES_PATH).ok()?)
+}
+
+/// Every apt source file in force, as text, canonical stanza first.
+///
+/// `ok-player.sources` is read first deliberately: it is the file both the packaging and the
+/// README write, so a machine carrying several entries is described by the one that describes
+/// it best.
+fn apt_source_files() -> Vec<String> {
+    let mut files = Vec::new();
+    let canonical = Path::new(APT_SOURCES_DIR).join("ok-player.sources");
+    if let Ok(contents) = fs::read_to_string(&canonical) {
+        files.push(contents);
+    }
+    if let Ok(entries) = fs::read_dir(APT_SOURCES_DIR) {
+        let mut paths: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path != &canonical
+                    && path
+                        .extension()
+                        .is_some_and(|extension| extension == "sources" || extension == "list")
+            })
+            .collect();
+        // Directory order is not defined; a stable read keeps the answer stable.
+        paths.sort();
+        files.extend(
+            paths
+                .iter()
+                .filter_map(|path| fs::read_to_string(path).ok()),
+        );
+    }
+    if let Ok(contents) = fs::read_to_string(APT_SOURCES_LIST) {
+        files.push(contents);
+    }
+    files
+}
+
+pub(crate) fn observe_package_source(install_kind: InstallKind) -> PackageSourceEvidence {
+    if !install_kind.delivery_must_be_established() {
+        return PackageSourceEvidence::Unestablished;
+    }
+    // In the C locale, because `Installed:` and `Candidate:` are prose and apt translates
+    // them. On a machine whose session is not English the version table would still parse —
+    // the origins are URLs — but the candidate line would not, and a subscribed machine with
+    // an update waiting would be reported as current on its suite. That is #725 again, in the
+    // half of the world that does not run in English.
+    let output = Command::new("apt-cache")
+        .args(["policy", APT_PACKAGE_NAME])
+        .env("LC_ALL", "C")
+        .env("LANGUAGE", "C")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned());
+    let Some(output) = output else {
+        return PackageSourceEvidence::Unestablished;
+    };
+    let evidence = package_source_from_policy(&output);
+    if !matches!(evidence, PackageSourceEvidence::NoSource) {
+        return evidence;
+    }
+    // `apt-cache policy` works "exclusively on the data acquired by an update" — apt's own
+    // words — so "apt knows this package only through dpkg" and "this machine has no source"
+    // are different claims, and every `.deb` install spends its first launch in the gap
+    // between them: #726's postinst writes the stanza and stops, because running `apt update`
+    // is not a maintainer script's business. Reading the configuration is what separates them
+    // (#725/#726).
+    let files = apt_source_files();
+    match apt_sources::configured_source(files.iter().map(String::as_str)) {
+        Some(source) => PackageSourceEvidence::ConfiguredButUnread {
+            suite: source.suite,
+        },
+        None => PackageSourceEvidence::NoSource,
+    }
+}
+
 fn command_output(program: &Path, args: &[&std::ffi::OsStr]) -> Option<String> {
     let output = Command::new(program)
         .args(args)
@@ -947,8 +1057,20 @@ fn build_update_action_surface(
         44
     });
     status.set_wrap(true);
+    // The actionable path out of "apt cannot deliver this" (#700, #725). It is on the
+    // Settings surface only: the offer banner sits over video, where a block of shell
+    // commands is not something a user can act on, and its button copies them anyway.
+    let setup = gtk::Label::new(None);
+    setup.add_css_class("okp-update-setup-commands");
+    setup.set_xalign(0.0);
+    setup.set_selectable(true);
+    setup.set_wrap(true);
+    setup.set_width_chars(1);
+    setup.set_max_width_chars(58);
+    setup.set_visible(false);
     copy.append(&title);
     copy.append(&status);
+    copy.append(&setup);
     root.append(&copy);
 
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -992,6 +1114,7 @@ fn build_update_action_surface(
         primary: primary.downgrade(),
         skip: skip.downgrade(),
         system: system.downgrade(),
+        setup: setup.downgrade(),
         check: check.map(|button| button.downgrade()),
     });
     refresh_linux_update_views(&state);
@@ -1025,6 +1148,14 @@ pub(crate) fn primary_action_accessible_label(action: UpdateAction) -> &'static 
     match action {
         UpdateAction::CheckNow => "Check for OK Player updates",
         UpdateAction::InstallAnyway => "Install the skipped update anyway",
+        // Not a step of an update: it copies the commands that would give this
+        // install an update path at all (#725).
+        UpdateAction::CopyRepositorySetup => {
+            "Copy the commands that add the OK Player package repository"
+        }
+        UpdateAction::CopyRefreshCommand => {
+            "Copy the command that refreshes this system's package lists"
+        }
         // Everything else is a step of the update itself — the download, the
         // apply, the restart that finishes it, or a retry of one of those.
         UpdateAction::DownloadUpdate
@@ -1046,6 +1177,25 @@ pub(crate) fn offer_primary_update_action(
     presentation.action
 }
 
+/// The repository instructions as one copyable block: what they achieve, the commands, the
+/// fingerprint the archive is signed with, and where to download a package instead. The
+/// fingerprint is here so the user can check the key against something the app did not fetch
+/// for them, and the download link so "add a repository" is not the only way out.
+pub(crate) fn repository_setup_text(setup: &RepositorySetup) -> String {
+    format!(
+        "{}\n\n{}\n\nThese commands subscribe this system to the {} channel — the one this build came from.\nThe archive is signed with {}.\nOr download a package from {}.",
+        setup.summary, setup.commands, setup.suite, setup.key_fingerprint, setup.downloads_url
+    )
+}
+
+/// The block for a machine whose repository is configured but unread (#726). Deliberately one
+/// command and no key material: nothing about this machine's subscription is being changed.
+pub(crate) fn refresh_command_text(command: &str) -> String {
+    format!(
+        "This system already subscribes to the OK Player repository; its package lists just have not been read yet.\n\n{command}"
+    )
+}
+
 pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
     let (presentation, offer_visible, busy) = {
         let state = state.borrow();
@@ -1059,9 +1209,17 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
     let offer_primary_action = offer_primary_update_action(&presentation);
     let checks_possible = update_checks_are_possible(presentation.install_kind);
     let system_updater = system_software_surface();
-    let system_visible = presentation.capability == UpdateCapability::SystemManaged
-        && presentation.target_version.is_some();
+    // Derived from the projection rather than from the install kind: the desktop updater
+    // reads the same package data the app just read, so offering it anywhere the app's claim
+    // did not come from that data is offering a tool guaranteed to contradict it (#725).
+    let system_visible = presentation.system_updater_offered;
     let title_text = update_surface_title(&presentation);
+    // A machine either has a repository or does not; the two blocks are never both shown.
+    let setup_text = presentation
+        .repository_setup
+        .as_ref()
+        .map(repository_setup_text)
+        .or_else(|| presentation.refresh_command.map(refresh_command_text));
 
     state.borrow_mut().linux_update_views.retain(|view| {
         let Some(root) = view.root.upgrade() else {
@@ -1109,6 +1267,14 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
         let can_skip = presentation.secondary_action == Some(UpdateAction::SkipVersion);
         skip.set_visible(can_skip);
         skip.set_sensitive(can_skip && presentation.actions_enabled);
+
+        if let Some(setup) = view.setup.upgrade() {
+            let show = view.kind == LinuxUpdateViewKind::Settings && setup_text.is_some();
+            setup.set_visible(show);
+            if let Some(text) = setup_text.as_deref() {
+                setup.set_text(text);
+            }
+        }
 
         system.set_visible(system_visible);
         system.set_sensitive(system_updater.is_some());
@@ -1299,7 +1465,9 @@ pub(crate) fn linux_update_preview_session(kind: InstallKind) -> Option<LinuxUpd
     // is there to photograph. `OKP_UPDATE_INSTALL_KIND` picks a specific lane.
     let kind = match kind.capability() {
         UpdateCapability::Unmanaged => InstallKind::AppImage,
-        UpdateCapability::SelfApply | UpdateCapability::SystemManaged => kind,
+        UpdateCapability::SelfApply
+        | UpdateCapability::SystemManaged
+        | UpdateCapability::SystemUnreachable => kind,
     };
     build_linux_update_preview(kind, preview.trim())
 }
@@ -1310,7 +1478,29 @@ pub(crate) fn build_linux_update_preview(
 ) -> Option<LinuxUpdateSession> {
     let mut session = LinuxUpdateSession::for_install_kind(kind);
     let lifecycle = &mut session.lifecycle;
-    match preview.to_ascii_lowercase().as_str() {
+    let preview = preview.to_ascii_lowercase();
+    // What a `.deb` surface says depends on what that machine's apt can deliver (#725), so a
+    // preview has to say which machine it is a picture of. Every preview but one is of a
+    // subscribed machine; `no-apt-source` is the one that is not, and it is the state the
+    // operator was in.
+    if kind.delivery_must_be_established() {
+        // Every preview of a .deb is a picture of a machine, and setup instructions name the
+        // channel the build came from, so the preview says which build it is.
+        lifecycle.packaged_suite_observed(Some("stable".to_owned()));
+        lifecycle.package_source_observed(if preview == "no-apt-source" {
+            PackageSourceEvidence::NoSource
+        } else if preview == "apt-source-unread" {
+            PackageSourceEvidence::ConfiguredButUnread {
+                suite: Some("stable".to_owned()),
+            }
+        } else {
+            PackageSourceEvidence::Source {
+                suite: "stable".to_owned(),
+                deliverable: Some(PREVIEW_UPDATE_VERSION.to_owned()),
+            }
+        });
+    }
+    match preview.as_str() {
         "up-to-date" => {
             lifecycle.start_check().ok()?;
             lifecycle.check_found_none().ok()?;
@@ -1319,6 +1509,18 @@ pub(crate) fn build_linux_update_preview(
             lifecycle.start_check().ok()?;
         }
         "available" => {
+            lifecycle.start_check().ok()?;
+            lifecycle.check_found(PREVIEW_UPDATE_VERSION).ok()?;
+        }
+        // A published build this machine cannot fetch, with the way out on screen. The same
+        // transitions as `available`; the difference is entirely the machine (#725).
+        "no-apt-source" => {
+            lifecycle.start_check().ok()?;
+            lifecycle.check_found(PREVIEW_UPDATE_VERSION).ok()?;
+        }
+        // The machine every .deb install is on at first launch: the repository is configured
+        // and apt has not read it yet (#726).
+        "apt-source-unread" => {
             lifecycle.start_check().ok()?;
             lifecycle.check_found(PREVIEW_UPDATE_VERSION).ok()?;
         }
@@ -1374,12 +1576,24 @@ pub(crate) fn start_update_check_for_ui(
     let install_kind = state.borrow().linux_update.install_kind();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender.send(check_for_linux_update(channel, install_kind));
+        let source = observe_package_source(install_kind);
+        let packaged = observe_packaged_suite(install_kind);
+        let _ = sender.send((
+            check_for_linux_update(channel, install_kind),
+            source,
+            packaged,
+        ));
     });
 
     glib::timeout_add_local(Duration::from_millis(120), move || {
         match receiver.try_recv() {
-            Ok(outcome) => {
+            Ok((outcome, source, packaged)) => {
+                {
+                    let mut state = state.borrow_mut();
+                    let lifecycle = &mut state.linux_update.lifecycle;
+                    lifecycle.package_source_observed(source);
+                    lifecycle.packaged_suite_observed(packaged);
+                }
                 apply_update_check_outcome(
                     Rc::clone(&state),
                     &status_toast,
@@ -1457,8 +1671,45 @@ pub(crate) fn take_primary_update_action(
         // a restart that came back on the old build it is the recovery, and
         // what it finds is a fresh offer the user takes on purpose (#701).
         Some(UpdateAction::CheckNow) => start_update_check_for_ui(state, status_toast, true),
+        // The app copies the commands and never runs them: adding an archive
+        // and its signing key is a privileged, system-wide change the user
+        // makes deliberately, and the privileged install path was removed in
+        // #698.
+        Some(UpdateAction::CopyRepositorySetup) => {
+            copy_repository_setup(&state, &status_toast);
+        }
+        // The repository is already configured; one command reads it (#726).
+        Some(UpdateAction::CopyRefreshCommand) => {
+            copy_refresh_command(&state, &status_toast);
+        }
         Some(UpdateAction::SkipVersion) | None => {}
     }
+}
+
+/// Puts the command that reads an already-configured source on the clipboard (#726).
+fn copy_refresh_command(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    let Some(command) = state.borrow().linux_update.describe().refresh_command else {
+        return;
+    };
+    let Some(display) = gtk::gdk::Display::default() else {
+        status_toast.show("Could not copy the refresh command");
+        return;
+    };
+    display.clipboard().set_text(command);
+    status_toast.show("Refresh command copied");
+}
+
+/// Puts the repository instructions on the clipboard (#725).
+fn copy_repository_setup(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    let Some(setup) = state.borrow().linux_update.describe().repository_setup else {
+        return;
+    };
+    let Some(display) = gtk::gdk::Display::default() else {
+        status_toast.show("Could not copy the setup commands");
+        return;
+    };
+    display.clipboard().set_text(&setup.commands);
+    status_toast.show("Setup commands copied");
 }
 
 /// Whether the shell drives the state an accepted offer restored any further on
@@ -1747,8 +1998,20 @@ pub(crate) fn apply_update_check_outcome(
     let mut toast = None;
     match outcome {
         LinuxUpdateCheckOutcome::UpToDate => {
-            transition_update(&state, "up to date", UpdateLifecycle::check_found_none);
-            toast = Some("OK Player is up to date");
+            if transition_update(&state, "up to date", UpdateLifecycle::check_found_none) {
+                // "The feed has nothing newer" is not the same answer as "there is
+                // nothing to do": apt may already be holding a build the feed has
+                // moved past, and the lifecycle turns that into an offer. The toast
+                // follows the state so it cannot contradict the surface behind it,
+                // or hide a release apt can actually deliver (#725).
+                toast = Some(match found_offer_target(&state) {
+                    None => "OK Player is up to date",
+                    Some(target) if skip_persisted_version(&state, channel, &target) => {
+                        "This version was skipped"
+                    }
+                    Some(_) => "Update available",
+                });
+            }
         }
         LinuxUpdateCheckOutcome::Failed(error) => {
             transition_update(&state, "check failed", |lifecycle| {
@@ -1761,10 +2024,18 @@ pub(crate) fn apply_update_check_outcome(
                 lifecycle.check_found(version.clone())
             }) {
                 state.borrow_mut().linux_update.payload = payload;
-                toast = Some(if skip_persisted_version(&state, channel, &version) {
-                    "This version was skipped"
-                } else {
-                    "Update available"
+                // What the check found and what it means for this machine are
+                // different questions (#725): a `stable` subscriber told about a
+                // candidate build ends up current on its own channel, and a toast
+                // saying "Update available" would contradict the surface behind
+                // it. Both the toast and the skip are therefore about the state
+                // the transition produced.
+                toast = Some(match found_offer_target(&state) {
+                    None => "OK Player is up to date",
+                    Some(target) if skip_persisted_version(&state, channel, &target) => {
+                        "This version was skipped"
+                    }
+                    Some(_) => "Update available",
                 });
             }
         }
@@ -1778,10 +2049,14 @@ pub(crate) fn apply_update_check_outcome(
                 state.borrow_mut().linux_update.payload = Some(payload);
                 transition_update(&state, "staged download", UpdateLifecycle::start_download);
                 transition_update(&state, "staged payload", UpdateLifecycle::download_finished);
-                toast = Some(if skip_persisted_version(&state, channel, &version) {
-                    "This version was skipped"
-                } else {
-                    "Update ready to install"
+                // Same rule as above: the skip is looked up under the version the
+                // surface names, which is the one it was recorded against.
+                toast = Some(match found_offer_target(&state) {
+                    None => "OK Player is up to date",
+                    Some(target) if skip_persisted_version(&state, channel, &target) => {
+                        "This version was skipped"
+                    }
+                    Some(_) => "Update ready to install",
                 });
             }
         }
@@ -1790,6 +2065,16 @@ pub(crate) fn apply_update_check_outcome(
     if let Some(message) = toast.filter(|_| show_toast) {
         status_toast.show(message);
     }
+}
+
+/// The version a completed check is offering, or nothing when it produced a verdict with no
+/// target — `WithheldBySuite`, where the machine is current on its own channel (#725).
+///
+/// The feed's version and the offer's version are not always the same. A system-managed
+/// install announces what its own source can deliver, so a skip recorded against what the
+/// surface named has to be looked up under that same version or it will not be found again.
+fn found_offer_target(state: &Rc<RefCell<PlayerState>>) -> Option<String> {
+    state.borrow().linux_update.describe().target_version
 }
 
 /// Re-applies a skip the user already made for this exact version, so a
@@ -1822,12 +2107,24 @@ pub(crate) fn check_updates_on_startup(
     let install_kind = state.borrow().linux_update.install_kind();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender.send(check_for_linux_update(channel, install_kind));
+        let source = observe_package_source(install_kind);
+        let packaged = observe_packaged_suite(install_kind);
+        let _ = sender.send((
+            check_for_linux_update(channel, install_kind),
+            source,
+            packaged,
+        ));
     });
 
     glib::timeout_add_local(Duration::from_millis(500), move || {
         match receiver.try_recv() {
-            Ok(outcome) => {
+            Ok((outcome, source, packaged)) => {
+                {
+                    let mut state = state.borrow_mut();
+                    let lifecycle = &mut state.linux_update.lifecycle;
+                    lifecycle.package_source_observed(source);
+                    lifecycle.packaged_suite_observed(packaged);
+                }
                 apply_update_check_outcome(
                     Rc::clone(&state),
                     &status_toast,
