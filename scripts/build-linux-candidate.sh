@@ -42,6 +42,13 @@ HEARTBEAT="$STATE_DIR/heartbeat.jsonl"
 LAST_BUNDLE="$STATE_DIR/last-bundle.path"
 OUT_RETAIN="${OKP_CANDIDATE_OUT_RETAIN:-3}"
 
+# Exit status meaning "the bundle is staged and available, but an advisory gate
+# failed". It is distinct from 1 so scripts/run-linux-candidate-workflow.sh can
+# tell this from a failure that happened before there was anything to hand off:
+# the first must still publish, the second must not. Keep the two in sync -
+# scripts/tests/candidate-gate-split.Tests.sh asserts they agree.
+ADVISORY_EXIT_STATUS=78
+
 mkdir -p "$STATE_DIR"
 
 # Direct invocations acquire through the Rust coordinator. Its descriptor is
@@ -167,6 +174,25 @@ run_gate() {
   fi
 }
 
+# An advisory gate says "this build is not vouched for". It may not say "this
+# build does not exist": it runs after packaging, so aborting here withholds a
+# finished, installable package from whoever is waiting for it. Its failure is
+# recorded in the build record, named in the heartbeat, and makes the run exit
+# nonzero at the very end - after the bundle is staged and the marker moved.
+ADVISORY_FAILURES=()
+run_advisory_gate() {
+  local gate="$1"; shift
+  heartbeat building "gate ${gate} (advisory)" "$BUILD_SHA"
+  if "$@"; then
+    record_gate "$gate" passed
+  else
+    record_gate "$gate" failed
+    ADVISORY_FAILURES+=("$gate")
+    heartbeat building "advisory gate ${gate} FAILED; build continues" "$BUILD_SHA"
+    echo "candidate build ${VERSION}: advisory gate ${gate} FAILED (build continues)" >&2
+  fi
+}
+
 export CC="${CC:-/usr/bin/cc}"
 export OKP_SKIP_UPDATE_CHECK=1
 export OKP_RUN_VELOPACK_PACK_TEST=1
@@ -201,7 +227,7 @@ APPIMAGE="$CHECKOUT/artifacts/linux/velopack/OK-Player-${VERSION}-x86_64.AppImag
 # a container runtime is present it also runs the foreign-distro launch gate.
 # required: a missing container runtime must fail the lane, not degrade it to
 # native-equivalence - that degradation is how #662 reached the public feed.
-run_gate portability-package-smoke \
+run_advisory_gate portability-package-smoke \
   env OKP_PORTABILITY_CONTAINER_MODE=required \
   "$CHECKOUT/scripts/verify-linux-package-portability.sh" \
   "$DEB" "$APPIMAGE" "$CHECKOUT/artifacts/linux/portability-report.json" "$BUILD_SHA"
@@ -217,7 +243,7 @@ package_identity_gate() {
 run_gate package-identity package_identity_gate
 
 # Clean install / upgrade / uninstall in a disposable environment.
-run_gate install-upgrade-uninstall-smoke \
+run_advisory_gate install-upgrade-uninstall-smoke \
   env OKP_SMOKE_REAL_DPKG=1 \
   "$CHECKOUT/scripts/smoke-linux-install-upgrade.sh" "$DEB" "$OUT_DIR/install-smoke"
 
@@ -251,7 +277,7 @@ deb_screenshot_smoke() {
     'not_proven=GNOME Wayland, clipboard, compositor, portal, focus' \
     >"$CHECKOUT/artifacts/linux/acceptance/deb-screenshot.txt"
 }
-run_gate deb-screenshot-smoke deb_screenshot_smoke
+run_advisory_gate deb-screenshot-smoke deb_screenshot_smoke
 
 # Run EOF and Close Media against the exact Debian payload. The Xvfb capture
 # proves the package-bound state transition, opaque pixels, and welcome identity;
@@ -264,7 +290,7 @@ deb_idle_return_smoke() {
   "$CHECKOUT/scripts/smoke-linux-idle-return.sh" \
     "$smoke_root/usr/lib/ok-player/ok-player" "$smoke_output"
 }
-run_gate deb-idle-return-smoke deb_idle_return_smoke
+run_advisory_gate deb-idle-return-smoke deb_idle_return_smoke
 
 # Headless launch smoke: prove the idle surface once, then require the complete
 # fit-only lifecycle three consecutive times with no retry inside the gate.
@@ -334,3 +360,13 @@ heartbeat idle "candidate ${VERSION} (source ${BUILD_SHA}) built; bundle at ${OU
 echo "Candidate bundle: $OUT_DIR"
 echo "  candidate-build.json, SHA256SUMS, package-identity.json, deb + AppImage under artifacts/"
 echo "Promote separately with scripts/promote-linux-candidate.sh (#339 consumes the bundle)."
+
+# The bundle exists and the marker has moved, so the package is available. Only
+# now does an advisory failure turn the run red - a red run with a delivered
+# package is the point of the split.
+if ((${#ADVISORY_FAILURES[@]} > 0)); then
+  printf 'candidate %s built and staged, with advisory gates failed: %s\n' \
+    "$VERSION" "${ADVISORY_FAILURES[*]}" >&2
+  echo "The package is available; it is not vouched for until these pass." >&2
+  exit "$ADVISORY_EXIT_STATUS"
+fi
