@@ -674,7 +674,9 @@ fn linux_packages_pin_and_bundle_the_embedded_wayland_mpv() {
     assert!(appimage.contains("dotnet-install.sh"));
     assert!(appimage.contains("vpk --version 1.2.0"));
     assert!(candidate.contains("run_gate bundled-mpv okp_use_linux_bundled_mpv"));
-    assert!(candidate.contains("run_gate portability-package-smoke"));
+    // Advisory since the gate split: it must still run, and must no longer be
+    // able to withhold a finished package (scripts/tests/candidate-gate-split.Tests.sh).
+    assert!(candidate.contains("run_advisory_gate portability-package-smoke"));
 }
 
 #[test]
