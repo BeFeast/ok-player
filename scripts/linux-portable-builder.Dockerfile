@@ -13,7 +13,7 @@ RUN apt-get update -qq \
       bash /tmp/linux-candidate-toolchain.sh --print-portable-debian-packages | tr '\n' ' ')" \
     && apt-get install -y -qq --no-install-recommends \
       $packages \
-      appstream appstream-compose ca-certificates curl dpkg-dev gnupg \
+      appstream appstream-compose ca-certificates curl dpkg-dev \
       libadwaita-1-dev libegl1-mesa-dev libgl1-mesa-dev libglx-dev \
       libgtk-4-dev libmpv-dev squashfs-tools unzip xz-utils \
     && rm -rf /var/lib/apt/lists/*
