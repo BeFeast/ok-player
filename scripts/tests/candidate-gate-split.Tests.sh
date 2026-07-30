@@ -98,13 +98,15 @@ fi
 # The feed refresh is where the package reaches apt subscribers. It `needs` the
 # build job, so a bare gate skips it whenever that job is red - including the
 # red-but-published state this split exists to produce.
-WORKFLOW=.github/workflows/release-linux-candidate.yml
-if grep -q "cancelled() && needs.build-and-publish.outputs.publish_result == 'published'" "$WORKFLOW"; then
-  pass "the feed refresh survives a red-but-published build"
-else
-  fail "the feed refresh must survive a red-but-published build" \
-    "a bare needs: gate skips delivery, so the package never reaches the archive"
-fi
+#
+# That property was asserted here by grepping the workflow for one exact condition
+# string, which fits badly in both directions: a comment quoting the string would
+# satisfy it, and an equivalent rewrite - `(success() || failure()) && ...` - would
+# fail it while delivering correctly. It now lives in
+# scripts/tests/feeds-workflow.Tests.sh, which parses release-linux-candidate.yml and
+# evaluates the condition against the states this lane actually reaches, including
+# promoted-then-reddened. Asserted in one place so the two cannot disagree about what
+# counts as delivered.
 
 printf '\n%s passed, %s failed\n' "$pass_count" "$fail_count"
 ((fail_count == 0)) || exit 1
