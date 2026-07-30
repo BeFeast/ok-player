@@ -50,6 +50,10 @@ for size in 16 24 32 48 64; do
     "$BUILD_ROOT/usr/share/icons/hicolor/${size}x${size}/apps/com.befeast.okplayer.svg"
 done
 
+# GPLv3 §4 and LGPLv3 §4(b): the licence documents have to travel with the
+# package. Debian policy §12.5 puts them in /usr/share/doc/<package>.
+"$ROOT/scripts/stage-license-documents.sh" deb "$BUILD_ROOT/usr/share/doc/ok-player"
+
 "$ROOT/scripts/verify-linux-bundled-mpv.sh" \
   "$BUILD_ROOT/usr/lib/ok-player/ok-player" \
   "$BUILD_ROOT/usr/lib/ok-player"

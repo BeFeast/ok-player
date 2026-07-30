@@ -34,6 +34,7 @@ assert_installed() {
   test -f /usr/share/metainfo/com.befeast.okplayer.metainfo.xml
   test -f /usr/share/icons/hicolor/scalable/apps/com.befeast.okplayer.svg
   test -f /usr/share/licenses/ok-player/LICENSE
+  test -f /usr/share/licenses/ok-player/LICENSE.LGPL-3.0
   test -f /usr/share/doc/ok-player/THIRD-PARTY-NOTICES.md
   rpm -q --requires ok-player | grep '^mpv-libs' >/dev/null
   ldd /usr/bin/ok-player | grep 'libmpv\.so' >/dev/null

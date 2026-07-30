@@ -1,0 +1,89 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: OK Player
+Upstream-Contact: https://github.com/BeFeast/ok-player/issues
+Source: https://github.com/BeFeast/ok-player
+Comment:
+ The full licence texts referenced below are installed next to this file:
+ GPL-3.0-or-later as `LICENSE`, LGPL-3.0 as `LICENSE.LGPL-3.0`. The notices
+ for every third-party component this package carries are in
+ `THIRD-PARTY-NOTICES.md`, also next to this file.
+
+Files: *
+Copyright: 2025-2026 BeFeast
+License: GPL-3.0-or-later
+
+Files: rust/crates/okp-linux-gtk/icons/*
+Copyright: the GNOME Project and contributors
+License: LGPL-3.0
+Comment:
+ The symbolic icons the Linux shell resolves for its own chrome are Adwaita
+ artwork, compiled into the binary as a GResource and therefore present in
+ every installed binary. Adwaita is dual licensed "either the GNU LGPL v3 or
+ CC-BY-SA 3.0"; OK Player takes the LGPL-3 option, which is compatible with
+ its own GPL-3.0-or-later terms. The files are renamed into an `okp-`
+ namespace so a user's icon theme cannot shadow them; the artwork is
+ upstream's. Source: https://gitlab.gnome.org/GNOME/adwaita-icon-theme
+
+Files: rust/crates/okp-linux-gtk/icons/okp-process-working-symbolic.svg
+Copyright: 2025-2026 BeFeast
+License: GPL-3.0-or-later
+Comment:
+ Adwaita has no counterpart for this icon, so it is original work drawn for
+ OK Player and carries the project's own terms.
+
+Files: usr/lib/ok-player/libmpv.so.2 usr/lib/ok-player/lib*
+Copyright: the mpv developers, the MPlayer and mplayer2 projects, and the
+ FFmpeg developers
+License: GPL-2.0-or-later
+Comment:
+ This package bundles libmpv built with its full (GPL) feature set, together
+ with the FFmpeg libraries it links. See THIRD-PARTY-NOTICES.md for the
+ per-component detail and for where to obtain the corresponding source.
+
+License: GPL-3.0-or-later
+ This program is free software: you can redistribute it and/or modify it
+ under the terms of the GNU General Public License as published by the Free
+ Software Foundation, either version 3 of the License, or (at your option)
+ any later version.
+ .
+ This program is distributed in the hope that it will be useful, but WITHOUT
+ ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ more details.
+ .
+ You should have received a copy of the GNU General Public License along
+ with this program. If not, see <https://www.gnu.org/licenses/>.
+ .
+ The complete text is installed as `LICENSE` next to this file, and on
+ Debian systems it is also in `/usr/share/common-licenses/GPL-3`.
+
+License: LGPL-3.0
+ This material is free software: you can redistribute it and/or modify it
+ under the terms of the GNU Lesser General Public License, version 3, as
+ published by the Free Software Foundation.
+ .
+ It is distributed in the hope that it will be useful, but WITHOUT ANY
+ WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for
+ more details.
+ .
+ You should have received a copy of the GNU Lesser General Public License
+ along with this material. If not, see <https://www.gnu.org/licenses/>.
+ .
+ The complete text is installed as `LICENSE.LGPL-3.0` next to this file, and
+ on Debian systems it is also in `/usr/share/common-licenses/LGPL-3`.
+
+License: GPL-2.0-or-later
+ This material is free software: you can redistribute it and/or modify it
+ under the terms of the GNU General Public License as published by the Free
+ Software Foundation, either version 2 of the License, or (at your option)
+ any later version.
+ .
+ It is distributed in the hope that it will be useful, but WITHOUT ANY
+ WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+ details.
+ .
+ On Debian systems the complete text of version 2 of the GNU General Public
+ License is in `/usr/share/common-licenses/GPL-2`; the upstream text is at
+ <https://github.com/mpv-player/mpv/blob/master/LICENSE.GPL>.

@@ -180,7 +180,13 @@ mkdir -p \
   "$FIXTURE/rust/target/release" \
   "$FIXTURE/mpv-runtime" \
   "$STUB_BIN"
-cp "$ROOT/scripts/package-linux-deb.sh" "$ROOT/scripts/linux-package-version.sh" "$FIXTURE/scripts/"
+cp "$ROOT/scripts/package-linux-deb.sh" "$ROOT/scripts/linux-package-version.sh" \
+  "$ROOT/scripts/stage-license-documents.sh" "$FIXTURE/scripts/"
+# The real licence documents, not stubs: this fixture runs the real packaging
+# and the real dpkg-deb, so it is also the cheapest place to prove the shipped
+# artifact carries them (issue #743).
+cp "$ROOT/LICENSE" "$ROOT/LICENSE.LGPL-3.0" "$ROOT/THIRD-PARTY-NOTICES.md" "$FIXTURE/"
+cp "$ROOT/rust/packaging/linux/copyright" "$FIXTURE/rust/packaging/linux/copyright"
 cat >"$FIXTURE/scripts/linux-bundled-mpv-env.sh" <<'STUB'
 okp_use_linux_bundled_mpv() { export OKP_BUNDLED_MPV_RUNTIME_DIR="$OKP_TEST_MPV_RUNTIME"; }
 STUB
@@ -220,6 +226,24 @@ if [[ -f "$CANDIDATE_DEB" && -f "$RELEASE_DEB" ]]; then
   pass "the packaging names its artifacts by the build version"
 else
   fail "artifact naming" "expected $CANDIDATE_DEB and $RELEASE_DEB"
+fi
+
+# Issue #743: the .deb reached the public candidate channel carrying no licence
+# document at all. Asked of the artifact dpkg-deb just wrote, not of the script
+# that wrote it.
+if [[ -f "$CANDIDATE_DEB" ]]; then
+  PACKAGED_CONTENTS="$(dpkg-deb -c "$CANDIDATE_DEB")"
+  missing_documents=()
+  for document in copyright LICENSE LICENSE.LGPL-3.0 THIRD-PARTY-NOTICES.md; do
+    grep -q " ./usr/share/doc/ok-player/${document}\$" <<<"$PACKAGED_CONTENTS" \
+      || missing_documents+=("$document")
+  done
+  if (( ${#missing_documents[@]} == 0 )); then
+    pass "the produced .deb installs its licence documents under /usr/share/doc/ok-player"
+  else
+    fail "packaged licence documents" \
+      "the .deb ships no ${missing_documents[*]} under /usr/share/doc/ok-player"
+  fi
 fi
 
 PACKAGED_CANDIDATE="$(dpkg-deb -f "$CANDIDATE_DEB" Version)"

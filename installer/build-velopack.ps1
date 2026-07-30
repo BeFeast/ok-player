@@ -4,7 +4,8 @@
   Build the OK Player Velopack release (auto-updating Setup.exe + portable zip) from a self-contained
   Release publish.
 .DESCRIPTION
-  Publishes the app self-contained for win-x64, stages LICENSE.txt + THIRD-PARTY-NOTICES.md + README next
+  Publishes the app self-contained for win-x64, stages LICENSE.txt + LICENSE.LGPL-3.0.txt +
+  THIRD-PARTY-NOTICES.md + README next
   to it, then runs `vpk pack` to produce the Velopack artifacts in artifacts\releases:
     - OkPlayer-win-Setup.exe      the auto-updating installer users download once
     - OkPlayer-win-Portable.zip   the no-install portable build (our fallback "as before")
@@ -65,7 +66,10 @@ if (Test-Path $publishDir) { Remove-Item $publishDir -Recurse -Force }
 dotnet publish $appProj -c Release -r win-x64 -o $publishDir -p:Version=$Version
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
 
+# GPLv3 §4 and LGPLv3 §4(b). Both texts get a .txt extension because a bare
+# extensionless file opens in nothing on Windows.
 Copy-Item (Join-Path $repo 'LICENSE') (Join-Path $publishDir 'LICENSE.txt') -Force
+Copy-Item (Join-Path $repo 'LICENSE.LGPL-3.0') (Join-Path $publishDir 'LICENSE.LGPL-3.0.txt') -Force
 Copy-Item (Join-Path $repo 'THIRD-PARTY-NOTICES.md') $publishDir -Force
 if (Test-Path (Join-Path $repo 'README.md')) { Copy-Item (Join-Path $repo 'README.md') $publishDir -Force }
 
