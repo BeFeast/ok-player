@@ -276,15 +276,23 @@ okp_apt_import_signing_key() {
   if [[ "$imported" != "$expected" ]]; then
     okp_apt_fail "signing key fingerprint mismatch: imported ${imported}, but $(okp_apt_secret_reference gpg-fingerprint) expects ${expected}. Refusing to sign the APT repository with an unexpected key."
   fi
-  # ...and the same key the packaging ships. The Infisical secret and the committed key are
-  # two independently editable values, and a rotation that moves one without the other leaves
-  # both builds green while the archive is signed by a key that is absent from the keyring
-  # every package-installed client has — `apt-get update` rejects the repository for all of
-  # them. Checking both here makes a half-done rotation stop the lane instead (#726).
-  local committed
-  committed="$(okp_apt_normalize_fingerprint "$OKP_APT_SIGNING_FINGERPRINT")"
-  if [[ "$imported" != "$committed" ]]; then
-    okp_apt_fail "signing key fingerprint mismatch: imported ${imported}, but the key shipped in every .deb is ${committed} (OKP_APT_SIGNING_FINGERPRINT in scripts/apt-archive-identity.sh, and rust/packaging/linux/ok-player-archive-keyring.asc). Rotate both in one change."
+  # ...and a key the packaging actually ships. The Infisical secret and the committed keyring
+  # are independently editable, and a rotation that moves one without the other leaves both
+  # builds green while the archive is signed by a key absent from the keyring every
+  # package-installed client has — `apt-get update` then rejects the repository for all of
+  # them, and they cannot self-heal, because apt must verify InRelease before it can download
+  # the package that would give it the new key.
+  #
+  # Membership rather than equality, so a rotation can be staged: step 1 publishes a keyring
+  # carrying both keys while the archive is still signed by the old one, and only then may the
+  # signer change. Requiring equality here would permit only the order that strands clients.
+  local trusted
+  trusted="$(okp_apt_trusted_fingerprints | while read -r fingerprint; do
+    okp_apt_normalize_fingerprint "$fingerprint"
+    printf '\n'
+  done)"
+  if ! grep -qxF "$imported" <<<"$trusted"; then
+    okp_apt_fail "signing key ${imported} is not one of the keys the packaging ships ($(tr '\n' ' ' <<<"$trusted")). See the staged rotation in scripts/apt-archive-identity.sh and docs/apt-repository.md."
   fi
   printf '%s' "$imported"
 }

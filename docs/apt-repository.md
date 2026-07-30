@@ -127,10 +127,13 @@ Four rules carry it:
   who installed a candidate `.deb` onto `stable` — the same class of failure as #725, from the
   other side. `scripts/tests/deb-apt-provisioning.Tests.sh` fails if the release lane ever stops
   declaring itself.
-* **The key is asserted at build time.** The committed key's fingerprint must equal
-  `77D0FCDEB0D594E13E50F43A9337815EB0F78C63` or the packaging aborts, so a package can never
-  ship a key that cannot verify the archive it points at. That would be worse than shipping no
-  key: apt would fail `update` outright rather than merely not update.
+* **The key is asserted at build time.** The committed keyring must carry exactly the keys
+  clients are meant to trust — `OKP_APT_SIGNING_FINGERPRINT`
+  (`77D0FCDEB0D594E13E50F43A9337815EB0F78C63`) plus anything staged in
+  `OKP_APT_ADDITIONAL_TRUSTED_FINGERPRINTS`, which is empty in steady state — or the packaging
+  aborts. So a package can never ship a keyring that cannot verify the archive it points at,
+  and never one carrying a key nobody decided to trust. The first would be worse than shipping
+  no key at all: apt would fail `update` outright rather than merely not update.
 * **An existing choice is never overwritten.** If any configured source can deliver packages
   from the archive — this file, the candidate stanza, or a hand-written one-line entry —
   `postinst` leaves it alone. "Can deliver" is the whole test, and it is narrower than "mentions
@@ -408,12 +411,26 @@ that distinguishes a working archive from a plausible-looking one.
   of** `ok-player.sources`, not beside it: with both files present apt sees both suites and will
   offer the candidate anyway, which makes "I am on stable" untrue without saying so. Both stanzas
   point at the same keyring, so switching channels never means re-trusting a key.
-* Rotating the signing key means updating the four Infisical secrets **and** the two committed
-  values the packaging asserts against — `rust/packaging/linux/ok-player-archive-keyring.asc`
-  and `OKP_APT_SIGNING_FINGERPRINT` in `scripts/apt-archive-identity.sh` — in the same change,
-  then letting the next run republish `ok-player-archive-keyring.{asc,gpg}`. The packaging
-  refuses to build a `.deb` whose key does not match that fingerprint, so a half-done rotation
-  stops the Linux lane rather than shipping a package that cannot verify the archive. Existing installs need the new key before the
+* **Rotating the signing key is three changes, not one, and the order is not optional.** apt
+  verifies `InRelease` before it downloads anything, so a client that does not already trust
+  the new key cannot fetch the package that would give it that key. Signing with a key nobody
+  trusts yet strands every installed machine with no way to self-heal.
+
+  1. Add the new public key to `rust/packaging/linux/ok-player-archive-keyring.asc` and its
+     fingerprint to `OKP_APT_ADDITIONAL_TRUSTED_FINGERPRINTS` in
+     `scripts/apt-archive-identity.sh`. Release it. Clients now trust both keys; the archive is
+     still signed by the old one.
+  2. Once that keyring has reached the installs you intend to keep working, move the four
+     Infisical secrets to the new key and make its fingerprint `OKP_APT_SIGNING_FINGERPRINT`,
+     leaving the old one in the additional list. The next archive run signs with the new key,
+     and every client from step 1 verifies it.
+  3. When no supported install can still be carrying only the old key, drop it from both the
+     committed keyring and the additional list.
+
+  Both checks are built for this: the packaging refuses to ship a keyring that is not exactly
+  the trusted set, and the generator refuses to sign with a key outside it. Together they make
+  step 2 impossible before step 1 has shipped — which is the ordering that matters — while
+  still stopping a rotation that moves only one side. Existing installs need the new key before the
   first archive signed with it is served, so publish a run with the *old* key still in place
   after users have fetched the new keyring, or accept that clients must re-fetch it.
 * `scripts/tests/apt-repo-generator.Tests.sh` runs in the *Rust* workflow next to the other

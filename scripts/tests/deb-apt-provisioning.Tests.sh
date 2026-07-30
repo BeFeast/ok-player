@@ -108,14 +108,22 @@ fi
 EXTRACT="$WORK/extract"
 mkdir -p "$EXTRACT"
 dpkg-deb -x "$STABLE_DEB" "$EXTRACT"
-SHIPPED_FINGERPRINT="$(
-  GNUPGHOME="$WORK" okp_apt_key_fingerprint \
+SHIPPED_FINGERPRINTS="$(
+  GNUPGHOME="$WORK" okp_apt_key_fingerprints \
     "$EXTRACT$OKP_APT_CARRIED_DIR/$OKP_APT_KEYRING_BASENAME.gpg"
 )"
-if [[ "$SHIPPED_FINGERPRINT" == "$OKP_APT_SIGNING_FINGERPRINT" ]]; then
-  pass "the shipped keyring is $OKP_APT_SIGNING_FINGERPRINT"
+# Exactly the keys clients are meant to trust. A rotation stages a second key in here before
+# the archive is ever signed with it, so this is a set rather than one value — but it is still
+# a closed set: an extra key would have every install trust one nobody decided to trust.
+if [[ "$(sort <<<"$SHIPPED_FINGERPRINTS")" == "$(okp_apt_trusted_fingerprints | sort)" ]]; then
+  pass "the shipped keyring carries exactly the trusted keys ($(tr '\n' ' ' <<<"$SHIPPED_FINGERPRINTS"))"
 else
-  fail 'shipped key' "the package ships ${SHIPPED_FINGERPRINT:-no OpenPGP key}"
+  fail 'shipped key' "the package ships ${SHIPPED_FINGERPRINTS:-no OpenPGP key}"
+fi
+if grep -qxF "$OKP_APT_SIGNING_FINGERPRINT" <<<"$SHIPPED_FINGERPRINTS"; then
+  pass "the shipped keyring carries the signing key $OKP_APT_SIGNING_FINGERPRINT"
+else
+  fail 'signing key' 'the package ships a keyring that cannot verify the archive it points at'
 fi
 
 # The build-time gate, exercised rather than read: a key that is not the archive's must abort

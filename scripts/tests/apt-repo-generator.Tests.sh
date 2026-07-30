@@ -118,6 +118,7 @@ test_secret_reader() {
 # installed keyring can verify, with both builds green.
 seed_secrets "$WORK/other-private.asc" "$OTHER_FINGERPRINT"
 OKP_APT_SIGNING_FINGERPRINT="$TEST_FINGERPRINT"
+OKP_APT_ADDITIONAL_TRUSTED_FINGERPRINTS=''
 if ( okp_apt_import_signing_key "$(okp_apt_make_gnupghome)" \
   "$WORK/other-private.asc" <(printf '%s\n' "$OTHER_FINGERPRINT") ) >/dev/null 2>&1; then
   fail 'committed fingerprint' \
@@ -125,6 +126,20 @@ if ( okp_apt_import_signing_key "$(okp_apt_make_gnupghome)" \
 else
   pass 'the generator refuses a signing key the packaging does not ship'
 fi
+
+# ...and accepts it once the packaging ships it, which is what makes a rotation stageable: the
+# keyring carrying both keys is published first, and only then may the signer change. Requiring
+# the signer to equal the one committed key would permit only the order that strands every
+# installed client, since apt must verify InRelease before it can fetch the new keyring.
+OKP_APT_ADDITIONAL_TRUSTED_FINGERPRINTS="$OTHER_FINGERPRINT"
+if ( okp_apt_import_signing_key "$(okp_apt_make_gnupghome)" \
+  "$WORK/other-private.asc" <(printf '%s\n' "$OTHER_FINGERPRINT") ) >/dev/null 2>&1; then
+  pass 'the generator signs with a staged key once the packaging ships it'
+else
+  fail 'staged rotation' \
+    'a key the packaging already ships was refused, so a rotation could only be done in the order that strands clients'
+fi
+OKP_APT_ADDITIONAL_TRUSTED_FINGERPRINTS=''
 seed_secrets
 OKP_APT_SIGNING_FINGERPRINT="$TEST_FINGERPRINT"
 

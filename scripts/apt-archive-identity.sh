@@ -35,13 +35,38 @@ OKP_APT_CARRIED_DIR='/usr/share/ok-player/apt'
 # real archive it built locally; production packages get this value.
 OKP_APT_BASE_URL_DEFAULT='https://befeast.github.io/ok-player/apt'
 
-# The archive signing key, by fingerprint. Both sides are held to it:
-# scripts/package-linux-deb.sh refuses to ship any other key, and scripts/build-apt-repo.sh
-# refuses to sign with any other key. Either check alone would leave a rotation able to move
-# one side and not the other, publishing an archive no installed keyring can verify. Rotating
-# means changing this line, the committed public key below, and the Infisical secrets in one
-# change — see docs/apt-repository.md.
+# The key the archive is signed with. scripts/build-apt-repo.sh refuses to sign with a key
+# that is not trusted here, and scripts/package-linux-deb.sh refuses to ship a keyring that
+# does not carry exactly the trusted set. Either check alone would let a rotation move one
+# side and not the other, publishing an archive no installed keyring can verify.
 OKP_APT_SIGNING_FINGERPRINT='77D0FCDEB0D594E13E50F43A9337815EB0F78C63'
+
+# Keys the shipped keyring carries besides the signer, and which the archive may therefore be
+# signed with. Empty in steady state; it exists because a rotation cannot be a single change.
+#
+# apt has to verify `InRelease` before it can download anything, so a client that does not
+# already trust the new key cannot fetch the package that would give it that key: signing with
+# a key nobody trusts yet strands every installed machine with no way to self-heal. A rotation
+# is therefore three changes, in this order, each published before the next:
+#
+#   1. Add the new fingerprint here and the new public key to the committed keyring. Clients
+#      now trust both; the archive is still signed by the old key.
+#   2. Once that keyring has reached clients, move the Infisical secrets to the new key and
+#      make it OKP_APT_SIGNING_FINGERPRINT, leaving the old fingerprint here.
+#   3. When no supported install can still be carrying only the old key, drop it from here and
+#      from the committed keyring.
+#
+# See docs/apt-repository.md.
+OKP_APT_ADDITIONAL_TRUSTED_FINGERPRINTS=''
+
+# Every fingerprint a client is expected to trust, newest first, one per line.
+okp_apt_trusted_fingerprints() {
+  printf '%s\n' "$OKP_APT_SIGNING_FINGERPRINT"
+  local fingerprint
+  for fingerprint in $OKP_APT_ADDITIONAL_TRUSTED_FINGERPRINTS; do
+    printf '%s\n' "$fingerprint"
+  done
+}
 
 # The committed armored public key, relative to the repository root. Armored on purpose: it is
 # reviewable in a diff, and the packaging dearmors it at build time into the binary keyring apt
@@ -62,10 +87,11 @@ okp_apt_write_sources_stanza() {
   } >"$destination"
 }
 
-# The primary key fingerprint of an armored or dearmored OpenPGP public key file, or nothing if
-# the file is not one. gpg is asked in --with-colons form so the answer is parsed rather than
-# read out of prose that changes between gpg versions.
-okp_apt_key_fingerprint() {
+# The primary key fingerprints in an armored or dearmored OpenPGP public key file, one per
+# line, or nothing if the file is not one. gpg is asked in --with-colons form so the answer is
+# parsed rather than read out of prose that changes between gpg versions, and only the
+# fingerprint that follows a `pub` record is taken — the others belong to subkeys.
+okp_apt_key_fingerprints() {
   gpg --batch --no-tty --show-keys --with-colons "$1" 2>/dev/null \
-    | awk -F: '$1 == "fpr" { print $10; exit }'
+    | awk -F: '$1 == "pub" { primary = 1; next } $1 == "fpr" && primary { print $10; primary = 0 }'
 }

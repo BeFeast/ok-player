@@ -43,7 +43,7 @@ APT_SUITE="${OKP_DEB_APT_SUITE:-$OKP_APT_CANDIDATE_SUITE}"
 # takes the committed key and the published archive.
 APT_BASE_URL="${OKP_DEB_APT_BASE_URL:-$OKP_APT_BASE_URL_DEFAULT}"
 APT_PUBLIC_KEY="${OKP_DEB_APT_PUBLIC_KEY:-$ROOT/$OKP_APT_PUBLIC_KEY_RELATIVE}"
-APT_EXPECT_FINGERPRINT="${OKP_DEB_APT_FINGERPRINT:-$OKP_APT_SIGNING_FINGERPRINT}"
+APT_EXPECT_FINGERPRINTS="${OKP_DEB_APT_FINGERPRINT:-$(okp_apt_trusted_fingerprints)}"
 
 case "$APT_SUITE" in
   "$OKP_APT_STABLE_SUITE" | "$OKP_APT_CANDIDATE_SUITE") ;;
@@ -99,12 +99,14 @@ trap 'rm -rf -- "$APT_GNUPGHOME"' EXIT
 chmod 700 "$APT_GNUPGHOME"
 export GNUPGHOME="$APT_GNUPGHOME"
 
-APT_ACTUAL_FINGERPRINT="$(okp_apt_key_fingerprint "$APT_PUBLIC_KEY")"
-if [[ "$APT_ACTUAL_FINGERPRINT" != "$APT_EXPECT_FINGERPRINT" ]]; then
-  echo "Refusing to ship an APT key the archive is not signed with." >&2
+# Exactly the trusted set, no more and no less. A missing key would strand clients across a
+# rotation; an extra one would have every install trust a key nobody decided to trust.
+APT_ACTUAL_FINGERPRINTS="$(okp_apt_key_fingerprints "$APT_PUBLIC_KEY")"
+if [[ "$(sort <<<"$APT_ACTUAL_FINGERPRINTS")" != "$(sort <<<"$APT_EXPECT_FINGERPRINTS")" ]]; then
+  echo "Refusing to ship a keyring that is not the set of keys clients are meant to trust." >&2
   echo "  key:      $APT_PUBLIC_KEY" >&2
-  echo "  expected: $APT_EXPECT_FINGERPRINT" >&2
-  echo "  found:    ${APT_ACTUAL_FINGERPRINT:-<not an OpenPGP public key>}" >&2
+  echo "  expected: $(tr '\n' ' ' <<<"$APT_EXPECT_FINGERPRINTS")" >&2
+  echo "  found:    ${APT_ACTUAL_FINGERPRINTS:-<not an OpenPGP public key>}" >&2
   exit 1
 fi
 
@@ -308,5 +310,5 @@ chmod -R u+rwX,go+rX,go-w "$BUILD_ROOT"
 dpkg-deb --root-owner-group --build "$BUILD_ROOT" "$DEB_DIR/${PACKAGE}_${VERSION}_${ARCH}.deb"
 
 echo "Debian package written to $DEB_DIR/${PACKAGE}_${VERSION}_${ARCH}.deb (Version: $DEB_VERSION)"
-echo "It provisions $APT_BASE_URL suite $APT_SUITE, signed by $APT_EXPECT_FINGERPRINT."
+echo "It provisions $APT_BASE_URL suite $APT_SUITE, trusting $(tr '\n' ' ' <<<"$APT_EXPECT_FINGERPRINTS")"
 echo "Run write-linux-acceptance-template.sh after both package lanes complete; publishing requires evidence for this exact artifact hash."
