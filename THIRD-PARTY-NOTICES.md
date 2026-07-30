@@ -90,3 +90,17 @@ bundled GPL components (mpv, FFmpeg) is available from the upstream projects lin
 Windows builds and their build scripts are published at <https://github.com/zhongfly/mpv-winbuild>
 and <https://sourceforge.net/projects/mpv-player-windows/>, and the standalone `ffmpeg.exe` build
 and its build scripts at <https://github.com/BtbN/FFmpeg-Builds>.
+
+## Adwaita icon theme (GNOME)
+
+The chrome icons under `rust/crates/okp-linux-gtk/icons/` are Adwaita symbolic
+artwork, renamed into an `okp-` namespace so a user's own icon theme cannot
+shadow them (see issue #731). Adwaita is dual licensed **"either the GNU LGPL
+v3 or CC-BY-SA 3.0"**, with newer icons under CC-BY-SA 4.0; this project takes
+the **LGPL-3 option**, which is compatible with its own GPL-3.0-or-later terms.
+
+Upstream: https://gitlab.gnome.org/GNOME/adwaita-icon-theme
+Copyright: the GNOME Project and contributors.
+
+`okp-process-working-symbolic.svg` is not Adwaita artwork; it is original work
+under GPL-3.0-or-later, produced by `scripts/generate-chrome-icons.py`.

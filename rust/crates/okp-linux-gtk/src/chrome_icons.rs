@@ -423,9 +423,25 @@ mod tests {
                 "{name} is not named as a symbolic icon"
             );
             let svg = std::fs::read_to_string(&path).expect("an icon must be readable");
+            // The grid is the rule, not the literal string: upstream artwork can
+            // carry a rounded extent (`0 0 16 15.980469`) from the tool that drew
+            // it, which is the same 16px grid and renders identically.
+            let box_attr = svg
+                .split_once("viewBox=\"")
+                .and_then(|(_, rest)| rest.split_once('"'))
+                .map(|(value, _)| value.to_string())
+                .unwrap_or_default();
+            let extent: Vec<f64> = box_attr
+                .split_whitespace()
+                .filter_map(|value| value.parse::<f64>().ok())
+                .collect();
             assert!(
-                svg.contains("viewBox=\"0 0 16 16\""),
-                "{name} is not drawn on the 16px grid"
+                extent.len() == 4
+                    && extent[0] == 0.0
+                    && extent[1] == 0.0
+                    && (extent[2] - 16.0).abs() < 0.05
+                    && (extent[3] - 16.0).abs() < 0.05,
+                "{name} is not drawn on the 16px grid: viewBox=\"{box_attr}\""
             );
         }
     }

@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Generate the OK Player symbolic chrome icon set.
+"""Generate the icons Adwaita has no counterpart for.
+
+The shipped chrome set is Adwaita artwork renamed into the okp- namespace
+(see THIRD-PARTY-NOTICES.md). Script-drawn icons were tried first to avoid
+establishing provenance, and they looked script-drawn: generating SVG paths
+is not design. Only okp-process-working-symbolic still comes from here.
+
+Original notes follow.
+
 
 One 16x16 grid, fills only (GTK's symbolic recolour rewrites `fill`, never
 `stroke`), 2px primary weight so a 1.5x scale lands on whole pixels.
