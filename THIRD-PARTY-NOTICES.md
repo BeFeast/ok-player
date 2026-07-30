@@ -68,20 +68,30 @@ distributed and licensed independently by Freedesktop/Flathub.
 - **CommunityToolkit.Mvvm** — © .NET Foundation and contributors, MIT License
   (<https://github.com/CommunityToolkit/dotnet>).
 
-## Chrome icon set (first-party)
+## Chrome icon set (Adwaita, plus one first-party icon)
 
 - **Component:** the symbolic icons the Linux shell resolves for its own chrome
   (`rust/crates/okp-linux-gtk/icons/okp-*-symbolic.svg`), compiled into the
-  binary as a `GResource`.
-- **Provenance:** original work, drawn for OK Player by
-  [`scripts/generate-chrome-icons.py`](scripts/generate-chrome-icons.py). No file
-  is derived from `adwaita-icon-theme` (CC-BY-SA-3.0 / LGPL-3), from any other
-  icon set, or from a font. Nothing third-party was taken, so there is no
-  upstream notice to reproduce.
-- **License:** GPL-3.0-or-later, the same terms as the rest of OK Player
-  (see [`LICENSE`](LICENSE)).
+  binary as a `GResource`. The set has two origins under two licences.
+- **Adwaita symbolic artwork** — every icon in the set except the one named
+  below. The files are renamed into an `okp-` namespace so a user's own icon
+  theme cannot shadow them (see issue #731); the artwork itself is upstream's.
+  - **Upstream:** <https://gitlab.gnome.org/GNOME/adwaita-icon-theme>
+  - **Copyright:** © the GNOME Project and contributors.
+  - **License:** Adwaita is dual licensed **"either the GNU LGPL v3 or
+    CC-BY-SA 3.0"**, with newer icons under CC-BY-SA 4.0. This project takes
+    the **LGPL-3 option**, which is compatible with its own GPL-3.0-or-later
+    terms.
+- **`okp-process-working-symbolic.svg` (first-party)** — Adwaita has no
+  counterpart for it, so it remains original work drawn for OK Player by
+  [`scripts/generate-chrome-icons.py`](scripts/generate-chrome-icons.py).
+  - **License:** GPL-3.0-or-later, the same terms as the rest of OK Player
+    (see [`LICENSE`](LICENSE)).
+- **Supersedes:** an earlier revision of this section declared the whole set
+  first-party and explicitly not derived from Adwaita. That described the
+  script-drawn set these files replaced, and does not describe what ships now.
 - **Not affected:** the application icon and desktop integration
-  (`rust/packaging/linux/`), which are also first-party and unchanged.
+  (`rust/packaging/linux/`), which are first-party and unchanged.
 
 ## Obtaining the source
 
@@ -90,17 +100,3 @@ bundled GPL components (mpv, FFmpeg) is available from the upstream projects lin
 Windows builds and their build scripts are published at <https://github.com/zhongfly/mpv-winbuild>
 and <https://sourceforge.net/projects/mpv-player-windows/>, and the standalone `ffmpeg.exe` build
 and its build scripts at <https://github.com/BtbN/FFmpeg-Builds>.
-
-## Adwaita icon theme (GNOME)
-
-The chrome icons under `rust/crates/okp-linux-gtk/icons/` are Adwaita symbolic
-artwork, renamed into an `okp-` namespace so a user's own icon theme cannot
-shadow them (see issue #731). Adwaita is dual licensed **"either the GNU LGPL
-v3 or CC-BY-SA 3.0"**, with newer icons under CC-BY-SA 4.0; this project takes
-the **LGPL-3 option**, which is compatible with its own GPL-3.0-or-later terms.
-
-Upstream: https://gitlab.gnome.org/GNOME/adwaita-icon-theme
-Copyright: the GNOME Project and contributors.
-
-`okp-process-working-symbolic.svg` is not Adwaita artwork; it is original work
-under GPL-3.0-or-later, produced by `scripts/generate-chrome-icons.py`.

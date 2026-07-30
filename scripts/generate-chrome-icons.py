@@ -381,9 +381,15 @@ HEADER = ('<?xml version="1.0" encoding="UTF-8"?>\n'
           ' viewBox="0 0 16 16">\n  <g fill="%s">\n    ' % FILL)
 FOOTER = "\n  </g>\n</svg>\n"
 
-for name, body in sorted(ICONS.items()):
+# ICONS above is kept whole as the record of the script-drawn set that Adwaita
+# replaced, but only these are still written. Emitting the rest would overwrite
+# the shipped Adwaita artwork with the very artwork it was replaced for looking
+# script-drawn, and the header would relabel LGPL-3 files as first-party.
+GENERATED = ("process-working",)
+
+for name in sorted(GENERATED):
     path = os.path.join(OUT, "okp-%s-symbolic.svg" % name)
     with open(path, "w") as handle:
-        handle.write(HEADER + body + FOOTER)
+        handle.write(HEADER + ICONS[name] + FOOTER)
 
-print("wrote %d icons to %s" % (len(ICONS), OUT))
+print("wrote %d icon(s) to %s" % (len(GENERATED), OUT))
