@@ -3513,6 +3513,19 @@ pub(crate) const OKP_STYLESHEET: &str = "
             box-shadow: 0 0 0 1px alpha(@okp_teal, 0.18);
         }
 
+        /* The Windows rail states the distance from the magnifier to the query outright:
+           SettingsWindow.xaml lays the icon and the text out in a horizontal StackPanel
+           whose spacing is 8. GTK leaves 6, which reads as no gap at all beside a 16px
+           glyph, so the remaining 2 is added here.
+
+           It is added to the text rather than to the icon because GtkImage keeps its
+           request square: a horizontal margin on the icon is charged to the entry's height
+           as well, which measures 32px tall untouched, 34px with 2px on the icon and 40px
+           with 8px. GtkText has no such coupling, so this moves the gap and nothing else. */
+        entry.okp-settings-search > text {
+            padding-left: 2px;
+        }
+
         button.okp-settings-search-result {
             min-height: 40px;
             margin: -2px 0 5px;

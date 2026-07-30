@@ -591,7 +591,10 @@ pub(crate) fn settings_nav_rail(
 
     let search = chrome_search_entry();
     search.add_css_class("okp-settings-search");
-    search.set_size_request(171, 30);
+    // Width only. The height is the one the Windows Border computes - its padding plus the
+    // single row of content inside it - rather than a constant, which can only ever hold the
+    // box open taller than what it contains.
+    search.set_size_request(171, -1);
     search.set_placeholder_text(Some("Search settings"));
     search.update_property(&[gtk::accessible::Property::Label("Search settings")]);
     rail.append(&search);
