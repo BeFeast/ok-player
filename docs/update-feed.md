@@ -90,9 +90,34 @@ That produces one of three states, and each gets a different surface:
 
 | Machine | Capability | What the surface says |
 |---|---|---|
-| No OK Player source | `SystemUnreachable` | Names the published build, says no repository is configured, and offers the commands to add one (or the direct download). Never the system updater. |
+| No OK Player source | `SystemUnreachable` | Names the published build, says no repository is configured, and offers the commands to add one **for the channel this build came from** (or the direct download). Never the system updater. |
+| Source configured, apt has not read it | `SystemManaged`, state `AvailableButSourceUnread` | Says this system subscribes to the repository but apt has not read it yet, and offers `sudo apt update`. Never setup commands. |
 | Subscribed, suite carries the build | `SystemManaged` | Names the build and the suite it comes from, and may offer the system updater — which reads the same package data and will agree. |
 | Subscribed, suite does not carry it | `SystemManaged`, state `WithheldBySuite` | Says the machine is up to date **on its channel**, and which channel that is. A `stable` subscriber is never shown a candidate build (#689), because apt would refuse it. |
+
+### The state every `.deb` install starts in (#726)
+
+`apt-cache policy` is not enough on its own, and the reason is the packaging: since #726 the
+`.deb`'s `postinst` writes `/etc/apt/sources.list.d/ok-player.sources` and stops there, because
+running `apt update` is not a maintainer script's business. So on the first launch after
+installing a package the stanza is on disk and `apt-cache policy` still knows OK Player only
+through `/var/lib/dpkg/status`.
+
+Read as "no source", that made the app deny a file its own packaging had written minutes
+earlier — and offer setup commands, which is the more damaging half: a tester who installed a
+`candidate` `.deb` and pasted a hard-coded `stable` block would be moved off the channel they
+installed for, silently, by the app's own advice. That is the failure #726 exists to prevent,
+delivered by #725.
+
+So the shell reads two observables, not one: `apt-cache policy` for *what apt can install*, and
+the source files themselves (`okp_core::apt_sources`) for *whether a source exists at all*. They
+differ for exactly the window between `postinst` and the next refresh.
+
+**Setup instructions never carry a hard-coded suite.** The channel comes from the stanza the
+package carries at `/usr/share/ok-player/apt/ok-player.sources`, so a machine is told how to
+subscribe to *its own* channel. A build that records no channel — anything published before
+#726 — is told that, and pointed at the download, rather than handed a guess: a wrong guess here
+changes the user's channel without saying so.
 
 "Could not ask" — no `apt-cache`, or a failed run — is its own state and is not read as evidence
 that a source exists. It gets the same actionable surface as "no source", because the remedy is
@@ -102,10 +127,14 @@ The app hands over the setup commands; it never runs them. Adding an archive and
 is a privileged, system-wide change the user makes deliberately, and the privileged install path
 was removed in #698.
 
-`scripts/verify-apt-source-instructions.sh` is the live check: it reproduces the operator's
-machine in a clean container, asks the surface what it says about it, then takes the commands
-out of the app, requires the README to publish exactly them, and follows them end to end until
-`apt-cache policy` shows the archive and the package installs from it.
+`scripts/verify-apt-source-instructions.sh` is the live check. It reproduces the operator's
+machine in a clean container and asks the surface what it says about it; it installs a real
+provisioning `.deb` and asks again **before** any `apt update`, requiring a refresh offer and
+not setup, then runs `apt update` and requires the machine to settle into the readable state;
+it takes the commands out of the app for both channels, requires the README to publish exactly
+them, and follows them end to end until `apt-cache policy` shows the archive and the package
+installs from it. Its negative control is the reading this replaced — the same machine judged
+from the policy alone — which must reproduce the false denial.
 
 ## Who writes the feeds
 

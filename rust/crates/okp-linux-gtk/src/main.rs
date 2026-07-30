@@ -16,6 +16,7 @@ use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
 use okp_core::apt_policy::package_source_from_policy;
+use okp_core::apt_sources;
 use okp_core::candidate_channel::{
     self, CandidateAppImage, CandidateAppImageCheck, CandidateFeed, CandidateInstallLane,
     CandidateUpdate, CandidateUpdateRoute,
@@ -2208,6 +2209,9 @@ impl LinuxUpdateSession {
             // interrupting for exactly once: it is the only place the user is
             // told why, and how to fix it (#725).
             | UpdateState::AvailableWithoutSource { .. }
+            // Reachable in one command, which the user has to be told about
+            // before they can take it (#726).
+            | UpdateState::AvailableButSourceUnread { .. }
             | UpdateState::Downloading { .. }
             | UpdateState::ReadyToApply { .. }
             | UpdateState::Applying { .. }

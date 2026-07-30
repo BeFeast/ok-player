@@ -72,12 +72,20 @@ lane is currently testing, they change often, and they can regress. Use it only 
 helping test OK Player.
 
 ```bash
-# The keyring above is still required; then, INSTEAD OF ok-player.sources:
+sudo install -d -m 0755 /usr/share/keyrings
+curl -fsSL https://befeast.github.io/ok-player/apt/ok-player-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/ok-player-archive-keyring.gpg >/dev/null
 curl -fsSL https://befeast.github.io/ok-player/apt/ok-player-candidate.sources \
   | sudo tee /etc/apt/sources.list.d/ok-player.sources >/dev/null
 sudo apt update
 sudo apt install ok-player
 ```
+
+This is the whole sequence, not an addition to the one above: it writes the candidate stanza to
+the same `ok-player.sources` path, so following it replaces a `stable` subscription rather than
+sitting beside it. It is also exactly what the app hands you if it ever offers these commands —
+and the app takes the channel from the build you installed, so a candidate install is never
+shown the `stable` block.
 
 Install it *instead of* `ok-player.sources`, not beside it — with both files present apt sees
 both suites and will offer you the candidate anyway. To go back to releases, put

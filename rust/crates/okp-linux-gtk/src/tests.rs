@@ -5408,6 +5408,22 @@ fn update_previews_walk_real_transitions() {
     // ...and it is a different picture from the subscribed machine's.
     assert!(deb.describe().repository_setup.is_none());
 
+    // The machine every .deb install is on at first launch (#726): the repository is
+    // configured, apt has not read it, and the offer is a refresh rather than setup.
+    let unread = build_linux_update_preview(InstallKind::Deb, "apt-source-unread")
+        .expect("a configured-but-unread source previews on the deb lane");
+    let unread = unread.describe();
+    assert_eq!(
+        primary_update_action(&unread),
+        Some(UpdateAction::CopyRefreshCommand)
+    );
+    assert!(
+        unread.repository_setup.is_none(),
+        "this machine has a repository; offering to add one would overwrite its suite"
+    );
+    assert!(unread.refresh_command.is_some());
+    assert!(unread.system_updater_offered);
+
     // A state a lane cannot reach is not previewable there either.
     assert!(build_linux_update_preview(InstallKind::Deb, "restart-pending").is_none());
     assert!(build_linux_update_preview(InstallKind::AppImage, "nonsense").is_none());
