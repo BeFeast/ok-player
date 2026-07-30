@@ -505,6 +505,13 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
                     prefix: "osc-overflow",
                     css_class: OscControlId::Overflow.slot_css_class(),
                 },
+                // The always-on-top control. Reporting it is what lets a harness press
+                // the real button instead of guessing at titlebar coordinates.
+                NestedPlanes {
+                    host: "titlebar",
+                    prefix: "window-pin",
+                    css_class: "okp-player-window-pin",
+                },
             ],
         },
     );
@@ -1323,7 +1330,20 @@ pub(crate) fn build_player_window_chrome(
     let pin_state = Rc::clone(&pinned);
     pin.connect_clicked(move |_| {
         let enabled = !pin_state.get();
-        match set_window_always_on_top(&pin_window, enabled) {
+        let result = set_window_always_on_top(&pin_window, enabled);
+        if env::var_os("OKP_DEBUG_INTERACTIONS").is_some() {
+            // The refusal is the row's whole content on Wayland, and until now it lived
+            // only in a toast that no log carries.
+            eprintln!(
+                "interaction: always-on-top={} requested={}",
+                match result {
+                    AlwaysOnTopResult::Applied => "applied",
+                    AlwaysOnTopResult::Unavailable => "unavailable",
+                },
+                u8::from(enabled)
+            );
+        }
+        match result {
             AlwaysOnTopResult::Applied => {
                 pin_state.set(enabled);
                 if enabled {

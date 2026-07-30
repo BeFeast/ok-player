@@ -83,6 +83,41 @@ pub const REQUIRED_LIVE_CHECKS: &[&str] = &[
     "keyboard-focus-navigation",
 ];
 
+/// Live rows a machine-driven session may attest, because the harness can observe the
+/// outcome itself rather than trusting that a gesture had an effect.
+///
+/// Membership is a per-row judgement recorded in the project brain, not a convenience:
+/// every row here has a mechanism that reads the result back out of the session (the
+/// Wayland clipboard through a separate client, the portal call on the session bus, the
+/// compositor's own fullscreen configure, the app's focus and always-on-top diagnostics)
+/// and a negative control proving the check can fail.
+pub const AUTOMATABLE_LIVE_CHECKS: &[&str] = &[
+    "gnome-file-chooser",
+    "wayland-clipboard",
+    "desktop-portal",
+    "wayland-compositor-fullscreen",
+    "wayland-double-click-fullscreen",
+    "wayland-always-on-top-unavailable",
+    "keyboard-focus-navigation",
+];
+
+/// Live rows that still require a human at the desk.
+///
+/// `gnome-folder-chooser` is reached through a popover menu item whose geometry the shell
+/// does not report, so a harness could only guess where to press; `wayland-drag-drop`
+/// needs a drag source holding a real input serial, which no harness on this desktop can
+/// produce without becoming the thing under test.
+pub const OPERATOR_ONLY_LIVE_CHECKS: &[&str] = &["gnome-folder-chooser", "wayland-drag-drop"];
+
+/// Whether a live row may be attested by the automated harness.
+pub fn live_check_is_automatable(state: &str) -> bool {
+    AUTOMATABLE_LIVE_CHECKS.contains(&state)
+}
+
+fn not_run() -> EvidenceStatus {
+    EvidenceStatus::NotRun
+}
+
 fn xvfb_viewport(state: &str) -> Viewport {
     match state {
         "narrow-layout" => Viewport {
@@ -697,6 +732,12 @@ pub enum EvidenceLevel {
     XvfbRender,
     InstalledPackage,
     GnomeWaylandOperator,
+    /// A live GNOME/Wayland session driven by the harness rather than by a person.
+    ///
+    /// Deliberately a separate level, never a synonym for `GnomeWaylandOperator`: it
+    /// carries an attestation of the session it ran in and the artefacts it captured, and
+    /// the release gate accepts it only for rows listed in `AUTOMATABLE_LIVE_CHECKS`.
+    GnomeWaylandAutomated,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -732,6 +773,50 @@ pub struct Measurement {
     pub status: EvidenceStatus,
 }
 
+/// One monitor of the session the harness ran in.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AutomationMonitor {
+    pub connector: String,
+    pub width: u32,
+    pub height: u32,
+    pub scale: f64,
+}
+
+/// A captured artefact backing an automated row: a screenshot, a log excerpt, a clipboard
+/// payload. The digest is what makes the row auditable after the fact.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct EvidenceArtifact {
+    pub file_name: String,
+    pub sha256: String,
+}
+
+/// What makes a machine-produced live row auditable.
+///
+/// Every field answers a question a reviewer would otherwise have to take on trust: which
+/// session the harness drove, which compositor decided the outcomes, how the desktop was
+/// laid out and scaled, which revision of the harness produced the run, and how input
+/// reached the seat. It carries no hostname, user, or path: the repository is public.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AutomationAttestation {
+    /// `wayland`. An automated live row recorded from an X11 or headless session is not
+    /// the thing the gate is asking about.
+    pub session_type: String,
+    pub compositor: String,
+    pub compositor_version: String,
+    pub monitors: Vec<AutomationMonitor>,
+    /// Full commit SHA of the tree the harness ran from.
+    pub harness_revision: String,
+    /// How real input reached the seat, for example `uinput`.
+    pub input_injector: String,
+    /// SHA-256 of the exact package the harness drove.
+    ///
+    /// Without it a passing live row says nothing about *which* bytes passed: rows merge
+    /// by state, so a run against one candidate would drop silently into another
+    /// candidate's manifest. The validator requires this to name an artifact of the
+    /// package the manifest is bound to.
+    pub package_sha256: String,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct EvidenceRow {
     pub id: String,
@@ -742,6 +827,14 @@ pub struct EvidenceRow {
     pub reference: String,
     pub measurement_result: EvidenceStatus,
     pub operator_status: EvidenceStatus,
+    /// Status claimed by the automated live-session harness. Kept separate from
+    /// `operator_status` so a machine can never be read as a person having looked.
+    #[serde(default = "not_run")]
+    pub automated_status: EvidenceStatus,
+    #[serde(default)]
+    pub automation: Option<AutomationAttestation>,
+    #[serde(default)]
+    pub artifacts: Vec<EvidenceArtifact>,
     #[serde(default)]
     pub measurements: Vec<Measurement>,
     #[serde(default)]
@@ -774,6 +867,9 @@ impl EvidenceManifest {
             reference: "rust-test-suite".to_owned(),
             measurement_result: EvidenceStatus::NotRun,
             operator_status: EvidenceStatus::NotRun,
+            automated_status: EvidenceStatus::NotRun,
+            automation: None,
+            artifacts: Vec::new(),
             measurements: Vec::new(),
             notes: String::new(),
             execution_environment_sha256: None,
@@ -787,6 +883,9 @@ impl EvidenceManifest {
             reference: String::new(),
             measurement_result: EvidenceStatus::NotRun,
             operator_status: EvidenceStatus::NotRun,
+            automated_status: EvidenceStatus::NotRun,
+            automation: None,
+            artifacts: Vec::new(),
             measurements: Vec::new(),
             notes: String::new(),
             execution_environment_sha256: None,
@@ -800,6 +899,9 @@ impl EvidenceManifest {
             reference: "packaging-contract".to_owned(),
             measurement_result: EvidenceStatus::NotRun,
             operator_status: EvidenceStatus::NotRun,
+            automated_status: EvidenceStatus::NotRun,
+            automation: None,
+            artifacts: Vec::new(),
             measurements: Vec::new(),
             notes: String::new(),
             execution_environment_sha256: None,
@@ -816,6 +918,9 @@ impl EvidenceManifest {
             reference: "operator-acceptance".to_owned(),
             measurement_result: EvidenceStatus::NotRun,
             operator_status: EvidenceStatus::NotRun,
+            automated_status: EvidenceStatus::NotRun,
+            automation: None,
+            artifacts: Vec::new(),
             measurements: Vec::new(),
             notes: String::new(),
             execution_environment_sha256: None,
@@ -884,12 +989,31 @@ impl EvidenceManifest {
                     row.id
                 ));
             }
-            if row.level != EvidenceLevel::GnomeWaylandOperator
-                && REQUIRED_LIVE_CHECKS.contains(&row.state.as_str())
+            let is_live_state = REQUIRED_LIVE_CHECKS.contains(&row.state.as_str());
+            if is_live_state
+                && !matches!(
+                    row.level,
+                    EvidenceLevel::GnomeWaylandOperator | EvidenceLevel::GnomeWaylandAutomated
+                )
             {
                 errors.push(format!(
                     "{}: live desktop behavior cannot be recorded at {:?} level",
                     row.id, row.level
+                ));
+            }
+            if row.level == EvidenceLevel::GnomeWaylandAutomated && !is_live_state {
+                errors.push(format!(
+                    "{}: gnome-wayland-automated is only for live desktop rows",
+                    row.id
+                ));
+            }
+            if row.level == EvidenceLevel::GnomeWaylandAutomated
+                && is_live_state
+                && !live_check_is_automatable(row.state.as_str())
+            {
+                errors.push(format!(
+                    "{}: {} is operator-only and cannot be attested by the harness",
+                    row.id, row.state
                 ));
             }
             if row.level != EvidenceLevel::GnomeWaylandOperator
@@ -899,6 +1023,81 @@ impl EvidenceManifest {
                     "{}: operator PASS requires gnome-wayland-operator evidence",
                     row.id
                 ));
+            }
+            // A machine attestation must never be readable as a person having looked.
+            if row.level == EvidenceLevel::GnomeWaylandAutomated
+                && row.operator_status != EvidenceStatus::NotRun
+            {
+                errors.push(format!(
+                    "{}: an automated row must leave operator_status not-run",
+                    row.id
+                ));
+            }
+            if row.automated_status != EvidenceStatus::NotRun
+                && row.level != EvidenceLevel::GnomeWaylandAutomated
+            {
+                errors.push(format!(
+                    "{}: automated status requires gnome-wayland-automated evidence",
+                    row.id
+                ));
+            }
+            if row.automated_status == EvidenceStatus::Pass {
+                match row.automation.as_ref() {
+                    Some(attestation) => {
+                        validate_automation_attestation(&row.id, attestation, &mut errors);
+                        if !self.package.artifacts.iter().any(|artifact| {
+                            artifact
+                                .sha256
+                                .eq_ignore_ascii_case(&attestation.package_sha256)
+                        }) {
+                            errors.push(format!(
+                                "{}: automated evidence names package {} , which is not an artifact of this candidate",
+                                row.id, attestation.package_sha256
+                            ));
+                        }
+                    }
+                    None => errors.push(format!(
+                        "{}: automated PASS requires a session attestation",
+                        row.id
+                    )),
+                }
+                if row.artifacts.is_empty() {
+                    errors.push(format!(
+                        "{}: automated PASS requires at least one captured artifact",
+                        row.id
+                    ));
+                }
+                for artifact in &row.artifacts {
+                    validate_portable_artifact_name(
+                        &format!("{} artifact", row.id),
+                        &artifact.file_name,
+                        &mut errors,
+                    );
+                    validate_sha256(
+                        &format!("{} artifact {} sha256", row.id, artifact.file_name),
+                        &artifact.sha256,
+                        &mut errors,
+                    );
+                }
+                match row.execution_environment_sha256.as_deref() {
+                    Some(fingerprint) => {
+                        validate_sha256(
+                            &format!("{} execution_environment_sha256", row.id),
+                            fingerprint,
+                            &mut errors,
+                        );
+                        if fingerprint.eq_ignore_ascii_case(&self.build_environment_sha256) {
+                            errors.push(format!(
+                                "{}: automated live evidence ran in the artifact build execution context",
+                                row.id
+                            ));
+                        }
+                    }
+                    None => errors.push(format!(
+                        "{}: automated PASS requires an execution environment fingerprint",
+                        row.id
+                    )),
+                }
             }
             if row.level == EvidenceLevel::XvfbRender && row.viewport.is_none() {
                 errors.push(format!("{}: Xvfb evidence requires a viewport", row.id));
@@ -976,13 +1175,7 @@ impl EvidenceManifest {
             );
         }
         for state in REQUIRED_LIVE_CHECKS {
-            require_pass(
-                &states,
-                state,
-                EvidenceLevel::GnomeWaylandOperator,
-                true,
-                &mut errors,
-            );
+            require_live_pass(&states, state, &mut errors);
         }
 
         if errors.is_empty() {
@@ -1260,6 +1453,103 @@ fn require_pass(
     }
 }
 
+/// A live row passes on a human sign-off, or - only where the project has decided the
+/// harness can observe the outcome - on a machine attestation carrying its evidence.
+fn require_live_pass(
+    states: &BTreeMap<&str, Vec<&EvidenceRow>>,
+    state: &str,
+    errors: &mut Vec<String>,
+) {
+    let Some(rows) = states.get(state) else {
+        errors.push(format!("missing required evidence row: {state}"));
+        return;
+    };
+    if rows.len() != 1 {
+        errors.push(format!(
+            "required evidence state {state} must have exactly one row"
+        ));
+        return;
+    }
+    let row = rows[0];
+    match row.level {
+        EvidenceLevel::GnomeWaylandOperator => {
+            if row.operator_status != EvidenceStatus::Pass {
+                errors.push(format!("{state}: live operator status is not PASS"));
+            }
+        }
+        EvidenceLevel::GnomeWaylandAutomated => {
+            if !live_check_is_automatable(state) {
+                errors.push(format!(
+                    "{state}: is operator-only and cannot be attested by the harness"
+                ));
+            }
+            if row.automated_status != EvidenceStatus::Pass {
+                errors.push(format!("{state}: automated live status is not PASS"));
+            }
+        }
+        other => errors.push(format!(
+            "{state}: expected live-desktop evidence, got {other:?}"
+        )),
+    }
+}
+
+fn validate_automation_attestation(
+    row_id: &str,
+    attestation: &AutomationAttestation,
+    errors: &mut Vec<String>,
+) {
+    if attestation.session_type != "wayland" {
+        errors.push(format!(
+            "{row_id}: automated live evidence requires a wayland session, got {:?}",
+            attestation.session_type
+        ));
+    }
+    for (name, value) in [
+        ("compositor", attestation.compositor.as_str()),
+        (
+            "compositor_version",
+            attestation.compositor_version.as_str(),
+        ),
+        ("input_injector", attestation.input_injector.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            errors.push(format!("{row_id}: automation {name} is empty"));
+        }
+    }
+    validate_git_commit(
+        &format!("{row_id} automation harness_revision"),
+        &attestation.harness_revision,
+        errors,
+    );
+    validate_sha256(
+        &format!("{row_id} automation package_sha256"),
+        &attestation.package_sha256,
+        errors,
+    );
+    if attestation.monitors.is_empty() {
+        errors.push(format!(
+            "{row_id}: automation attestation records no monitor layout"
+        ));
+    }
+    for monitor in &attestation.monitors {
+        if monitor.connector.trim().is_empty() {
+            errors.push(format!("{row_id}: automation monitor connector is empty"));
+        }
+        if monitor.width == 0 || monitor.height == 0 {
+            errors.push(format!(
+                "{row_id}: automation monitor {} has an empty resolution",
+                monitor.connector
+            ));
+        }
+        if !(monitor.scale.is_finite() && monitor.scale > 0.0) {
+            errors.push(format!(
+                "{row_id}: automation monitor {} has an invalid scale",
+                monitor.connector
+            ));
+        }
+    }
+}
+
 fn require_viewport_and_theme(
     states: &BTreeMap<&str, Vec<&EvidenceRow>>,
     state: &str,
@@ -1332,6 +1622,220 @@ mod tests {
             }
         }
         manifest
+    }
+
+    fn attestation() -> AutomationAttestation {
+        AutomationAttestation {
+            session_type: "wayland".to_owned(),
+            compositor: "gnome-shell".to_owned(),
+            compositor_version: "50.1".to_owned(),
+            monitors: vec![AutomationMonitor {
+                connector: "eDP-1".to_owned(),
+                width: 1920,
+                height: 1080,
+                scale: 1.5,
+            }],
+            harness_revision: "c".repeat(40),
+            input_injector: "uinput".to_owned(),
+            package_sha256: "a".repeat(64),
+        }
+    }
+
+    /// Record one live row the way the harness does.
+    fn automate(manifest: &mut EvidenceManifest, state: &str) {
+        let row = manifest
+            .rows
+            .iter_mut()
+            .find(|row| row.state == state)
+            .expect("live row");
+        row.level = EvidenceLevel::GnomeWaylandAutomated;
+        row.operator_status = EvidenceStatus::NotRun;
+        row.automated_status = EvidenceStatus::Pass;
+        row.automation = Some(attestation());
+        row.artifacts = vec![EvidenceArtifact {
+            file_name: format!("{state}.png"),
+            sha256: "d".repeat(64),
+        }];
+        row.execution_environment_sha256 = Some("e".repeat(64));
+    }
+
+    #[test]
+    fn automatable_and_operator_only_rows_partition_the_live_set() {
+        let mut union: Vec<&str> = AUTOMATABLE_LIVE_CHECKS
+            .iter()
+            .chain(OPERATOR_ONLY_LIVE_CHECKS.iter())
+            .copied()
+            .collect();
+        union.sort_unstable();
+        let mut required = REQUIRED_LIVE_CHECKS.to_vec();
+        required.sort_unstable();
+        assert_eq!(union, required);
+        assert!(union.windows(2).all(|pair| pair[0] != pair[1]));
+    }
+
+    #[test]
+    fn automated_evidence_passes_the_release_gate_for_automatable_rows() {
+        let mut manifest = passing_manifest();
+        for state in AUTOMATABLE_LIVE_CHECKS {
+            automate(&mut manifest, state);
+        }
+        assert_eq!(manifest.validate_release_ready(&package()), Ok(()));
+    }
+
+    #[test]
+    fn automated_evidence_is_refused_for_operator_only_rows() {
+        let mut manifest = passing_manifest();
+        automate(&mut manifest, "wayland-drag-drop");
+        let errors = manifest.validate_release_ready(&package()).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("operator-only and cannot be attested")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn an_automated_row_cannot_also_claim_a_person_looked() {
+        let mut manifest = passing_manifest();
+        automate(&mut manifest, "wayland-clipboard");
+        manifest
+            .rows
+            .iter_mut()
+            .find(|row| row.state == "wayland-clipboard")
+            .expect("row")
+            .operator_status = EvidenceStatus::Pass;
+        let errors = manifest.validate_contract().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("leave operator_status not-run")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn automated_pass_requires_an_attestation_and_artifacts() {
+        for break_it in [0usize, 1] {
+            let mut manifest = passing_manifest();
+            automate(&mut manifest, "wayland-clipboard");
+            let row = manifest
+                .rows
+                .iter_mut()
+                .find(|row| row.state == "wayland-clipboard")
+                .expect("row");
+            let expected = if break_it == 0 {
+                row.automation = None;
+                "requires a session attestation"
+            } else {
+                row.artifacts.clear();
+                "requires at least one captured artifact"
+            };
+            let errors = manifest.validate_contract().unwrap_err();
+            assert!(
+                errors.iter().any(|error| error.contains(expected)),
+                "{errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn automated_evidence_must_name_an_artifact_of_this_candidate() {
+        let mut manifest = passing_manifest();
+        automate(&mut manifest, "wayland-clipboard");
+        manifest
+            .rows
+            .iter_mut()
+            .find(|row| row.state == "wayland-clipboard")
+            .expect("row")
+            .automation
+            .as_mut()
+            .expect("attestation")
+            .package_sha256 = "9".repeat(64);
+        let errors = manifest.validate_contract().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("not an artifact of this candidate")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn an_automated_row_recorded_off_a_wayland_session_is_refused() {
+        let mut manifest = passing_manifest();
+        automate(&mut manifest, "wayland-clipboard");
+        manifest
+            .rows
+            .iter_mut()
+            .find(|row| row.state == "wayland-clipboard")
+            .expect("row")
+            .automation
+            .as_mut()
+            .expect("attestation")
+            .session_type = "x11".to_owned();
+        let errors = manifest.validate_contract().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("requires a wayland session")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn automated_live_evidence_may_not_come_from_the_build_execution_context() {
+        let mut manifest = passing_manifest();
+        automate(&mut manifest, "wayland-clipboard");
+        manifest
+            .rows
+            .iter_mut()
+            .find(|row| row.state == "wayland-clipboard")
+            .expect("row")
+            .execution_environment_sha256 = Some(manifest.build_environment_sha256.clone());
+        let errors = manifest.validate_contract().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("ran in the artifact build execution context")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn automated_status_outside_the_automated_level_is_refused() {
+        let mut manifest = passing_manifest();
+        let row = manifest
+            .rows
+            .iter_mut()
+            .find(|row| row.state == "wayland-clipboard")
+            .expect("row");
+        row.automated_status = EvidenceStatus::Pass;
+        let errors = manifest.validate_contract().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("automated status requires gnome-wayland-automated")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn the_automated_level_is_refused_outside_live_rows() {
+        let mut manifest = passing_manifest();
+        let row = manifest
+            .rows
+            .iter_mut()
+            .find(|row| row.state == "first-run")
+            .expect("row");
+        row.level = EvidenceLevel::GnomeWaylandAutomated;
+        let errors = manifest.validate_contract().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("only for live desktop rows")),
+            "{errors:?}"
+        );
     }
 
     fn passing_candidate_upgrade_evidence() -> CandidateUpgradeEvidence {
@@ -2007,7 +2511,7 @@ mod tests {
         assert!(
             errors
                 .iter()
-                .any(|error| error.contains("expected GnomeWaylandOperator"))
+                .any(|error| error.contains("expected live-desktop evidence, got XvfbRender"))
         );
     }
 

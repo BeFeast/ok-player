@@ -1,0 +1,168 @@
+name: GNOME Wayland Acceptance
+
+# Produce the live GNOME/Wayland acceptance rows a machine is allowed to attest (#691).
+#
+# This runs on the self-hosted graphical QA host, against that host's real logged-in
+# Wayland session: it drives uinput input through the compositor and reads each outcome
+# back out of the session. It is dispatch-only on purpose - it takes an exclusive lease on
+# a desktop and moves the pointer on it, so it must never start by itself.
+#
+# It emits rows at `gnome-wayland-automated` level. The rows the project has decided still
+# need a person (`gnome-folder-chooser`, `wayland-drag-drop`) are deliberately absent, and
+# the Rust validator refuses them at this level, so a release still records them from an
+# operator run. The decision and its reasoning live in the project brain.
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Linux candidate/release workflow run ID holding the packages to test
+        required: true
+        type: string
+      package_version:
+        description: Linux package version, for example 0.1.0-linux-alpha.113
+        required: true
+        type: string
+      rows:
+        description: Comma-separated subset of the automated rows; empty means all of them
+        required: false
+        default: gnome-file-chooser,wayland-clipboard,desktop-portal,wayland-compositor-fullscreen,wayland-double-click-fullscreen,wayland-always-on-top-unavailable,keyboard-focus-navigation
+        type: string
+      negative_control:
+        description: Withhold one row's stimulus so it must FAIL; proves the row can fail
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  # One graphical session, one pointer. Never two of these at once.
+  group: gnome-wayland-acceptance
+  cancel-in-progress: false
+
+jobs:
+  live-rows:
+    name: Live GNOME/Wayland rows
+    runs-on: [self-hosted, mimir]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Attach to the host's graphical session
+        id: session
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_dir="/run/user/$(id -u)"
+          [[ -d "$runtime_dir" ]] || { echo "no user runtime directory: there is no session here" >&2; exit 75; }
+          display="$(cd "$runtime_dir" && ls -1 wayland-[0-9]* 2>/dev/null | grep -v '\.lock$' | head -n1 || true)"
+          [[ -n "$display" ]] || { echo "no Wayland display socket in the user runtime directory" >&2; exit 75; }
+          {
+            echo "XDG_RUNTIME_DIR=$runtime_dir"
+            echo "DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime_dir/bus"
+            echo "WAYLAND_DISPLAY=$display"
+            echo "XDG_SESSION_TYPE=wayland"
+            echo "GDK_BACKEND=wayland"
+          } >>"$GITHUB_ENV"
+
+      - name: Take the exclusive QA lease
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/ok-player-qa-lease.sh acquire "${RUNNER_NAME}" "gnome-wayland-${GITHUB_RUN_ID}" 45 "$$"
+
+      - name: Download the exact candidate packages
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Dispatch inputs reach Bash as environment variables, never as text pasted
+          # into the script: this job runs on a persistent self-hosted graphical host,
+          # where a value like $(...) substituted before Bash parses the line would
+          # execute on that host.
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          PACKAGE_VERSION: ${{ inputs.package_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/candidate
+          gh run download "$CANDIDATE_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir artifacts/candidate
+          deb="$(find artifacts/candidate -name "ok-player_${PACKAGE_VERSION}_amd64.deb" | head -n1)"
+          [[ -n "$deb" ]] || { echo "the run holds no Debian package for $PACKAGE_VERSION" >&2; exit 1; }
+          # Extract rather than install: the rows are about the packaged binary's behaviour
+          # on this desktop, not about touching the host's package database.
+          rm -rf artifacts/extracted
+          mkdir -p artifacts/extracted
+          dpkg-deb -x "$deb" artifacts/extracted
+          echo "OKP_TEST_BINARY=$PWD/artifacts/extracted/usr/bin/ok-player" >>"$GITHUB_ENV"
+          # The rows carry this digest, and the validator refuses evidence that does not
+          # name an artifact of the candidate it is merged into.
+          echo "OKP_TEST_PACKAGE_SHA256=$(sha256sum "$deb" | awk '{print $1}')" >>"$GITHUB_ENV"
+
+      - name: Generate the media fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/fixture
+          ffmpeg -nostdin -loglevel error -y \
+            -f lavfi -i testsrc2=size=1280x720:rate=30 \
+            -f lavfi -i sine=frequency=440 \
+            -t 120 -c:v libx264 -preset ultrafast -crf 30 -pix_fmt yuv420p -c:a aac \
+            artifacts/fixture/acceptance.mp4
+
+      - name: Run the live acceptance harness
+        id: harness
+        shell: bash
+        env:
+          OKP_ACCEPTANCE_NEGATIVE_CONTROL: ${{ inputs.negative_control }}
+          ROWS: ${{ inputs.rows }}
+        run: |
+          set -euo pipefail
+          ./scripts/run-linux-gnome-wayland-acceptance.sh \
+            --binary "$OKP_TEST_BINARY" \
+            --fixture "$PWD/artifacts/fixture/acceptance.mp4" \
+            --out "$PWD/artifacts/gnome-wayland" \
+            --package-sha256 "$OKP_TEST_PACKAGE_SHA256" \
+            --rows "$ROWS"
+
+      - name: Check the rows against the evidence contract
+        if: always() && steps.harness.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The manifest a release consumes is assembled from the operator template; this
+          # step only proves the harness rows themselves satisfy the contract they claim.
+          python3 - <<'PY'
+          import json, os, pathlib, sys
+          rows = json.loads(pathlib.Path("artifacts/gnome-wayland/gnome-wayland-rows.json").read_text())
+          expected = os.environ["OKP_TEST_PACKAGE_SHA256"]
+          bad = [r["id"] for r in rows if r["automated_status"] != "pass"]
+          for row in rows:
+              assert row["level"] == "gnome-wayland-automated", row["id"]
+              assert row["operator_status"] == "not-run", row["id"]
+              if row["automated_status"] == "pass":
+                  assert row["automation"]["package_sha256"] == expected, row["id"]
+          if bad:
+              print("rows not passing: " + ", ".join(bad))
+              sys.exit(1)
+          print(f"{len(rows)} automated rows pass")
+          PY
+
+      - name: Release the lease
+        if: always()
+        shell: bash
+        run: ./scripts/ok-player-qa-lease.sh release "gnome-wayland-${GITHUB_RUN_ID}" || true
+
+      - name: Upload the evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gnome-wayland-acceptance-${{ inputs.package_version }}
+          path: |
+            artifacts/gnome-wayland/gnome-wayland-rows.json
+            artifacts/gnome-wayland/session-facts.json
+            artifacts/gnome-wayland/results
+            artifacts/gnome-wayland/artifacts
+          if-no-files-found: error
+          retention-days: 30

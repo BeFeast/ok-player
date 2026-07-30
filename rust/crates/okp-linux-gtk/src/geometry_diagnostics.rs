@@ -11,6 +11,7 @@
 
 use super::*;
 
+use okp_core::focus_trace;
 use okp_core::interaction_geometry::{
     self as geometry, Monitor, Plane, Point, Rect, WindowGeometry,
 };
@@ -94,6 +95,45 @@ pub(crate) fn connect_geometry_diagnostics(
     motion.set_propagation_phase(gtk::PropagationPhase::Capture);
     motion.connect_motion(move |_, x, y| reporter.publish_pointer(Point::new(x, y)));
     window.add_controller(motion);
+
+    connect_focus_diagnostics(window);
+}
+
+/// Name each keyboard-focus stop, so a harness can tell traversal apart from keys that
+/// went nowhere.
+///
+/// Tab is stock GTK behaviour with no shell code and no outcome anywhere else in the
+/// diagnostics, so a check driving it could otherwise only assert that it sent keys - a
+/// check that passes just as well when focus never moves, which is not evidence.
+fn connect_focus_diagnostics(window: &gtk::ApplicationWindow) {
+    let sequence = Cell::new(0u64);
+    let previous = RefCell::new(String::new());
+    window.connect_focus_widget_notify(move |window| {
+        let token = gtk::prelude::GtkWindowExt::focus(window)
+            .map(|widget| focus_widget_token(&widget))
+            .unwrap_or_else(|| focus_trace::NO_FOCUS.to_owned());
+        // Only a change is a stop. GTK renotifies while a widget rebuilds, and a repeated
+        // name would let a harness read standing still as traversal.
+        if *previous.borrow() == token {
+            return;
+        }
+        previous.replace(token.clone());
+        let next = sequence.get().wrapping_add(1);
+        sequence.set(next);
+        eprintln!("{}", focus_trace::focus_line(&token, next));
+    });
+}
+
+fn focus_widget_token(widget: &gtk::Widget) -> String {
+    let classes = widget.css_classes();
+    // The tooltip is the label a user reads off this control, so it is the closest thing
+    // to a name for the widgets the stylesheet does not claim with an `okp-` class.
+    let label = widget.tooltip_text();
+    focus_trace::focus_token(
+        widget.type_().name(),
+        classes.iter().map(|class| class.as_str()),
+        label.as_deref(),
+    )
 }
 
 impl GeometryReporter {

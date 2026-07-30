@@ -127,6 +127,12 @@ jobs:
           # display-backed toast and window-geometry smokes.
           sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build appstream appstream-compose squashfs-tools unzip dbus xvfb xfwm4 xdotool x11-utils x11-xserver-utils imagemagick
 
+      # Named one by one rather than globbed: a suite CI never reaches looks exactly like
+      # a suite with nothing to say (#720). It runs after the dependency step because it
+      # resolves connection ownership on a real session bus rather than faking the answer.
+      - name: GNOME/Wayland acceptance harness judges rows the way the contract says
+        run: ./scripts/tests/gnome-wayland-acceptance.Tests.sh
+
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '9.0.x'
