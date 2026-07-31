@@ -120,16 +120,11 @@ assert "artifacts/manual-ui/linux-software-renderer-smoke/**" in workflow
 assert re.search(r"apt-get install -y [^\n]*\bripgrep\b", workflow)
 
 # The lane's own gates must be in the push path filter, or a change to a gate
-# would not run the gate it changed. Exactly once: the deep lane has had no
-# pull_request filter since the two-lane split (#727).
-for gate_source in (
-    "scripts/flatpak_cargo_sources.py",
-    "scripts/flatpak_integration_markers.py",
-    "scripts/tests/flatpak-integration-markers.sh",
-    "scripts/tests/flatpak-lifecycle-control.sh",
-    "scripts/smoke-linux-flatpak.sh",
-):
-    assert workflow.count(f"- '{gate_source}'") == 1, gate_source
+# would not run the gate it changed. Asserted against the parsed workflow in
+# scripts/tests/lane-split.Tests.sh (a required check on every pull request),
+# not against the source text here: a textual count broke when the two-lane
+# split (#727) removed the pull_request trigger, and this smoke sat red on
+# main without running any of its real checks (#755).
 
 
 def workflow_steps(text, job):
