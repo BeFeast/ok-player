@@ -160,7 +160,11 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     // The shell is rounded while windowed and square while maximized or
     // fullscreen; the retained EGL plane below it has to switch with it, or a
     // square black corner shows through the rounding (#778).
-    for state_property in ["maximized", "fullscreen"] {
+    // GTK names the property `fullscreened`, not `fullscreen`: subscribing to the
+    // latter silently never fires, so the mask would stay cut into a fullscreen
+    // plane. The rest of this file's fullscreen listeners already use the right
+    // name; this one is kept in step with them deliberately.
+    for state_property in ["maximized", "fullscreened"] {
         let radius_state = Rc::clone(&state);
         window.connect_notify_local(Some(state_property), move |window, _| {
             mpv_bridge::sync_native_plane_corner_radius(
