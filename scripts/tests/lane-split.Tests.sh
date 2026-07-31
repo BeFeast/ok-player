@@ -77,6 +77,25 @@ for required in 'src/**' 'LICENSE' 'THIRD-PARTY-NOTICES.md'; do
   fi
 done
 
+# The Flatpak lane asserts its own gate sources are in its push filter; keep the
+# filter honest here too, so a stale assertion in the smoke cannot drift apart
+# from the workflow again (#755).
+policy="$(read_policy .github/workflows/flatpak.yml)"
+push_paths="${policy##*$'\n'}"
+push_paths="${push_paths#push_paths=}"
+for required in   'scripts/flatpak_cargo_sources.py'   'scripts/flatpak_integration_markers.py'   'scripts/tests/flatpak-integration-markers.sh'   'scripts/tests/flatpak-lifecycle-control.sh'   'scripts/smoke-linux-flatpak.sh'; do
+  found=no
+  IFS=$'\x1f' read -r -a entries <<<"$push_paths"
+  for entry in "${entries[@]}"; do
+    [[ "${entry%$'\n'}" == "$required" ]] && found=yes
+  done
+  if [[ "$found" == yes ]]; then
+    pass "the Flatpak push filter covers $required"
+  else
+    fail "the Flatpak push filter must list $required exactly" "paths: ${push_paths//$'\x1f'/, }"
+  fi
+done
+
 # The fast lane is the other half of the contract: the required checks report on every pull
 # request, so they must carry no path filter at all.
 for fast in .github/workflows/ci.yml .github/workflows/rust.yml; do
