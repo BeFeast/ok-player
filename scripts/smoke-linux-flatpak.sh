@@ -119,8 +119,9 @@ assert "artifacts/linux/flatpak/flatpak-lifecycle-ci.json" in workflow
 assert "artifacts/manual-ui/linux-software-renderer-smoke/**" in workflow
 assert re.search(r"apt-get install -y [^\n]*\bripgrep\b", workflow)
 
-# The lane's own gates must be in both path filters, or a change to a gate would
-# not run the gate it changed.
+# The lane's own gates must be in the push path filter, or a change to a gate
+# would not run the gate it changed. Exactly once: the deep lane has had no
+# pull_request filter since the two-lane split (#727).
 for gate_source in (
     "scripts/flatpak_cargo_sources.py",
     "scripts/flatpak_integration_markers.py",
@@ -128,7 +129,7 @@ for gate_source in (
     "scripts/tests/flatpak-lifecycle-control.sh",
     "scripts/smoke-linux-flatpak.sh",
 ):
-    assert workflow.count(f"- '{gate_source}'") == 2, gate_source
+    assert workflow.count(f"- '{gate_source}'") == 1, gate_source
 
 
 def workflow_steps(text, job):
