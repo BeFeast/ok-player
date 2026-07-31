@@ -1,5 +1,6 @@
 #include <EGL/egl.h>
 #include <GL/gl.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -65,6 +66,12 @@ struct okp_wayland_video_plane {
     int logical_height;
     int buffer_width;
     int buffer_height;
+    /* Corner radius of the rounded shell above this plane, logical px.
+     * Written from the GTK thread, applied on the render thread at swap:
+     * the corner arcs are cleared to transparent alpha so the square plane
+     * no longer pokes through the shell's rounded corners (#778). */
+    atomic_int corner_radius;
+    int applied_region_radius;
     struct pending_feedback *pending_feedback;
     struct okp_wayland_feedback_record feedback_ring[OKP_FEEDBACK_RING_CAPACITY];
     atomic_size_t feedback_read;
@@ -298,9 +305,21 @@ static void set_regions(struct okp_wayland_video_plane *plane) {
 
     struct wl_region *opaque = wl_compositor_create_region(plane->compositor);
     if (opaque != NULL) {
-        wl_region_add(opaque, 0, 0, plane->logical_width, plane->logical_height);
+        int radius = atomic_load_explicit(&plane->corner_radius, memory_order_acquire);
+        if (radius > 0 && plane->logical_width > 2 * radius &&
+            plane->logical_height > 2 * radius) {
+            /* Leave the corner squares out of the opaque region: their
+             * pixels carry the transparent arc alpha. */
+            wl_region_add(opaque, 0, radius, plane->logical_width,
+                          plane->logical_height - 2 * radius);
+            wl_region_add(opaque, radius, 0, plane->logical_width - 2 * radius,
+                          plane->logical_height);
+        } else {
+            wl_region_add(opaque, 0, 0, plane->logical_width, plane->logical_height);
+        }
         wl_surface_set_opaque_region(plane->surface, opaque);
         wl_region_destroy(opaque);
+        plane->applied_region_radius = radius;
     }
 }
 
@@ -379,6 +398,7 @@ struct okp_wayland_video_plane *okp_wayland_video_plane_create(
     plane->buffer_height = buffer_height > 0 ? buffer_height : 1;
     atomic_init(&plane->feedback_read, 0);
     atomic_init(&plane->feedback_write, 0);
+    atomic_init(&plane->corner_radius, 0);
 
     if (!bind_wayland_globals(plane, error, error_length)) {
         destroy_plane(plane);
@@ -420,7 +440,7 @@ struct okp_wayland_video_plane *okp_wayland_video_plane_create(
         EGL_RED_SIZE, 8,
         EGL_GREEN_SIZE, 8,
         EGL_BLUE_SIZE, 8,
-        EGL_ALPHA_SIZE, 0,
+        EGL_ALPHA_SIZE, 8,
         EGL_NONE,
     };
     EGLConfig config = NULL;
@@ -508,10 +528,70 @@ bool okp_wayland_video_plane_release_current(struct okp_wayland_video_plane *pla
                           EGL_NO_CONTEXT);
 }
 
+/* Clear the four corner arcs of the freshly rendered buffer to transparent
+ * so the compositor shows the desktop there, matching the rounded chrome the
+ * GTK parent surface draws above this plane. Runs on the render thread with
+ * the EGL context current, immediately before the swap that commits the
+ * buffer (#778). */
+static void apply_corner_mask(struct okp_wayland_video_plane *plane) {
+    int radius = atomic_load_explicit(&plane->corner_radius, memory_order_acquire);
+    if (radius != plane->applied_region_radius) {
+        set_regions(plane);
+    }
+    if (radius <= 0) {
+        return;
+    }
+    double scale_x = (double)plane->buffer_width / (double)plane->logical_width;
+    double scale_y = (double)plane->buffer_height / (double)plane->logical_height;
+    int rx = (int)ceil((double)radius * scale_x);
+    int ry = (int)ceil((double)radius * scale_y);
+    if (rx <= 0 || ry <= 0 || plane->buffer_width <= 2 * rx ||
+        plane->buffer_height <= 2 * ry) {
+        return;
+    }
+    /* The renderer wrote arbitrary alpha; the compositor honours it outside
+     * the opaque region, so pin the whole buffer opaque first. */
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glEnable(GL_SCISSOR_TEST);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    for (int row = 0; row < ry; row++) {
+        double reach = 1.0 - (((double)row + 0.5) / (double)ry);
+        double cut = (double)rx * (1.0 - sqrt(fmax(0.0, 1.0 - reach * reach)));
+        int columns = (int)ceil(cut);
+        if (columns <= 0) {
+            continue;
+        }
+        int top = plane->buffer_height - 1 - row;
+        int right = plane->buffer_width - columns;
+        glScissor(0, row, columns, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glScissor(right, row, columns, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glScissor(0, top, columns, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glScissor(right, top, columns, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
+    glDisable(GL_SCISSOR_TEST);
+}
+
+void okp_wayland_video_plane_set_corner_radius(
+    struct okp_wayland_video_plane *plane, int radius) {
+    if (plane == NULL) {
+        return;
+    }
+    atomic_store_explicit(&plane->corner_radius, radius > 0 ? radius : 0,
+                          memory_order_release);
+}
+
 bool okp_wayland_video_plane_swap(struct okp_wayland_video_plane *plane) {
     if (plane == NULL) {
         return false;
     }
+    apply_corner_mask(plane);
     request_presentation_feedback(plane);
     bool swapped = eglSwapBuffers(plane->egl_display, plane->egl_surface);
     wl_display_dispatch_queue_pending(plane->display, plane->queue);

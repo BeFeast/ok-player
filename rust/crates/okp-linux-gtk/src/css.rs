@@ -39,6 +39,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         window.okp-player-window.is-compact-mode,
         window.okp-player-window.is-compact-mode .okp-root {
+            /* Keep in sync with COMPACT_SHELL_CORNER_RADIUS in mpv_bridge.rs:
+               the native video plane cuts matching transparent corner arcs. */
             border-radius: 14px;
             background: @okp_bg;
         }

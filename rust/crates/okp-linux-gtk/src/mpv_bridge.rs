@@ -648,6 +648,16 @@ fn start_native_mpv(
         state.native_render_loop = Some(render_loop);
         state.mpv = Some(mpv);
     }
+    // The plane may be built while the compact shell is already up
+    // (OKP_START_COMPACT, or media opened from compact mode): apply the
+    // rounded-corner mask it would otherwise miss, and present once so it
+    // shows without waiting for a video frame (#778).
+    if area
+        .root()
+        .is_some_and(|root| root.has_css_class("is-compact-mode"))
+    {
+        sync_native_plane_corner_radius(state, true);
+    }
     if let Some(surface) = area.native().and_then(|native| native.surface())
         && surface.find_property("scale").is_some()
     {
@@ -755,6 +765,31 @@ fn area_video_plane_geometry(area: &gtk::DrawingArea) -> fullscreen_toggle::Vide
         width: area.width().max(1),
         height: area.height().max(1),
         scale: native_surface_scale(area),
+    }
+}
+
+/// Logical corner radius of the compact shell. Must match the 14px
+/// `border-radius` on `window.okp-player-window.is-compact-mode` in `css.rs`:
+/// the retained EGL plane clears these corner arcs to transparent so the
+/// square subsurface does not poke through the rounded chrome (#778).
+pub(crate) const COMPACT_SHELL_CORNER_RADIUS: i32 = 14;
+
+/// Round or square the retained EGL plane's corners to follow the compact
+/// shell, and present once so the change is visible without waiting for a
+/// video frame. Maximized and fullscreen windows never carry the compact
+/// class, so they keep the square plane.
+pub(crate) fn sync_native_plane_corner_radius(state: &Rc<RefCell<PlayerState>>, compact: bool) {
+    let state = state.borrow();
+    let Some(plane) = state.native_video_plane.as_ref() else {
+        return;
+    };
+    plane.set_corner_radius(if compact {
+        COMPACT_SHELL_CORNER_RADIUS
+    } else {
+        0
+    });
+    if let Some(render_loop) = state.native_render_loop.as_ref() {
+        render_loop.request_render();
     }
 }
 

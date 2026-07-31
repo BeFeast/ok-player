@@ -50,6 +50,7 @@ unsafe extern "C" {
         buffer_width: i32,
         buffer_height: i32,
     );
+    fn okp_wayland_video_plane_set_corner_radius(plane: *mut NativePlaneOpaque, radius: i32);
 }
 
 type GetDisplayHandle = unsafe extern "C" fn(*mut gdk::ffi::GdkDisplay) -> *mut c_void;
@@ -252,6 +253,19 @@ impl NativeVideoPlane {
             width: buffer_width,
             height: buffer_height,
         })
+    }
+
+    /// Corner radius of the rounded shell above the plane, logical px.
+    /// Zero restores the square plane. The value only touches an atomic on
+    /// the C side; the render thread applies it on its next present, so this
+    /// is safe to call from the GTK thread (follow with a forced render).
+    pub(crate) fn set_corner_radius(&self, logical_radius: i32) {
+        if !self.alive.load(Ordering::Acquire) {
+            return;
+        }
+        unsafe {
+            okp_wayland_video_plane_set_corner_radius(self.pointer.as_ptr(), logical_radius.max(0));
+        }
     }
 
     pub(crate) fn disable(&self) {
