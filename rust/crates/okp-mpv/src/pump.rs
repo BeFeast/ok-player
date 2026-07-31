@@ -145,6 +145,10 @@ struct PumpShared {
     wayland_presentation_feedback: Mutex<Vec<WaylandPresentationFeedback>>,
     diagnostic_messages: Mutex<VecDeque<String>>,
     media_source: Mutex<Option<PathBuf>>,
+    /// The last finite duration observed for the current entry, so `EndFile` can
+    /// report how long the ended source was even though mpv has already unloaded
+    /// it by then (#768). Cleared on `FileLoaded`, taken by `EndFile`.
+    last_duration: Mutex<Option<f64>>,
     audio_device_current: Mutex<String>,
     wake: Mutex<bool>,
     condvar: Condvar,
@@ -181,6 +185,7 @@ impl EventPump {
             wayland_presentation_feedback: Mutex::new(Vec::new()),
             diagnostic_messages: Mutex::new(VecDeque::new()),
             media_source: Mutex::new(None),
+            last_duration: Mutex::new(None),
             audio_device_current: Mutex::new("auto".to_owned()),
             // Start "pending" so the pump populates the snapshot immediately.
             wake: Mutex::new(true),
@@ -438,6 +443,17 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                 // failure. Logs from the currently ending source are captured
                 // when `EndFile` drains the buffer.
                 lock(&shared.diagnostic_messages).clear();
+                // A duration observed for the previous source must never be
+                // reported for this one, so replace it with the loaded source's
+                // own — read live rather than left for the next recompute pass,
+                // because an ultra-short clip can queue its `EndFile` into this
+                // same drain batch, before any recompute runs (#768).
+                *lock(&shared.last_duration) = shared
+                    .reader
+                    .playback_state()
+                    .ok()
+                    .and_then(|playback| playback.duration)
+                    .filter(|duration| duration.is_finite() && *duration > 0.0);
                 lifecycle.push(MpvEvent::FileLoaded { video_dimensions });
                 flags.tracks = true;
                 flags.chapters = true;
@@ -466,10 +482,22 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                 // poll is dropped instead of failing the new source.
                 let path = shared.reader.path();
                 let diagnostic_messages = lock(&shared.diagnostic_messages).drain(..).collect();
+                // How long the ended source was. mpv has usually cleared
+                // `duration` along with `path` by now, so fall back to the last
+                // value the recompute pass observed while the source was still
+                // loaded; taken, so it cannot leak onto a later event (#768).
+                let last_duration = shared
+                    .reader
+                    .playback_state()
+                    .ok()
+                    .and_then(|playback| playback.duration)
+                    .filter(|duration| duration.is_finite() && *duration > 0.0)
+                    .or_else(|| lock(&shared.last_duration).take());
                 lifecycle.push(MpvEvent::EndFile {
                     reason,
                     path,
                     diagnostic_messages,
+                    last_duration,
                 });
             }
             ffi::MPV_EVENT_PROPERTY_CHANGE => {
@@ -606,6 +634,12 @@ fn recompute(shared: &Arc<PumpShared>, flags: RecomputeFlags) {
     let reader = shared.reader;
 
     let playback = reader.playback_state().unwrap_or_default();
+    if let Some(duration) = playback
+        .duration
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+    {
+        *lock(&shared.last_duration) = Some(duration);
+    }
     let playback_diagnostics = reader.playback_diagnostics().unwrap_or_default();
     let ab_loop = reader.ab_loop_state().unwrap_or_default();
     let subtitle_delay = reader.subtitle_delay().unwrap_or(0.0);

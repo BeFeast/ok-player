@@ -6344,6 +6344,81 @@ fn eof_without_an_auto_advance_target_returns_to_idle() {
     assert_eq!(state.media_load_state, network_media::MediaLoadState::Idle);
 }
 
+struct RecordingProgressSink(Rc<RefCell<Vec<progress_report::ProgressEvent>>>);
+
+impl progress_report::ProgressSink for RecordingProgressSink {
+    fn report(&mut self, event: progress_report::ProgressEvent) {
+        self.0.borrow_mut().push(event);
+    }
+}
+
+#[test]
+fn eof_without_a_history_row_still_reports_the_completion() {
+    // A clip shorter than the progress-persistence interval never gets a history
+    // row, so `mark_finished` has nothing to finish. Reporting progress and
+    // listing a file in History are independent concerns: the sink is still owed
+    // the final 100% update and the `Watched` event, taken from the duration the
+    // pump carried on the `EndFile` event (#768).
+    let path = PathBuf::from("/media/short-clip.mkv");
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_file: Some(path.clone()),
+        media_load_state: network_media::MediaLoadState::Playing,
+        progress_reporter: progress_report::ProgressReporter::new(RecordingProgressSink(
+            events.clone(),
+        )),
+        ..PlayerState::default()
+    }));
+
+    finish_current_progress(&state, Some("/media/short-clip.mkv"), Some(7.5));
+
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[
+            progress_report::ProgressEvent::Progress(progress_report::ProgressUpdate {
+                media: "/media/short-clip.mkv".to_owned(),
+                position_seconds: 7.5,
+                duration_seconds: 7.5,
+                fraction: 1.0,
+            }),
+            progress_report::ProgressEvent::Watched(progress_report::WatchedUpdate {
+                media: "/media/short-clip.mkv".to_owned(),
+                position_seconds: 7.5,
+                duration_seconds: 7.5,
+            }),
+        ]
+    );
+    // Finishing must not start listing files that were never listed: the history
+    // stays without a row for the clip.
+    let mut state = state.borrow_mut();
+    assert!(state.history.resume_position(&path).is_none());
+    assert_eq!(state.history.mark_finished(&path, false), None);
+}
+
+#[test]
+fn eof_without_a_history_row_or_a_usable_duration_stays_silent() {
+    // No row and no observed duration: there is nothing truthful to report, so
+    // the sink hears nothing and the history is still not written. An invalid
+    // carried duration is treated the same as an absent one.
+    for ended_duration in [None, Some(f64::NAN), Some(0.0), Some(-3.0)] {
+        let path = PathBuf::from("/media/short-clip.mkv");
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let state = Rc::new(RefCell::new(PlayerState {
+            current_file: Some(path.clone()),
+            media_load_state: network_media::MediaLoadState::Playing,
+            progress_reporter: progress_report::ProgressReporter::new(RecordingProgressSink(
+                events.clone(),
+            )),
+            ..PlayerState::default()
+        }));
+
+        finish_current_progress(&state, Some("/media/short-clip.mkv"), ended_duration);
+
+        assert!(events.borrow().is_empty());
+        assert!(state.borrow().history.resume_position(&path).is_none());
+    }
+}
+
 #[test]
 fn idle_return_smoke_waits_for_natural_eof_before_welcome_capture() {
     let smoke = include_str!("../../../../scripts/smoke-linux-idle-return.sh");

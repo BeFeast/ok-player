@@ -1193,7 +1193,11 @@ pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: 
 /// driven by the lifecycle event alone.
 ///
 /// [#766]: https://github.com/BeFeast/ok-player/issues/766
-pub(crate) fn finish_current_progress(state: &Rc<RefCell<PlayerState>>, ended_path: Option<&str>) {
+pub(crate) fn finish_current_progress(
+    state: &Rc<RefCell<PlayerState>>,
+    ended_path: Option<&str>,
+    ended_duration: Option<f64>,
+) {
     // The same staleness rule the asynchronous `EndFile` diagnostics use. A queued end
     // of file for the previous source can be drained after the user has opened another
     // one, and finishing needs no engine state at all, so without this guard it would
@@ -1216,6 +1220,22 @@ pub(crate) fn finish_current_progress(state: &Rc<RefCell<PlayerState>>, ended_pa
 
     let mut state = state.borrow_mut();
     let Some(duration) = state.history.mark_finished(&path, private_session) else {
+        // No history row: a clip shorter than the persistence interval, or an open
+        // that went straight to the end. Finishing must not start listing files that
+        // were never listed, so the history stays untouched — but reporting progress
+        // and listing a file in History are independent concerns, and the reporter's
+        // end-of-file contract still owes the sink its completion. The engine has
+        // already unloaded and observes no duration, so report from the last one the
+        // pump observed for the ended source, carried on the `EndFile` event (#768).
+        if let Some(duration) = ended_duration.filter(|value| value.is_finite() && *value > 0.0) {
+            state.progress_reporter.observe(
+                private_session,
+                path.to_string_lossy().as_ref(),
+                duration,
+                duration,
+                true,
+            );
+        }
         return;
     };
     if let Err(error) = state.history.save() {
