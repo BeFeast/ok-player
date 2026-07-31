@@ -362,7 +362,10 @@ impl CompactMode {
 
         self.active.set(true);
         self.window.add_css_class("is-compact-mode");
-        crate::mpv_bridge::sync_native_plane_corner_radius(&self.state, true);
+        crate::mpv_bridge::sync_native_plane_corner_radius(
+            &self.state,
+            crate::mpv_bridge::shell_corner_radius(&self.window),
+        );
         self.window.set_size_request(floor.width, floor.height);
         self.window.set_default_size(size.width, size.height);
         resize_player_window_on_x11(&self.window, size);
@@ -396,7 +399,10 @@ impl CompactMode {
         self.active.set(false);
         self.surface_restore_pending.set(true);
         self.window.remove_css_class("is-compact-mode");
-        crate::mpv_bridge::sync_native_plane_corner_radius(&self.state, false);
+        crate::mpv_bridge::sync_native_plane_corner_radius(
+            &self.state,
+            crate::mpv_bridge::shell_corner_radius(&self.window),
+        );
         self.window.set_size_request(-1, -1);
         self.aspect_lock_after.set(None);
         self.top_bar.set_visible(false);
