@@ -1184,6 +1184,58 @@ pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: 
     );
 }
 
+/// Record that the current file was watched to its end.
+///
+/// This deliberately does not go through [`save_current_progress`]: that reads the
+/// position and duration the engine is observing, and at end of file the engine has
+/// already unloaded the source and observes neither, so the completion was silently
+/// dropped and the last periodic position sample stood instead ([#766]). Finishing is
+/// driven by the lifecycle event alone.
+///
+/// [#766]: https://github.com/BeFeast/ok-player/issues/766
+pub(crate) fn finish_current_progress(state: &Rc<RefCell<PlayerState>>, ended_path: Option<&str>) {
+    // The same staleness rule the asynchronous `EndFile` diagnostics use. A queued end
+    // of file for the previous source can be drained after the user has opened another
+    // one, and finishing needs no engine state at all, so without this guard it would
+    // happily mark the newly opened file watched and erase its resume point.
+    let Some(current_source) = current_load_failure_source(state) else {
+        return;
+    };
+    if ended_path.is_some_and(|ended| !current_source.matches_engine_path(ended)) {
+        eprintln!("ignoring stale EndFile completion for a superseded source");
+        return;
+    }
+
+    let (private_session, path) = {
+        let state = state.borrow();
+        let Some(path) = state.current_file.clone() else {
+            return;
+        };
+        (state.private_session, path)
+    };
+
+    let mut state = state.borrow_mut();
+    let Some(duration) = state.history.mark_finished(&path, private_session) else {
+        return;
+    };
+    if let Err(error) = state.history.save() {
+        eprintln!("Failed to save history: {error}");
+    }
+    // Reported at the end of the file, not at the zero the history entry now holds:
+    // those are different questions. Zero is where the next open should start; the end
+    // is how far this viewing got, and every observation the reporter is handed also
+    // emits a progress fraction. Reporting zero here would hand a sink a completed file
+    // sitting at 0%, and would say so even when the `Watched` event is suppressed
+    // because an earlier sample already crossed the threshold.
+    state.progress_reporter.observe(
+        private_session,
+        path.to_string_lossy().as_ref(),
+        duration,
+        duration,
+        true,
+    );
+}
+
 pub(crate) fn build_folder_playlist(path: &Path) -> Vec<PlaylistItem> {
     let Some(parent) = path.parent() else {
         return vec![PlaylistItem::Local(path.to_path_buf())];

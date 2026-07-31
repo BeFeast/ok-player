@@ -2502,7 +2502,7 @@ pub(crate) fn drain_mpv_events(
             } if reason.is_eof() => {
                 if !apply_endfile_eof_diagnostic(state, path.as_deref(), &diagnostic_messages) {
                     if state.borrow().playlist.repeat() != RepeatMode::One {
-                        save_current_progress(state, true);
+                        finish_current_progress(state, path.as_deref());
                     }
                     let advanced = advance_playlist_on_eof(state);
                     if env::var_os("OKP_DEBUG_IDLE_RETURN_SMOKE").is_some()

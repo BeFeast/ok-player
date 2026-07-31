@@ -123,6 +123,16 @@ impl History {
         }
     }
 
+    /// Where reopening `key` should start, or `None` to start at zero.
+    ///
+    /// The rule is [`crate::recents_shelf::is_resumable`]: a file resumes only from
+    /// strictly inside the window between the opening 5% and
+    /// [`crate::recents_shelf::completion_start`], and never once it is finished.
+    pub fn resume_position(&self, key: &str) -> Option<f64> {
+        let entry = self.files.get(key)?;
+        crate::recents_shelf::is_resumable(entry).then_some(entry.position)
+    }
+
     fn normalize_preferences(&mut self) {
         for entry in self.files.values_mut() {
             if let Some(geometry) = entry.preferences.video_geometry.as_mut() {
@@ -169,6 +179,41 @@ impl History {
             HistoryTitleUpdate::Clear => record.title = None,
             HistoryTitleUpdate::Set(title) => record.title = Some(title),
         }
+        HistoryWriteResult::Changed
+    }
+
+    /// Mark an entry watched to the end and drop its resume position, so the next
+    /// open starts at zero.
+    ///
+    /// Reaching the end of a file is a lifecycle fact, not a position sample. By the
+    /// time a shell observes the engine's end-of-file event the source is already
+    /// unloaded and reports no position or duration at all, so a finish that has to
+    /// carry a position can only be dropped ([#766]). This takes none.
+    ///
+    /// An absent key is left absent: finishing must not conjure a history row for a
+    /// file that never had one, because that would change which files are listed
+    /// rather than only where playback starts.
+    ///
+    /// [#766]: https://github.com/BeFeast/ok-player/issues/766
+    pub fn mark_finished(
+        &mut self,
+        key: &str,
+        updated_at_unix: i64,
+        mode: HistoryWriteMode,
+    ) -> HistoryWriteResult {
+        if mode == HistoryWriteMode::Private {
+            return HistoryWriteResult::Suppressed;
+        }
+        let Some(record) = self.files.get_mut(key) else {
+            return HistoryWriteResult::Unchanged;
+        };
+        // Deliberately not short-circuited when the flag and the position already hold
+        // these values. Watching a file to the end is an event, and History is sorted
+        // and labelled from `updated_at_unix`, so a replay that ends where the last one
+        // did still has to move the row to the top and refresh its "Opened" label.
+        record.finished = true;
+        record.position = 0.0;
+        record.updated_at_unix = updated_at_unix;
         HistoryWriteResult::Changed
     }
 
@@ -466,6 +511,168 @@ fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
     let day_of_year = (153 * shifted_month + 2) / 5 + i64::from(day) - 1;
     let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
     era * 146_097 + day_of_era - 719_468
+}
+
+#[cfg(test)]
+mod resume_journeys {
+    //! Where a reopened file starts, driven end to end the way the shell drives it:
+    //! periodic position samples during playback, then whichever transition ended it.
+    use super::*;
+
+    const KEY: &str = "/media/clip.mkv";
+
+    fn sample(history: &mut History, position: f64, duration: f64) {
+        history.record_progress(
+            KEY,
+            HistoryProgressUpdate {
+                position,
+                duration,
+                finished: false,
+                updated_at_unix: 1_700_000_000,
+                title: HistoryTitleUpdate::Preserve,
+            },
+            HistoryWriteMode::Record,
+        );
+    }
+
+    #[test]
+    fn a_file_played_to_its_end_reopens_at_the_beginning() {
+        // The operator's file: 19.07 s long, last periodic sample at 12.83 s, then the
+        // engine hit end of file. 12.83 sits below the completion window, so nothing but
+        // the end-of-file transition itself can stop it from resuming.
+        let mut history = History::default();
+        sample(&mut history, 12.83, 19.07);
+        assert_eq!(history.resume_position(KEY), Some(12.83));
+
+        history.mark_finished(KEY, 1_700_000_100, HistoryWriteMode::Record);
+
+        assert_eq!(history.resume_position(KEY), None);
+        assert_eq!(history.files[KEY].position, 0.0);
+        assert!(history.files[KEY].finished);
+    }
+
+    #[test]
+    fn a_file_stopped_in_the_middle_reopens_where_it_stopped() {
+        let mut history = History::default();
+        sample(&mut history, 120.0, 600.0);
+
+        assert_eq!(history.resume_position(KEY), Some(120.0));
+    }
+
+    #[test]
+    fn a_file_stopped_just_before_the_end_reopens_at_the_beginning() {
+        // Stopping inside the completion window counts as watched even without an
+        // end-of-file event, on long media (the final 30 s) and short media (the final
+        // 5%) alike.
+        let mut long = History::default();
+        sample(&mut long, 3_575.0, 3_600.0);
+        assert_eq!(long.resume_position(KEY), None);
+
+        let mut short = History::default();
+        sample(&mut short, 18.2, 19.07);
+        assert_eq!(short.resume_position(KEY), None);
+    }
+
+    #[test]
+    fn the_completion_window_is_the_later_of_the_final_five_percent_and_the_final_thirty_seconds() {
+        // A percentage alone would call six minutes of an unwatched two-hour film
+        // finished; thirty seconds alone would call a nineteen-second clip finished the
+        // moment it opened. Whichever lands later wins, so each length gets the rule
+        // that fits it.
+        let mut long = History::default();
+        sample(&mut long, 3_400.0, 3_600.0);
+        assert_eq!(long.resume_position(KEY), Some(3_400.0));
+
+        let mut short = History::default();
+        sample(&mut short, 2.0, 19.07);
+        assert_eq!(short.resume_position(KEY), Some(2.0));
+    }
+
+    #[test]
+    fn finishing_leaves_the_file_listed_in_history_with_everything_it_carried() {
+        // Only where playback starts changes. A finished file is still a History row and
+        // still owns its bookmarks, duration, and preferences.
+        let mut history = History::default();
+        sample(&mut history, 12.83, 19.07);
+        history.add_bookmark(KEY, 5.0, 1_700_000_050, HistoryWriteMode::Record);
+
+        history.mark_finished(KEY, 1_700_000_100, HistoryWriteMode::Record);
+
+        let listed = crate::recents_shelf::search(&history, "");
+        assert!(listed.iter().any(|item| item.path == KEY));
+        assert_eq!(history.files[KEY].bookmarks, vec![5.0]);
+        assert_eq!(history.files[KEY].duration, 19.07);
+    }
+
+    #[test]
+    fn finishing_drops_the_file_out_of_continue_watching_exactly_as_a_late_stop_does() {
+        // Continue watching offers resume points, so it has always dropped a file
+        // stopped inside the completion window. Finishing is the same answer reached by
+        // the other route, not a new listing rule.
+        let mut finished = History::default();
+        sample(&mut finished, 12.83, 19.07);
+        finished.mark_finished(KEY, 1_700_000_100, HistoryWriteMode::Record);
+
+        let mut stopped_late = History::default();
+        sample(&mut stopped_late, 18.6, 19.07);
+
+        assert_eq!(
+            crate::recents_shelf::select(&finished, 10),
+            crate::recents_shelf::WelcomeShelf::Empty
+        );
+        assert_eq!(
+            crate::recents_shelf::select(&stopped_late, 10),
+            crate::recents_shelf::WelcomeShelf::Empty
+        );
+    }
+
+    #[test]
+    fn replaying_to_the_end_moves_the_file_back_to_the_top_of_history() {
+        // History is ordered and labelled from the timestamp, so finishing a file that
+        // was already finished still has to say when it happened.
+        let mut history = History::default();
+        sample(&mut history, 12.83, 19.07);
+        history.mark_finished(KEY, 1_700_000_100, HistoryWriteMode::Record);
+
+        let result = history.mark_finished(KEY, 1_700_009_999, HistoryWriteMode::Record);
+
+        assert_eq!(result, HistoryWriteResult::Changed);
+        assert_eq!(history.files[KEY].updated_at_unix, 1_700_009_999);
+    }
+
+    #[test]
+    fn finishing_never_creates_a_row_for_a_file_that_had_none() {
+        // Clips shorter than the periodic sample interval reach the end without ever
+        // having been written. Finishing must not start listing them.
+        let mut history = History::default();
+
+        let result = history.mark_finished(KEY, 1_700_000_100, HistoryWriteMode::Record);
+
+        assert_eq!(result, HistoryWriteResult::Unchanged);
+        assert!(history.files.is_empty());
+    }
+
+    #[test]
+    fn a_private_session_records_no_completion() {
+        let mut history = History::default();
+        sample(&mut history, 12.83, 19.07);
+
+        let result = history.mark_finished(KEY, 1_700_000_100, HistoryWriteMode::Private);
+
+        assert_eq!(result, HistoryWriteResult::Suppressed);
+        assert!(!history.files[KEY].finished);
+    }
+
+    #[test]
+    fn replaying_a_finished_file_makes_it_resumable_again() {
+        let mut history = History::default();
+        sample(&mut history, 12.83, 19.07);
+        history.mark_finished(KEY, 1_700_000_100, HistoryWriteMode::Record);
+
+        sample(&mut history, 6.0, 19.07);
+
+        assert_eq!(history.resume_position(KEY), Some(6.0));
+    }
 }
 
 #[cfg(test)]
