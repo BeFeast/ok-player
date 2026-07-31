@@ -335,7 +335,8 @@ pub enum TrackKind {
 /// source. The shell can therefore react without a blocking UI-thread property
 /// read and can drop a stale event whose source has already been superseded.
 /// Not `Copy` because `path` is a `String`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Not `Eq` because `EndFile::last_duration` is an `f64`.
+#[derive(Debug, Clone, PartialEq)]
 pub enum MpvEvent {
     /// libmpv logged a decoder problem while the source was open. This is
     /// diagnostic only: the engine has not said the source failed, and the
@@ -348,6 +349,12 @@ pub enum MpvEvent {
         reason: EndFileReason,
         path: Option<String>,
         diagnostic_messages: Vec<String>,
+        /// The last finite duration the pump observed for the ended source, since
+        /// mpv has already unloaded it and observes none by the time the shell
+        /// drains this event. `None` when no duration was ever observed. Lets an
+        /// end of file be reported as a completion even for a source that never
+        /// got a history row (#768).
+        last_duration: Option<f64>,
     },
     CommandReply {
         request_id: u64,

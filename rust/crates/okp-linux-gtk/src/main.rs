@@ -273,12 +273,6 @@ struct PlayerState {
     hover_thumbnail_request_key: Option<String>,
     chapters_snapshot: Vec<Chapter>,
     private_session: bool,
-    /// The engine's last finite duration observation for the current source, kept so
-    /// an end of file can still be reported as a completion when the source never got
-    /// a history row — at EOF the engine has already unloaded and observes no
-    /// duration, and a clip shorter than the progress-persistence interval has no row
-    /// to read one back from (#768). Cleared whenever the source changes.
-    last_observed_duration: Option<f64>,
     progress_reporter: progress_report::ProgressReporter,
     scribe_subtitles: scribe_subtitles::ScribeSubtitleState,
     history: history::HistoryStore,

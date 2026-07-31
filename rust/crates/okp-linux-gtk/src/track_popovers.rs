@@ -2499,10 +2499,11 @@ pub(crate) fn drain_mpv_events(
                 reason,
                 path,
                 diagnostic_messages,
+                last_duration,
             } if reason.is_eof() => {
                 if !apply_endfile_eof_diagnostic(state, path.as_deref(), &diagnostic_messages) {
                     if state.borrow().playlist.repeat() != RepeatMode::One {
-                        finish_current_progress(state, path.as_deref());
+                        finish_current_progress(state, path.as_deref(), last_duration);
                     }
                     let advanced = advance_playlist_on_eof(state);
                     if env::var_os("OKP_DEBUG_IDLE_RETURN_SMOKE").is_some()
@@ -2517,6 +2518,7 @@ pub(crate) fn drain_mpv_events(
                 reason: EndFileReason::Error(error),
                 path,
                 diagnostic_messages,
+                last_duration: _,
             } => {
                 // The engine rejected the source (e.g. a 404 stream). Transition the
                 // transport surface to `Failed` and store the short reason for the Copy

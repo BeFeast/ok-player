@@ -829,9 +829,6 @@ fn track_selection_id(selection: launch_args::TrackSelection) -> Option<i64> {
 fn advance_source_generation(state: &mut PlayerState) {
     state.source_generation = state.source_generation.wrapping_add(1);
     state.current_video_dimensions = None;
-    // A duration observed for the previous source must never complete the next
-    // one (#768).
-    state.last_observed_duration = None;
     state
         .initial_window_fit
         .begin_source(state.source_generation);
@@ -1196,7 +1193,11 @@ pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: 
 /// driven by the lifecycle event alone.
 ///
 /// [#766]: https://github.com/BeFeast/ok-player/issues/766
-pub(crate) fn finish_current_progress(state: &Rc<RefCell<PlayerState>>, ended_path: Option<&str>) {
+pub(crate) fn finish_current_progress(
+    state: &Rc<RefCell<PlayerState>>,
+    ended_path: Option<&str>,
+    ended_duration: Option<f64>,
+) {
     // The same staleness rule the asynchronous `EndFile` diagnostics use. A queued end
     // of file for the previous source can be drained after the user has opened another
     // one, and finishing needs no engine state at all, so without this guard it would
@@ -1224,9 +1225,9 @@ pub(crate) fn finish_current_progress(state: &Rc<RefCell<PlayerState>>, ended_pa
         // were never listed, so the history stays untouched — but reporting progress
         // and listing a file in History are independent concerns, and the reporter's
         // end-of-file contract still owes the sink its completion. The engine has
-        // already unloaded and observes no duration, so report from the last one it
-        // observed for this source (#768).
-        if let Some(duration) = state.last_observed_duration {
+        // already unloaded and observes no duration, so report from the last one the
+        // pump observed for the ended source, carried on the `EndFile` event (#768).
+        if let Some(duration) = ended_duration.filter(|value| value.is_finite() && *value > 0.0) {
             state.progress_reporter.observe(
                 private_session,
                 path.to_string_lossy().as_ref(),
@@ -1253,19 +1254,6 @@ pub(crate) fn finish_current_progress(state: &Rc<RefCell<PlayerState>>, ended_pa
         duration,
         true,
     );
-}
-
-/// Remember the engine's duration observation for the current source, so an end of
-/// file can be completed from it when no history row exists (#768). Invalid values
-/// are ignored rather than clearing the memory: at end of file the engine unloads
-/// and observes no duration, which is exactly when the remembered one is needed.
-pub(crate) fn note_observed_duration(state: &Rc<RefCell<PlayerState>>, duration: Option<f64>) {
-    let Some(duration) = duration else {
-        return;
-    };
-    if duration.is_finite() && duration > 0.0 {
-        state.borrow_mut().last_observed_duration = Some(duration);
-    }
 }
 
 pub(crate) fn build_folder_playlist(path: &Path) -> Vec<PlaylistItem> {

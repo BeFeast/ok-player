@@ -6358,20 +6358,19 @@ fn eof_without_a_history_row_still_reports_the_completion() {
     // row, so `mark_finished` has nothing to finish. Reporting progress and
     // listing a file in History are independent concerns: the sink is still owed
     // the final 100% update and the `Watched` event, taken from the duration the
-    // engine last observed for the source (#768).
+    // pump carried on the `EndFile` event (#768).
     let path = PathBuf::from("/media/short-clip.mkv");
     let events = Rc::new(RefCell::new(Vec::new()));
     let state = Rc::new(RefCell::new(PlayerState {
         current_file: Some(path.clone()),
         media_load_state: network_media::MediaLoadState::Playing,
-        last_observed_duration: Some(7.5),
         progress_reporter: progress_report::ProgressReporter::new(RecordingProgressSink(
             events.clone(),
         )),
         ..PlayerState::default()
     }));
 
-    finish_current_progress(&state, Some("/media/short-clip.mkv"));
+    finish_current_progress(&state, Some("/media/short-clip.mkv"), Some(7.5));
 
     assert_eq!(
         events.borrow().as_slice(),
@@ -6397,36 +6396,27 @@ fn eof_without_a_history_row_still_reports_the_completion() {
 }
 
 #[test]
-fn engine_duration_observations_are_remembered_only_while_valid() {
-    let state = Rc::new(RefCell::new(PlayerState::default()));
+fn eof_without_a_history_row_or_a_usable_duration_stays_silent() {
+    // No row and no observed duration: there is nothing truthful to report, so
+    // the sink hears nothing and the history is still not written. An invalid
+    // carried duration is treated the same as an absent one.
+    for ended_duration in [None, Some(f64::NAN), Some(0.0), Some(-3.0)] {
+        let path = PathBuf::from("/media/short-clip.mkv");
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let state = Rc::new(RefCell::new(PlayerState {
+            current_file: Some(path.clone()),
+            media_load_state: network_media::MediaLoadState::Playing,
+            progress_reporter: progress_report::ProgressReporter::new(RecordingProgressSink(
+                events.clone(),
+            )),
+            ..PlayerState::default()
+        }));
 
-    note_observed_duration(&state, Some(42.0));
-    assert_eq!(state.borrow().last_observed_duration, Some(42.0));
+        finish_current_progress(&state, Some("/media/short-clip.mkv"), ended_duration);
 
-    // At end of file the engine unloads and observes no duration; that absence
-    // is exactly when the remembered value is needed, so it must not clear it.
-    note_observed_duration(&state, None);
-    assert_eq!(state.borrow().last_observed_duration, Some(42.0));
-
-    note_observed_duration(&state, Some(f64::NAN));
-    note_observed_duration(&state, Some(0.0));
-    note_observed_duration(&state, Some(-3.0));
-    assert_eq!(state.borrow().last_observed_duration, Some(42.0));
-}
-
-#[test]
-fn observed_duration_does_not_survive_a_source_change() {
-    // A duration observed for the previous source must never complete the next
-    // one (#768): retiring the source drops the memory with it.
-    let state = Rc::new(RefCell::new(PlayerState {
-        current_file: Some(PathBuf::from("/media/short-clip.mkv")),
-        last_observed_duration: Some(7.5),
-        ..PlayerState::default()
-    }));
-
-    clear_loaded_media_state(&state);
-
-    assert!(state.borrow().last_observed_duration.is_none());
+        assert!(events.borrow().is_empty());
+        assert!(state.borrow().history.resume_position(&path).is_none());
+    }
 }
 
 #[test]
