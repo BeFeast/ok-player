@@ -444,8 +444,16 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                 // when `EndFile` drains the buffer.
                 lock(&shared.diagnostic_messages).clear();
                 // A duration observed for the previous source must never be
-                // reported for this one; the next recompute reads the new one.
-                *lock(&shared.last_duration) = None;
+                // reported for this one, so replace it with the loaded source's
+                // own — read live rather than left for the next recompute pass,
+                // because an ultra-short clip can queue its `EndFile` into this
+                // same drain batch, before any recompute runs (#768).
+                *lock(&shared.last_duration) = shared
+                    .reader
+                    .playback_state()
+                    .ok()
+                    .and_then(|playback| playback.duration)
+                    .filter(|duration| duration.is_finite() && *duration > 0.0);
                 lifecycle.push(MpvEvent::FileLoaded { video_dimensions });
                 flags.tracks = true;
                 flags.chapters = true;
