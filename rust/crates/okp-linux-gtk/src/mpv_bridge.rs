@@ -390,171 +390,51 @@ fn connect_native_mpv(
     state: Rc<RefCell<PlayerState>>,
     startup_launch: StartupLaunchGate,
 ) {
-    let realize_state = Rc::clone(&state);
-    let fallback_container = container.clone();
+    // The Wayland embed contract fixes the surface size into the engine when it
+    // is created, and mpv keeps configuring against that size until a later
+    // allocation reaches it. Building the engine on `realize` alone therefore
+    // hands it a 1x1 placeholder whenever the host widget has not been
+    // allocated yet - and on a launch that carries media, the first frames are
+    // decoded and presented against that placeholder. Realize and the first
+    // allocation arrive in either order, so whichever one completes the pair
+    // starts the engine, exactly once.
+    let started = Rc::new(Cell::new(false));
     let fallback_started = Rc::new(Cell::new(false));
-    let realize_fallback_started = Rc::clone(&fallback_started);
-    video_area.connect_realize(move |area| {
-        let plane = match NativeVideoPlane::create(area) {
-            Ok(plane) => plane,
-            Err(error) => {
-                schedule_gtk_mpv_fallback(
-                    &fallback_container,
-                    &realize_fallback_started,
-                    &realize_state,
-                    &startup_launch,
-                    auto_fallback,
-                    format!("Failed to create the native Wayland/EGL video plane: {error}"),
-                );
-                return;
-            }
-        };
-        if !plane.make_current() {
-            schedule_gtk_mpv_fallback(
-                &fallback_container,
-                &realize_fallback_started,
-                &realize_state,
-                &startup_launch,
-                auto_fallback,
-                "Failed to activate the native Wayland/EGL video context".to_owned(),
-            );
-            return;
-        }
-        let dmabuf_target = wayland_dmabuf_target(area).ok();
-        let render_size =
-            native_render_size(area.width(), area.height(), native_surface_scale(area));
-        let Some(mut mpv) = create_configured_native_mpv(
-            &realize_state,
-            dmabuf_target,
-            render_size,
-            wayland_scale_units(area),
-        ) else {
-            return;
-        };
-        let display = area.display();
-        let native_wayland_display = wayland_display_resource(&display);
-        if native_wayland_display.is_none() {
-            schedule_gtk_mpv_fallback(
-                &fallback_container,
-                &realize_fallback_started,
-                &realize_state,
-                &startup_launch,
-                auto_fallback,
-                "GDK Wayland native display is unavailable for direct VAAPI interop".to_owned(),
-            );
-            return;
-        }
-        if let Err(error) = mpv.create_render_context(native_wayland_display, true) {
-            schedule_gtk_mpv_fallback(
-                &fallback_container,
-                &realize_fallback_started,
-                &realize_state,
-                &startup_launch,
-                auto_fallback,
-                format!("Failed to create mpv native render context: {error}"),
-            );
-            return;
-        }
-        let update_handle = match mpv.render_update_handle() {
-            Ok(handle) => handle,
-            Err(error) => {
-                mpv.destroy_render_context();
-                schedule_gtk_mpv_fallback(
-                    &fallback_container,
-                    &realize_fallback_started,
-                    &realize_state,
-                    &startup_launch,
-                    auto_fallback,
-                    format!("Failed to capture the mpv native render handle: {error}"),
-                );
-                return;
-            }
-        };
-        if !plane.release_current() {
-            mpv.destroy_render_context();
-            schedule_gtk_mpv_fallback(
-                &fallback_container,
-                &realize_fallback_started,
-                &realize_state,
-                &startup_launch,
-                auto_fallback,
-                "Failed to transfer the native Wayland/EGL context to the render thread".to_owned(),
-            );
-            return;
-        }
-        let render_loop = match NativeRenderLoop::start(Arc::clone(&plane), update_handle) {
-            Ok(render_loop) => render_loop,
-            Err(error) => {
-                let _ = plane.make_current();
-                mpv.destroy_render_context();
-                schedule_gtk_mpv_fallback(
-                    &fallback_container,
-                    &realize_fallback_started,
-                    &realize_state,
-                    &startup_launch,
-                    auto_fallback,
-                    error,
-                );
-                return;
-            }
-        };
-        if let Err(error) = unsafe {
-            mpv.set_render_update_callback(
-                Some(native_render_update_trampoline),
-                render_loop.callback_context(),
-            )
-        } {
-            eprintln!("Failed to install the mpv native render callback: {error}");
-            drop(render_loop);
-            let _ = plane.make_current();
-            mpv.destroy_render_context();
-            schedule_gtk_mpv_fallback(
-                &fallback_container,
-                &realize_fallback_started,
-                &realize_state,
-                &startup_launch,
-                auto_fallback,
-                format!("Failed to install the mpv native render callback: {error}"),
-            );
-            return;
-        }
 
-        start_event_pump_for_session(&mut mpv);
-        {
-            let mut state = realize_state.borrow_mut();
-            state.native_video_plane = Some(plane);
-            state.native_render_loop = Some(render_loop);
-            state.mpv = Some(mpv);
-        }
-        if let Some(surface) = area.native().and_then(|native| native.surface())
-            && surface.find_property("scale").is_some()
-        {
-            let scale_state = Rc::clone(&realize_state);
-            let scale_area = area.clone();
-            surface.connect_notify_local(Some("scale"), move |_, _| {
-                match offer_native_video_geometry(&scale_area, &scale_state) {
-                    fullscreen_toggle::GeometryDisposition::Held => {
-                        log_fullscreen_video_geometry_from_area(
-                            &scale_area,
-                            &scale_state,
-                            "scale-held-for-fullscreen-ack",
-                        );
-                    }
-                    fullscreen_toggle::GeometryDisposition::Apply(geometry) => {
-                        apply_native_video_geometry(&scale_state, geometry, true);
-                    }
-                }
-            });
-        }
-        schedule_audio_device_restore(&realize_state);
-        try_pending_audio_device_restore(&realize_state);
-        mark_startup_player_ready(&startup_launch, &realize_state);
-        area.queue_draw();
+    let realize_state = Rc::clone(&state);
+    let realize_container = container.clone();
+    let realize_started = Rc::clone(&started);
+    let realize_fallback_started = Rc::clone(&fallback_started);
+    let realize_launch = Rc::clone(&startup_launch);
+    video_area.connect_realize(move |area| {
+        start_native_mpv(
+            area,
+            &realize_container,
+            auto_fallback,
+            &realize_state,
+            &realize_launch,
+            &realize_started,
+            &realize_fallback_started,
+        );
     });
 
+    let start_state = Rc::clone(&state);
+    let start_container = container.clone();
+    let start_started = Rc::clone(&started);
+    let start_fallback_started = Rc::clone(&fallback_started);
+    let start_launch = Rc::clone(&startup_launch);
     let resize_state = Rc::clone(&state);
     video_area.connect_resize(move |area, width, height| {
         debug_assert_eq!((width, height), (area.width(), area.height()));
+        start_native_mpv(
+            area,
+            &start_container,
+            auto_fallback,
+            &start_state,
+            &start_launch,
+            &start_started,
+            &start_fallback_started,
+        );
         match offer_native_video_geometry(area, &resize_state) {
             fullscreen_toggle::GeometryDisposition::Held => {
                 log_fullscreen_video_geometry_from_area(
@@ -569,8 +449,11 @@ fn connect_native_mpv(
         }
     });
 
+    let unrealize_started = Rc::clone(&started);
     let unrealize_state = Rc::clone(&state);
     video_area.connect_unrealize(move |_| {
+        // A later realization must be able to build the engine again.
+        unrealize_started.set(false);
         let mut state = unrealize_state.borrow_mut();
         let uses_wayland_dmabuf = state
             .mpv
@@ -607,6 +490,189 @@ fn connect_native_mpv(
         }
         state.native_video_plane = None;
     });
+}
+
+/// Whether the video host can carry an engine yet.
+///
+/// Both edges are required. A realized widget is the one that owns the
+/// `wl_surface` the plane is built on; a positive allocation is the only size
+/// that is not a placeholder, and the Wayland embed contract fixes that size
+/// into the engine at creation. GTK delivers realization and the first
+/// allocation in either order, so neither one alone is a readiness signal.
+pub(crate) const fn native_engine_host_is_ready(realized: bool, width: i32, height: i32) -> bool {
+    realized && width > 0 && height > 0
+}
+
+/// Build the native Wayland/EGL video plane and its engine once the host widget
+/// is both realized (so it has a `wl_surface`) and allocated (so the size handed
+/// to the engine is the real one). Runs at most once per realization.
+fn start_native_mpv(
+    area: &gtk::DrawingArea,
+    container: &gtk::Stack,
+    auto_fallback: bool,
+    state: &Rc<RefCell<PlayerState>>,
+    startup_launch: &StartupLaunchGate,
+    started: &Rc<Cell<bool>>,
+    fallback_started: &Rc<Cell<bool>>,
+) {
+    if started.get()
+        || !native_engine_host_is_ready(area.is_realized(), area.width(), area.height())
+    {
+        return;
+    }
+    started.set(true);
+    let plane = match NativeVideoPlane::create(area) {
+        Ok(plane) => plane,
+        Err(error) => {
+            schedule_gtk_mpv_fallback(
+                container,
+                fallback_started,
+                state,
+                startup_launch,
+                auto_fallback,
+                format!("Failed to create the native Wayland/EGL video plane: {error}"),
+            );
+            return;
+        }
+    };
+    if !plane.make_current() {
+        schedule_gtk_mpv_fallback(
+            container,
+            fallback_started,
+            state,
+            startup_launch,
+            auto_fallback,
+            "Failed to activate the native Wayland/EGL video context".to_owned(),
+        );
+        return;
+    }
+    let dmabuf_target = wayland_dmabuf_target(area).ok();
+    let render_size = native_render_size(area.width(), area.height(), native_surface_scale(area));
+    let Some(mut mpv) =
+        create_configured_native_mpv(state, dmabuf_target, render_size, wayland_scale_units(area))
+    else {
+        return;
+    };
+    let display = area.display();
+    let native_wayland_display = wayland_display_resource(&display);
+    if native_wayland_display.is_none() {
+        schedule_gtk_mpv_fallback(
+            container,
+            fallback_started,
+            state,
+            startup_launch,
+            auto_fallback,
+            "GDK Wayland native display is unavailable for direct VAAPI interop".to_owned(),
+        );
+        return;
+    }
+    if let Err(error) = mpv.create_render_context(native_wayland_display, true) {
+        schedule_gtk_mpv_fallback(
+            container,
+            fallback_started,
+            state,
+            startup_launch,
+            auto_fallback,
+            format!("Failed to create mpv native render context: {error}"),
+        );
+        return;
+    }
+    let update_handle = match mpv.render_update_handle() {
+        Ok(handle) => handle,
+        Err(error) => {
+            mpv.destroy_render_context();
+            schedule_gtk_mpv_fallback(
+                container,
+                fallback_started,
+                state,
+                startup_launch,
+                auto_fallback,
+                format!("Failed to capture the mpv native render handle: {error}"),
+            );
+            return;
+        }
+    };
+    if !plane.release_current() {
+        mpv.destroy_render_context();
+        schedule_gtk_mpv_fallback(
+            container,
+            fallback_started,
+            state,
+            startup_launch,
+            auto_fallback,
+            "Failed to transfer the native Wayland/EGL context to the render thread".to_owned(),
+        );
+        return;
+    }
+    let render_loop = match NativeRenderLoop::start(Arc::clone(&plane), update_handle) {
+        Ok(render_loop) => render_loop,
+        Err(error) => {
+            let _ = plane.make_current();
+            mpv.destroy_render_context();
+            schedule_gtk_mpv_fallback(
+                container,
+                fallback_started,
+                state,
+                startup_launch,
+                auto_fallback,
+                error,
+            );
+            return;
+        }
+    };
+    if let Err(error) = unsafe {
+        mpv.set_render_update_callback(
+            Some(native_render_update_trampoline),
+            render_loop.callback_context(),
+        )
+    } {
+        eprintln!("Failed to install the mpv native render callback: {error}");
+        drop(render_loop);
+        let _ = plane.make_current();
+        mpv.destroy_render_context();
+        schedule_gtk_mpv_fallback(
+            container,
+            fallback_started,
+            state,
+            startup_launch,
+            auto_fallback,
+            format!("Failed to install the mpv native render callback: {error}"),
+        );
+        return;
+    }
+
+    start_event_pump_for_session(&mut mpv);
+    {
+        let mut state = state.borrow_mut();
+        state.native_video_plane = Some(plane);
+        state.native_render_loop = Some(render_loop);
+        state.mpv = Some(mpv);
+    }
+    if let Some(surface) = area.native().and_then(|native| native.surface())
+        && surface.find_property("scale").is_some()
+    {
+        let scale_state = Rc::clone(state);
+        let scale_area = area.clone();
+        surface.connect_notify_local(
+            Some("scale"),
+            move |_, _| match offer_native_video_geometry(&scale_area, &scale_state) {
+                fullscreen_toggle::GeometryDisposition::Held => {
+                    log_fullscreen_video_geometry_from_area(
+                        &scale_area,
+                        &scale_state,
+                        "scale-held-for-fullscreen-ack",
+                    );
+                }
+                fullscreen_toggle::GeometryDisposition::Apply(geometry) => {
+                    apply_native_video_geometry(&scale_state, geometry, true);
+                }
+            },
+        );
+    }
+    schedule_audio_device_restore(state);
+    try_pending_audio_device_restore(state);
+    mark_startup_player_ready(startup_launch, state);
+    area.queue_draw();
 }
 
 /// Bounded wait for the compositor to acknowledge a fullscreen request.
@@ -2226,5 +2292,39 @@ mod native_render_notifier_tests {
                 force: true,
             })
         );
+    }
+}
+
+#[cfg(test)]
+mod native_engine_start_tests {
+    use super::*;
+
+    #[test]
+    fn a_realized_but_unallocated_host_cannot_carry_an_engine() {
+        // The regression this guards: the engine was built on `realize`, where
+        // GTK has not allocated the host yet, so mpv fixed a 1x1 placeholder as
+        // its Wayland embed size and configured its first frames against it.
+        assert!(!native_engine_host_is_ready(true, 0, 0));
+        assert!(!native_engine_host_is_ready(true, 1920, 0));
+        assert!(!native_engine_host_is_ready(true, 0, 1080));
+    }
+
+    #[test]
+    fn an_allocated_but_unrealized_host_cannot_carry_an_engine() {
+        // Allocation can precede realization; the plane needs the wl_surface
+        // that only realization provides, so this edge must not start it either.
+        assert!(!native_engine_host_is_ready(false, 1920, 1080));
+    }
+
+    #[test]
+    fn a_realized_and_allocated_host_carries_an_engine() {
+        assert!(native_engine_host_is_ready(true, 1920, 1080));
+        assert!(native_engine_host_is_ready(true, 1, 1));
+    }
+
+    #[test]
+    fn a_negative_allocation_is_not_a_size() {
+        assert!(!native_engine_host_is_ready(true, -1, 1080));
+        assert!(!native_engine_host_is_ready(true, 1920, -1));
     }
 }
