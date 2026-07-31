@@ -207,9 +207,10 @@ impl History {
         let Some(record) = self.files.get_mut(key) else {
             return HistoryWriteResult::Unchanged;
         };
-        if record.finished && record.position == 0.0 {
-            return HistoryWriteResult::Unchanged;
-        }
+        // Deliberately not short-circuited when the flag and the position already hold
+        // these values. Watching a file to the end is an event, and History is sorted
+        // and labelled from `updated_at_unix`, so a replay that ends where the last one
+        // did still has to move the row to the top and refresh its "Opened" label.
         record.finished = true;
         record.position = 0.0;
         record.updated_at_unix = updated_at_unix;
@@ -623,6 +624,20 @@ mod resume_journeys {
             crate::recents_shelf::select(&stopped_late, 10),
             crate::recents_shelf::WelcomeShelf::Empty
         );
+    }
+
+    #[test]
+    fn replaying_to_the_end_moves_the_file_back_to_the_top_of_history() {
+        // History is ordered and labelled from the timestamp, so finishing a file that
+        // was already finished still has to say when it happened.
+        let mut history = History::default();
+        sample(&mut history, 12.83, 19.07);
+        history.mark_finished(KEY, 1_700_000_100, HistoryWriteMode::Record);
+
+        let result = history.mark_finished(KEY, 1_700_009_999, HistoryWriteMode::Record);
+
+        assert_eq!(result, HistoryWriteResult::Changed);
+        assert_eq!(history.files[KEY].updated_at_unix, 1_700_009_999);
     }
 
     #[test]

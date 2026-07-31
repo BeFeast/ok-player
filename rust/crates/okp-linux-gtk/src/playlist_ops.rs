@@ -1193,7 +1193,19 @@ pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: 
 /// driven by the lifecycle event alone.
 ///
 /// [#766]: https://github.com/BeFeast/ok-player/issues/766
-pub(crate) fn finish_current_progress(state: &Rc<RefCell<PlayerState>>) {
+pub(crate) fn finish_current_progress(state: &Rc<RefCell<PlayerState>>, ended_path: Option<&str>) {
+    // The same staleness rule the asynchronous `EndFile` diagnostics use. A queued end
+    // of file for the previous source can be drained after the user has opened another
+    // one, and finishing needs no engine state at all, so without this guard it would
+    // happily mark the newly opened file watched and erase its resume point.
+    let Some(current_source) = current_load_failure_source(state) else {
+        return;
+    };
+    if ended_path.is_some_and(|ended| !current_source.matches_engine_path(ended)) {
+        eprintln!("ignoring stale EndFile completion for a superseded source");
+        return;
+    }
+
     let (private_session, path) = {
         let state = state.borrow();
         let Some(path) = state.current_file.clone() else {
