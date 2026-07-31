@@ -190,6 +190,28 @@ mod tests {
     }
 
     #[test]
+    fn a_completion_reported_at_the_end_never_looks_like_no_progress() {
+        // Reaching the end of a file clears the *resume* position, which is not the
+        // position the viewing reached. A sink reads the progress fraction of every
+        // observation, so a completion handed in at zero would report a watched file as
+        // untouched - and would be the only thing the sink saw whenever the `Watched`
+        // event was already spent on an earlier sample.
+        let mut tracker = ProgressTracker::default();
+        // Spend the Watched event on an earlier sample, so the completion below has only
+        // its progress fraction left to speak with.
+        assert_eq!(tracker.observe("movie.mkv", 570.0, 600.0, false).len(), 2);
+
+        let events = tracker.observe("movie.mkv", 600.0, 600.0, true);
+
+        assert!(matches!(events.as_slice(), [ProgressEvent::Progress(_)]));
+        let ProgressEvent::Progress(update) = &events[0] else {
+            unreachable!()
+        };
+        assert_eq!(update.fraction, 1.0);
+        assert_eq!(update.position_seconds, 600.0);
+    }
+
+    #[test]
     fn eof_marks_short_or_stale_position_as_watched() {
         let mut tracker = ProgressTracker::default();
         let events = tracker.observe("clip.mkv", 8.0, 20.0, true);

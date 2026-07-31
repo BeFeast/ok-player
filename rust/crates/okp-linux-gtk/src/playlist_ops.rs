@@ -1209,12 +1209,16 @@ pub(crate) fn finish_current_progress(state: &Rc<RefCell<PlayerState>>) {
     if let Err(error) = state.history.save() {
         eprintln!("Failed to save history: {error}");
     }
-    // Position zero with `finished` set: the reporter derives "watched" from the flag,
-    // so a completion is reported even though no final position sample exists.
+    // Reported at the end of the file, not at the zero the history entry now holds:
+    // those are different questions. Zero is where the next open should start; the end
+    // is how far this viewing got, and every observation the reporter is handed also
+    // emits a progress fraction. Reporting zero here would hand a sink a completed file
+    // sitting at 0%, and would say so even when the `Watched` event is suppressed
+    // because an earlier sample already crossed the threshold.
     state.progress_reporter.observe(
         private_session,
         path.to_string_lossy().as_ref(),
-        0.0,
+        duration,
         duration,
         true,
     );
