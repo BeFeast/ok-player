@@ -1,5 +1,11 @@
 use super::*;
 
+/// Corner radius of the rounded OK Player shell, logical px. The stylesheet
+/// below states the same number literally (CSS is a static string); the
+/// `shell_radius_matches_the_stylesheet` test pins the two together, and the
+/// native video plane cuts matching transparent corner arcs (#778).
+pub(crate) const SHELL_CORNER_RADIUS_PX: i32 = 14;
+
 pub(crate) const OKP_STYLESHEET: &str = "
         /* Design tokens: one coherent OK Player palette. Every accent and state
            colour below derives from these bases via alpha()/mix(), so the whole
@@ -37,8 +43,22 @@ pub(crate) const OKP_STYLESHEET: &str = "
             background: @okp_bg;
         }
 
+        /* OK Player rounds its own windowed shell. The toplevel is undecorated,
+           so GTK draws no decoration node and contributes no radius of its own:
+           without this rule the window is square on every desktop, and where a
+           desktop rounds it compositor-side the square video plane below shows
+           through the rounding (#778). Maximized and fullscreen keep square
+           corners - GTK sets those style classes itself. Keep the radius equal
+           to SHELL_CORNER_RADIUS_PX. */
+        window.okp-player-window:not(.maximized):not(.fullscreen),
+        window.okp-player-window:not(.maximized):not(.fullscreen) .okp-root {
+            border-radius: 14px;
+        }
+
         window.okp-player-window.is-compact-mode,
         window.okp-player-window.is-compact-mode .okp-root {
+            /* Keep in sync with COMPACT_SHELL_CORNER_RADIUS in mpv_bridge.rs:
+               the native video plane cuts matching transparent corner arcs. */
             border-radius: 14px;
             background: @okp_bg;
         }
@@ -4735,8 +4755,31 @@ pub(crate) fn install_css() {
 
 #[cfg(test)]
 mod tests {
-    use super::OKP_STYLESHEET;
+    use super::{OKP_STYLESHEET, SHELL_CORNER_RADIUS_PX};
     use std::collections::HashSet;
+
+    /// The mask the native video plane cuts is driven by
+    /// `SHELL_CORNER_RADIUS_PX`, while the stylesheet is a static string that
+    /// has to state the same number. Pin them together: a radius that
+    /// disagrees with the chrome is the very defect #778 reported.
+    #[test]
+    fn shell_radius_matches_the_stylesheet() {
+        let radius = format!("border-radius: {SHELL_CORNER_RADIUS_PX}px;");
+        for selector in [
+            "window.okp-player-window:not(.maximized):not(.fullscreen),",
+            "window.okp-player-window.is-compact-mode,",
+        ] {
+            let rule_start = OKP_STYLESHEET
+                .find(selector)
+                .unwrap_or_else(|| panic!("rounded shell selector missing: {selector}"));
+            let rule = &OKP_STYLESHEET[rule_start..];
+            let rule_end = rule.find('}').expect("rounded shell rule terminator");
+            assert!(
+                rule[..rule_end].contains(&radius),
+                "{selector} must round the shell at {SHELL_CORNER_RADIUS_PX}px"
+            );
+        }
+    }
 
     #[test]
     fn native_video_compact_mode_keeps_the_parent_surface_transparent() {

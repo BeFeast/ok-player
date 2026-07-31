@@ -157,6 +157,22 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     window.set_icon_name(Some(LINUX_ICON_NAME));
     let aspect_resize_state = AspectResizeState::new();
     let window_bounds = track_player_window_bounds(&window, &aspect_resize_state);
+    // The shell is rounded while windowed and square while maximized or
+    // fullscreen; the retained EGL plane below it has to switch with it, or a
+    // square black corner shows through the rounding (#778).
+    // GTK names the property `fullscreened`, not `fullscreen`: subscribing to the
+    // latter silently never fires, so the mask would stay cut into a fullscreen
+    // plane. The rest of this file's fullscreen listeners already use the right
+    // name; this one is kept in step with them deliberately.
+    for state_property in ["maximized", "fullscreened"] {
+        let radius_state = Rc::clone(&state);
+        window.connect_notify_local(Some(state_property), move |window, _| {
+            mpv_bridge::sync_native_plane_corner_radius(
+                &radius_state,
+                mpv_bridge::shell_corner_radius(window),
+            );
+        });
+    }
     connect_aspect_resize_shift(&window, &aspect_resize_state);
 
     let video_host = VideoHost::for_display(&gtk::prelude::WidgetExt::display(&window));
