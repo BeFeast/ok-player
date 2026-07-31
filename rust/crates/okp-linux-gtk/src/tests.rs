@@ -4388,10 +4388,17 @@ fn a_deb_install_announces_the_package_manager_and_offers_no_in_app_install() {
 
     let presentation = session.describe();
     assert_eq!(presentation.capability, UpdateCapability::SystemManaged);
+    // The one action it has, and the reason it has one: what stood here was a button into
+    // the desktop's system-wide updater, and removing that without this would leave the
+    // announcement with nothing under it (#759).
     assert_eq!(
         primary_update_action(&presentation),
-        None,
-        "a system-managed install must not offer an in-app install"
+        Some(UpdateAction::CopyUpgradeCommand),
+        "a system-managed install offers the command for its own package"
+    );
+    assert!(
+        !UpdateAction::CopyUpgradeCommand.applies_update_in_app(),
+        "and that command is not an in-app install: apt runs it, not OK Player"
     );
     assert!(presentation.updates_message.contains("0.12.0"));
     // The tool by the name the user knows it by, and the suite it will fetch from. Naming the
@@ -4434,7 +4441,12 @@ fn a_skipped_deb_offer_keeps_its_instructions_but_leaves_the_player_surface() {
 
     let presentation = session.describe();
     assert!(!session.offer_surface_visible());
-    assert_eq!(primary_update_action(&presentation), None);
+    // Silenced, not made unreachable: the command that installs it stays on the Settings
+    // surface for the user who changes their mind (#759).
+    assert_eq!(
+        primary_update_action(&presentation),
+        Some(UpdateAction::CopyUpgradeCommand)
+    );
     assert!(presentation.updates_message.contains("apt"));
 }
 
@@ -5376,7 +5388,10 @@ fn update_previews_walk_real_transitions() {
             .updates_message
             .contains(PREVIEW_UPDATE_VERSION)
     );
-    assert_eq!(primary_update_action(&deb.describe()), None);
+    assert_eq!(
+        primary_update_action(&deb.describe()),
+        Some(UpdateAction::CopyUpgradeCommand)
+    );
 
     let appimage = build_linux_update_preview(InstallKind::AppImage, "restart-pending")
         .expect("a pending restart previews on the AppImage lane");
@@ -5402,7 +5417,7 @@ fn update_previews_walk_real_transitions() {
         Some(UpdateAction::CopyRepositorySetup)
     );
     assert!(no_source.repository_setup.is_some());
-    assert!(!no_source.system_updater_offered);
+    assert_eq!(no_source.upgrade_command, None);
     assert!(no_source.updates_message.contains(PREVIEW_UPDATE_VERSION));
 
     // ...and it is a different picture from the subscribed machine's.
@@ -5422,7 +5437,10 @@ fn update_previews_walk_real_transitions() {
         "this machine has a repository; offering to add one would overwrite its suite"
     );
     assert!(unread.refresh_command.is_some());
-    assert!(unread.system_updater_offered);
+    assert_eq!(
+        unread.upgrade_command, None,
+        "apt has nothing to upgrade to until it has read the source"
+    );
 
     // A state a lane cannot reach is not previewable there either.
     assert!(build_linux_update_preview(InstallKind::Deb, "restart-pending").is_none());
@@ -5467,21 +5485,54 @@ fn a_refresh_keeps_the_offer_it_is_refreshing() {
     );
 }
 
-/// The system-managed action hands the user to a real tool or admits there is
-/// none; it never silently does nothing.
+/// The Settings block a system-managed install is shown when its own source is holding the
+/// update (#759). What it replaced was a button into the desktop's system-wide updater; what
+/// is there now is one command for one package, and a sentence saying who runs it.
 #[test]
-fn the_system_software_action_is_honest_about_what_this_desktop_has() {
-    let discovered = system_software_surface();
-    match discovered {
-        Some((path, _)) => assert!(path.is_absolute() || path.exists()),
-        None => assert!(!SYSTEM_UPDATER_ABSENT_HINT.is_empty()),
-    }
+fn the_system_managed_block_offers_one_package_scoped_command_and_no_updater() {
+    let subscribed = build_linux_update_preview(InstallKind::Deb, "apt-source-carries-it")
+        .expect("a subscribed machine with a deliverable previews on the deb lane");
+    let subscribed = subscribed.describe();
+
     assert_eq!(
-        SYSTEM_SOFTWARE_SURFACES.len(),
-        5,
-        "the candidate list is the whole policy; changing it is a deliberate act"
+        primary_update_action(&subscribed),
+        Some(UpdateAction::CopyUpgradeCommand),
+        "the surface that names the version hands over the command that installs it"
     );
-    assert!(SYSTEM_UPDATER_ACTION_LABEL.starts_with("Open"));
+    let command = subscribed
+        .upgrade_command
+        .expect("a machine whose source carries the build is given the command for it");
+    assert!(command.contains("ok-player"), "{command}");
+    assert!(!command.contains("pkexec"), "{command}");
+
+    let block = upgrade_command_text(command);
+    assert!(
+        block.contains(command),
+        "the block shows the command it tells the user to run: {block}"
+    );
+    assert!(
+        block.contains("package manager installs this update"),
+        "the block is honest about who applies it: {block}"
+    );
+    assert!(
+        block.contains("without touching anything else on this system"),
+        "the block says what it does not touch: {block}"
+    );
+    assert!(
+        block.contains("whatever the new version needs"),
+        "...and does not overpromise: a new version's dependencies come with it, as they \
+         must for any command that installs the package at all: {block}"
+    );
+    assert!(
+        subscribed.repository_setup.is_none() && subscribed.refresh_command.is_none(),
+        "a machine whose source carries the build is not told to add or refresh one"
+    );
+    assert!(
+        !primary_action_accessible_label(UpdateAction::CopyUpgradeCommand)
+            .to_lowercase()
+            .contains("software updater"),
+        "the announced label is about this package, not about the desktop's updater"
+    );
 }
 
 #[test]

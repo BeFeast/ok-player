@@ -1085,15 +1085,6 @@ fn build_update_action_surface(
     skip.connect_clicked(move |_| skip_current_update(&skip_state, &skip_toast));
     actions.append(&skip);
 
-    let system = gtk::Button::with_label(SYSTEM_UPDATER_ACTION_LABEL);
-    system.add_css_class("okp-settings-button");
-    system.update_property(&[gtk::accessible::Property::Label(
-        "Open the system software updater",
-    )]);
-    let system_toast = Rc::clone(&status_toast);
-    system.connect_clicked(move |_| open_system_software_surface(&system_toast));
-    actions.append(&system);
-
     let primary = gtk::Button::with_label("Update");
     primary.add_css_class("okp-update-primary-button");
     primary.update_property(&[gtk::accessible::Property::Label("Update OK Player")]);
@@ -1113,7 +1104,6 @@ fn build_update_action_surface(
         status: status.downgrade(),
         primary: primary.downgrade(),
         skip: skip.downgrade(),
-        system: system.downgrade(),
         setup: setup.downgrade(),
         check: check.map(|button| button.downgrade()),
     });
@@ -1156,6 +1146,7 @@ pub(crate) fn primary_action_accessible_label(action: UpdateAction) -> &'static 
         UpdateAction::CopyRefreshCommand => {
             "Copy the command that refreshes this system's package lists"
         }
+        UpdateAction::CopyUpgradeCommand => "Copy the command that upgrades the OK Player package",
         // Everything else is a step of the update itself — the download, the
         // apply, the restart that finishes it, or a retry of one of those.
         UpdateAction::DownloadUpdate
@@ -1188,6 +1179,20 @@ pub(crate) fn repository_setup_text(setup: &RepositorySetup) -> String {
     )
 }
 
+/// The block for a machine whose own source is already holding the update (#759).
+///
+/// One command, naming one package. What it replaced was a button that opened the desktop's
+/// system-wide updater, which builds a transaction over every upgradable package on the
+/// machine — on the reporting machine that meant `tzdata`, a debconf prompt, and a window
+/// stuck at `Preconfiguring packages ...`. The sentence above the command says who applies
+/// the update, because it is not this app: the privileged install path was removed in #698
+/// and nothing here runs anything.
+pub(crate) fn upgrade_command_text(command: &str) -> String {
+    format!(
+        "Your package manager installs this update, not OK Player. This command upgrades the OK Player package, and whatever the new version needs, without touching anything else on this system:\n\n{command}"
+    )
+}
+
 /// The block for a machine whose repository is configured but unread (#726). Deliberately one
 /// command and no key material: nothing about this machine's subscription is being changed.
 pub(crate) fn refresh_command_text(command: &str) -> String {
@@ -1208,18 +1213,16 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
     let settings_primary_action = primary_update_action(&presentation);
     let offer_primary_action = offer_primary_update_action(&presentation);
     let checks_possible = update_checks_are_possible(presentation.install_kind);
-    let system_updater = system_software_surface();
-    // Derived from the projection rather than from the install kind: the desktop updater
-    // reads the same package data the app just read, so offering it anywhere the app's claim
-    // did not come from that data is offering a tool guaranteed to contradict it (#725).
-    let system_visible = presentation.system_updater_offered;
     let title_text = update_surface_title(&presentation);
-    // A machine either has a repository or does not; the two blocks are never both shown.
+    // One block, because the three are answers to the same question and a machine is only
+    // ever in one of them: it has no repository, or it has one apt has not read, or it has
+    // one holding the update.
     let setup_text = presentation
         .repository_setup
         .as_ref()
         .map(repository_setup_text)
-        .or_else(|| presentation.refresh_command.map(refresh_command_text));
+        .or_else(|| presentation.refresh_command.map(refresh_command_text))
+        .or_else(|| presentation.upgrade_command.map(upgrade_command_text));
 
     state.borrow_mut().linux_update_views.retain(|view| {
         let Some(root) = view.root.upgrade() else {
@@ -1235,9 +1238,6 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
             return false;
         };
         let Some(skip) = view.skip.upgrade() else {
-            return false;
-        };
-        let Some(system) = view.system.upgrade() else {
             return false;
         };
 
@@ -1275,13 +1275,6 @@ pub(crate) fn refresh_linux_update_views(state: &Rc<RefCell<PlayerState>>) {
                 setup.set_text(text);
             }
         }
-
-        system.set_visible(system_visible);
-        system.set_sensitive(system_updater.is_some());
-        system.set_tooltip_text(match &system_updater {
-            Some(_) => None,
-            None => Some(SYSTEM_UPDATER_ABSENT_HINT),
-        });
 
         if let Some(check) = view.check.as_ref().and_then(glib::WeakRef::upgrade) {
             check.set_visible(checks_possible);
@@ -1518,6 +1511,13 @@ pub(crate) fn build_linux_update_preview(
             lifecycle.start_check().ok()?;
             lifecycle.check_found(PREVIEW_UPDATE_VERSION).ok()?;
         }
+        // A subscribed machine whose own source is holding the build. This is what the
+        // reporting machine actually was, and the state that used to offer a way into the
+        // desktop's system-wide updater and no way to update OK Player (#759).
+        "apt-source-carries-it" => {
+            lifecycle.start_check().ok()?;
+            lifecycle.check_found(PREVIEW_UPDATE_VERSION).ok()?;
+        }
         // The machine every .deb install is on at first launch: the repository is configured
         // and apt has not read it yet (#726).
         "apt-source-unread" => {
@@ -1682,8 +1682,27 @@ pub(crate) fn take_primary_update_action(
         Some(UpdateAction::CopyRefreshCommand) => {
             copy_refresh_command(&state, &status_toast);
         }
+        // The source is holding the build; one command installs that package and no
+        // other (#759). The app copies it and runs nothing, as on the two paths above.
+        Some(UpdateAction::CopyUpgradeCommand) => {
+            copy_upgrade_command(&state, &status_toast);
+        }
         Some(UpdateAction::SkipVersion) | None => {}
     }
+}
+
+/// Puts the command that upgrades this package — and only this package — on the clipboard
+/// (#759). Nothing here launches a system-wide updater, and nothing here elevates.
+fn copy_upgrade_command(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    let Some(command) = state.borrow().linux_update.describe().upgrade_command else {
+        return;
+    };
+    let Some(display) = gtk::gdk::Display::default() else {
+        status_toast.show("Could not copy the upgrade command");
+        return;
+    };
+    display.clipboard().set_text(command);
+    status_toast.show("Upgrade command copied");
 }
 
 /// Puts the command that reads an already-configured source on the clipboard (#726).
@@ -2470,38 +2489,16 @@ pub(crate) fn apply_staged_linux_update(
     Ok(LinuxUpdateApplyResult::RestartRequired)
 }
 
-pub(crate) const SYSTEM_UPDATER_ACTION_LABEL: &str = "Open software updater";
-pub(crate) const SYSTEM_UPDATER_ABSENT_HINT: &str =
-    "No graphical software updater was found on this desktop.";
-
-/// The desktop's own update surface, in the order a GTK desktop is likely to
-/// have one. Nothing here installs anything: the action hands the user to the
-/// tool that owns the package, and when the desktop has none the surface says
-/// so instead of pretending.
-pub(crate) const SYSTEM_SOFTWARE_SURFACES: [(&str, &[&str]); 5] = [
-    ("gnome-software", &["--mode=updates"]),
-    ("mintupdate", &[]),
-    ("update-manager", &[]),
-    ("gpk-update-viewer", &[]),
-    ("plasma-discover", &["--mode", "update"]),
-];
-
-pub(crate) fn system_software_surface() -> Option<(PathBuf, &'static [&'static str])> {
-    SYSTEM_SOFTWARE_SURFACES
-        .iter()
-        .find_map(|(name, args)| find_executable(name).map(|path| (path, *args)))
-}
-
-fn open_system_software_surface(status_toast: &StatusToast) {
-    let Some((executable, args)) = system_software_surface() else {
-        status_toast.show(SYSTEM_UPDATER_ABSENT_HINT);
-        return;
-    };
-    if let Err(error) = Command::new(&executable).args(args).spawn() {
-        eprintln!("Failed to open {}: {error}", executable.display());
-        status_toast.show("Could not open the software updater");
-    }
-}
+// There is deliberately no launcher for the desktop's software updater here (#759).
+//
+// It existed, as the counterpart to the repository instructions, on the reasoning that the
+// updater reads the same package data the app read and so could not contradict the surface.
+// That holds for the *verdict* and not for the *transaction*: agreeing about `ok-player` says
+// nothing about the other packages the tool picks up on the way. On the reporting machine the
+// transaction included `tzdata`, whose debconf question blocked `dpkg-preconfigure` behind a
+// prompt nothing was answering. The app has no way to bound what such a tool does, so the
+// offer is gone rather than narrowed; what a system-managed install offers now is the command
+// for its own package. See `UpdateAction::CopyUpgradeCommand`.
 
 /// Where a system-managed install gets its packages, for the surface to show.
 /// Only the apt lane has a repository of OK Player's own; the others are
