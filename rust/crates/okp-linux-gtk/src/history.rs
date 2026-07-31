@@ -109,6 +109,23 @@ impl HistoryStore {
         }
     }
 
+    /// Mark `path` watched to the end, clearing its resume position so the next open
+    /// starts at zero. Returns the entry's stored duration when a record was actually
+    /// changed, so the caller can report the completion it just observed.
+    pub fn mark_finished(&mut self, path: &Path, private_session: bool) -> Option<f64> {
+        let key = history_key(path);
+        let result = self.data.mark_finished(
+            &key,
+            unix_now(),
+            HistoryWriteMode::from_private(private_session),
+        );
+        if result != HistoryWriteResult::Changed {
+            return None;
+        }
+        self.dirty = true;
+        self.data.files.get(&key).map(|record| record.duration)
+    }
+
     /// The user's saved position bookmarks for `path`, sorted (empty when none). Read by
     /// the side panel to render the Bookmarks section.
     pub fn bookmarks(&self, path: &Path) -> Vec<f64> {
@@ -194,18 +211,7 @@ impl HistoryStore {
     }
 
     pub fn resume_position(&self, path: &Path) -> Option<f64> {
-        let record = self.data.files.get(&history_key(path))?;
-        if record.finished
-            || !record.duration.is_finite()
-            || record.duration <= 0.0
-            || !record.position.is_finite()
-            || record.position <= record.duration * 0.05
-            || record.position >= completion_start(record.duration)
-        {
-            return None;
-        }
-
-        Some(record.position)
+        self.data.resume_position(&history_key(path))
     }
 
     pub fn record_preferences(
@@ -331,10 +337,6 @@ struct HistoryStoreSnapshot {
     cleared: bool,
 }
 
-pub fn completion_start(duration: f64) -> f64 {
-    okp_core::recents_shelf::completion_start(duration)
-}
-
 fn history_path() -> PathBuf {
     if let Some(state_home) = env::var_os("XDG_STATE_HOME").filter(|value| !value.is_empty()) {
         return PathBuf::from(state_home).join("ok-player/history.json");
@@ -418,9 +420,49 @@ mod tests {
         let mut history = store();
         let path = Path::new("/media/movie.mkv");
 
-        history.record(path, completion_start(600.0), 600.0, false);
+        history.record(
+            path,
+            okp_core::recents_shelf::completion_start(600.0),
+            600.0,
+            false,
+        );
 
         assert_eq!(history.resume_position(path), None);
+    }
+
+    #[test]
+    fn marking_finished_clears_the_resume_position_without_a_final_sample() {
+        // The shell reaches end of file with no position to report; the store must still
+        // stop the next open from resuming, and must persist that.
+        let mut history = store();
+        let path = Path::new("/media/movie.mkv");
+        history.record(path, 120.0, 600.0, false);
+
+        let duration = history.mark_finished(path, false);
+
+        assert_eq!(duration, Some(600.0));
+        assert_eq!(history.resume_position(path), None);
+        assert!(history.dirty);
+    }
+
+    #[test]
+    fn marking_finished_reports_nothing_for_an_unknown_file() {
+        let mut history = store();
+
+        assert_eq!(
+            history.mark_finished(Path::new("/media/never-seen.mkv"), false),
+            None
+        );
+    }
+
+    #[test]
+    fn a_private_session_marks_nothing_finished() {
+        let mut history = store();
+        let path = Path::new("/media/movie.mkv");
+        history.record(path, 120.0, 600.0, false);
+
+        assert_eq!(history.mark_finished(path, true), None);
+        assert_eq!(history.resume_position(path), Some(120.0));
     }
 
     #[test]

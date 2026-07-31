@@ -185,6 +185,13 @@ jobs:
         run: ./scripts/smoke-linux-osc-narrow-bar.sh
       - name: Chrome icons come out of the binary, not the host icon theme
         run: ./scripts/smoke-linux-chrome-icons.sh
+      # Named on its own rather than folded into another playback smoke: a file watched
+      # to the end reopening near the end (#766) shipped because nothing ever played a
+      # file to its end and opened it again.
+      - name: A file watched to the end reopens at the beginning
+        run: |
+          cargo build --manifest-path rust/Cargo.toml -p okp-linux-gtk
+          ./scripts/smoke-linux-resume-after-eof.sh
 
   deb-apt-provisioning:
     name: Debian APT provisioning gate
