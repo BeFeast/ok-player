@@ -1538,17 +1538,18 @@ public sealed partial class PlayerView : UserControl
         Recents.Clear();
         foreach (var (path, rec) in _history.Recents(30))
         {
-            // Continue-watching = genuinely resumable progress only (the resume thresholds: > 5% watched
-            // and not within 30s of the end). Completed files (stored at position 0) are excluded.
-            if (rec.Duration <= 0 || rec.Position <= rec.Duration * 0.05 || rec.Position >= rec.Duration - 30)
-                continue;
-            double progress = Math.Clamp(rec.Position / rec.Duration, 0, 1);
+            // The shelf selects by last-opened recency alone (#776) — "pick up where you left off, or
+            // open something new". Finished files stay on it, showing their Finished state instead of a
+            // time-left chip, and reopen from zero (resume skips finished records — #767). Unfinished
+            // entries keep their time-left chip and resume behaviour unchanged.
+            var (chip, progress) = OkPlayer.Core.RecentsShelf.CardState(
+                rec.Position, rec.Duration, rec.Finished, FormatTimeLeft(rec.Duration - rec.Position));
             var entry = new RecentEntry
             {
                 Path = path,
                 Title = string.IsNullOrEmpty(rec.Title) ? System.IO.Path.GetFileNameWithoutExtension(path) : rec.Title!,
-                Meta = FormatRuntime(rec.Duration),
-                TimeLeft = FormatTimeLeft(rec.Duration - rec.Position),
+                Meta = rec.Duration > 0 ? FormatRuntime(rec.Duration) : string.Empty,
+                TimeLeft = chip,
                 Progress = progress,
                 PlaceholderGradient = PosterGradient(Recents.Count),
             };
@@ -1558,10 +1559,10 @@ public sealed partial class PlayerView : UserControl
             if (Recents.Count >= 10) // a bounded pool; the shelf shows what fits, the rest live in History
                 break;
         }
-        // Two welcome layouts: recents-forward "Continue watching" when there is resumable history,
+        // Two welcome layouts: recents-forward "Continue watching" when there is any history,
         // else the centred first-run hero.
         bool hasRecents = Recents.Count > 0;
-        // You don't "watch" audio: when every resumable item is a track, call the shelf "Continue listening".
+        // You don't "watch" audio: when every recent item is a track, call the shelf "Continue listening".
         // Mixed or any video keeps "Continue watching" (there's something to watch).
         bool allAudio = hasRecents && Recents.All(r => OkPlayer.Core.MediaFormats.IsAudio(r.Path));
         ContinueHeader.Text = allAudio ? "Continue listening" : "Continue watching";

@@ -367,7 +367,7 @@
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
                         <!-- recents row: show as many cards as fit the available width (no horizontal scroll —
-                             the design's elegance bar). Older resumable files stay reachable via History. The
+                             the design's elegance bar). Older files stay reachable via History. The
                              visible count is recomputed from the viewport width in OnRecentsViewportSizeChanged
                              (not this row's own width, which is content-sized and can't grow back once shrunk). -->
                         <Grid x:Name="RecentsRow" Margin="0,22,0,0">
@@ -404,7 +404,7 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </Grid>
-                        <!-- recents that don't fit the row, opened in a flyout so every resumable file stays
+                        <!-- recents that don't fit the row, opened in a flyout so every recent file stays
                              reachable without a horizontal scrollbar (a full History view is separate work) -->
                         <Button x:Name="MoreRecentsLink" Visibility="Collapsed" Margin="2,7,0,0" Padding="4,2"
                                 Background="Transparent" BorderThickness="0">

@@ -37,4 +37,26 @@ public class RecentsShelfTests
     [InlineData(2, 2)]
     public void VisibleCount_FallsBackToTheDefault_BeforeTheRowIsMeasured(int available, int expected)
         => Assert.Equal(expected, RecentsShelf.VisibleCount(rowWidth: 0, available, Card, Gap, unmeasuredDefault: 3));
+
+    // #776: the shelf keeps finished files (selected by recency alone); their card shows the
+    // Finished state instead of a time-left chip and an empty progress bar — they reopen from
+    // zero because resume refuses finished records (#767).
+    [Fact]
+    public void CardState_FinishedShowsFinishedStateAndZeroProgress()
+        => Assert.Equal(("Finished", 0d), RecentsShelf.CardState(position: 3600, duration: 3600,
+                                                                 finished: true, timeLeft: "1m left"));
+
+    [Fact]
+    public void CardState_UnfinishedKeepsTimeLeftChipAndFractionalProgress()
+    {
+        var (chip, progress) = RecentsShelf.CardState(position: 600, duration: 1200,
+                                                      finished: false, timeLeft: "10m left");
+        Assert.Equal("10m left", chip);
+        Assert.Equal(0.5, progress, precision: 6);
+    }
+
+    [Fact]
+    public void CardState_WithoutMeasuredDurationShowsNeitherChipNorProgress()
+        => Assert.Equal((string.Empty, 0d), RecentsShelf.CardState(position: 12, duration: 0,
+                                                                   finished: false, timeLeft: "1m left"));
 }

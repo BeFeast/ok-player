@@ -348,7 +348,14 @@ pub(crate) fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>) -
     progress.set_valign(gtk::Align::End);
     progress.set_halign(gtk::Align::Fill);
     thumbnail.add_overlay(&progress);
-    let remaining = gtk::Label::new(Some(&item.state_label));
+    // One visual language for the state (#776): a finished card says exactly what its
+    // History row says, instead of a time-left countdown. The chip container stays the
+    // shelf's own so it remains legible over a poster.
+    let remaining = gtk::Label::new(Some(if item.state_kind == HistoryStateKind::Finished {
+        "✓ Finished"
+    } else {
+        item.state_label.as_str()
+    }));
     remaining.add_css_class("okp-recent-time-left");
     remaining.set_halign(gtk::Align::End);
     remaining.set_valign(gtk::Align::End);
