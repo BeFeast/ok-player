@@ -1609,6 +1609,7 @@ pub(crate) fn connect_state_poll(
             .mpv
             .as_ref()
             .map(|mpv| mpv.observed_playback_state());
+        note_observed_duration(&state, playback.and_then(|playback| playback.duration));
         if let Some(playback) = playback {
             let state = state.borrow();
             if let (Some(recorder), Some(mpv)) =

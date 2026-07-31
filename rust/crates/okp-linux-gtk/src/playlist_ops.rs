@@ -829,6 +829,9 @@ fn track_selection_id(selection: launch_args::TrackSelection) -> Option<i64> {
 fn advance_source_generation(state: &mut PlayerState) {
     state.source_generation = state.source_generation.wrapping_add(1);
     state.current_video_dimensions = None;
+    // A duration observed for the previous source must never complete the next
+    // one (#768).
+    state.last_observed_duration = None;
     state
         .initial_window_fit
         .begin_source(state.source_generation);
@@ -1216,6 +1219,22 @@ pub(crate) fn finish_current_progress(state: &Rc<RefCell<PlayerState>>, ended_pa
 
     let mut state = state.borrow_mut();
     let Some(duration) = state.history.mark_finished(&path, private_session) else {
+        // No history row: a clip shorter than the persistence interval, or an open
+        // that went straight to the end. Finishing must not start listing files that
+        // were never listed, so the history stays untouched — but reporting progress
+        // and listing a file in History are independent concerns, and the reporter's
+        // end-of-file contract still owes the sink its completion. The engine has
+        // already unloaded and observes no duration, so report from the last one it
+        // observed for this source (#768).
+        if let Some(duration) = state.last_observed_duration {
+            state.progress_reporter.observe(
+                private_session,
+                path.to_string_lossy().as_ref(),
+                duration,
+                duration,
+                true,
+            );
+        }
         return;
     };
     if let Err(error) = state.history.save() {
@@ -1234,6 +1253,19 @@ pub(crate) fn finish_current_progress(state: &Rc<RefCell<PlayerState>>, ended_pa
         duration,
         true,
     );
+}
+
+/// Remember the engine's duration observation for the current source, so an end of
+/// file can be completed from it when no history row exists (#768). Invalid values
+/// are ignored rather than clearing the memory: at end of file the engine unloads
+/// and observes no duration, which is exactly when the remembered one is needed.
+pub(crate) fn note_observed_duration(state: &Rc<RefCell<PlayerState>>, duration: Option<f64>) {
+    let Some(duration) = duration else {
+        return;
+    };
+    if duration.is_finite() && duration > 0.0 {
+        state.borrow_mut().last_observed_duration = Some(duration);
+    }
 }
 
 pub(crate) fn build_folder_playlist(path: &Path) -> Vec<PlaylistItem> {
