@@ -2162,14 +2162,24 @@ impl UpdateLifecycle {
     /// * A packaging tool owns the payload — [`UpdateCapability::SystemManaged`]. Anywhere
     ///   else the app either applies the update itself or has no delivery path at all, and an
     ///   apt command would be advice about a machine that is not this one.
-    /// * The tool has something to deliver *right now* — a candidate it has read and that is
-    ///   not what is already installed. Not merely "a source exists": a configured source apt
-    ///   has not fetched delivers nothing yet (the remedy there is the refresh, #726), and a
-    ///   source whose candidate is the installed version delivers nothing either. Either way
-    ///   the command would answer "ok-player is already the newest version" under a surface
-    ///   that had just named a build, which is #725's disagreement in miniature. The evidence
-    ///   is re-read at check time, before the outcome is known, so a refresh that fails can
-    ///   restore an offer beside evidence that has moved on — this is what catches that.
+    /// * The tool would deliver *the version this state is about*. Two failures hide behind
+    ///   the one comparison, and the evidence is re-read at check time — before the outcome is
+    ///   known — so a refresh that then fails restores an offer beside evidence that has moved
+    ///   on, and both are reachable from there:
+    ///
+    ///   - Nothing to deliver. A configured source apt has not fetched delivers nothing yet
+    ///     (the remedy there is the refresh, #726), and a source whose candidate is the
+    ///     installed version delivers nothing either. The command would answer "ok-player is
+    ///     already the newest version" under a surface that had just named a build — #725's
+    ///     disagreement in miniature.
+    ///   - Something *else* to deliver. A skipped 2.0.0 beside a source whose candidate has
+    ///     advanced to 3.0.0 would hand the user a command that installs 3.0.0 under a
+    ///     sentence about 2.0.0. The user pastes what they were shown and gets a version the
+    ///     app never named, which is worse than the offer being absent.
+    ///
+    ///   Comparing the two settles both. An [`UpdateState::AvailableExternally`] is built out
+    ///   of the deliverable, so it matches by construction; it is the states that outlive the
+    ///   observation they came from that need the check.
     /// * The state is one the command would act on: a build the source carries, or one the
     ///   user silenced and may still want. [`UpdateState::WithheldBySuite`] is deliberately
     ///   not one — that suite is not offering the build, so the command would do nothing.
@@ -2183,8 +2193,10 @@ impl UpdateLifecycle {
             return None;
         }
         // Not `carries_the_package`: a source that exists is not a source with something to
-        // give, and only the second is worth a command.
-        self.package_source.deliverable()?;
+        // give, and what it gives has to be the version on screen.
+        if state.target_version() != self.package_source.deliverable() {
+            return None;
+        }
         matches!(
             state,
             UpdateState::AvailableExternally { .. } | UpdateState::Skipped { .. }
@@ -4280,6 +4292,67 @@ mod tests {
             presentation.check_available,
             "and looking again is what could change that"
         );
+    }
+
+    /// And the other way the two can disagree: the source has something, but not what the
+    /// surface is talking about.
+    ///
+    /// A skipped 2.0.0 beside a source whose candidate has since advanced to 3.0.0. The
+    /// command does not name a version — it installs whatever the candidate is — so offering
+    /// it here hands the user a paste that fetches 3.0.0 under a sentence about 2.0.0. They
+    /// get a build the app never named, which is worse than no offer at all.
+    #[test]
+    fn a_skipped_offer_gets_no_command_once_its_source_moves_past_the_version_on_screen() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "1.0.0");
+        lifecycle.package_source_observed(subscribed("stable", Some("2.0.0")));
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+        lifecycle.skip_offer().unwrap();
+
+        lifecycle.start_check().unwrap();
+        lifecycle.package_source_observed(subscribed("stable", Some("3.0.0")));
+        lifecycle.check_failed("network unreachable").unwrap();
+        assert_eq!(
+            lifecycle.state().target_version(),
+            Some("2.0.0"),
+            "the surface still says 2.0.0 was the version skipped"
+        );
+
+        let presentation = lifecycle.describe();
+        assert_eq!(
+            presentation.upgrade_command, None,
+            "the command would install 3.0.0 under a sentence about 2.0.0"
+        );
+        assert_eq!(presentation.action, None);
+
+        // A successful check settles it: the state moves onto what apt would install, and
+        // the command comes back because the two now agree.
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("3.0.0").unwrap();
+        let settled = lifecycle.describe();
+        assert_eq!(settled.target_version.as_deref(), Some("3.0.0"));
+        assert_eq!(settled.action, Some(UpdateAction::CopyUpgradeCommand));
+    }
+
+    /// Invariant behind both: whenever the command is offered, what it would install is the
+    /// version the surface is talking about. The command names no version, so the surface's
+    /// version and apt's candidate have to be one thing.
+    #[test]
+    fn the_command_is_only_offered_for_the_version_the_surface_names() {
+        for kind in every_install_kind() {
+            sweep_reachable_states(kind, |life| {
+                let presentation = life.describe();
+                if presentation.upgrade_command.is_none() {
+                    return;
+                }
+                assert_eq!(
+                    presentation.target_version.as_deref(),
+                    life.package_source().deliverable(),
+                    "{kind} offered a command for a version it is not naming, in {:?}",
+                    life.state()
+                );
+            });
+        }
     }
 
     /// The action and the command are one offer: neither is ever on screen alone. A button

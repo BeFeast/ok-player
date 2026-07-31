@@ -125,15 +125,24 @@ resolves that as part of installing the package — no command that installs OK 
 it, and the surface says so rather than promising otherwise. What such a command cannot do is
 reach packages that have nothing to do with OK Player, which is the whole of what went wrong.
 
-It is offered where the packaging tool has something to deliver **now**: an announced build the
-machine's source carries, and one the user skipped but may still want. The gate is
-`PackageSourceEvidence::deliverable()`, not `carries_the_package()` — a source that exists is
-not a source with something to give. The shell re-reads that evidence at check time, before the
-check's outcome is known, so a refresh that then fails can restore an offer beside evidence that
-has moved on; a command offered there would answer "already the newest version" underneath a
-surface still naming a build, which is #725's disagreement in miniature. `WithheldBySuite` does
-not get it (that suite is not offering the build) and neither does `AvailableButSourceUnread`
-(apt has not read the source yet; the refresh comes first).
+It is offered where the packaging tool would deliver **the version the surface is naming**. The
+gate is `state.target_version() == package_source.deliverable()`, not `carries_the_package()`,
+because the command names no version — it installs whatever apt's candidate is, so the two have
+to be one thing. The shell re-reads that evidence at check time, before the check's outcome is
+known, so a refresh that then fails restores an offer beside evidence that has moved on, and
+both ways of disagreeing are reachable from there:
+
+* **Nothing to deliver.** A source that exists is not a source with something to give. The
+  command would answer "already the newest version" underneath a surface still naming a build —
+  #725's disagreement in miniature.
+* **Something else to deliver.** A skipped 2.0.0 beside a candidate that has advanced to 3.0.0
+  would hand the user a paste that fetches 3.0.0 under a sentence about 2.0.0: a build the app
+  never named.
+
+An `AvailableExternally` is built out of the deliverable, so it matches by construction; it is
+the states that outlive the observation they came from that need the comparison.
+`WithheldBySuite` does not get the command (that suite is not offering the build) and neither
+does `AvailableButSourceUnread` (apt has not read the source yet; the refresh comes first).
 
 Two invariants in `okp_core` hold this over every install kind and every answer about its
 delivery path: `no_offered_action_reaches_beyond_this_package`, which makes every
