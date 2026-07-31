@@ -2,8 +2,8 @@
 //!
 //! The fit math is a port of `src/OkPlayer.Core/RecentsShelf.cs`; the C# suite in
 //! `tests/OkPlayer.Tests/RecentsShelfTests.cs` is the executable spec. Linux also uses this
-//! module for reusable history ranking, resumable filtering, and search matching so the GTK
-//! shell only renders the resulting model. Private sessions gate writes, not reads: persisted
+//! module for reusable history ranking, welcome-shelf selection, and search matching so the
+//! GTK shell only renders the resulting model. Private sessions gate writes, not reads: persisted
 //! recents remain available while recording is paused.
 
 use crate::history::{FileEntry, History};
@@ -30,14 +30,20 @@ pub enum WelcomeShelf {
     Items(Vec<HistoryItem>),
 }
 
-/// Select the newest resumable history rows for the welcome surface.
+/// Select the newest history rows for the welcome surface, by last-opened recency alone.
 pub fn select(history: &History, limit: usize) -> WelcomeShelf {
     select_where(history, limit, |_| true)
 }
 
-/// Select the newest resumable rows whose paths pass the shell-supplied availability check.
+/// Select the newest rows whose paths pass the shell-supplied availability check.
 /// Availability is injected because filesystem and network probing are platform concerns,
 /// while filtering before ranking and limiting must remain shared and deterministic.
+///
+/// Membership is last-opened recency, not resumable progress (#776): the shelf is "pick up
+/// where you left off — or open something new", so a finished file stays on it. A finished
+/// row carries [`HistoryStateKind::Finished`] — shells render that state instead of a
+/// time-left chip — and reopens from zero because [`History::resume_position`] refuses
+/// finished entries.
 pub fn select_where(
     history: &History,
     limit: usize,
@@ -46,7 +52,6 @@ pub fn select_where(
     let items = sorted_items(history)
         .into_iter()
         .filter(|item| is_listable(&item.path))
-        .filter(|item| history.files.get(&item.path).is_some_and(is_resumable))
         .take(limit)
         .collect::<Vec<_>>();
 
@@ -82,7 +87,8 @@ pub fn search_where(
 }
 
 /// Whether a record has a useful resume point: past the first 5%, before the completion
-/// window, unfinished, and backed by finite progress values.
+/// window, unfinished, and backed by finite progress values. This is the resume rule only —
+/// the welcome shelf no longer filters on it (#776); shelf membership is recency alone.
 pub fn is_resumable(entry: &FileEntry) -> bool {
     !entry.finished
         && entry.duration.is_finite()
@@ -297,7 +303,11 @@ mod tests {
     }
 
     #[test]
-    fn select_returns_newest_resumable_items_only() {
+    fn select_keeps_every_item_by_recency_including_finished_ones() {
+        // #776: a freshly finished file appears on the shelf ahead of older unfinished
+        // ones, carrying its Finished state (rendered instead of a time-left chip) and an
+        // empty progress bar; it reopens from zero because resume refuses finished
+        // entries. Barely-started files are equally recency-ranked, not dropped.
         let history = history([
             ("/media/older.mkv", entry(120.0, 600.0, false, 10)),
             ("/media/finished.mkv", entry(0.0, 600.0, true, 40)),
@@ -313,8 +323,12 @@ mod tests {
                 .iter()
                 .map(|item| item.title.as_str())
                 .collect::<Vec<_>>(),
-            vec!["newer", "older"]
+            vec!["finished", "barely", "newer", "older"]
         );
+        assert_eq!(items[0].state_kind, HistoryStateKind::Finished);
+        assert_eq!(items[0].state_label, "Finished");
+        assert_eq!(items[0].progress, 0.0);
+        assert_eq!(items[2].state_kind, HistoryStateKind::Progress);
     }
 
     #[test]

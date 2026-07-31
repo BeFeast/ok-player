@@ -605,10 +605,11 @@ mod resume_journeys {
     }
 
     #[test]
-    fn finishing_drops_the_file_out_of_continue_watching_exactly_as_a_late_stop_does() {
-        // Continue watching offers resume points, so it has always dropped a file
-        // stopped inside the completion window. Finishing is the same answer reached by
-        // the other route, not a new listing rule.
+    fn finishing_keeps_the_file_on_continue_watching_with_its_finished_state() {
+        // The shelf selects by last-opened recency alone (#776): recently opened files
+        // stay on it whether they were finished or stopped inside the completion
+        // window. A finished row carries the Finished state — rendered instead of a
+        // time-left chip — and refuses to resume, so it reopens from zero.
         let mut finished = History::default();
         sample(&mut finished, 12.83, 19.07);
         finished.mark_finished(KEY, 1_700_000_100, HistoryWriteMode::Record);
@@ -616,14 +617,25 @@ mod resume_journeys {
         let mut stopped_late = History::default();
         sample(&mut stopped_late, 18.6, 19.07);
 
+        let crate::recents_shelf::WelcomeShelf::Items(items) =
+            crate::recents_shelf::select(&finished, 10)
+        else {
+            panic!("expected the finished file on the shelf");
+        };
+        assert_eq!(items[0].path, KEY);
         assert_eq!(
-            crate::recents_shelf::select(&finished, 10),
-            crate::recents_shelf::WelcomeShelf::Empty
+            items[0].state_kind,
+            crate::history_format::HistoryStateKind::Finished
         );
-        assert_eq!(
-            crate::recents_shelf::select(&stopped_late, 10),
-            crate::recents_shelf::WelcomeShelf::Empty
-        );
+        assert_eq!(finished.resume_position(KEY), None);
+
+        let crate::recents_shelf::WelcomeShelf::Items(items) =
+            crate::recents_shelf::select(&stopped_late, 10)
+        else {
+            panic!("expected the late-stopped file on the shelf");
+        };
+        assert_eq!(items[0].path, KEY);
+        assert_eq!(stopped_late.resume_position(KEY), None);
     }
 
     #[test]
