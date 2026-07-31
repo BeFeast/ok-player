@@ -109,8 +109,8 @@ objection: the app dragged unrelated packages into the user's lap and had no way
 it had started.
 
 The action is gone rather than narrowed, because the problem was never which states it appeared
-in. What a system-managed install offers instead is `UpdateAction::CopyUpgradeCommand`: the
-one command that upgrades this package, named, and nothing else.
+in. What a system-managed install offers instead is `UpdateAction::CopyUpgradeCommand`: the one
+command that upgrades this package, named, and nothing unrelated to it.
 
     sudo apt install --only-upgrade ok-player
 
@@ -120,10 +120,20 @@ tester between channels. `--only-upgrade` keeps apt from reaching for anything n
 installed. The app copies it and runs nothing: the packaging tool applies the update, as the
 message beside the command says, and the privileged install path removed in #698 stays removed.
 
-It is offered exactly where it would work — an announced build the machine's own source
-carries, and one the user skipped but may still want. `WithheldBySuite` does not get it (that
-suite is not offering the build) and neither does `AvailableButSourceUnread` (apt has not read
-the source yet; the refresh comes first).
+"Nothing unrelated", not "nothing at all": a new version may need a newer dependency, and apt
+resolves that as part of installing the package — no command that installs OK Player can avoid
+it, and the surface says so rather than promising otherwise. What such a command cannot do is
+reach packages that have nothing to do with OK Player, which is the whole of what went wrong.
+
+It is offered where the packaging tool has something to deliver **now**: an announced build the
+machine's source carries, and one the user skipped but may still want. The gate is
+`PackageSourceEvidence::deliverable()`, not `carries_the_package()` — a source that exists is
+not a source with something to give. The shell re-reads that evidence at check time, before the
+check's outcome is known, so a refresh that then fails can restore an offer beside evidence that
+has moved on; a command offered there would answer "already the newest version" underneath a
+surface still naming a build, which is #725's disagreement in miniature. `WithheldBySuite` does
+not get it (that suite is not offering the build) and neither does `AvailableButSourceUnread`
+(apt has not read the source yet; the refresh comes first).
 
 Two invariants in `okp_core` hold this over every install kind and every answer about its
 delivery path: `no_offered_action_reaches_beyond_this_package`, which makes every

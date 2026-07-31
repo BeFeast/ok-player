@@ -5515,8 +5515,13 @@ fn the_system_managed_block_offers_one_package_scoped_command_and_no_updater() {
         "the block is honest about who applies it: {block}"
     );
     assert!(
-        block.to_lowercase().contains("nothing else"),
+        block.contains("without touching anything else on this system"),
         "the block says what it does not touch: {block}"
+    );
+    assert!(
+        block.contains("whatever the new version needs"),
+        "...and does not overpromise: a new version's dependencies come with it, as they \
+         must for any command that installs the package at all: {block}"
     );
     assert!(
         subscribed.repository_setup.is_none() && subscribed.refresh_command.is_none(),

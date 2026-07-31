@@ -131,8 +131,13 @@ impl InstallKind {
         }
     }
 
-    /// The command that upgrades **this package and nothing else** through the tool that owns
-    /// it (#759).
+    /// The command that upgrades **this package and nothing else on the machine** through the
+    /// tool that owns it (#759).
+    ///
+    /// Not "this package alone": a new version may need a newer dependency, and apt resolves
+    /// that as part of installing the package at all — no command that installs OK Player can
+    /// avoid it. What it cannot do is reach *unrelated* packages, which is the whole of the
+    /// defect this replaced.
     ///
     /// It names the package on purpose. What it replaced opened the desktop's *system-wide*
     /// updater, which builds a transaction over every upgradable package on the machine: on
@@ -147,9 +152,9 @@ impl InstallKind {
     /// upgrades from whatever that is, so it cannot move anybody between channels the way a
     /// hard-coded stanza would.
     ///
-    /// `--only-upgrade` is what makes the sentence true in the other direction too: apt is
-    /// forbidden to *install* anything that is not already on the machine, so the transaction
-    /// cannot grow past the package and what it depends on.
+    /// `--only-upgrade` narrows it further in the other direction: apt is forbidden to
+    /// *install* anything that is not already on the machine, so the transaction cannot grow
+    /// past the package and the dependencies it already has.
     pub const fn upgrade_command(self) -> Option<&'static str> {
         match self {
             Self::Deb => Some("sudo apt install --only-upgrade ok-player"),
@@ -1113,7 +1118,8 @@ pub enum UpdateAction {
     /// the wrong one is harmful: this machine has a repository, and handing it setup commands
     /// would overwrite the suite it is subscribed to.
     CopyRefreshCommand,
-    /// Put the command that upgrades **this package alone** on the clipboard (#759).
+    /// Put the command that upgrades **this package**, and nothing unrelated to it, on the
+    /// clipboard (#759).
     ///
     /// The one action a system-managed install has for an update its own source can already
     /// deliver. The app does not run it: the packaging tool applies the update, as the
@@ -1186,7 +1192,9 @@ impl UpdateAction {
             | Self::CopyRepositorySetup
             | Self::CopyRefreshCommand
             // Named in the command itself, and `--only-upgrade` keeps apt from reaching for
-            // anything that is not already installed.
+            // anything that is not already installed. What the new version depends on comes
+            // with it, as it must for any command that installs the package at all — but
+            // nothing unrelated does.
             | Self::CopyUpgradeCommand => false,
         }
     }
@@ -1243,8 +1251,8 @@ pub struct UpdatePresentation {
     /// "Skip this version" on a live offer. Kept in the projection so a shell
     /// never has to maintain its own parallel offer model.
     pub secondary_action: Option<UpdateAction>,
-    /// The command that upgrades **this package alone**, when a packaging tool that owns this
-    /// install can deliver the version on screen (#759).
+    /// The command that upgrades **this package**, and nothing unrelated to it, when a
+    /// packaging tool that owns this install can deliver the version on screen (#759).
     ///
     /// This is what a system-managed install offers instead of a way into the desktop's
     /// system-wide updater. That offer was removed outright: it was not this app's to make,
@@ -2154,10 +2162,14 @@ impl UpdateLifecycle {
     /// * A packaging tool owns the payload — [`UpdateCapability::SystemManaged`]. Anywhere
     ///   else the app either applies the update itself or has no delivery path at all, and an
     ///   apt command would be advice about a machine that is not this one.
-    /// * A source the tool has *read* carries the package. A configured source apt has not
-    ///   fetched cannot deliver anything yet: the remedy there is the refresh (#726), and
-    ///   handing over an upgrade command instead would produce "already the newest version"
-    ///   for a machine the surface had just told about a build.
+    /// * The tool has something to deliver *right now* — a candidate it has read and that is
+    ///   not what is already installed. Not merely "a source exists": a configured source apt
+    ///   has not fetched delivers nothing yet (the remedy there is the refresh, #726), and a
+    ///   source whose candidate is the installed version delivers nothing either. Either way
+    ///   the command would answer "ok-player is already the newest version" under a surface
+    ///   that had just named a build, which is #725's disagreement in miniature. The evidence
+    ///   is re-read at check time, before the outcome is known, so a refresh that fails can
+    ///   restore an offer beside evidence that has moved on — this is what catches that.
     /// * The state is one the command would act on: a build the source carries, or one the
     ///   user silenced and may still want. [`UpdateState::WithheldBySuite`] is deliberately
     ///   not one — that suite is not offering the build, so the command would do nothing.
@@ -2170,9 +2182,9 @@ impl UpdateLifecycle {
         if self.capability() != UpdateCapability::SystemManaged {
             return None;
         }
-        if !self.package_source.carries_the_package() {
-            return None;
-        }
+        // Not `carries_the_package`: a source that exists is not a source with something to
+        // give, and only the second is worth a command.
+        self.package_source.deliverable()?;
         matches!(
             state,
             UpdateState::AvailableExternally { .. } | UpdateState::Skipped { .. }
@@ -4166,7 +4178,7 @@ mod tests {
     /// command changed to `apt upgrade` would keep every action honest by the first rule and
     /// still hand the user the machine.
     #[test]
-    fn every_command_the_surface_offers_names_this_package_and_upgrades_nothing_else() {
+    fn every_command_the_surface_offers_names_this_package_and_never_the_whole_machine() {
         // `apt upgrade`, `apt-get dist-upgrade`, `apt full-upgrade`, `dnf upgrade` with no
         // argument — the ways of saying "everything on this machine".
         const WHOLE_MACHINE: [&str; 3] = ["dist-upgrade", "full-upgrade", "apt upgrade"];
@@ -4208,6 +4220,12 @@ mod tests {
                 if kind.upgrade_command().is_none() {
                     return;
                 }
+                // The command is offered against what apt can deliver now, so a machine
+                // whose evidence has since stopped naming one is outside this rule — see
+                // `a_skipped_offer_gets_no_command_once_its_source_stops_carrying_one`.
+                if life.package_source().deliverable().is_none() {
+                    return;
+                }
                 assert_eq!(
                     presentation.action,
                     Some(UpdateAction::CopyUpgradeCommand),
@@ -4221,6 +4239,47 @@ mod tests {
                 );
             });
         }
+    }
+
+    /// A source that exists is not the same as a source with something to give.
+    ///
+    /// The shell re-reads what apt can deliver at check time, *before* the check's outcome is
+    /// known, so a refresh that then fails restores the offer it was refreshing beside
+    /// evidence that has moved on. `Source { deliverable: None }` is still a source — apt has
+    /// read it and it carries the package — but there is nothing to install, and a command
+    /// offered here would answer "ok-player is already the newest version" underneath a
+    /// surface still naming a build. That disagreement between the app and the tool it points
+    /// at is exactly what #725 was.
+    #[test]
+    fn a_skipped_offer_gets_no_command_once_its_source_stops_carrying_one() {
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "1.0.0");
+        lifecycle.package_source_observed(subscribed("stable", Some("2.0.0")));
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+        lifecycle.skip_offer().unwrap();
+        assert_eq!(
+            lifecycle.describe().action,
+            Some(UpdateAction::CopyUpgradeCommand),
+            "while the suite is holding it, the skipped version stays installable on demand"
+        );
+
+        // The refresh reads the machine first — the suite is no longer offering anything —
+        // and then the feed request fails, which brings the skipped offer back unchanged.
+        lifecycle.start_check().unwrap();
+        lifecycle.package_source_observed(subscribed("stable", None));
+        lifecycle.check_failed("network unreachable").unwrap();
+        assert!(matches!(lifecycle.state(), UpdateState::Skipped { .. }));
+
+        let presentation = lifecycle.describe();
+        assert_eq!(
+            presentation.upgrade_command, None,
+            "apt has nothing to install; the command would contradict the surface offering it"
+        );
+        assert_eq!(presentation.action, None);
+        assert!(
+            presentation.check_available,
+            "and looking again is what could change that"
+        );
     }
 
     /// The action and the command are one offer: neither is ever on screen alone. A button

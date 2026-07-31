@@ -1189,7 +1189,7 @@ pub(crate) fn repository_setup_text(setup: &RepositorySetup) -> String {
 /// and nothing here runs anything.
 pub(crate) fn upgrade_command_text(command: &str) -> String {
     format!(
-        "Your package manager installs this update, not OK Player. This command upgrades OK Player and nothing else:\n\n{command}"
+        "Your package manager installs this update, not OK Player. This command upgrades the OK Player package, and whatever the new version needs, without touching anything else on this system:\n\n{command}"
     )
 }
 
