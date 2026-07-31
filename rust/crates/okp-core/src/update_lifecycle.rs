@@ -131,6 +131,37 @@ impl InstallKind {
         }
     }
 
+    /// The command that upgrades **this package and nothing else** through the tool that owns
+    /// it (#759).
+    ///
+    /// It names the package on purpose. What it replaced opened the desktop's *system-wide*
+    /// updater, which builds a transaction over every upgradable package on the machine: on
+    /// the reporting machine that pulled in `tzdata`, whose debconf question blocked
+    /// `dpkg-preconfigure` behind a prompt nothing was answering, and the window sat at
+    /// `Preconfiguring packages ...` indefinitely. None of it was OK Player's package, and
+    /// that is the point — an application a packaging tool owns has one package's worth of
+    /// business.
+    ///
+    /// **No suite and no channel appears here.** What this machine subscribes to was
+    /// established by [`crate::apt_policy`] / [`crate::apt_sources`] (#725/#726); the command
+    /// upgrades from whatever that is, so it cannot move anybody between channels the way a
+    /// hard-coded stanza would.
+    ///
+    /// `--only-upgrade` is what makes the sentence true in the other direction too: apt is
+    /// forbidden to *install* anything that is not already on the machine, so the transaction
+    /// cannot grow past the package and what it depends on.
+    pub const fn upgrade_command(self) -> Option<&'static str> {
+        match self {
+            Self::Deb => Some("sudo apt install --only-upgrade ok-player"),
+            // Not "there is no such command" but "this app has no state in which to offer
+            // one": the rpm and flatpak lanes never discover a version, so they never reach a
+            // state that announces one. What they say is who updates them, unchanged.
+            Self::Rpm | Self::Flatpak | Self::WindowsVelopack | Self::AppImage | Self::DevBuild => {
+                None
+            }
+        }
+    }
+
     /// Whether the app discovers versions for this install kind at all. The
     /// rpm and flatpak lanes never ask — they report who updates them — while
     /// every other kind, the system-managed `.deb` lane included, polls a feed
@@ -1082,6 +1113,16 @@ pub enum UpdateAction {
     /// the wrong one is harmful: this machine has a repository, and handing it setup commands
     /// would overwrite the suite it is subscribed to.
     CopyRefreshCommand,
+    /// Put the command that upgrades **this package alone** on the clipboard (#759).
+    ///
+    /// The one action a system-managed install has for an update its own source can already
+    /// deliver. The app does not run it: the packaging tool applies the update, as the
+    /// message beside this says, and the privileged install path was removed in #698.
+    ///
+    /// It exists because the alternative shipped and failed. This state used to offer "Open
+    /// software updater", which handed the user their desktop's system-wide updater and a
+    /// transaction over every upgradable package on the machine.
+    CopyUpgradeCommand,
 }
 
 impl UpdateAction {
@@ -1098,6 +1139,7 @@ impl UpdateAction {
             Self::InstallAnyway => "Install anyway",
             Self::CopyRepositorySetup => "Copy setup commands",
             Self::CopyRefreshCommand => "Copy refresh command",
+            Self::CopyUpgradeCommand => "Copy upgrade command",
         }
     }
 
@@ -1117,6 +1159,36 @@ impl UpdateAction {
                 | Self::RestartToFinish
                 | Self::InstallAnyway
         )
+    }
+
+    /// Whether taking this action puts anything beyond OK Player itself into the user's
+    /// hands.
+    ///
+    /// Every action answers `false`, and that is the invariant rather than an accident
+    /// (#759): an application a packaging tool owns offers exactly one action for *itself*.
+    /// The action this rule was written for answered `true` — "Open software updater" launched
+    /// the desktop's system-wide updater, which builds a transaction over every upgradable
+    /// package on the machine, and on the reporting machine that transaction blocked
+    /// indefinitely on `tzdata`'s debconf prompt.
+    ///
+    /// The match is exhaustive on purpose. A new action has to answer here, and
+    /// `no_offered_action_reaches_beyond_this_package` refuses any that answers `true`.
+    pub const fn reaches_beyond_this_package(self) -> bool {
+        match self {
+            Self::CheckNow
+            | Self::DownloadUpdate
+            | Self::ApplyAndRestart
+            | Self::RestartToFinish
+            | Self::RestartToUseInstalled
+            | Self::Retry
+            | Self::SkipVersion
+            | Self::InstallAnyway
+            | Self::CopyRepositorySetup
+            | Self::CopyRefreshCommand
+            // Named in the command itself, and `--only-upgrade` keeps apt from reaching for
+            // anything that is not already installed.
+            | Self::CopyUpgradeCommand => false,
+        }
     }
 
     /// Whether taking this action shuts the running process down. Both ways of
@@ -1171,16 +1243,16 @@ pub struct UpdatePresentation {
     /// "Skip this version" on a live offer. Kept in the projection so a shell
     /// never has to maintain its own parallel offer model.
     pub secondary_action: Option<UpdateAction>,
-    /// Whether the surface may offer to open the desktop's software updater
-    /// (#725).
+    /// The command that upgrades **this package alone**, when a packaging tool that owns this
+    /// install can deliver the version on screen (#759).
     ///
-    /// True only where a packaging tool owns the payload **and** a source was
-    /// observed to carry the version being named. The updater reads the same
-    /// package data the app just read, so offering it anywhere else is offering
-    /// a tool that is guaranteed to disagree: on the #725 machine it opened and
-    /// correctly reported that everything was up to date, next to an app naming
-    /// a version.
-    pub system_updater_offered: bool,
+    /// This is what a system-managed install offers instead of a way into the desktop's
+    /// system-wide updater. That offer was removed outright: it was not this app's to make,
+    /// because the transaction it starts covers every upgradable package on the machine and
+    /// nothing in the app bounds it. What is left names the package, and only the package.
+    ///
+    /// Nothing in the app runs it — apt applies the update, exactly as the message says.
+    pub upgrade_command: Option<&'static str>,
     /// How to give this install a delivery path, when it has none and the
     /// project publishes one (#700, #725). The surface shows the commands and
     /// the key fingerprint; nothing in the app runs them.
@@ -2067,47 +2139,46 @@ impl UpdateLifecycle {
             check_available: self.check_is_allowed(),
             action_closes_the_app: self.action_closes_the_app(),
             secondary_action: self.secondary_action(),
-            system_updater_offered: self.system_updater_offered(),
+            upgrade_command: self.upgrade_command_for(self.presented_state().as_ref()),
             repository_setup: self.repository_setup(),
             refresh_command: self.refresh_command(),
             notice: self.notice.clone(),
         }
     }
 
-    /// Whether the desktop's software updater is a tool that could act on what
-    /// this state says.
+    /// The command that upgrades this package and nothing else, when that is what stands
+    /// between this machine and the version on screen (#759).
     ///
-    /// It can only agree with the app when the app's claim came from the same
-    /// package data the updater reads — that is, [`UpdateCapability::SystemManaged`], which
-    /// is reached only once a source was *established*. Every other combination sends the
-    /// user to a tool that will contradict the surface that sent them (#725).
+    /// Three conditions, and each is load-bearing:
     ///
-    /// Established, not readable-right-now: the three states this covers are a source with
-    /// something to deliver, a source whose suite is not offering the build, and a source the
-    /// tool has not read yet (#726). In all three the updater agrees or does better, because
-    /// what it does is read the very lists the verdict came from. Where no source exists at
-    /// all it would flatly contradict, which is the dead end #725 reported.
-    fn system_updater_offered(&self) -> bool {
+    /// * A packaging tool owns the payload — [`UpdateCapability::SystemManaged`]. Anywhere
+    ///   else the app either applies the update itself or has no delivery path at all, and an
+    ///   apt command would be advice about a machine that is not this one.
+    /// * A source the tool has *read* carries the package. A configured source apt has not
+    ///   fetched cannot deliver anything yet: the remedy there is the refresh (#726), and
+    ///   handing over an upgrade command instead would produce "already the newest version"
+    ///   for a machine the surface had just told about a build.
+    /// * The state is one the command would act on: a build the source carries, or one the
+    ///   user silenced and may still want. [`UpdateState::WithheldBySuite`] is deliberately
+    ///   not one — that suite is not offering the build, so the command would do nothing.
+    ///
+    /// What this replaced was "Open software updater", which opened the desktop's system-wide
+    /// updater. It is not narrowed here, it is gone: the objection was never which states it
+    /// appeared in but what it does, which is start a transaction over every upgradable
+    /// package on the machine.
+    fn upgrade_command_for(&self, state: &UpdateState) -> Option<&'static str> {
         if self.capability() != UpdateCapability::SystemManaged {
-            return false;
+            return None;
+        }
+        if !self.package_source.carries_the_package() {
+            return None;
         }
         matches!(
-            self.presented_state().as_ref(),
-            UpdateState::AvailableExternally { .. }
-                // The tool that refreshes the package lists this verdict was read
-                // from. It is the only thing that can settle whether the suite is
-                // really not carrying the build or whether apt simply has not
-                // looked lately, and it agrees with this state either way.
-                | UpdateState::WithheldBySuite { .. }
-                // And the state where reading the lists is the entire remedy: the
-                // updater does exactly that, so it can only improve on this verdict.
-                | UpdateState::AvailableButSourceUnread { .. }
-                | UpdateState::Skipped { hint: Some(_), .. }
-                | UpdateState::Failed {
-                    target: Some(_),
-                    ..
-                }
+            state,
+            UpdateState::AvailableExternally { .. } | UpdateState::Skipped { .. }
         )
+        .then(|| self.install_kind.upgrade_command())
+        .flatten()
     }
 
     /// The instructions for giving this install a delivery path, shown only
@@ -2436,14 +2507,26 @@ impl UpdateLifecycle {
                 // An install with no delivery path keeps the one action it has:
                 // the setup that would give it one (#725).
                 UpdateCapability::SystemUnreachable => Some(UpdateAction::CopyRepositorySetup),
-                UpdateCapability::SystemManaged | UpdateCapability::Unmanaged => None,
+                // The system-managed twin of `InstallAnyway`: skipping silenced the
+                // prompt, not the version, and the command that installs it is what
+                // this lane has instead of an in-app install (#759).
+                UpdateCapability::SystemManaged => self
+                    .upgrade_command_for(state)
+                    .map(|_| UpdateAction::CopyUpgradeCommand),
+                UpdateCapability::Unmanaged => None,
             },
-            // A system-managed update is announced, never actioned in-app; an
-            // install the system owns outright offers not even a check; a
+            // A system-managed update is applied by the packaging tool and never in the
+            // app — but this is the surface the user is looking at, so it hands over the
+            // one command that upgrades this package and nothing else (#759). Before that
+            // it offered a way into the desktop's system-wide updater and no way to update
+            // OK Player, which is a state with an announcement and nothing to act on.
+            UpdateState::AvailableExternally { .. } => self
+                .upgrade_command_for(state)
+                .map(|_| UpdateAction::CopyUpgradeCommand),
+            // An install the system owns outright offers not even a check; a
             // download or apply in flight offers nothing, and a check with no
             // offer behind it has nothing to keep on screen.
-            UpdateState::AvailableExternally { .. }
-            | UpdateState::ManagedExternally { .. }
+            UpdateState::ManagedExternally { .. }
             | UpdateState::Checking { .. }
             | UpdateState::Downloading { .. }
             | UpdateState::Applying { .. } => None,
@@ -2586,6 +2669,11 @@ mod tests {
             vec![
                 PackageSourceEvidence::Unestablished,
                 PackageSourceEvidence::NoSource,
+                // The state every .deb install passes through on first launch (#726).
+                PackageSourceEvidence::ConfiguredButUnread {
+                    suite: Some("candidate".to_owned()),
+                },
+                PackageSourceEvidence::ConfiguredButUnread { suite: None },
                 subscribed("stable", Some("2.0.0")),
                 subscribed("stable", None),
             ]
@@ -3134,8 +3222,9 @@ mod tests {
     }
 
     /// Invariant: a `SystemManaged` install never offers an in-app "Update
-    /// now"; it announces the update and hands the user to their package
-    /// manager.
+    /// now"; it announces the update and hands the user the command their package
+    /// manager takes (#759). The offer is not nothing — that was the state the
+    /// operator was stranded in — but nothing about it installs anything here.
     #[test]
     fn system_managed_never_offers_an_in_app_update_action() {
         for kind in SYSTEM_MANAGED_KINDS {
@@ -3148,9 +3237,12 @@ mod tests {
             );
 
             let presentation = lifecycle.describe();
-            assert_eq!(
-                presentation.action, None,
-                "{kind} must offer no in-app apply"
+            assert!(
+                presentation
+                    .action
+                    .is_none_or(|action| !action.applies_update_in_app()),
+                "{kind} must offer no in-app apply, offered {:?}",
+                presentation.action
             );
             assert!(
                 presentation.updates_message.contains("2.0.0"),
@@ -3196,7 +3288,15 @@ mod tests {
                 ),
                 "{kind} must come back as an announcement, never an in-app offer"
             );
-            assert_eq!(failed_recheck.describe().action, None);
+            // The offer the refresh was over comes back whole, controls included — which
+            // for this lane is the command its packaging tool takes, and nothing in-app.
+            assert!(
+                failed_recheck
+                    .describe()
+                    .action
+                    .is_none_or(|action| !action.applies_update_in_app()),
+                "{kind} came back with an in-app offer"
+            );
 
             let mut failed_check = system_managed_lifecycle(kind, "1.0.0");
             failed_check.start_check().unwrap();
@@ -3219,16 +3319,25 @@ mod tests {
                 matches!(restored.state(), UpdateState::Skipped { .. }),
                 "{kind} can still skip a restored announcement"
             );
-            assert_eq!(restored.describe().action, None);
+            assert!(
+                restored
+                    .describe()
+                    .action
+                    .is_none_or(|action| !action.applies_update_in_app()),
+                "{kind} offered an in-app install over a skipped announcement"
+            );
 
             let mut skipped = system_managed_lifecycle(kind, "1.0.0");
             skipped.start_check().unwrap();
             skipped.check_found("2.0.0").unwrap();
             skipped.skip_offer().unwrap();
-            assert_eq!(
-                skipped.describe().action,
-                None,
-                "{kind} cannot install a skipped version in app"
+            assert!(
+                skipped
+                    .describe()
+                    .action
+                    .is_none_or(|action| !action.applies_update_in_app()),
+                "{kind} cannot install a skipped version in app, offered {:?}",
+                skipped.describe().action
             );
             assert_eq!(
                 skipped.install_anyway(),
@@ -3614,9 +3723,9 @@ mod tests {
             "the published build is still named: {}",
             presentation.updates_message
         );
-        assert!(
-            !presentation.system_updater_offered,
-            "the desktop updater reads the same package data and would contradict this"
+        assert_eq!(
+            presentation.upgrade_command, None,
+            "there is no source to upgrade from; the remedy is to add one"
         );
         // The exact sentence #725 is about must not survive anywhere.
         assert!(
@@ -3702,9 +3811,9 @@ mod tests {
             "a build this machine cannot install is not an update target"
         );
         assert_eq!(presentation.claim, VersionClaim::Current);
-        assert!(
-            presentation.system_updater_offered,
-            "the updater refreshes the lists this verdict was read from, and agrees either way"
+        assert_eq!(
+            presentation.upgrade_command, None,
+            "this suite is not offering the build; a command to install it would do nothing"
         );
         assert_eq!(
             presentation.repository_setup, None,
@@ -3730,21 +3839,24 @@ mod tests {
     /// A machine whose apt lists are simply out of date reaches the same state as a `stable`
     /// subscriber that will never be offered a candidate — `apt-cache` answers from the last
     /// fetch and says so itself, and this app is not privileged to refresh it. So the state
-    /// must not claim the suite *cannot* carry the build, and must keep on offer the one tool
-    /// that can settle it. The desktop updater cannot contradict this state the way it
-    /// contradicted the one #725 reported: refreshing either finds the release, or confirms
-    /// what this state already says.
+    /// must not claim the suite *cannot* carry the build, and must keep the one control that
+    /// can settle it: looking again.
     #[test]
-    fn a_suite_that_is_not_offering_a_build_keeps_the_tool_that_could_refresh_it() {
+    fn a_suite_that_is_not_offering_a_build_still_lets_the_user_look_again() {
         let mut lifecycle = UpdateLifecycle::new(InstallKind::Deb, "0.11.0-beta.0.208");
         lifecycle.package_source_observed(subscribed("stable", None));
         lifecycle.start_check().unwrap();
         lifecycle.check_found("0.11.0-beta.0.210").unwrap();
 
         let presentation = lifecycle.describe();
-        assert!(
-            presentation.system_updater_offered,
-            "the tool that refreshes the package lists this verdict was read from stays on offer"
+        assert_eq!(
+            presentation.action,
+            Some(UpdateAction::CheckNow),
+            "checking again is what could change this answer"
+        );
+        assert_eq!(
+            presentation.upgrade_command, None,
+            "nothing to upgrade to on this channel"
         );
         assert!(
             presentation.repository_setup.is_none(),
@@ -3801,9 +3913,10 @@ mod tests {
             presentation.repository_setup.is_none(),
             "offering setup here would overwrite the subscription this machine already has"
         );
-        assert!(
-            presentation.system_updater_offered,
-            "the updater reads the very lists this verdict is about"
+        assert_eq!(
+            presentation.upgrade_command, None,
+            "apt has not read the source yet, so it has nothing to upgrade to; the refresh \
+             comes first"
         );
         // The sentence must not deny the source, which is the defect this state exists for.
         assert!(
@@ -3913,12 +4026,37 @@ mod tests {
         );
 
         let presentation = lifecycle.describe();
-        assert!(presentation.system_updater_offered);
         assert_eq!(presentation.repository_setup, None);
-        assert_eq!(presentation.action, None, "apt installs it, not the app");
+        // The state the operator was in. It used to offer nothing but a way into the
+        // desktop's system-wide updater (#759): an announcement with no way to act on it,
+        // and a button that put every upgradable package on the machine in one transaction.
+        assert_eq!(
+            presentation.action,
+            Some(UpdateAction::CopyUpgradeCommand),
+            "the surface that names the version hands over the command that installs it"
+        );
+        assert_eq!(
+            presentation.upgrade_command,
+            Some("sudo apt install --only-upgrade ok-player"),
+            "and the command names this package and nothing else"
+        );
+        assert!(
+            !presentation.action.unwrap().applies_update_in_app(),
+            "apt applies it, not the app: the privileged install path stays removed (#698)"
+        );
         assert_eq!(
             presentation.secondary_action,
             Some(UpdateAction::SkipVersion)
+        );
+
+        // ...and silencing it does not take the command away: the version stays installable
+        // on demand, which is what `InstallAnyway` is for on the self-applying lane.
+        lifecycle.skip_offer().unwrap();
+        let skipped = lifecycle.describe();
+        assert_eq!(skipped.action, Some(UpdateAction::CopyUpgradeCommand));
+        assert_eq!(
+            skipped.upgrade_command,
+            Some("sudo apt install --only-upgrade ok-player")
         );
     }
 
@@ -3962,15 +4100,13 @@ mod tests {
             seen.push(state);
 
             let presentation = lifecycle.describe();
-            // The one rule that spans all three: a surface may only send the
-            // user to the system updater when a source was established. That is
-            // what makes the tool agree — it reads the same package data, and
-            // refreshing it is the only thing that could change this answer.
-            // Where no source was established it would contradict the surface
-            // that sent the user to it, which is the #725 defect.
+            // The one rule that spans all three: an upgrade command is offered exactly where
+            // a source apt has read is actually holding a build to upgrade to. A suite that
+            // carries nothing gets no command, because running it would report the machine
+            // already current under a surface that had just named a version (#759).
             assert_eq!(
-                presentation.system_updater_offered,
-                source.carries_the_package(),
+                presentation.upgrade_command.is_some(),
+                source.deliverable().is_some(),
                 "for {source:?}"
             );
             // And nothing anywhere may offer to install it in the app.
@@ -3983,33 +4119,122 @@ mod tests {
         }
     }
 
-    /// Invariant, over every reachable state of every install kind: the desktop
-    /// software updater is offered only where a packaging tool owns the payload
-    /// *and* a source was established to carry it. This is the projection rule
-    /// that #725's dead end violated — the shell used to decide it from the
-    /// capability and the presence of a version alone.
-    #[test]
-    fn the_software_updater_is_offered_only_where_a_source_is_established() {
-        for kind in SELF_APPLY_KINDS
+    /// Every install kind, and for the lane that has answers about its delivery path, every
+    /// answer.
+    fn every_install_kind() -> Vec<InstallKind> {
+        SELF_APPLY_KINDS
             .iter()
             .chain(&SYSTEM_MANAGED_KINDS)
             .chain(&[InstallKind::DevBuild])
-        {
-            sweep_reachable_states(*kind, |life| {
+            .copied()
+            .collect()
+    }
+
+    /// **The #759 invariant.** Over every install kind and every answer about its delivery
+    /// path, nothing the surface offers reaches past OK Player's own package.
+    ///
+    /// The defect it forbids shipped: a system-managed install offered "Open software
+    /// updater", which launched the desktop's system-wide updater and built a transaction over
+    /// every upgradable package on the machine. On the reporting machine that transaction
+    /// included `tzdata`, whose debconf question blocked `dpkg-preconfigure` indefinitely.
+    /// None of it was this app's package, and nothing in the app could bound it — which is why
+    /// the rule is about what an action *reaches*, not about which states it appears in.
+    #[test]
+    fn no_offered_action_reaches_beyond_this_package() {
+        for kind in every_install_kind() {
+            sweep_reachable_states(kind, |life| {
                 let presentation = life.describe();
-                if !presentation.system_updater_offered {
+                for action in [presentation.action, presentation.secondary_action]
+                    .into_iter()
+                    .flatten()
+                {
+                    assert!(
+                        !action.reaches_beyond_this_package(),
+                        "{kind} offered {action:?}, which acts on more than this package, in \
+                         {:?}",
+                        life.state()
+                    );
+                }
+            });
+        }
+    }
+
+    /// And the commands themselves, over the same space: every command the surface hands a
+    /// user names this package, and none of them is a whole-system upgrade.
+    ///
+    /// The predicate above is about the shape of the offer; this is about its content. A
+    /// command changed to `apt upgrade` would keep every action honest by the first rule and
+    /// still hand the user the machine.
+    #[test]
+    fn every_command_the_surface_offers_names_this_package_and_upgrades_nothing_else() {
+        // `apt upgrade`, `apt-get dist-upgrade`, `apt full-upgrade`, `dnf upgrade` with no
+        // argument — the ways of saying "everything on this machine".
+        const WHOLE_MACHINE: [&str; 3] = ["dist-upgrade", "full-upgrade", "apt upgrade"];
+        for kind in every_install_kind() {
+            sweep_reachable_states(kind, |life| {
+                let Some(command) = life.describe().upgrade_command else {
+                    return;
+                };
+                assert!(
+                    command.contains("ok-player"),
+                    "{kind} offered {command:?}, which does not name the package"
+                );
+                for whole_machine in WHOLE_MACHINE {
+                    assert!(
+                        !command.contains(whole_machine),
+                        "{kind} offered {command:?}, which upgrades more than this package"
+                    );
+                }
+                assert!(
+                    !command.contains("pkexec"),
+                    "{kind} offered {command:?}; the privileged path was removed in #698"
+                );
+            });
+        }
+    }
+
+    /// The other half of the same rule, and the reason the action could not simply be
+    /// deleted: a system-managed install whose own source is holding a build must be given a
+    /// way to install it. Removing the updater without this leaves the state the operator
+    /// reported from the other side — an announcement with no control under it.
+    #[test]
+    fn a_system_managed_install_with_a_deliverable_always_offers_the_command() {
+        for kind in every_install_kind() {
+            sweep_reachable_states(kind, |life| {
+                let presentation = life.describe();
+                if !matches!(life.state(), UpdateState::AvailableExternally { .. }) {
+                    return;
+                }
+                if kind.upgrade_command().is_none() {
                     return;
                 }
                 assert_eq!(
-                    presentation.capability,
-                    UpdateCapability::SystemManaged,
-                    "{kind} offered the updater without a package manager owning it, in {:?}",
-                    life.state()
+                    presentation.action,
+                    Some(UpdateAction::CopyUpgradeCommand),
+                    "{kind} announced a build its source carries and offered {:?} for it",
+                    presentation.action
                 );
-                assert!(
-                    life.package_source().carries_the_package()
-                        || !kind.delivery_must_be_established(),
-                    "{kind} offered the updater with no established source, in {:?}",
+                assert_eq!(
+                    presentation.upgrade_command,
+                    kind.upgrade_command(),
+                    "{kind} offered the action without the command it copies"
+                );
+            });
+        }
+    }
+
+    /// The action and the command are one offer: neither is ever on screen alone. A button
+    /// that copies nothing and a command with no way to take it are the two halves of the
+    /// same defect.
+    #[test]
+    fn the_upgrade_action_and_its_command_are_never_separated() {
+        for kind in every_install_kind() {
+            sweep_reachable_states(kind, |life| {
+                let presentation = life.describe();
+                assert_eq!(
+                    presentation.action == Some(UpdateAction::CopyUpgradeCommand),
+                    presentation.upgrade_command.is_some(),
+                    "{kind} in {:?} offered one half of the upgrade offer",
                     life.state()
                 );
             });
@@ -4039,7 +4264,7 @@ mod tests {
             }
         );
         let presentation = lifecycle.describe();
-        assert!(!presentation.system_updater_offered);
+        assert_eq!(presentation.upgrade_command, None);
         assert!(presentation.repository_setup.is_some());
         assert!(
             presentation.updates_message.contains("could not ask"),
@@ -4096,7 +4321,7 @@ mod tests {
         );
         let presentation = lifecycle.describe();
         assert!(presentation.repository_setup.is_some());
-        assert!(!presentation.system_updater_offered);
+        assert_eq!(presentation.upgrade_command, None);
         assert!(presentation.updates_message.contains("network unreachable"));
     }
 
@@ -4902,9 +5127,12 @@ mod tests {
                 presentation.updates_message.contains("2.0.0"),
                 "{kind} must still name the skipped version"
             );
-            assert_eq!(
-                presentation.action, None,
-                "{kind} still installs nothing in app"
+            assert!(
+                presentation
+                    .action
+                    .is_none_or(|action| !action.applies_update_in_app()),
+                "{kind} still installs nothing in app, offered {:?}",
+                presentation.action
             );
         }
 

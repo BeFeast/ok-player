@@ -1002,7 +1002,6 @@ struct LinuxUpdateView {
     skip: glib::WeakRef<gtk::Button>,
     /// Opens the desktop's own software surface. Offered only where a system
     /// tool owns the payload, and disabled when this desktop has none.
-    system: glib::WeakRef<gtk::Button>,
     /// The commands that give a `.deb` install an update path, shown only when
     /// it has none (#725). Selectable, so a user can copy them by hand as well
     /// as with the button.

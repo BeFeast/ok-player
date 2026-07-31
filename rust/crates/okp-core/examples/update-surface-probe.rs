@@ -98,8 +98,8 @@ fn main() {
             let presentation = lifecycle.describe();
             println!("capability: {:?}", presentation.capability);
             println!(
-                "system_updater_offered: {}",
-                presentation.system_updater_offered
+                "upgrade_command: {}",
+                presentation.upgrade_command.unwrap_or("absent")
             );
             println!(
                 "repository_setup: {}",

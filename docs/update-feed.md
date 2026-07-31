@@ -90,10 +90,48 @@ That produces one of three states, and each gets a different surface:
 
 | Machine | Capability | What the surface says |
 |---|---|---|
-| No OK Player source | `SystemUnreachable` | Names the published build, says no repository is configured, and offers the commands to add one **for the channel this build came from** (or the direct download). Never the system updater. |
+| No OK Player source | `SystemUnreachable` | Names the published build, says no repository is configured, and offers the commands to add one **for the channel this build came from** (or the direct download). |
 | Source configured, apt has not read it | `SystemManaged`, state `AvailableButSourceUnread` | Says this system subscribes to the repository but apt has not read it yet, and offers `sudo apt update`. Never setup commands. |
-| Subscribed, suite carries the build | `SystemManaged` | Names the build and the suite it comes from, and may offer the system updater — which reads the same package data and will agree. |
+| Subscribed, suite carries the build | `SystemManaged` | Names the build and the suite it comes from, and offers **Copy upgrade command** — one command, for this package only (#759). |
 | Subscribed, suite does not carry it | `SystemManaged`, state `WithheldBySuite` | Says the machine is up to date **on its channel**, and which channel that is. A `stable` subscriber is never shown a candidate build (#689), because apt would refuse it. |
+
+### The app offers its own package, never the machine (issue #759)
+
+#725 left one action pointing outward: **Open software updater**, offered wherever a source
+was established. Its justification was that the updater reads the same package data the app
+read, so the two could not contradict each other. That holds for the *verdict* and not for the
+*transaction*. The tool it launches is the desktop's system-wide updater, and what it builds is
+an upgrade of **every** upgradable package on the machine. On the reporting machine that
+included `tzdata`; its debconf question blocked `dpkg-preconfigure --apt`, `pk-debconf-helper`
+span at 100% CPU, and the window sat at `Preconfiguring packages ...` indefinitely — measured
+twice, ten minutes each. Nothing about OK Player's package was involved, which is the whole
+objection: the app dragged unrelated packages into the user's lap and had no way to bound what
+it had started.
+
+The action is gone rather than narrowed, because the problem was never which states it appeared
+in. What a system-managed install offers instead is `UpdateAction::CopyUpgradeCommand`: the
+one command that upgrades this package, named, and nothing else.
+
+    sudo apt install --only-upgrade ok-player
+
+No suite and no channel appears in it — the machine's subscription was already established by
+`apt_policy`/`apt_sources`, so the command upgrades from whatever that is and cannot move a
+tester between channels. `--only-upgrade` keeps apt from reaching for anything not already
+installed. The app copies it and runs nothing: the packaging tool applies the update, as the
+message beside the command says, and the privileged install path removed in #698 stays removed.
+
+It is offered exactly where it would work — an announced build the machine's own source
+carries, and one the user skipped but may still want. `WithheldBySuite` does not get it (that
+suite is not offering the build) and neither does `AvailableButSourceUnread` (apt has not read
+the source yet; the refresh comes first).
+
+Two invariants in `okp_core` hold this over every install kind and every answer about its
+delivery path: `no_offered_action_reaches_beyond_this_package`, which makes every
+`UpdateAction` classify itself, and
+`every_command_the_surface_offers_names_this_package_and_upgrades_nothing_else`, which reads
+the command text. `scripts/verify-apt-source-instructions.sh` then runs the command the app
+prints, verbatim, in a container with an unrelated upgrade pending, and checks that only
+`ok-player` moved.
 
 ### The state every `.deb` install starts in (#726)
 

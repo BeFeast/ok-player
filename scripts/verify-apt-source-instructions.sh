@@ -13,6 +13,13 @@
 #   2. **The instructions the app shows.** They are the README's, verbatim, and following them
 #      in a clean container end to end must leave a machine that apt can carry — the archive as
 #      a source, and `ok-player` installed from it.
+#   3. **The upgrade command the app shows (#759).** A subscribed machine is handed one command
+#      and told it upgrades OK Player and nothing else. That is a claim about a transaction, so
+#      it is measured as one: the command is run verbatim on a machine that has an unrelated
+#      package waiting to be upgraded, and only `ok-player` may move. The offer this replaced
+#      was "Open software updater", which started a transaction over everything the machine
+#      could upgrade — on the reporting machine, `tzdata` and a debconf prompt that never
+#      returned.
 #
 # The lifecycle is asked through `cargo run --example update-surface-probe`, which is the same
 # chain the GTK shell uses: run `apt-cache policy`, hand the output to okp_core::apt_policy,
@@ -167,10 +174,10 @@ probe describe 0.11.0-beta.0.208 0.11.0-beta.0.210 --packaged-suite candidate \
 echo '--- what the update surface says about it ---'
 cat "$WORK/no-source.surface"
 
-if grep -qx 'system_updater_offered: false' "$WORK/no-source.surface" &&
+if grep -qx 'upgrade_command: absent' "$WORK/no-source.surface" &&
   grep -qx 'repository_setup: present (candidate)' "$WORK/no-source.surface" &&
   grep -qx 'capability: SystemUnreachable' "$WORK/no-source.surface"; then
-  pass 'with no source configured the surface offers the repository and never the updater'
+  pass 'with no source configured the surface offers the repository and no upgrade command'
 else
   fail 'no-source surface' 'the surface still points at a delivery path this machine does not have'
 fi
@@ -368,6 +375,141 @@ if grep -q '^message: .*stable' "$WORK/subscribed.surface" &&
   pass 'a stable subscriber is told which channel it is current on, not about a build it cannot get'
 else
   fail 'suite honesty' 'the surface announced a build this machine cannot install'
+fi
+
+# --- 4. The upgrade command the app prints, run verbatim (#759) ----------------------------
+# The property is "this command upgrades OK Player and nothing else", so the machine it runs on
+# must have something else to upgrade. A two-package fixture archive supplies that: `ok-player`
+# with a newer version waiting, and `okp-unrelated` with one waiting too. `okp-unrelated` stands
+# in for the `tzdata` on the reporting machine — something apt could upgrade that is none of
+# this app's business. A whole-machine action takes it; a package-scoped one leaves it alone,
+# and the difference is visible in dpkg's own log.
+#
+# The machine is built by one script run twice, because the app's verdict is computed on this
+# host and the command has to be executed on that machine: the first run reports what apt says,
+# the second rebuilds the identical machine and runs what the app decided to print. The setup is
+# byte-identical and offline after `apt-get update`, so the two machines are the same machine.
+cat >"$WORK/pending-upgrade.sh" <<'PENDING'
+set -eu
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq --no-install-recommends apt-utils sudo >/dev/null
+
+build_fixture_package() {
+  root="/tmp/build/$1-$2"
+  mkdir -p "$root/DEBIAN" "$root/usr/share/$1"
+  printf '%s\n' "$2" >"$root/usr/share/$1/version"
+  {
+    printf 'Package: %s\n' "$1"
+    printf 'Version: %s\n' "$2"
+    printf 'Architecture: all\n'
+    printf 'Maintainer: OK Player <noreply@example.invalid>\n'
+    printf 'Description: fixture for the package-scoped upgrade check\n'
+  } >"$root/DEBIAN/control"
+  dpkg-deb --build --root-owner-group "$root" /opt/repo/stable >/dev/null
+}
+
+mkdir -p /opt/repo/stable
+build_fixture_package ok-player 1.0.0
+build_fixture_package ok-player 2.0.0
+build_fixture_package okp-unrelated 1.0.0
+build_fixture_package okp-unrelated 2.0.0
+( cd /opt/repo && apt-ftparchive packages stable >stable/Packages )
+echo 'deb [trusted=yes] file:/opt/repo stable/' >/etc/apt/sources.list.d/okp-fixture.list
+apt-get update -qq
+apt-get install -y -qq ok-player=1.0.0 okp-unrelated=1.0.0 >/dev/null
+PENDING
+
+cat >"$WORK/pending-report.sh" <<'REPORT'
+set -eu
+. /srv/pending-upgrade.sh
+mkdir -p /srv-out
+apt-cache policy ok-player >/srv-out/policy
+apt list --upgradable 2>/dev/null >/srv-out/upgradable
+REPORT
+
+PENDING_OUT="$WORK/pending"
+mkdir -p "$PENDING_OUT"
+chmod -R a+rX "$WORK" 2>/dev/null || true
+
+if "$RUNTIME" run --rm \
+  --mount "type=bind,src=$WORK,dst=/srv,ro" \
+  --mount "type=bind,src=$PENDING_OUT,dst=/srv-out" \
+  -e DEBIAN_FRONTEND=noninteractive "$IMAGE" \
+  bash /srv/pending-report.sh >"$WORK/pending-setup.log" 2>&1; then
+
+  echo '--- a subscribed machine with an unrelated upgrade also pending ---'
+  cat "$PENDING_OUT/upgradable"
+  cat "$PENDING_OUT/policy"
+
+  probe describe 1.0.0 2.0.0 --packaged-suite stable \
+    <"$PENDING_OUT/policy" >"$PENDING_OUT/surface"
+  echo '--- what the update surface offers it ---'
+  cat "$PENDING_OUT/surface"
+
+  UPGRADE_COMMAND="$(sed -n 's/^upgrade_command: //p' "$PENDING_OUT/surface")"
+  if grep -qx 'capability: SystemManaged' "$PENDING_OUT/surface" &&
+    grep -qx 'action: Some(CopyUpgradeCommand)' "$PENDING_OUT/surface" &&
+    [[ -n "$UPGRADE_COMMAND" && "$UPGRADE_COMMAND" != absent ]]; then
+    pass 'a subscribed machine whose source carries the build is given a command to run'
+  else
+    fail 'upgrade offer' 'the surface named a version and offered no way to install it'
+  fi
+
+  # The machine must really have had something else to upgrade, or the check below proves
+  # nothing: a command cannot be shown to leave other packages alone on a machine that had none.
+  if grep -q '^okp-unrelated/' "$PENDING_OUT/upgradable"; then
+    pass 'the machine under test has an unrelated upgrade pending, as the reporting one did'
+  else
+    fail 'pending upgrade' 'nothing unrelated was waiting, so the command had nothing to spare'
+  fi
+
+  printf '%s\n' "$UPGRADE_COMMAND" >"$WORK/upgrade-command.txt"
+  cat >"$WORK/pending-run.sh" <<'RUN'
+set -eu
+. /srv/pending-upgrade.sh
+mkdir -p /srv-out
+echo '--- what the app told the user to run ---'
+cat /srv/upgrade-command.txt
+: >/var/log/dpkg.log
+# Verbatim, as printed. `yes` only answers a prompt the app cannot; it changes no word of it.
+yes | sh /srv/upgrade-command.txt
+dpkg-query -W -f='${Package} ${Version}\n' ok-player okp-unrelated >/srv-out/versions
+awk '$3 == "upgrade" || $3 == "install" || $3 == "remove" || $3 == "purge" { sub(/:.*/, "", $4); print $4 }' \
+  /var/log/dpkg.log | sort -u >/srv-out/touched
+RUN
+  chmod -R a+rX "$WORK" 2>/dev/null || true
+
+  if "$RUNTIME" run --rm \
+    --mount "type=bind,src=$WORK,dst=/srv,ro" \
+    --mount "type=bind,src=$PENDING_OUT,dst=/srv-out" \
+    "$IMAGE" bash /srv/pending-run.sh >"$WORK/pending-run.log" 2>&1; then
+    cat "$WORK/pending-run.log"
+    echo '--- versions after running it ---'
+    cat "$PENDING_OUT/versions"
+    echo '--- every package dpkg touched while it ran ---'
+    cat "$PENDING_OUT/touched"
+
+    if grep -qx 'ok-player 2.0.0' "$PENDING_OUT/versions"; then
+      pass 'running the command the app printed upgrades OK Player'
+    else
+      fail 'upgrade command' 'the command the app prints does not upgrade OK Player'
+    fi
+
+    if grep -qx 'okp-unrelated 1.0.0' "$PENDING_OUT/versions" &&
+      [[ "$(cat "$PENDING_OUT/touched")" == 'ok-player' ]]; then
+      pass 'and touches nothing else: the unrelated upgrade is still pending afterwards'
+    else
+      fail 'package scope' \
+        "the command reached past OK Player: dpkg touched $(tr '\n' ' ' <"$PENDING_OUT/touched")"
+    fi
+  else
+    cat "$WORK/pending-run.log" >&2
+    fail 'upgrade command' 'the command the app prints did not run to completion'
+  fi
+else
+  cat "$WORK/pending-setup.log" >&2
+  fail 'pending upgrade fixture' 'the machine with a pending unrelated upgrade could not be built'
 fi
 
 printf '\n'
