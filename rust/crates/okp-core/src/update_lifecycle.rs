@@ -1692,19 +1692,6 @@ impl UpdateLifecycle {
                     suite: self.package_source.suite().map(str::to_owned),
                 }
             }
-            // A source exists but has not been read: what the feed published is reachable,
-            // and one command makes it so (#726).
-            UpdateCapability::SystemManaged
-                if matches!(
-                    self.package_source,
-                    PackageSourceEvidence::ConfiguredButUnread { .. }
-                ) =>
-            {
-                UpdateState::AvailableButSourceUnread {
-                    version: published,
-                    suite: self.package_source.suite().map(str::to_owned),
-                }
-            }
             UpdateCapability::SystemManaged => match self.package_source.deliverable() {
                 Some(deliverable) => UpdateState::AvailableExternally {
                     version: deliverable.to_owned(),
