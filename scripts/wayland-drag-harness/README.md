@@ -128,3 +128,59 @@ Order of work: make headless gnome-shell deliver injected pointer input
 fresh-session campaign under the real shell → expect the SEGV with a core →
 fix from the backtrace. See docs/qa-records/2026-07-27-issue-627.md for the
 authoritative result matrix.
+
+## Fit acceptance (#546) — fit-check.sh
+
+`fit-check.sh` turns the dual-head spanning defect (#546: the window opens or
+fits across both monitors instead of inside the current monitor's workarea)
+into a headless, human-free acceptance check. It reuses this harness's
+environment — gnome-shell headless with the two virtual monitors, the
+`setscales.py` operator layout, a private `XDG_RUNTIME_DIR` and session bus —
+but needs no pointer input: the evidence is the `window fit request:` record
+the player emits under `OKP_DEBUG_WINDOW_FIT=1` from a live Wayland session
+(rust/crates/okp-linux-gtk/src/window.rs) PLUS the compositor-applied frame
+rect read back out of Mutter per round (`org.gnome.Shell.Eval`, unsafe mode
+flipped by a throwaway extension installed into the run's private HOME - the
+host session is never touched), since the request records alone say nothing
+about what GTK/Mutter actually applied.
+
+```sh
+./fit-check.sh                        # build + 3 rounds x {16:9, 4K} fixtures
+./fit-check.sh --rounds 5 --binary ../../rust/target/release/okp-linux-gtk \
+  --root /var/tmp/okp-fit-check
+```
+
+Per round the source-built player is launched with one clip (ffmpeg lavfi
+fixtures are generated when none are provided). Round 1 is the initial-map +
+fit-to-media shape; later rounds relaunch against the same persisted HOME/XDG
+state, which is the re-open/second-launch shape. Every fit record in every
+round must satisfy, against the logical layout read back from DisplayConfig:
+
+- `monitor_geometry` is exactly one logical monitor of the applied layout — a
+  union fit betrays itself as a rectangle wider than either head;
+- `workarea` lies inside that single monitor's geometry;
+- the placed `window` lies entirely inside that workarea;
+- `bounds_source=current-monitor`, and `window fit deferred: monitor workarea
+  unavailable` never appears;
+- the record's `video=` matches the fixture the matrix row claims (fixture
+  pixel dimensions are also ffprobe-verified up front, so a mistyped
+  `--clip-4k` cannot run the same 1080p input twice);
+- the compositor-APPLIED frame rect (polled until stable across consecutive
+  reads) is contained in a single monitor's workarea.
+
+Guardrails: `--rounds` below 3 is rejected (the acceptance contract requires
+at least three launches per clip), and the recursive `--root` cleanup only
+runs inside a directory the harness owns — system/shared roots are refused,
+and any other pre-existing non-empty root must carry the `.okp-fit-check-root`
+marker the script drops on first use.
+
+Exit 0 prints the PASS summary; exit 1 is the #546 defect (a spanning or
+uncontained fit, diagnosis printed per round); exit 2 is a harness fault,
+including missing dependencies; exit 64 is a usage error (bad flag value,
+unusable fixture or binary).
+A launch that dies before logging any fit decision is not a fit verdict
+(that is the #627 startup-crash class, out of scope here), so a round
+relaunches up to twice — keeping the dead launch's log — before the run
+becomes a harness fault.
+App logs stay under `<root>/logs/fit-<clip>-<round>.log` as the geometry
+evidence the issue asks for (x/y/w/h + monitor + workarea, 16:9 and 4K).
