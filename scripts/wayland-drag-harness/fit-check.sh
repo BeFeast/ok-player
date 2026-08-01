@@ -20,6 +20,15 @@
 #   (c) the placed window lies entirely inside that workarea;
 #   (d) bounds_source is current-monitor;
 #   (e) `window fit deferred: monitor workarea unavailable` never appears.
+# The `window fit request/configure` records are only what the app ASKED for -
+# they are emitted before set_default_size and never measured back, so per
+# round the harness also reads the compositor-APPLIED frame rect and the
+# per-monitor workareas straight out of Mutter (org.gnome.Shell.Eval on the
+# private session, unsafe-mode enabled by a throwaway extension in the private
+# HOME) and asserts:
+#   (f) the applied window frame rect is contained in a single logical
+#       monitor's workarea - so a compositor that ignores or re-constrains the
+#       request cannot turn a spanning window into a PASS.
 set -euo pipefail
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,7 +48,8 @@ usage() {
 usage: fit-check.sh [--rounds N] [--clip-16x9 PATH] [--clip-4k PATH]
                     [--binary PATH] [--root DIR]
 
-  --rounds N       launches per clip (default 3; contract requires >= 3)
+  --rounds N       launches per clip (default 3; the contract requires >= 3,
+                   smaller values are rejected)
   --clip-16x9 P    16:9 fixture (default: ffmpeg lavfi 1920x1080, generated)
   --clip-4k P      4K fixture   (default: ffmpeg lavfi 3840x2160, generated)
   --binary P       player binary (default: cargo build --release -p okp-linux-gtk)
@@ -62,7 +72,9 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown argument: $1" >&2; usage; exit 64 ;;
   esac
 done
-[[ "$ROUNDS" =~ ^[0-9]+$ && "$ROUNDS" -ge 1 ]] || { echo "--rounds must be a positive integer" >&2; exit 64; }
+# The acceptance contract requires at least three launches per clip; a
+# shortened run must not be mistakable for contract-compliant evidence.
+[[ "$ROUNDS" =~ ^[0-9]+$ && "$ROUNDS" -ge 3 ]] || { echo "--rounds must be an integer >= 3 (the acceptance contract requires at least three launches per clip)" >&2; exit 64; }
 
 for tool in gnome-shell dbus-daemon python3 ffmpeg; do
   command -v "$tool" >/dev/null 2>&1 || { echo "missing required tool: $tool" >&2; exit 127; }
@@ -80,8 +92,30 @@ fi
 
 #--------------------------------------------------------------- private env --
 # Fresh session state per run, but generated clips are reusable.
+#
+# The cleanup below is recursive, so refuse to point it at anything that is
+# not a dedicated harness-owned directory: system/shared roots are rejected
+# outright, and any other pre-existing non-empty directory must carry the
+# marker file this script drops on first use. A typo like `--root /var/tmp/..`
+# therefore cannot delete unrelated data.
+FIT_ROOT_MARKER=".okp-fit-check-root"
 mkdir -p "$FIT_ROOT"
 FIT_ROOT="$(cd "$FIT_ROOT" && pwd)"
+case "$FIT_ROOT" in
+  /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/media|/mnt|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var|/var/tmp|/workspace|"$HOME")
+    echo "refusing unsafe --root $FIT_ROOT: use a dedicated subdirectory (e.g. /var/tmp/okp-fit-check)" >&2
+    exit 64 ;;
+esac
+if [[ ! -e "$FIT_ROOT/$FIT_ROOT_MARKER" ]]; then
+  if [[ -n "$(ls -A "$FIT_ROOT")" ]]; then
+    { echo "refusing to clean $FIT_ROOT: it has content but no $FIT_ROOT_MARKER marker,"
+      echo "so it does not look harness-owned. Point --root at a fresh or dedicated"
+      echo "directory (or, if this really is a fit-check root, touch $FIT_ROOT/$FIT_ROOT_MARKER)."
+    } >&2
+    exit 64
+  fi
+  touch "$FIT_ROOT/$FIT_ROOT_MARKER"
+fi
 rm -rf "$FIT_ROOT/home" "$FIT_ROOT/xdg" "$FIT_ROOT/logs" "$FIT_ROOT/bus" "$FIT_ROOT/layout.txt"
 mkdir -p "$FIT_ROOT/home/.config" "$FIT_ROOT/logs"
 mkdir -p -m 700 "$FIT_ROOT/xdg"
@@ -113,10 +147,43 @@ echo "== private session bus"
 dbus-daemon --session --address="unix:path=$FIT_ROOT/bus" --fork --print-pid >"$FIT_ROOT/logs/dbus.pid" 2>/dev/null
 DBUS_PID="$(cat "$FIT_ROOT/logs/dbus.pid")"
 
+# The applied-geometry assertion reads frame rects via org.gnome.Shell.Eval,
+# which only answers in unsafe mode; recent shells dropped the --unsafe-mode
+# flag, so a throwaway extension in the PRIVATE home flips it at startup. It
+# never touches the host's real session or extensions.
+UNSAFE_UUID="okp-fit-unsafe@fit-check"
+EXT_DIR="$FIT_ROOT/home/.local/share/gnome-shell/extensions/$UNSAFE_UUID"
+SHELL_MAJOR="$(gnome-shell --version | grep -oE '[0-9]+' | head -1)"
+mkdir -p "$EXT_DIR"
+cat >"$EXT_DIR/metadata.json" <<EOF
+{
+  "uuid": "$UNSAFE_UUID",
+  "name": "okp fit-check unsafe mode",
+  "description": "Enable unsafe mode so fit-check.sh can read compositor-applied window geometry via Shell.Eval.",
+  "shell-version": ["$SHELL_MAJOR"],
+  "url": ""
+}
+EOF
+cat >"$EXT_DIR/extension.js" <<'EOF'
+import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
+
+export default class OkpFitUnsafeMode extends Extension {
+    enable() {
+        global.context.unsafe_mode = true;
+    }
+
+    disable() {
+        global.context.unsafe_mode = false;
+    }
+}
+EOF
+
 echo "== headless gnome-shell (3840x2160 + 1920x1080)"
 # The operator layout needs fractional scaling; the keyfile backend keeps the
 # flag out of the host's dconf (see the harness README).
 env "${SESSION_ENV[@]}" gsettings set org.gnome.mutter experimental-features "['scale-monitor-framebuffer']"
+env "${SESSION_ENV[@]}" gsettings set org.gnome.shell disable-extension-version-validation true
+env "${SESSION_ENV[@]}" gsettings set org.gnome.shell enabled-extensions "['$UNSAFE_UUID']"
 env "${SESSION_ENV[@]}" gnome-shell --headless --wayland-display "$WL_NAME" \
   --virtual-monitor 3840x2160 --virtual-monitor 1920x1080 \
   >"$FIT_ROOT/logs/shell.log" 2>&1 &
@@ -180,6 +247,80 @@ gen_clip() {
 [[ -f "$CLIP_16X9" ]] || { echo "missing 16:9 clip: $CLIP_16X9" >&2; exit 64; }
 [[ -f "$CLIP_4K" ]] || { echo "missing 4K clip: $CLIP_4K" >&2; exit 64; }
 
+#-------------------------------------------------------------- applied geo --
+# Snapshot what the compositor ACTUALLY applied: mapped frame rects plus the
+# per-monitor geometries/workareas, straight out of Mutter via Shell.Eval.
+# Polls until an app window exists and its frame rect is stable across two
+# consecutive reads, so a mid-resize/mid-placement transient is never the
+# evidence. Exit 0 = stable snapshot written; 3 = timed out waiting for a
+# stable app window; anything else = Eval/harness fault.
+capture_compositor_state() {
+  local out="$1"
+  env "${SESSION_ENV[@]}" python3 - "$out" <<'PY'
+import json, os, sys, time
+import gi
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib
+
+JS = """
+JSON.stringify((() => {
+    const ws = global.workspace_manager.get_active_workspace();
+    const monitors = [];
+    for (let i = 0; i < global.display.get_n_monitors(); i++) {
+        const g = global.display.get_monitor_geometry(i);
+        const w = ws.get_work_area_for_monitor(i);
+        monitors.push({geometry: [g.width, g.height, g.x, g.y],
+                       workarea: [w.width, w.height, w.x, w.y]});
+    }
+    const windows = global.get_window_actors().map(a => {
+        const mw = a.meta_window;
+        const r = mw.get_frame_rect();
+        return {wm_class: mw.get_wm_class(), title: mw.get_title(),
+                rect: [r.width, r.height, r.x, r.y]};
+    });
+    return {monitors, windows};
+})())
+"""
+
+bus = Gio.DBusConnection.new_for_address_sync(
+    os.environ["DBUS_SESSION_BUS_ADDRESS"],
+    Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT
+    | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION,
+    None, None)
+def snapshot():
+    ok, result = bus.call_sync(
+        "org.gnome.Shell", "/org/gnome/Shell", "org.gnome.Shell", "Eval",
+        GLib.Variant("(s)", (JS,)), None, 0, -1, None).unpack()
+    if not ok:
+        print(f"Shell.Eval failed (unsafe mode not active?): {result}", file=sys.stderr)
+        sys.exit(1)
+    # Eval JSON-encodes its return value, and the JS stringifies too on some
+    # shell versions - unwrap until the object comes out.
+    state = json.loads(result)
+    if isinstance(state, str):
+        state = json.loads(state)
+    return state
+
+deadline = time.monotonic() + 12
+prev_rects = None
+state = None
+while time.monotonic() < deadline:
+    state = snapshot()
+    rects = sorted(tuple(w["rect"]) for w in state["windows"]
+                   if "okplayer" in (w["wm_class"] or "").lower())
+    if rects and rects == prev_rects:
+        with open(sys.argv[1], "w") as f:
+            json.dump(state, f)
+        sys.exit(0)
+    prev_rects = rects
+    time.sleep(0.3)
+if state is not None:
+    with open(sys.argv[1], "w") as f:
+        json.dump(state, f)
+sys.exit(3)
+PY
+}
+
 #-------------------------------------------------------------------- rounds --
 # One launch: wait for the app to log its fit decision, then take it down.
 # A launch that dies before any fit decision is not a fit verdict - that is
@@ -188,7 +329,7 @@ gen_clip() {
 # before it becomes a harness fault.
 run_round() {
   local clip="$1" log="$2"
-  local attempt seen
+  local attempt seen rc
   for attempt in 1 2 3; do
     env "${SESSION_ENV[@]}" \
       WAYLAND_DISPLAY="$WL_NAME" GDK_BACKEND=wayland OKP_DEBUG_WINDOW_FIT=1 \
@@ -202,6 +343,19 @@ run_round() {
     done
     # Let the paired `window fit configure` land before tearing the app down.
     sleep 1
+    if [[ "$seen" == 1 ]]; then
+      # The fit records are only the request side; while the window is still
+      # mapped, snapshot the geometry the compositor actually applied.
+      rm -f "$log.compositor.json"
+      rc=0; capture_compositor_state "$log.compositor.json" || rc=$?
+      if [[ "$rc" != 0 ]]; then
+        kill "$APP_PID" 2>/dev/null || true
+        wait "$APP_PID" 2>/dev/null || true
+        APP_PID=""
+        echo "HARNESS FAULT: could not read the compositor-applied window geometry (rc=$rc; Shell.Eval via $UNSAFE_UUID)" >&2
+        exit 2
+      fi
+    fi
     kill "$APP_PID" 2>/dev/null || true
     wait "$APP_PID" 2>/dev/null || true
     APP_PID=""
@@ -218,13 +372,16 @@ run_round() {
   exit 2
 }
 
-# Every `window fit request` line in one log must be single-monitor-contained.
+# Every `window fit request` line in one log must be single-monitor-contained,
+# and the compositor-applied frame rect (captured while the window was mapped)
+# must land inside a single monitor's workarea too - the request alone proves
+# nothing about what GTK/Mutter actually did with it.
 check_round() {
   local log="$1" label="$2"
-  python3 - "$log" "$FIT_ROOT/layout.txt" "$label" <<'PY'
-import re, sys
+  python3 - "$log" "$FIT_ROOT/layout.txt" "$label" "$log.compositor.json" <<'PY'
+import json, re, sys
 
-log_path, layout_path, label = sys.argv[1:4]
+log_path, layout_path, label, comp_path = sys.argv[1:5]
 heads = []
 for line in open(layout_path):
     m = re.match(r"(\d+)x(\d+)\+(-?\d+),(-?\d+)", line.strip())
@@ -274,6 +431,28 @@ for f in fits:
     print(f"  {label}: video={vw}x{vh} window={win[0]}x{win[1]}+{win[2]},{win[3]} "
           f"inside workarea={work[0]}x{work[1]}+{work[2]},{work[3]} on {monitor} "
           f"(bounds_source={source})")
+
+# The requested rectangle passing is necessary but not sufficient: assert the
+# geometry the compositor APPLIED (Mutter frame rect, in the same logical
+# coordinate space as Mutter's own monitor geometries/workareas).
+comp = json.load(open(comp_path))
+app_windows = [w for w in comp["windows"]
+               if "okplayer" in (w["wm_class"] or "").lower()]
+if not app_windows:
+    fail("no compositor-side app window in the applied-geometry snapshot")
+for w in app_windows:
+    rect = tuple(w["rect"])  # (w, h, x, y), same shape as heads
+    homes = [m for m in comp["monitors"] if contains(tuple(m["geometry"]), rect)]
+    if not homes:
+        fail(f"compositor-APPLIED window {rect[0]}x{rect[1]}+{rect[2]},{rect[3]} is not "
+             f"contained in any single monitor geometry "
+             f"{[tuple(m['geometry']) for m in comp['monitors']]} - the applied window "
+             "spans monitors or overflows (#546), whatever the request said")
+    if not any(contains(tuple(m["workarea"]), rect) for m in homes):
+        fail(f"compositor-APPLIED window {rect[0]}x{rect[1]}+{rect[2]},{rect[3]} escapes "
+             f"its monitor's workarea {[tuple(m['workarea']) for m in homes]}")
+    print(f"  {label}: compositor applied window={rect[0]}x{rect[1]}+{rect[2]},{rect[3]} "
+          "contained in a single monitor workarea")
 PY
 }
 
@@ -296,4 +475,4 @@ if (( failures > 0 )); then
   echo "FAIL: $failures of $total rounds produced a spanning/uncontained fit (#546 defect); evidence in $FIT_ROOT/logs"
   exit 1
 fi
-echo "PASS: all $total fits single-monitor-contained on the scaled dual-monitor layout (workarea never the union, bounds_source=current-monitor, zero deferred fits); evidence in $FIT_ROOT/logs"
+echo "PASS: all $total fits single-monitor-contained on the scaled dual-monitor layout (requested AND compositor-applied geometry, workarea never the union, bounds_source=current-monitor, zero deferred fits); evidence in $FIT_ROOT/logs"
