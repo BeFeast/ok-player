@@ -1,0 +1,32 @@
+Renderer policy: mode=automatic flatpak=false dri-accessible=true backend=automatic hwdec=settings render-api=default gsk-renderer=default
+
+(okp-linux-gtk:1202575): Gdk-WARNING **: 14:52:59.055: Cannot get portal org.freedesktop.portal.Inhibit version: GDBus.Error:org.freedesktop.DBus.Error.InvalidArgs: No such interface “org.freedesktop.portal.Inhibit”
+startup launch lifecycle: window mapped
+native GL context: version=4.6 (Core Profile) Mesa 26.0.3-1ubuntu1 vendor=Intel renderer=Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2)
+Hardware decoding policy: hwdec=vaapi,nvdec,vdpau,drm,no source=Automatic
+Cannot load libcuda.so.1
+startup launch lifecycle: player ready
+startup launch lifecycle: delivering after map and player readiness
+Launch request: 1 item(s), 0 playlist(s), 0 subtitle(s)
+
+(okp-linux-gtk:1202575): Gtk-WARNING **: 14:52:59.375: GtkGizmo 0x617cf34b1950 (slider) reported min width -2, but sizes must be >= 0
+
+(okp-linux-gtk:1202575): Gtk-WARNING **: 14:52:59.375: GtkGizmo 0x617cf34ae9f0 (slider) reported min height -2, but sizes must be >= 0
+Cannot connect to server socket err = No such file or directory
+Cannot connect to server request channel
+jack server is not running or cannot be started
+JackShmReadWritePtr::~JackShmReadWritePtr - Init not done for -1, skipping unlock
+JackShmReadWritePtr::~JackShmReadWritePtr - Init not done for -1, skipping unlock
+
+(okp-linux-gtk:1202575): Gtk-WARNING **: 14:52:59.388: GtkGizmo 0x617cf33cb010 (slider) reported min width -4, but sizes must be >= 0
+
+(okp-linux-gtk:1202575): Gtk-WARNING **: 14:52:59.389: GtkGizmo 0x617cf33c80b0 (slider) reported min height -2, but sizes must be >= 0
+
+(okp-linux-gtk:1202575): Gtk-WARNING **: 14:52:59.458: GtkGizmo 0x617cf353e850 (highlight) reported min width -2, but sizes must be >= 0
+Update install kind: detected=dev-build capability=Unmanaged package-kind=development
+Update session: Updates are disabled for development builds.
+window fit request: video=1920x1080 scale=2.00 monitor=Meta-0 monitor_geometry=1920x1080+0,0 workarea=1920x1016+0,32 window=960x540+480,270 bounds_source=current-monitor
+window fit remembers idle geometry: 1120x680
+window fit configure: kind=initial target=960x540+480,270 mapped=true
+native video geometry applied: surface=960x540+0,0 subsurface=960x540+0,0 buffer=1920x1080
+native video geometry applied: surface=960x540+0,0 subsurface=960x540+0,0 buffer=1920x1080
