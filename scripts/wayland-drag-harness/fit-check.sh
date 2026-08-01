@@ -62,13 +62,18 @@ not the app). 64 = usage error (bad flag value, unusable fixture/binary).
 EOF
 }
 
+# A malformed invocation is a usage error (64), never mistakable for the
+# app-defect result - so no bare ${2:?} expansions, which would exit 1.
+require_value() {
+  [[ $# -ge 2 ]] || { echo "option $1 requires a value" >&2; usage; exit 64; }
+}
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --rounds) ROUNDS="${2:?}"; shift 2 ;;
-    --clip-16x9) CLIP_16X9="${2:?}"; shift 2 ;;
-    --clip-4k) CLIP_4K="${2:?}"; shift 2 ;;
-    --binary) BINARY="${2:?}"; shift 2 ;;
-    --root) FIT_ROOT="${2:?}"; shift 2 ;;
+    --rounds) require_value "$@"; ROUNDS="$2"; shift 2 ;;
+    --clip-16x9) require_value "$@"; CLIP_16X9="$2"; shift 2 ;;
+    --clip-4k) require_value "$@"; CLIP_4K="$2"; shift 2 ;;
+    --binary) require_value "$@"; BINARY="$2"; shift 2 ;;
+    --root) require_value "$@"; FIT_ROOT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage; exit 64 ;;
   esac
@@ -103,7 +108,9 @@ fi
 # therefore cannot delete unrelated data.
 FIT_ROOT_MARKER=".okp-fit-check-root"
 mkdir -p "$FIT_ROOT"
-FIT_ROOT="$(cd "$FIT_ROOT" && pwd)"
+# pwd -P: validate the PHYSICAL directory, so a symlink like
+# some/safe-looking/run -> /tmp cannot smuggle a forbidden root past the case.
+FIT_ROOT="$(cd "$FIT_ROOT" && pwd -P)"
 case "$FIT_ROOT" in
   /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/media|/mnt|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var|/var/tmp|/workspace|"$HOME")
     echo "refusing unsafe --root $FIT_ROOT: use a dedicated subdirectory (e.g. /var/tmp/okp-fit-check)" >&2
