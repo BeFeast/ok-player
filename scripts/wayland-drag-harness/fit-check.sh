@@ -57,7 +57,8 @@ usage: fit-check.sh [--rounds N] [--clip-16x9 PATH] [--clip-4k PATH]
                    (default /var/tmp/okp-fit-check, env OKP_FIT_ROOT)
 
 Exit 0 = every fit single-monitor-contained. 1 = a fit assertion failed
-(the #546 defect). 2 = harness fault (environment, not the app).
+(the #546 defect). 2 = harness fault (environment or missing dependency,
+not the app). 64 = usage error (bad flag value, unusable fixture/binary).
 EOF
 }
 
@@ -76,14 +77,16 @@ done
 # shortened run must not be mistakable for contract-compliant evidence.
 [[ "$ROUNDS" =~ ^[0-9]+$ && "$ROUNDS" -ge 3 ]] || { echo "--rounds must be an integer >= 3 (the acceptance contract requires at least three launches per clip)" >&2; exit 64; }
 
-for tool in gnome-shell dbus-daemon python3 ffmpeg; do
-  command -v "$tool" >/dev/null 2>&1 || { echo "missing required tool: $tool" >&2; exit 127; }
+# Missing dependencies are the documented harness-fault class (exit 2), not
+# a distinct undocumented status.
+for tool in gnome-shell dbus-daemon python3 ffmpeg ffprobe; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "missing required tool: $tool" >&2; exit 2; }
 done
-python3 -c 'import gi' 2>/dev/null || { echo "python3-gi is required (setscales.py, layout query)" >&2; exit 127; }
+python3 -c 'import gi' 2>/dev/null || { echo "python3-gi is required (setscales.py, layout query)" >&2; exit 2; }
 
 #------------------------------------------------------------------- binary --
 if [[ -z "$BINARY" ]]; then
-  command -v cargo >/dev/null 2>&1 || { echo "no --binary given and cargo is missing" >&2; exit 127; }
+  command -v cargo >/dev/null 2>&1 || { echo "no --binary given and cargo is missing" >&2; exit 2; }
   echo "== building okp-linux-gtk (release)"
   cargo build --release -p okp-linux-gtk --manifest-path "$REPO/rust/Cargo.toml"
   BINARY="$REPO/rust/target/release/okp-linux-gtk"
@@ -247,6 +250,21 @@ gen_clip() {
 [[ -f "$CLIP_16X9" ]] || { echo "missing 16:9 clip: $CLIP_16X9" >&2; exit 64; }
 [[ -f "$CLIP_4K" ]] || { echo "missing 4K clip: $CLIP_4K" >&2; exit 64; }
 
+# The 16:9/4K matrix is only real if the fixtures actually have those pixel
+# dimensions - a mistyped --clip-4k or a stale generated file must not let
+# the same 1080p input pass twice. check_round re-asserts this per fit record.
+CLIP_16X9_DIMS="1920x1080"
+CLIP_4K_DIMS="3840x2160"
+clip_dims() {
+  ffprobe -v error -select_streams v:0 -show_entries stream=width,height \
+    -of csv=s=x:p=0 "$1"
+}
+for spec in "$CLIP_16X9:$CLIP_16X9_DIMS" "$CLIP_4K:$CLIP_4K_DIMS"; do
+  clip="${spec%:*}"; want="${spec##*:}"
+  got="$(clip_dims "$clip")" || { echo "ffprobe cannot read $clip" >&2; exit 64; }
+  [[ "$got" == "$want" ]] || { echo "fixture $clip is ${got:-unreadable}, expected $want" >&2; exit 64; }
+done
+
 #-------------------------------------------------------------- applied geo --
 # Snapshot what the compositor ACTUALLY applied: mapped frame rects plus the
 # per-monitor geometries/workareas, straight out of Mutter via Shell.Eval.
@@ -377,11 +395,11 @@ run_round() {
 # must land inside a single monitor's workarea too - the request alone proves
 # nothing about what GTK/Mutter actually did with it.
 check_round() {
-  local log="$1" label="$2"
-  python3 - "$log" "$FIT_ROOT/layout.txt" "$label" "$log.compositor.json" <<'PY'
+  local log="$1" label="$2" want_video="$3"
+  python3 - "$log" "$FIT_ROOT/layout.txt" "$label" "$log.compositor.json" "$want_video" <<'PY'
 import json, re, sys
 
-log_path, layout_path, label, comp_path = sys.argv[1:5]
+log_path, layout_path, label, comp_path, want_video = sys.argv[1:6]
 heads = []
 for line in open(layout_path):
     m = re.match(r"(\d+)x(\d+)\+(-?\d+),(-?\d+)", line.strip())
@@ -412,6 +430,9 @@ def contains(outer, inner):
 
 for f in fits:
     vw, vh = int(f[0]), int(f[1])
+    if f"{vw}x{vh}" != want_video:
+        fail(f"fit record is for video {vw}x{vh}, expected {want_video} - the round "
+             "did not exercise the fixture the matrix claims")
     monitor = f[3]
     geo = (int(f[4]), int(f[5]), int(f[6]), int(f[7]))
     work = (int(f[8]), int(f[9]), int(f[10]), int(f[11]))
@@ -459,14 +480,15 @@ PY
 failures=0
 total=0
 for kind in 16x9 4k; do
-  clip="$CLIP_16X9"; [[ "$kind" == 4k ]] && clip="$CLIP_4K"
+  clip="$CLIP_16X9"; want_video="$CLIP_16X9_DIMS"
+  [[ "$kind" == 4k ]] && { clip="$CLIP_4K"; want_video="$CLIP_4K_DIMS"; }
   for r in $(seq 1 "$ROUNDS"); do
     shape="re-open"; [[ "$r" == 1 ]] && shape="initial map + fit-to-media"
     log="$FIT_ROOT/logs/fit-$kind-$r.log"
     echo "== round $r/$ROUNDS ($kind, $shape)"
     run_round "$clip" "$log"
     total=$((total + 1))
-    check_round "$log" "$kind round $r" || failures=$((failures + 1))
+    check_round "$log" "$kind round $r" "$want_video" || failures=$((failures + 1))
   done
 done
 

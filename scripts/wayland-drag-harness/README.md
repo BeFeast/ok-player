@@ -138,7 +138,11 @@ environment — gnome-shell headless with the two virtual monitors, the
 `setscales.py` operator layout, a private `XDG_RUNTIME_DIR` and session bus —
 but needs no pointer input: the evidence is the `window fit request:` record
 the player emits under `OKP_DEBUG_WINDOW_FIT=1` from a live Wayland session
-(rust/crates/okp-linux-gtk/src/window.rs).
+(rust/crates/okp-linux-gtk/src/window.rs) PLUS the compositor-applied frame
+rect read back out of Mutter per round (`org.gnome.Shell.Eval`, unsafe mode
+flipped by a throwaway extension installed into the run's private HOME - the
+host session is never touched), since the request records alone say nothing
+about what GTK/Mutter actually applied.
 
 ```sh
 ./fit-check.sh                        # build + 3 rounds x {16:9, 4K} fixtures
@@ -157,10 +161,23 @@ round must satisfy, against the logical layout read back from DisplayConfig:
 - `workarea` lies inside that single monitor's geometry;
 - the placed `window` lies entirely inside that workarea;
 - `bounds_source=current-monitor`, and `window fit deferred: monitor workarea
-  unavailable` never appears.
+  unavailable` never appears;
+- the record's `video=` matches the fixture the matrix row claims (fixture
+  pixel dimensions are also ffprobe-verified up front, so a mistyped
+  `--clip-4k` cannot run the same 1080p input twice);
+- the compositor-APPLIED frame rect (polled until stable across consecutive
+  reads) is contained in a single monitor's workarea.
+
+Guardrails: `--rounds` below 3 is rejected (the acceptance contract requires
+at least three launches per clip), and the recursive `--root` cleanup only
+runs inside a directory the harness owns — system/shared roots are refused,
+and any other pre-existing non-empty root must carry the `.okp-fit-check-root`
+marker the script drops on first use.
 
 Exit 0 prints the PASS summary; exit 1 is the #546 defect (a spanning or
-uncontained fit, diagnosis printed per round); exit 2 is a harness fault.
+uncontained fit, diagnosis printed per round); exit 2 is a harness fault,
+including missing dependencies; exit 64 is a usage error (bad flag value,
+unusable fixture or binary).
 A launch that dies before logging any fit decision is not a fit verdict
 (that is the #627 startup-crash class, out of scope here), so a round
 relaunches up to twice — keeping the dead launch's log — before the run
