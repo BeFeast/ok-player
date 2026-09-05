@@ -70,11 +70,7 @@
                 {
                     "type": "git",
                     "url": "https://github.com/BeFeast/ok-player.git",
-                    "commit": "45913a6868d158d40f4f07aa07bd9d3011d97703"
-                },
-                {
-                    "type": "patch",
-                    "path": "ok-player-flatpak.patch"
+                    "commit": "1424005fdacf698ac3335cf63a676cb0a5032654"
                 },
                 {
                     "comment": "The application source is a pinned commit that predates this file, so it reaches the build tree as a source rather than from the pin (issue #743).",
