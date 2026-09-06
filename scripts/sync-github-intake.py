@@ -8,6 +8,7 @@ at a time (the scheduled workflow uses a concurrency group).
 """
 import argparse
 import collections
+import datetime
 import hashlib
 import json
 import os
@@ -22,6 +23,8 @@ REPO = 'BeFeast/ok-player'
 # Subsequent entries are mapped by immutable source ID, never by matching numbers.
 HISTORICAL_LAST = 782
 ECHO_MARKER = '<!-- forgejo-downstream-validation -->'
+# Immutable GitHub account ID of the existing authorized downstream publisher.
+DOWNSTREAM_AUTHOR_IDS = frozenset({51094})
 
 
 def issue_marker(source):
@@ -60,7 +63,8 @@ def map_issues(source, destination):
     mapping = {}
     missing = []
     for row in source:
-        if re.search(r'^' + re.escape(ECHO_MARKER) + r'\s*$', row.get('body') or '', re.MULTILINE):
+        if (row.get('user', {}).get('id') in DOWNSTREAM_AUTHOR_IDS
+                and re.search(r'^' + re.escape(ECHO_MARKER) + r'\s*$', row.get('body') or '', re.MULTILINE)):
             continue
         if row['id'] in by_source:
             mapping[row['number']] = by_source[row['id']]
@@ -102,6 +106,23 @@ def comment_body(source):
             + comment_marker(source) + '\n')
 
 
+def timestamp_identity(value):
+    try:
+        parsed = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except (ValueError, TypeError, AttributeError):
+        raise RuntimeError('Invalid comment timestamp') from None
+    if parsed.tzinfo is None:
+        raise RuntimeError('Comment timestamp lacks timezone')
+    return parsed.astimezone(datetime.timezone.utc).isoformat()
+
+
+def source_token(environment):
+    token = environment.get('INTAKE_GITHUB_TOKEN', '')
+    if not token:
+        raise RuntimeError('INTAKE_GITHUB_TOKEN is required for authenticated source scans')
+    return token
+
+
 def missing_comments(source, destination, mapping):
     # Historical import had no source-ID markers; exact body/time/issue matches
     # preserve those copies. Source-ID copies also recognize the migration's
@@ -111,7 +132,7 @@ def missing_comments(source, destination, mapping):
     for row in destination:
         identity = terminal_marker(row.get('body'), 'comment')
         if identity is None:
-            exact[(issue_number(row), row['created_at'], row.get('body') or '')] += 1
+            exact[(issue_number(row), timestamp_identity(row['created_at']), row.get('body') or '')] += 1
         else:
             imported[identity].append(row)
     missing = []
@@ -120,7 +141,7 @@ def missing_comments(source, destination, mapping):
         if target is None:
             continue
         body = row.get('body') or ''
-        key = (target, row['created_at'], body)
+        key = (target, timestamp_identity(row['created_at']), body)
         if exact[key]:
             exact[key] -= 1
             continue
@@ -198,13 +219,14 @@ def sync(github, forgejo, apply=False):
         report['new_issues'].append({'github': row['number'], 'forgejo': target})
     source_comments = github.pages(path + '/issues/comments')
     destination_comments = forgejo.pages(path + '/issues/comments')
-    # Head revisions for post-cutover external PRs are triage comments only.
-    # Closed historical imported PRs are outside ongoing intake.
+    # Open/reopened historical PRs and post-cutover PRs receive head revisions.
+    # Closed historical imported PRs stay archived until reopened.
     new_numbers = {row['number'] for row in missing}
     for row in source:
         target = mapping.get(row['number'])
         if (not row.get('pull_request') or target is None
-                or row['number'] <= HISTORICAL_LAST or row['number'] in new_numbers):
+                or (row['number'] <= HISTORICAL_LAST and row['state'] == 'closed')
+                or row['number'] in new_numbers):
             continue
         pull = github.call('GET', path + f'/pulls/{row["number"]}')
         sha = pull['head']['sha']
@@ -238,7 +260,7 @@ def main():
     parsed = urllib.parse.urlsplit(base)
     if parsed.scheme != 'https' or parsed.username or parsed.password:
         raise RuntimeError('FORGEJO_API_URL must be HTTPS without embedded credentials')
-    github = API('https://api.github.com', os.environ.get('GITHUB_TOKEN', ''))
+    github = API('https://api.github.com', source_token(os.environ))
     forgejo = API(base, os.environ['FORGEJO_TOKEN'], writable=args.apply)
     print(json.dumps(sync(github, forgejo, args.apply), indent=2))
 

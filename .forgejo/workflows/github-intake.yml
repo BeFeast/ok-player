@@ -22,4 +22,5 @@ jobs:
         env:
           FORGEJO_API_URL: ${{ github.server_url }}/api/v1
           FORGEJO_TOKEN: ${{ secrets.OKLABS_BOT_PAT }}
+          INTAKE_GITHUB_TOKEN: ${{ secrets.INTAKE_GITHUB_TOKEN }}
         run: python3 scripts/sync-github-intake.py --apply

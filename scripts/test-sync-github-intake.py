@@ -13,14 +13,14 @@ SPEC.loader.exec_module(intake)
 def issue(number=800, identity=9000, body='External report'):
     return {'number': number, 'id': identity, 'body': body, 'title': 'Source title',
             'state': 'open', 'html_url': f'https://github.com/BeFeast/ok-player/issues/{number}',
-            'user': {'login': 'contributor'}, 'created_at': '2026-09-07T00:00:00Z',
+            'user': {'login': 'contributor', 'id': 999999}, 'created_at': '2026-09-07T00:00:00Z',
             'updated_at': '2026-09-07T00:00:00Z'}
 
 
 def comment(body='Please fix', identity=321, number=800):
     return {'id': identity, 'body': body, 'issue_url': f'https://api.github.com/repos/BeFeast/ok-player/issues/{number}',
             'html_url': f'https://github.com/BeFeast/ok-player/issues/{number}#issuecomment-{identity}',
-            'user': {'login': 'contributor'}, 'created_at': '2026-09-07T00:01:00Z',
+            'user': {'login': 'contributor', 'id': 999999}, 'created_at': '2026-09-07T00:01:00Z',
             'updated_at': '2026-09-07T00:01:00Z'}
 
 
@@ -92,6 +92,7 @@ class IntakeTests(unittest.TestCase):
         echo = issue(801, 9001, 'Validation companion for the canonical Forgejo pull request.\n\n'
                      + intake.ECHO_MARKER + '\n\n<!-- CURSOR_SUMMARY -->\n---\n'
                      + '> Reviewed by Cursor Bugbot.\n<!-- /CURSOR_SUMMARY -->')
+        echo['user'] = {'login': 'kossoy', 'id': 51094}
         source = FakeAPI([proposal, echo])
         target = FakeAPI([])
         intake.sync(source, target, True)
@@ -114,6 +115,43 @@ class IntakeTests(unittest.TestCase):
         self.assertEqual(len(target.comments), 1)
         self.assertIn('b' * 40, target.comments[0]['body'])
         self.assertTrue(all(method == 'GET' for method, _ in source.calls))
+
+    def test_external_author_cannot_hide_intake_with_publisher_marker(self):
+        spoof = issue(body=intake.ECHO_MARKER)
+        source = FakeAPI([spoof], [comment()])
+        target = FakeAPI([])
+        result = intake.sync(source, target, True)
+        self.assertEqual(len(result['new_issues']), 1)
+        self.assertEqual(result['new_comments'], 1)
+
+    def test_historical_reopened_pr_heads_are_recorded_and_replay_safe(self):
+        historical = dict(issue(number=42), pull_request={'url': 'unused'}, state='closed')
+        source = FakeAPI([historical])
+        target = FakeAPI([historical])
+        self.assertEqual(intake.sync(source, target, True)['pr_head_revisions'], 0)
+        self.assertEqual(source.calls, [])
+        source.issues[0]['state'] = 'open'
+        self.assertEqual(intake.sync(source, target, True)['pr_head_revisions'], 1)
+        self.assertEqual(intake.sync(source, target, True)['pr_head_revisions'], 0)
+        source.head_sha = 'b' * 40
+        self.assertEqual(intake.sync(source, target, True)['pr_head_revisions'], 1)
+        self.assertEqual(intake.sync(source, target, True)['pr_head_revisions'], 0)
+        self.assertEqual(target.issues[0]['state'], 'closed')
+        self.assertEqual(len(target.comments), 2)
+
+    def test_equivalent_timestamp_offsets_do_not_duplicate_historical_comment(self):
+        original = comment(number=42)
+        legacy = dict(original, created_at='2026-09-07T00:01:00+00:00')
+        self.assertEqual(intake.missing_comments([original], [legacy], {42: 42}), [])
+        legacy['created_at'] = '2026-09-07T01:01:00+01:00'
+        self.assertEqual(intake.missing_comments([original], [legacy], {42: 42}), [])
+
+    def test_source_credential_is_explicit_and_never_ambient(self):
+        environment = {'GITHUB_TOKEN': 'forgejo-runtime-token'}
+        with self.assertRaises(RuntimeError):
+            intake.source_token(environment)
+        environment['INTAKE_GITHUB_TOKEN'] = 'github-read-token'
+        self.assertEqual(intake.source_token(environment), 'github-read-token')
 
     def test_duplicate_issue_mapping_stops_instead_of_overwriting(self):
         row = issue()
