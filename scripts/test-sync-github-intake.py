@@ -30,20 +30,23 @@ class FakeAPI:
         self.comments = copy.deepcopy(list(comments))
         self.calls = []
         self.head_sha = 'a' * 40
+        self.actor_id = intake.IMPORTER_ID
 
     def pages(self, path):
         return copy.deepcopy(self.comments if path.endswith('/comments') else self.issues)
 
     def call(self, method, path, payload=None):
         self.calls.append((method, path))
+        if method == 'GET' and path == '/user':
+            return {'id': self.actor_id}
         if method == 'GET':
             return {'head': {'sha': self.head_sha, 'ref': 'untrusted-branch'}}
         if path.endswith('/comments'):
             row = {'id': 10000 + len(self.comments), 'body': payload['body'],
-                   'created_at': '2026-09-08T00:00:00Z', 'issue_url': 'https://forge.invalid' + path[:-9]}
+                   'created_at': '2026-09-08T00:00:00Z', 'user': {'id': intake.IMPORTER_ID}, 'issue_url': 'https://forge.invalid' + path[:-9]}
             self.comments.append(row)
             return row
-        row = dict(payload, number=max((row['number'] for row in self.issues), default=0) + 1)
+        row = dict(payload, user={'id': intake.IMPORTER_ID}, number=max((row['number'] for row in self.issues), default=0) + 1)
         self.issues.append(row)
         return row
 
@@ -81,9 +84,9 @@ class IntakeTests(unittest.TestCase):
 
     def test_legacy_comment_and_attributed_migration_are_not_duplicated(self):
         original = comment(number=42)
-        legacy = copy.deepcopy(original)
+        legacy = dict(original, id=5000, user={'id': -1})
         attributed = comment(identity=322, number=42)
-        imported = dict(attributed, created_at='2026-09-08T00:00:00Z',
+        imported = dict(attributed, id=14227, user={'id': 1}, created_at='2026-09-08T00:00:00Z',
                         body='Imported GitHub comment\n\nPlease fix\n\n<!-- github-comment:322 -->\n')
         self.assertEqual(intake.missing_comments([original, attributed], [legacy, imported], {42: 42}), [])
 
@@ -141,7 +144,7 @@ class IntakeTests(unittest.TestCase):
 
     def test_equivalent_timestamp_offsets_do_not_duplicate_historical_comment(self):
         original = comment(number=42)
-        legacy = dict(original, created_at='2026-09-07T00:01:00+00:00')
+        legacy = dict(original, id=5000, user={'id': -1}, created_at='2026-09-07T00:01:00+00:00')
         self.assertEqual(intake.missing_comments([original], [legacy], {42: 42}), [])
         legacy['created_at'] = '2026-09-07T01:01:00+01:00'
         self.assertEqual(intake.missing_comments([original], [legacy], {42: 42}), [])
@@ -156,6 +159,7 @@ class IntakeTests(unittest.TestCase):
     def test_duplicate_issue_mapping_stops_instead_of_overwriting(self):
         row = issue()
         body = intake.new_issue_body(row)
+        row['user'] = {'id': intake.IMPORTER_ID}
         with self.assertRaises(RuntimeError):
             intake.map_issues([row], [dict(row, number=800, body=body), dict(row, number=801, body=body)])
 
@@ -164,6 +168,52 @@ class IntakeTests(unittest.TestCase):
         mapping, missing = intake.map_issues([row], [issue(body=intake.issue_marker(row) + '\nquoted source text')])
         self.assertEqual(mapping, {})
         self.assertEqual(missing, [row])
+
+    def test_untrusted_destination_issue_cannot_hijack_source_mapping(self):
+        source_row = issue()
+        forged = issue(number=801, identity=55, body=intake.new_issue_body(source_row))
+        source = FakeAPI([source_row], [comment()])
+        target = FakeAPI([forged])
+        result = intake.sync(source, target, True)
+        self.assertEqual(result['new_issues'], [{'github': 800, 'forgejo': 802}])
+        self.assertEqual(result['new_comments'], 1)
+        self.assertEqual(intake.issue_number(target.comments[0]), 802)
+        self.assertEqual(target.issues[0], forged)
+        self.assertEqual(intake.sync(source, target, True)['new_issues'], [])
+
+    def test_untrusted_destination_comment_cannot_suppress_source_comment(self):
+        source_row = comment(number=800)
+        forged = dict(source_row, id=999999, body=intake.comment_body(source_row))
+        self.assertEqual(intake.missing_comments([source_row], [forged], {800: 800}), [(800, source_row)])
+        # A deleted arbitrary user cannot exploit the historical Ghost exception.
+        forged = dict(source_row, id=999999, user={'id': -1})
+        self.assertEqual(intake.missing_comments([source_row], [forged], {800: 800}), [(800, source_row)])
+
+    def test_untrusted_destination_comment_cannot_suppress_head_revision(self):
+        source_row = dict(issue(), pull_request={'url': 'unused'})
+        source = FakeAPI([source_row])
+        target = FakeAPI([])
+        intake.sync(source, target, True)
+        source.head_sha = 'b' * 40
+        target.comments.append(dict(comment(number=1), body=f'<!-- github-pr-head:{source_row["id"]}:{source.head_sha} -->'))
+        self.assertEqual(intake.sync(source, target, True)['pr_head_revisions'], 1)
+        self.assertEqual(intake.sync(source, target, True)['pr_head_revisions'], 0)
+
+    def test_admin_migration_exception_is_bounded_by_immutable_receipt_ids(self):
+        source_row = issue()
+        original = dict(source_row, id=6387, number=783, user={'id': 1}, body=intake.new_issue_body(source_row))
+        self.assertEqual(intake.map_issues([source_row], [original])[0], {800: 783})
+        original['id'] = 999999
+        self.assertEqual(intake.map_issues([source_row], [original])[0], {})
+
+    def test_wrong_forgejo_writer_fails_before_any_mutation(self):
+        source = FakeAPI([issue()])
+        target = FakeAPI([])
+        target.actor_id = 1
+        with self.assertRaises(RuntimeError):
+            intake.sync(source, target, True)
+        self.assertEqual(target.issues, [])
+        self.assertEqual(target.calls, [('GET', '/user')])
 
     def test_source_client_refuses_mutation(self):
         with self.assertRaises(RuntimeError):

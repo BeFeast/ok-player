@@ -25,6 +25,33 @@ HISTORICAL_LAST = 782
 ECHO_MARKER = '<!-- forgejo-downstream-validation -->'
 # Immutable GitHub account ID of the existing authorized downstream publisher.
 DOWNSTREAM_AUTHOR_IDS = frozenset({51094})
+# Immutable Forgejo writer IDs and narrow historical migration receipts.
+# Account 4 is the ongoing bot; account 1 created only the bounded delta below.
+IMPORTER_ID = 4
+MIGRATED_ISSUE_IDS = frozenset({6387, 6388, 6389})
+MIGRATED_COMMENT_IDS = (14227, 15893)
+HISTORICAL_COMMENT_IDS = (4247, 5322)
+
+
+def trusted_issue_record(row):
+    author = row.get('user', {}).get('id')
+    return (author == IMPORTER_ID
+            or (author == 1 and row.get('id') in MIGRATED_ISSUE_IDS))
+
+
+def trusted_comment_record(row):
+    author = row.get('user', {}).get('id')
+    identity = row.get('id', 0)
+    return (author == IMPORTER_ID
+            or (author == 1 and MIGRATED_COMMENT_IDS[0] <= identity <= MIGRATED_COMMENT_IDS[1]))
+
+
+def trusted_historical_comment(row):
+    # Ghost is the original full-import attribution, never a generic trust grant.
+    return (row.get('user', {}).get('id') == -1
+            and HISTORICAL_COMMENT_IDS[0] <= row.get('id', 0) <= HISTORICAL_COMMENT_IDS[1]
+            and issue_number(row) <= HISTORICAL_LAST)
+
 
 
 def issue_marker(source):
@@ -55,7 +82,7 @@ def map_issues(source, destination):
     by_number = {row['number']: row for row in destination}
     by_source = {}
     for row in destination:
-        identity = terminal_marker(row.get('body'), 'issue')
+        identity = terminal_marker(row.get('body'), 'issue') if trusted_issue_record(row) else None
         if identity is not None:
             if identity in by_source:
                 raise RuntimeError('Duplicate canonical source mapping; stop for reconciliation')
@@ -131,9 +158,9 @@ def missing_comments(source, destination, mapping):
     imported = collections.defaultdict(list)
     for row in destination:
         identity = terminal_marker(row.get('body'), 'comment')
-        if identity is None:
+        if identity is None and trusted_historical_comment(row):
             exact[(issue_number(row), timestamp_identity(row['created_at']), row.get('body') or '')] += 1
-        else:
+        elif identity is not None and trusted_comment_record(row):
             imported[identity].append(row)
     missing = []
     for row in source:
@@ -201,6 +228,8 @@ class API:
 
 
 def sync(github, forgejo, apply=False):
+    if apply and forgejo.call('GET', '/user').get('id') != IMPORTER_ID:
+        raise RuntimeError('Forgejo write credential is not the configured importer identity')
     path = '/repos/' + REPO
     source = github.pages(path + '/issues?state=all')
     destination = forgejo.pages(path + '/issues?state=all')
@@ -233,9 +262,9 @@ def sync(github, forgejo, apply=False):
         if not re.fullmatch(r'[0-9a-f]{40,64}', sha):
             raise RuntimeError('Invalid pull request head SHA')
         marker = f'<!-- github-pr-head:{row["id"]}:{sha} -->'
-        seen = any(marker in (item.get('body') or '') for item in destination if item['number'] == target)
+        seen = any(marker in (item.get('body') or '') for item in destination if item['number'] == target and trusted_issue_record(item))
         seen = seen or any(marker in (item.get('body') or '') for item in destination_comments
-                           if issue_number(item) == target)
+                           if issue_number(item) == target and trusted_comment_record(item))
         if not seen:
             text = (f'External [GitHub pull request]({row["html_url"]}) now has head `{sha}` '
                     f'on `{pull["head"]["ref"]}`. Source author: `{row["user"]["login"]}`. '
