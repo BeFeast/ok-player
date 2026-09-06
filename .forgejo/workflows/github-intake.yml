@@ -1,0 +1,25 @@
+name: GitHub external intake
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+concurrency:
+  group: github-external-intake
+  cancel-in-progress: false
+jobs:
+  intake:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Verify mapping and replay behavior
+        run: python3 scripts/test-sync-github-intake.py
+      - name: Import external proposals and comments
+        env:
+          FORGEJO_API_URL: ${{ github.server_url }}/api/v1
+          FORGEJO_TOKEN: ${{ secrets.OKLABS_BOT_PAT }}
+        run: python3 scripts/sync-github-intake.py --apply
