@@ -1,0 +1,210 @@
+name: Rust
+
+# Native workspace gate; Debian container provisioning and Windows stay in
+# GitHub CI until their isolated Forgejo runner surfaces are available.
+
+on:
+  push:
+    branches: [ main, agent/forgejo-cutover-20260906 ]
+  # `edited` is here because this job carries the unfinished-work gate and is on
+  # the required-checks list. Without it, a pull request could pass the required
+  # check and then have a WIP marker or an acceptance hold added to its title or
+  # body, leaving the enforced check green and stale.
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  # No workflow_dispatch. A manual run produces a check run named
+  # "Rust workspace (Linux)" - the name branch protection requires - on a head
+  # that has an open pull request, but with no pull request context, so both
+  # declaration steps would skip and the required check would go green without
+  # the gate ever evaluating. Re-running a failed run replays its original
+  # event, so nothing is lost: the declaration is re-read live from the API.
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  rust:
+    name: Rust workspace (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: 4
+      CARGO_INCREMENTAL: 0
+    steps:
+      # Full history: the source-text-only test check compares the allowlist
+      # against its state on the base commit to prove the allowlist only shrank.
+      - uses: https://code.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      # The unfinished-work gate runs here, first, because this job is on the
+      # branch protection required-checks list: a gate that is not required is a
+      # suggestion. The Merge gate workflow runs the same two scripts for fast,
+      # edit-aware feedback. Both must stay cheap and stay ahead of the apt step.
+      - name: Read pull request declaration
+        if: github.event_name == 'pull_request'
+        env:
+          FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORGEJO_API_URL: ${{ github.api_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: ./scripts/read-forgejo-pr-declaration.py "$PR_NUMBER" "$RUNNER_TEMP"
+
+      - name: No unfinished work declared
+        if: github.event_name == 'pull_request'
+        run: >-
+          python3 scripts/check-unfinished-work.py --root .
+          --title-file "$RUNNER_TEMP/pr-title.txt"
+          --body-file "$RUNNER_TEMP/pr-body.txt"
+
+      - name: No unfinished-code markers in the tree
+        if: github.event_name != 'pull_request'
+        run: python3 scripts/check-unfinished-work.py --root .
+
+      # --require-base-ref on pull requests: the allowlist growth guard is the
+      # only rule that catches a new offender added together with its allowlist
+      # entry, so an empty BASE_REF must fail the job rather than quietly skip
+      # the comparison.
+      - name: Tests assert behaviour, not source text
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: >-
+          python3 scripts/check-source-grep-tests.py --root .
+          ${{ github.event_name == 'pull_request' && '--require-base-ref' || '' }}
+
+      - name: Candidate gate split tests
+        run: ./scripts/tests/candidate-gate-split.Tests.sh
+      - name: Narrow-width seam aiming tests
+        run: ./scripts/tests/narrow-width-seam.Tests.sh
+      - name: Lane split policy tests
+        run: ./scripts/tests/lane-split.Tests.sh
+      - name: Night GUI QA driver policy tests
+        run: ./scripts/tests/ok-player-night-gui-qa.Tests.sh
+
+      - name: Linux window regression smoke runner policy tests
+        run: ./scripts/tests/linux-window-regression-smokes.Tests.sh
+
+      - name: Installed-RPM launch gate policy tests
+        run: ./scripts/tests/rpm-installed-launch-gate.Tests.sh
+
+      - name: Linux package version scheme tests
+        run: ./scripts/tests/linux-package-version.Tests.sh
+
+      - name: Debian APT provisioning tests
+        run: ./scripts/tests/deb-apt-provisioning.Tests.sh
+
+      - name: The repository instructions the app shows actually work
+        run: ./scripts/verify-apt-source-instructions.sh
+
+      - name: APT repository generator policy tests
+        run: ./scripts/tests/apt-repo-generator.Tests.sh
+
+      - name: Candidate GTK binary resolution stays correct
+        run: ./scripts/tests/candidate-gtk-binary.Tests.sh
+
+      - name: Candidate packaging-mode boundary stays container+required
+        run: ./scripts/tests/candidate-packaging-mode.Tests.sh
+
+      - name: Feeds workflow keeps the signed-archive handoff intact
+        run: ./scripts/tests/feeds-workflow.Tests.sh
+
+      - name: Container ownership handoff stays runtime-agnostic
+        run: ./scripts/tests/container-fixup-ownership.Tests.sh
+
+      - name: Bundled-runtime platform policy keeps host integration out
+        run: ./scripts/tests/bundled-runtime-policy.Tests.sh
+
+      - name: Wayland aiming harness delivers or refuses
+        run: ./scripts/tests/wayland-aim-harness.Tests.sh
+
+      # The five packaging lanes are the only place the licence obligation is
+      # discharged, and none of them is built by a pull request. This pair is
+      # cheap and static: the checker reads every lane, and the policy tests
+      # take one document away from one lane at a time and require the checker
+      # to go red for it.
+      - name: Every packaging lane ships the licence documents
+        run: python3 scripts/check-packaging-licenses.py --root .
+
+      - name: The licence-document gate goes red when a lane drops one
+        run: ./scripts/tests/packaging-licenses.Tests.sh
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          # dbus backs the mock-portal file-reveal tests; xvfb, xfwm4 and xdotool back the
+          # display-backed toast and window-geometry smokes.
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build appstream appstream-compose squashfs-tools unzip dbus xvfb xfwm4 xdotool x11-utils x11-xserver-utils imagemagick
+
+      # Named one by one rather than globbed: a suite CI never reaches looks exactly like
+      # a suite with nothing to say (#720). It runs after the dependency step because it
+      # resolves connection ownership on a real session bus rather than faking the answer.
+      - name: GNOME/Wayland acceptance harness judges rows the way the contract says
+        run: ./scripts/tests/gnome-wayland-acceptance.Tests.sh
+
+      - uses: https://github.com/actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Install Velopack CLI
+        run: dotnet tool install -g vpk --version 1.2.0
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable -c clippy -c rustfmt
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Cache Cargo dependencies and build outputs
+        uses: https://code.forgejo.org/actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/db/
+            rust/target/
+          key: ${{ runner.os }}-ok-player-cargo-${{ hashFiles('rust/Cargo.lock') }}
+
+      - name: Format
+        working-directory: rust
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        working-directory: rust
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: rust
+        env:
+          OKP_RUN_VELOPACK_PACK_TEST: 1
+        run: cargo test --workspace
+
+      - name: AppStream MetaInfo validation smoke
+        run: ./scripts/smoke-linux-appstream.sh
+
+      - name: Native file dialog result smoke
+        run: ./scripts/smoke-linux-file-dialog.sh
+
+      - name: Toast behaviour under a virtual display
+        run: ./scripts/smoke-linux-toast-behaviour.sh
+
+      - name: Window geometry diagnostic under a virtual display
+        run: |
+          cargo build --manifest-path rust/Cargo.toml -p okp-linux-gtk
+          ./scripts/smoke-linux-window-geometry.sh
+
+      - name: Continue-watching shelf stays a grid under a virtual display
+        run: ./scripts/smoke-linux-recents-shelf.sh
+
+      - name: Settings opens About whole and on one grid under a virtual display
+        run: ./scripts/smoke-linux-settings-about.sh
+      - name: Idle canvas survives a narrow window and gives its geometry back
+        run: ./scripts/smoke-linux-idle-narrow-canvas.sh
+      - name: Playback OSC reflows instead of clipping at a narrow window
+        run: ./scripts/smoke-linux-osc-narrow-bar.sh
+      - name: Chrome icons come out of the binary, not the host icon theme
+        run: ./scripts/smoke-linux-chrome-icons.sh
+      # Named on its own rather than folded into another playback smoke: a file watched
+      # to the end reopening near the end (#766) shipped because nothing ever played a
+      # file to its end and opened it again.
+      - name: A file watched to the end reopens at the beginning
+        run: |
+          cargo build --manifest-path rust/Cargo.toml -p okp-linux-gtk
+          ./scripts/smoke-linux-resume-after-eof.sh
