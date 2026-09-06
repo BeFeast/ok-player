@@ -143,8 +143,8 @@ jobs:
       - name: Debian APT provisioning tests
         run: ./scripts/tests/deb-apt-provisioning.Tests.sh
 
-      - name: The repository instructions the app shows actually work
-        run: ./scripts/verify-apt-source-instructions.sh
+      # verify-apt-source-instructions.sh requires a nested container runtime.
+      # It remains mandatory in the matching-head GitHub Rust workflow.
 
       - name: APT repository generator policy tests
         run: ./scripts/tests/apt-repo-generator.Tests.sh
