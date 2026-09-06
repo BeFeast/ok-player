@@ -214,7 +214,9 @@ mod tests {
         for y in 0..48usize {
             let row = &data[y * stride..y * stride + 48 * 4];
             white_pixels += row
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|pixel| pixel[0] >= 230 && pixel[1] >= 230 && pixel[2] >= 230)
                 .count();
         }

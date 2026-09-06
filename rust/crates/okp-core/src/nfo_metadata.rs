@@ -156,12 +156,9 @@ fn decode_text(bytes: Vec<u8>) -> Option<String> {
 }
 
 fn decode_utf16(payload: &[u8], decode: fn([u8; 2]) -> u16) -> Option<String> {
-    let mut chunks = payload.chunks_exact(2);
-    let units = chunks
-        .by_ref()
-        .map(|chunk| decode([chunk[0], chunk[1]]))
-        .collect::<Vec<_>>();
-    chunks.remainder().is_empty().then_some(())?;
+    let (chunks, remainder) = payload.as_chunks::<2>();
+    let units = chunks.iter().copied().map(decode).collect::<Vec<_>>();
+    remainder.is_empty().then_some(())?;
     String::from_utf16(&units).ok()
 }
 
