@@ -72,6 +72,16 @@ jobs:
           python3 scripts/check-source-grep-tests.py --root .
           ${{ github.event_name == 'pull_request' && '--require-base-ref' || '' }}
 
+      - name: Install policy test dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends python3-yaml
+          # act images may put a separate Python before the distro interpreter.
+          echo "/usr/bin" >> "$GITHUB_PATH"
+
+      - name: Forgejo declaration reader tests
+        run: python3 scripts/tests/read-forgejo-pr-declaration.Tests.py
+
       - name: Candidate gate split tests
         run: ./scripts/tests/candidate-gate-split.Tests.sh
       - name: Narrow-width seam aiming tests
