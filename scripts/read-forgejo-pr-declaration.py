@@ -33,8 +33,8 @@ def main():
         raise SystemExit("Forgejo response has invalid PR body")
     output = Path(sys.argv[2])
     output.mkdir(parents=True, exist_ok=True)
-    (output / "pr-title.txt").write_text(declaration["title"] + "\n")
-    (output / "pr-body.txt").write_text(body + "\n")
+    (output / "pr-title.txt").write_text(declaration["title"] + "\n", encoding="utf-8")
+    (output / "pr-body.txt").write_text(body + "\n", encoding="utf-8")
     print(f"Read declaration for pull request #{sys.argv[1]}.")
 
 

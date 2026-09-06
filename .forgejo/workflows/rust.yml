@@ -96,7 +96,7 @@ jobs:
       - name: GNOME/Wayland acceptance harness judges rows the way the contract says
         run: ./scripts/tests/gnome-wayland-acceptance.Tests.sh
 
-      - uses: https://github.com/actions/setup-dotnet@v4
+      - uses: https://github.com/actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '9.0.x'
 
@@ -107,7 +107,7 @@ jobs:
 
       - name: Install Rust toolchain
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable -c clippy -c rustfmt
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.98.1 -c clippy -c rustfmt
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Cache Cargo dependencies and build outputs
@@ -117,7 +117,7 @@ jobs:
             ~/.cargo/registry/
             ~/.cargo/git/db/
             rust/target/
-          key: ${{ runner.os }}-ok-player-cargo-${{ hashFiles('rust/Cargo.lock') }}
+          key: ${{ runner.os }}-ok-player-cargo-1.98.1-${{ github.ref }}-${{ hashFiles('rust/Cargo.lock') }}
 
       - name: Forgejo declaration reader tests
         run: python3 scripts/tests/read-forgejo-pr-declaration.Tests.py
