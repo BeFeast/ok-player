@@ -11,7 +11,8 @@ push exercised Actions before the workflow reached `main`; its push trigger
 was removed once the canonical PR existed. Only PR runs exercise declarations.
 
 Windows integration, the separate Debian APT provisioning gate, and the
-`verify-apt-source-instructions.sh` container smoke still run on GitHub. They require Windows and an isolated container runtime respectively;
+`verify-apt-source-instructions.sh` container smoke and
+`container-fixup-ownership.Tests.sh` user-namespace test still run on GitHub. They require Windows and an isolated container runtime respectively;
 the default Forgejo container runner provides neither. Their GitHub workflows,
 release tags, Pages/APT publisher and update URLs remain unchanged. Passing
 Forgejo Rust alone does not replace those existing merge requirements. A
