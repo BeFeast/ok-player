@@ -67,7 +67,7 @@ jobs:
       # the comparison.
       - name: Tests assert behaviour, not source text
         env:
-          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE_REF: ${{ github.event.pull_request.base.sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || 'origin/main' }}
         run: >-
           python3 scripts/check-source-grep-tests.py --root .
           ${{ github.event_name == 'pull_request' && '--require-base-ref' || '' }}
