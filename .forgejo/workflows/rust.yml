@@ -79,6 +79,40 @@ jobs:
           # act images may put a separate Python before the distro interpreter.
           echo "/usr/bin" >> "$GITHUB_PATH"
 
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          # dbus backs the mock-portal file-reveal tests; xvfb, xfwm4 and xdotool back the
+          # display-backed toast and window-geometry smokes.
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build appstream appstream-compose squashfs-tools unzip dbus xvfb xfwm4 xdotool x11-utils x11-xserver-utils imagemagick
+
+      # Named one by one rather than globbed: a suite CI never reaches looks exactly like
+      # a suite with nothing to say (#720). It runs after the dependency step because it
+      # resolves connection ownership on a real session bus rather than faking the answer.
+      - name: GNOME/Wayland acceptance harness judges rows the way the contract says
+        run: ./scripts/tests/gnome-wayland-acceptance.Tests.sh
+
+      - uses: https://github.com/actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Install Velopack CLI
+        run: dotnet tool install -g vpk --version 1.2.0
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable -c clippy -c rustfmt
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Cache Cargo dependencies and build outputs
+        uses: https://code.forgejo.org/actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/db/
+            rust/target/
+          key: ${{ runner.os }}-ok-player-cargo-${{ hashFiles('rust/Cargo.lock') }}
+
       - name: Forgejo declaration reader tests
         run: python3 scripts/tests/read-forgejo-pr-declaration.Tests.py
 
@@ -137,40 +171,6 @@ jobs:
 
       - name: The licence-document gate goes red when a lane drops one
         run: ./scripts/tests/packaging-licenses.Tests.sh
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          # dbus backs the mock-portal file-reveal tests; xvfb, xfwm4 and xdotool back the
-          # display-backed toast and window-geometry smokes.
-          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build appstream appstream-compose squashfs-tools unzip dbus xvfb xfwm4 xdotool x11-utils x11-xserver-utils imagemagick
-
-      # Named one by one rather than globbed: a suite CI never reaches looks exactly like
-      # a suite with nothing to say (#720). It runs after the dependency step because it
-      # resolves connection ownership on a real session bus rather than faking the answer.
-      - name: GNOME/Wayland acceptance harness judges rows the way the contract says
-        run: ./scripts/tests/gnome-wayland-acceptance.Tests.sh
-
-      - uses: https://github.com/actions/setup-dotnet@v4
-        with:
-          dotnet-version: '9.0.x'
-
-      - name: Install Velopack CLI
-        run: dotnet tool install -g vpk --version 1.2.0
-
-      - name: Install Rust toolchain
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable -c clippy -c rustfmt
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-
-      - name: Cache Cargo dependencies and build outputs
-        uses: https://code.forgejo.org/actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.cargo/registry/
-            ~/.cargo/git/db/
-            rust/target/
-          key: ${{ runner.os }}-ok-player-cargo-${{ hashFiles('rust/Cargo.lock') }}
 
       - name: Format
         working-directory: rust
