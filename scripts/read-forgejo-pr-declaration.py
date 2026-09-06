@@ -26,7 +26,7 @@ def main():
     )
     with urlopen(request, timeout=30) as response:
         declaration = json.load(response)
-    if not isinstance(declaration.get("title"), str):
+    if not isinstance(declaration, dict) or not isinstance(declaration.get("title"), str):
         raise SystemExit("Forgejo response has no PR title")
     body = declaration.get("body") or ""
     if not isinstance(body, str):

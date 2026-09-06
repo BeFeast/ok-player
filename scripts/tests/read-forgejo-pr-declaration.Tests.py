@@ -49,6 +49,12 @@ class DeclarationTests(unittest.TestCase):
                 self.call(output, error=HTTPError("https://forge.example", 403, "Forbidden", {}, None))
             self.assertFalse(Path(output, "pr-title.txt").exists())
 
+    def test_non_object_payload_fails_closed(self):
+        with tempfile.TemporaryDirectory() as output:
+            with self.assertRaises(SystemExit):
+                self.call(output, ["unexpected"])
+            self.assertFalse(Path(output, "pr-title.txt").exists())
+
     def test_malformed_payload_fails_closed(self):
         with tempfile.TemporaryDirectory() as output:
             with self.assertRaises(SystemExit):
