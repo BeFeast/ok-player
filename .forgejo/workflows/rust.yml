@@ -5,7 +5,7 @@ name: Rust
 
 on:
   push:
-    branches: [ main, agent/forgejo-cutover-20260906 ]
+    branches: [ main ]
   # `edited` is here because this job carries the unfinished-work gate and is on
   # the required-checks list. Without it, a pull request could pass the required
   # check and then have a WIP marker or an acceptance hold added to its title or
@@ -18,6 +18,10 @@ on:
   # declaration steps would skip and the required check would go green without
   # the gate ever evaluating. Re-running a failed run replays its original
   # event, so nothing is lost: the declaration is re-read live from the API.
+
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -97,7 +101,9 @@ jobs:
           dotnet-version: '9.0.x'
 
       - name: Install Velopack CLI
-        run: dotnet tool install -g vpk --version 1.2.0
+        run: |
+          dotnet tool install -g vpk --version 1.2.0
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
 
       - name: Install Rust toolchain
         run: |

@@ -6,9 +6,9 @@ The canonical repository and issue tracker are [Forgejo](https://git.oklabs.uk/B
 `.forgejo/workflows/rust.yml` runs the complete existing Rust workspace gate,
 including formatting, Clippy, workspace tests, packaging policy tests and virtual
 display smoke tests. Pull request declarations are read live from Forgejo so
-reruns cannot approve a stale title or acceptance block. The bootstrap branch
-push trigger exists to exercise Actions before the workflow reaches `main`;
-it does not satisfy the PR declaration gate.
+reruns cannot approve a stale title or acceptance block. The initial bootstrap branch
+push exercised Actions before the workflow reached `main`; its push trigger
+was removed once the canonical PR existed. Only PR runs exercise declarations.
 
 Windows integration and the separate Debian APT provisioning gate still run on
 GitHub. They require Windows and an isolated container runtime respectively;
