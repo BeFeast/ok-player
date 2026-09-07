@@ -2217,6 +2217,27 @@ fn raw_mpv_config_parser_rejects_nul_values() {
 }
 
 #[test]
+fn configured_x_load_yields_to_advanced_ytdl_format() {
+    let mut state = PlayerState::default();
+    state
+        .settings
+        .set_raw_mpv_config("cache=yes\n--ytdl-format=worstvideo+worstaudio/worst\n");
+
+    assert_eq!(
+        configured_url_load_options(&state.settings, "https://x.com/user/status/1").ytdl_format(),
+        Some("worstvideo+worstaudio/worst")
+    );
+    assert_eq!(
+        configured_url_load_options(
+            &PlayerState::default().settings,
+            "https://x.com/user/status/1",
+        )
+        .ytdl_format(),
+        Some(network_media::X_TWITTER_YTDL_FORMAT)
+    );
+}
+
+#[test]
 fn desktop_mime_parser_keeps_registered_types() {
     let desktop_entry = "\
 [Desktop Entry]
@@ -7687,6 +7708,38 @@ fn url_poster_waits_for_the_current_sources_first_presentable_frame() {
     state.borrow_mut().private_session = false;
     record_ready_url_poster(&state, Some(current));
     assert_eq!(state.borrow().screenshot_jobs.poster_request_count(), 1);
+}
+
+#[test]
+fn x_load_keeps_the_original_page_url_as_history_identity() {
+    let original_url =
+        "https://x.com/0xCodez/status/2095987472328958435/video/1?source=history#scene";
+    let root = tempfile::tempdir().expect("temporary history directory");
+    let state = Rc::new(RefCell::new(PlayerState {
+        history: history::HistoryStore::open_test(root.path().join("history.json")),
+        ..PlayerState::default()
+    }));
+
+    load_media_url(&state, original_url.to_owned());
+
+    {
+        let mut state = state.borrow_mut();
+        assert_eq!(state.current_url.as_deref(), Some(original_url));
+        assert_eq!(
+            state.playlist.items(),
+            &[PlaylistItem::Url(original_url.to_owned())]
+        );
+        assert_eq!(
+            state.retry_load_source,
+            Some(network_media::LoadFailureSource::url(original_url))
+        );
+        state.media_load_state = network_media::MediaLoadState::Playing;
+    }
+    record_successful_url_open(&state);
+
+    let rows = state.borrow().history.search("");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].source(), PlaylistItem::Url(original_url.to_owned()));
 }
 
 #[test]

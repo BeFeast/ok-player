@@ -9,6 +9,107 @@
 
 use std::path::{Path, PathBuf};
 
+/// The measured X/Twitter workaround: prefer a combined progressive HTTPS format, then
+/// leave selection to the extractor when that format is absent. Keeping the fallback in
+/// the selector means an X post without a progressive rendition still opens normally.
+pub const X_TWITTER_YTDL_FORMAT: &str = "best[protocol=https]/bestvideo+bestaudio/best";
+
+/// Per-URL options for handing a network source to the playback engine. This value is
+/// rebuilt for every load; it deliberately carries no state from the preceding source.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct UrlLoadOptions {
+    ytdl_format: Option<String>,
+}
+
+impl UrlLoadOptions {
+    /// A file-local `ytdl-format` value, or `None` to inherit the engine/user default.
+    pub fn ytdl_format(&self) -> Option<&str> {
+        self.ytdl_format.as_deref()
+    }
+}
+
+/// Resolve the file-local options for one URL load.
+///
+/// X/Twitter page URLs receive the measured combined-HTTPS preference unless the user
+/// explicitly configured `ytdl-format` in the Advanced mpv options. Other sources inherit
+/// existing selection unchanged. Option-name comparison is case-insensitive because mpv
+/// option names are case-insensitive at the configuration boundary.
+pub fn url_load_options<'a>(
+    url: &str,
+    configured_options: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> UrlLoadOptions {
+    // Reapply the last explicit value per load: mpv restores the option that existed
+    // before the preceding file, which can otherwise erase an Advanced live edit.
+    let mut user_selected_format = None;
+    for (name, value) in configured_options {
+        if name
+            .trim()
+            .strip_prefix("--")
+            .unwrap_or(name.trim())
+            .eq_ignore_ascii_case("ytdl-format")
+        {
+            user_selected_format = Some(value.to_owned());
+        }
+    }
+    UrlLoadOptions {
+        ytdl_format: user_selected_format
+            .or_else(|| is_x_twitter_url(url).then(|| X_TWITTER_YTDL_FORMAT.to_owned())),
+    }
+}
+
+/// True only for HTTP(S) URLs on the X/Twitter hosts accepted by yt-dlp: the base domains
+/// and its documented `www`, `m`, and `mobile` variants. Recognition is by the authority's
+/// host rather than a substring, so paths, userinfo, and look-alike suffixes do not match.
+pub fn is_x_twitter_url(url: &str) -> bool {
+    const ROOT_HOSTS: &[&str] = &[
+        "x.com",
+        "twitter.com",
+        "twitter3e4tixl4xyajtrzo62zg5vztmjuricljdp2c5kshju4avyoid.onion",
+    ];
+    const ALLOWED_PREFIXES: &[&str] = &["", "www.", "m.", "mobile."];
+
+    let Some(host) = http_url_host(url.trim()) else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+
+    ROOT_HOSTS.iter().any(|root| {
+        host.strip_suffix(root)
+            .is_some_and(|prefix| ALLOWED_PREFIXES.contains(&prefix))
+    })
+}
+
+/// Recover a conventional hostname from an HTTP(S) URL without pulling URL parsing into
+/// the core crate. This is intentionally stricter than the generic playable-URL check:
+/// malformed authorities and non-HTTP schemes must never acquire a site-specific policy.
+fn http_url_host(url: &str) -> Option<&str> {
+    let (scheme, rest) = url.split_once("://")?;
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return None;
+    }
+
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    if authority.is_empty() || authority.contains('\\') {
+        return None;
+    }
+    let host_and_port = authority.rsplit('@').next().unwrap_or(authority);
+    if host_and_port.starts_with('[') {
+        return None;
+    }
+    let (host, port) = host_and_port
+        .split_once(':')
+        .map_or((host_and_port, None), |(host, port)| (host, Some(port)));
+    if host.is_empty()
+        || host.contains(':')
+        || port
+            .is_some_and(|port| port.is_empty() || !port.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return None;
+    }
+
+    Some(host)
+}
+
 /// The transport-surface state for the loaded source, derived from what the shell has
 /// observed from the engine. The shell transitions this on `load_url`/`load_file`, the
 /// engine's `FileLoaded` lifecycle event, and a reported load failure (`EndFile::Error`
@@ -194,6 +295,108 @@ pub fn failure_detail(source: &LoadFailureSource, reason: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn x_twitter_load_prefers_combined_https_with_extractor_fallback() {
+        let options = url_load_options(
+            "https://x.com/0xCodez/status/2095987472328958435/video/1",
+            std::iter::empty(),
+        );
+
+        assert_eq!(
+            options.ytdl_format(),
+            Some("best[protocol=https]/bestvideo+bestaudio/best")
+        );
+        let (preferred, fallback) = options
+            .ytdl_format()
+            .and_then(|selector| selector.split_once('/'))
+            .expect("X selector should include an extractor-supported fallback");
+        assert_eq!(preferred, "best[protocol=https]");
+        assert_eq!(fallback, "bestvideo+bestaudio/best");
+    }
+
+    #[test]
+    fn x_twitter_recognition_matches_only_supported_host_boundaries() {
+        for url in [
+            "https://x.com/user/status/1",
+            "http://www.x.com/user/status/1",
+            "https://m.x.com/user/status/1",
+            "https://mobile.x.com/user/status/1",
+            "https://twitter.com/user/status/1",
+            "https://www.twitter.com/user/status/1",
+            "https://m.twitter.com/user/status/1",
+            "https://mobile.twitter.com/user/status/1",
+            "https://twitter3e4tixl4xyajtrzo62zg5vztmjuricljdp2c5kshju4avyoid.onion/user/status/1",
+            "https://X.COM:443/user/status/1",
+        ] {
+            assert!(is_x_twitter_url(url), "supported X/Twitter URL: {url}");
+        }
+
+        for url in [
+            "https://notx.com/status/1",
+            "https://x.com.example.test/status/1",
+            "https://news.x.com/status/1",
+            "https://mobile.news.x.com/status/1",
+            "https://example.test/x.com/status/1",
+            "https://x.com@evil.test/status/1",
+            "https://x.com.evil.test@twitter.invalid/status/1",
+            "https://x.com./status/1",
+            "https://x.com:bad/status/1",
+            "ftp://x.com/status/1",
+            "not a URL mentioning twitter.com",
+        ] {
+            assert!(!is_x_twitter_url(url), "non-X/Twitter URL: {url}");
+        }
+    }
+
+    #[test]
+    fn explicit_user_ytdl_format_overrides_x_policy() {
+        for configured_names in [
+            vec![("ytdl-format", "worst")],
+            vec![
+                ("cache", "yes"),
+                ("YTDL-FORMAT", "worst"),
+                ("profile", "fast"),
+            ],
+            vec![("--ytdl-format", "worst")],
+        ] {
+            assert_eq!(
+                url_load_options("https://www.x.com/user/status/1", configured_names).ytdl_format(),
+                Some("worst")
+            );
+        }
+    }
+
+    #[test]
+    fn non_x_sources_keep_existing_format_selection() {
+        for url in [
+            "https://www.youtube.com/watch?v=0O91lY-CoeE",
+            "https://youtu.be/0O91lY-CoeE",
+            "https://vimeo.com/1234",
+            "https://example.test/video.mp4",
+            "rtsp://example.test/live",
+        ] {
+            assert_eq!(
+                url_load_options(url, [("cache", "yes"), ("profile", "fast")]).ytdl_format(),
+                None,
+                "non-X source must inherit existing selection: {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn format_policy_is_recomputed_for_each_source() {
+        let x = url_load_options("https://x.com/user/status/1", std::iter::empty());
+        let youtube = url_load_options(
+            "https://www.youtube.com/watch?v=0O91lY-CoeE",
+            std::iter::empty(),
+        );
+        let direct = url_load_options("https://example.test/movie.mp4", std::iter::empty());
+
+        assert_eq!(x.ytdl_format(), Some(X_TWITTER_YTDL_FORMAT));
+        assert_eq!(youtube.ytdl_format(), None);
+        assert_eq!(direct.ytdl_format(), None);
+    }
 
     #[test]
     fn local_final_saves_remain_eligible_but_unsuccessful_urls_do_not() {

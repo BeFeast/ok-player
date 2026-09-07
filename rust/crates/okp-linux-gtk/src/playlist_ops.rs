@@ -214,7 +214,7 @@ pub(crate) fn load_media_url(state: &Rc<RefCell<PlayerState>>, url: String) {
 
     let result = {
         let state = state.borrow();
-        load_new_source(&state, |mpv| mpv.load_url(&url))
+        load_new_url_source(&state, &url)
     };
 
     match result {
@@ -383,7 +383,7 @@ pub(crate) fn load_media_url_with_playlist(
 
     let result = {
         let state = state.borrow();
-        load_new_source(&state, |mpv| mpv.load_url(&url))
+        load_new_url_source(&state, &url)
     };
 
     match result {
@@ -413,6 +413,29 @@ fn load_new_source(
         state.settings.subtitle_scale(),
         load,
     ))
+}
+
+fn load_new_url_source(state: &PlayerState, url: &str) -> Option<Result<(), okp_mpv::MpvError>> {
+    let mpv = state.mpv.as_ref()?;
+    let options = configured_url_load_options(&state.settings, url);
+    Some(load_new_source_with_global_subtitle_scale(
+        mpv,
+        state.settings.subtitle_scale(),
+        |mpv| mpv.load_url_with_ytdl_format(url, options.ytdl_format()),
+    ))
+}
+
+pub(crate) fn configured_url_load_options(
+    settings: &settings::SettingsStore,
+    url: &str,
+) -> network_media::UrlLoadOptions {
+    let configured_options = configured_raw_mpv_options(settings);
+    network_media::url_load_options(
+        url,
+        configured_options
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str())),
+    )
 }
 
 pub(crate) fn load_new_source_with_global_subtitle_scale(

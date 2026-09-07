@@ -1495,14 +1495,24 @@ impl Mpv {
     }
 
     pub fn load_url(&self, url: &str) -> Result<(), MpvError> {
+        self.load_url_with_ytdl_format(url, None)
+    }
+
+    /// Load a URL with an optional file-local yt-dlp selector. mpv restores file-local
+    /// options after the source ends, so a site-specific selection cannot leak into the
+    /// next URL loaded by this engine.
+    pub fn load_url_with_ytdl_format(
+        &self,
+        url: &str,
+        ytdl_format: Option<&str>,
+    ) -> Result<(), MpvError> {
         if let Some(pump) = self.pump.as_ref() {
             pump.begin_media_load();
         }
-        let command = CString::new("loadfile")?;
-        let url = CString::new(url)?;
-        let args = [command.as_ptr(), url.as_ptr(), ptr::null()];
 
-        check(unsafe { ffi::mpv_command(self.handle.as_ptr(), args.as_ptr()) })
+        let args = load_url_command_args(url, ytdl_format);
+        let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        self.command(&args)
     }
 
     pub fn add_subtitle_file(&self, path: &Path) -> Result<(), MpvError> {
@@ -2040,6 +2050,24 @@ fn command_args(args: &[&str]) -> Result<(Vec<CString>, Vec<*const c_char>), Mpv
     let mut ptrs = c_args.iter().map(|arg| arg.as_ptr()).collect::<Vec<_>>();
     ptrs.push(ptr::null());
     Ok((c_args, ptrs))
+}
+
+/// Construct mpv's `loadfile` argv. Since mpv 0.38 the insertion-index placeholder is
+/// required before per-file options; keeping it here prevents an option from being mistaken
+/// for a playlist index and makes ordinary loads retain their original two arguments.
+fn load_url_command_args(url: &str, ytdl_format: Option<&str>) -> Vec<String> {
+    ytdl_format.map_or_else(
+        || vec!["loadfile".to_owned(), url.to_owned()],
+        |ytdl_format| {
+            vec![
+                "loadfile".to_owned(),
+                url.to_owned(),
+                "replace".to_owned(),
+                "-1".to_owned(),
+                format!("ytdl-format=%{}%{ytdl_format}", ytdl_format.len()),
+            ]
+        },
+    )
 }
 
 fn screenshot_mode(include_subtitles: bool) -> &'static str {
@@ -2617,6 +2645,87 @@ mod tests {
 
     const REAL_MPV_CASE_ENV: &str = "OKP_REAL_MPV_TEST_CASE";
     const REAL_MPV_CASE_TIMEOUT: Duration = Duration::from_secs(10);
+
+    #[test]
+    fn url_load_command_keeps_site_format_file_local() {
+        let original = "https://x.com/user/status/1?source=history#scene";
+        assert_eq!(
+            load_url_command_args(original, Some("best[protocol=https]/best")),
+            [
+                "loadfile",
+                original,
+                "replace",
+                "-1",
+                "ytdl-format=%25%best[protocol=https]/best",
+            ]
+        );
+
+        assert_eq!(
+            load_url_command_args("https://www.youtube.com/watch?v=0O91lY-CoeE", None,),
+            ["loadfile", "https://www.youtube.com/watch?v=0O91lY-CoeE"]
+        );
+    }
+
+    #[test]
+    fn file_local_format_restores_defaults_and_preserves_later_user_edits() {
+        if !enter_real_mpv_case(
+            "file-local-format",
+            "player::tests::file_local_format_restores_defaults_and_preserves_later_user_edits",
+        ) {
+            return;
+        }
+        let root = unique_temp_dir("okp-mpv-file-local-format");
+        let first = root.path().join("first.ppm");
+        let second = root.path().join("second.ppm");
+        write_codec_neutral_media_fixture(&first);
+        write_codec_neutral_media_fixture(&second);
+        let mut mpv = test_mpv();
+        mpv.start_event_pump_without_audio_devices();
+        mpv.apply_options(&[("ytdl-format".to_owned(), "initial-user-value".to_owned())])
+            .expect("initial selector");
+        let wait_loaded = |mpv: &Mpv| {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if mpv
+                    .take_lifecycle_events()
+                    .iter()
+                    .any(|event| matches!(event, MpvEvent::FileLoaded { .. }))
+                {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "fixture must finish loading");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        let selector = |mpv: &Mpv| {
+            mpv.reader()
+                .get_string("ytdl-format")
+                .expect("read selector")
+        };
+        let temporary = okp_core::network_media::X_TWITTER_YTDL_FORMAT;
+        mpv.load_url_with_ytdl_format(first.to_str().unwrap(), Some(temporary))
+            .unwrap();
+        wait_loaded(&mpv);
+        assert_eq!(selector(&mpv).as_deref(), Some(temporary));
+        mpv.load_url(second.to_str().unwrap()).unwrap();
+        wait_loaded(&mpv);
+        assert_eq!(selector(&mpv).as_deref(), Some("initial-user-value"));
+
+        mpv.load_url_with_ytdl_format(first.to_str().unwrap(), Some(temporary))
+            .unwrap();
+        wait_loaded(&mpv);
+        let edited = "bestvideo,bestaudio";
+        mpv.apply_options(&[("ytdl-format".to_owned(), edited.to_owned())])
+            .unwrap();
+        let options = okp_core::network_media::url_load_options(
+            "https://www.youtube.com/watch?v=0O91lY-CoeE",
+            [("ytdl-format", edited)],
+        );
+        mpv.load_url_with_ytdl_format(second.to_str().unwrap(), options.ytdl_format())
+            .unwrap();
+        wait_loaded(&mpv);
+        assert_eq!(selector(&mpv).as_deref(), Some(edited));
+    }
 
     fn enter_real_mpv_case(case: &str, test_name: &str) -> bool {
         if std::env::var(REAL_MPV_CASE_ENV).as_deref() == Ok(case) {
