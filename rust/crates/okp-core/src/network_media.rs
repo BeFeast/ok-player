@@ -32,8 +32,7 @@ impl UrlLoadOptions {
 ///
 /// X/Twitter page URLs receive the measured combined-HTTPS preference unless the user
 /// explicitly configured `ytdl-format` in the Advanced mpv options. Other sources inherit
-/// existing selection unchanged. Option-name comparison is case-insensitive because mpv
-/// option names are case-insensitive at the configuration boundary.
+/// existing selection unchanged. Option names match mpv's case-sensitive configuration boundary.
 pub fn url_load_options<'a>(
     url: &str,
     configured_options: impl IntoIterator<Item = (&'a str, &'a str)>,
@@ -42,12 +41,7 @@ pub fn url_load_options<'a>(
     // before the preceding file, which can otherwise erase an Advanced live edit.
     let mut user_selected_format = None;
     for (name, value) in configured_options {
-        if name
-            .trim()
-            .strip_prefix("--")
-            .unwrap_or(name.trim())
-            .eq_ignore_ascii_case("ytdl-format")
-        {
+        if name.trim().strip_prefix("--").unwrap_or(name.trim()) == "ytdl-format" {
             user_selected_format = Some(value.to_owned());
         }
     }
@@ -59,7 +53,7 @@ pub fn url_load_options<'a>(
 
 /// True only for HTTP(S) URLs on the X/Twitter hosts accepted by yt-dlp: the base domains
 /// and its documented `www`, `m`, and `mobile` variants. Recognition is by the authority's
-/// host rather than a substring, so paths, userinfo, and look-alike suffixes do not match.
+/// host rather than a substring: an X name in a path or userinfo cannot match a different host.
 pub fn is_x_twitter_url(url: &str) -> bool {
     const ROOT_HOSTS: &[&str] = &[
         "x.com",
@@ -355,7 +349,7 @@ mod tests {
             vec![("ytdl-format", "worst")],
             vec![
                 ("cache", "yes"),
-                ("YTDL-FORMAT", "worst"),
+                ("ytdl-format", "worst"),
                 ("profile", "fast"),
             ],
             vec![("--ytdl-format", "worst")],
@@ -365,6 +359,22 @@ mod tests {
                 Some("worst")
             );
         }
+    }
+
+    #[test]
+    fn invalid_uppercase_option_cannot_override_the_x_policy() {
+        assert_eq!(
+            url_load_options("https://x.com/user/status/1", [("YTDL-FORMAT", "worst")])
+                .ytdl_format(),
+            Some(X_TWITTER_YTDL_FORMAT)
+        );
+        assert_eq!(
+            url_load_options("https://example.test/video", [("YTDL-FORMAT", "worst")])
+                .ytdl_format(),
+            None
+        );
+        assert!(is_x_twitter_url("https://user@x.com/user/status/1"));
+        assert!(!is_x_twitter_url("https://x.com@other.test/user/status/1"));
     }
 
     #[test]

@@ -1076,6 +1076,7 @@ pub struct Mpv {
     wayland_dmabuf_target: Option<WaylandDmabufTarget>,
     pump: Option<EventPump>,
     next_request_id: AtomicU64,
+    loadfile_has_index: bool,
     #[cfg(debug_assertions)]
     blocking_read_guard: crate::guard::BlockingReadGuard,
 }
@@ -1166,6 +1167,7 @@ impl Mpv {
             wayland_dmabuf_target: None,
             pump: None,
             next_request_id: AtomicU64::new(1),
+            loadfile_has_index: true,
             #[cfg(debug_assertions)]
             blocking_read_guard: Default::default(),
         };
@@ -1203,8 +1205,14 @@ impl Mpv {
         Ok(())
     }
 
-    fn initialize(self) -> Result<Self, MpvError> {
+    fn initialize(mut self) -> Result<Self, MpvError> {
         check(unsafe { ffi::mpv_initialize(self.handle.as_ptr()) })?;
+        // Read once before the UI/event pump starts; URL loads never query properties.
+        self.loadfile_has_index = loadfile_has_index_argument(
+            RawReader::new(self.handle)
+                .get_string("mpv-version")?
+                .as_deref(),
+        );
         let warning_level = CString::new("warn").expect("static log level has no nul");
         check(unsafe {
             ffi::mpv_request_log_messages(self.handle.as_ptr(), warning_level.as_ptr())
@@ -1510,7 +1518,7 @@ impl Mpv {
             pump.begin_media_load();
         }
 
-        let args = load_url_command_args(url, ytdl_format);
+        let args = load_url_command_args(url, ytdl_format, self.loadfile_has_index);
         let args = args.iter().map(String::as_str).collect::<Vec<_>>();
         self.command(&args)
     }
@@ -2052,22 +2060,31 @@ fn command_args(args: &[&str]) -> Result<(Vec<CString>, Vec<*const c_char>), Mpv
     Ok((c_args, ptrs))
 }
 
-/// Construct mpv's `loadfile` argv. Since mpv 0.38 the insertion-index placeholder is
-/// required before per-file options; keeping it here prevents an option from being mistaken
-/// for a playlist index and makes ordinary loads retain their original two arguments.
-fn load_url_command_args(url: &str, ytdl_format: Option<&str>) -> Vec<String> {
-    ytdl_format.map_or_else(
-        || vec!["loadfile".to_owned(), url.to_owned()],
-        |ytdl_format| {
-            vec![
-                "loadfile".to_owned(),
-                url.to_owned(),
-                "replace".to_owned(),
-                "-1".to_owned(),
-                format!("ytdl-format=%{}%{ytdl_format}", ytdl_format.len()),
-            ]
-        },
-    )
+/// mpv 0.38 inserted the index argument before per-file options. Distribution
+/// suffixes do not change the command ABI; an unavailable version retains modern syntax.
+fn loadfile_has_index_argument(version: Option<&str>) -> bool {
+    let Some(version) = version else { return true };
+    let version = version.trim_start_matches("mpv ").trim_start_matches('v');
+    let mut parts = version.split('.');
+    let major = parts.next().and_then(|part| part.parse::<u32>().ok());
+    let minor = parts.next().and_then(|part| part.parse::<u32>().ok());
+    match (major, minor) {
+        (Some(major), Some(minor)) => (major, minor) >= (0, 38),
+        _ => true,
+    }
+}
+
+/// Construct file-local options in the syntax supported by the initialized engine.
+fn load_url_command_args(url: &str, ytdl_format: Option<&str>, has_index: bool) -> Vec<String> {
+    let mut args = vec!["loadfile".to_owned(), url.to_owned()];
+    if let Some(ytdl_format) = ytdl_format {
+        args.push("replace".to_owned());
+        if has_index {
+            args.push("-1".to_owned());
+        }
+        args.push(format!("ytdl-format=%{}%{ytdl_format}", ytdl_format.len()));
+    }
+    args
 }
 
 fn screenshot_mode(include_subtitles: bool) -> &'static str {
@@ -2650,7 +2667,7 @@ mod tests {
     fn url_load_command_keeps_site_format_file_local() {
         let original = "https://x.com/user/status/1?source=history#scene";
         assert_eq!(
-            load_url_command_args(original, Some("best[protocol=https]/best")),
+            load_url_command_args(original, Some("best[protocol=https]/best"), true),
             [
                 "loadfile",
                 original,
@@ -2661,9 +2678,37 @@ mod tests {
         );
 
         assert_eq!(
-            load_url_command_args("https://www.youtube.com/watch?v=0O91lY-CoeE", None,),
+            load_url_command_args("https://www.youtube.com/watch?v=0O91lY-CoeE", None, true),
             ["loadfile", "https://www.youtube.com/watch?v=0O91lY-CoeE"]
         );
+    }
+
+    #[test]
+    fn old_and_current_engines_receive_their_supported_file_options_position() {
+        for version in [
+            "mpv 0.35.1",
+            "mpv v0.37.0-3ubuntu1",
+            "mpv v0.38.0",
+            "mpv v0.40.0",
+            "mpv v0.41.0",
+        ] {
+            let args = load_url_command_args(
+                "https://x.com/user/status/1",
+                Some("worst"),
+                loadfile_has_index_argument(Some(version)),
+            );
+            let expected_index = if version.contains("0.35") || version.contains("0.37") {
+                3
+            } else {
+                4
+            };
+            assert_eq!(args[expected_index], "ytdl-format=%5%worst", "{version}");
+            assert_eq!(
+                args.len(),
+                expected_index + 1,
+                "no unsupported trailing arguments: {version}"
+            );
+        }
     }
 
     #[test]
