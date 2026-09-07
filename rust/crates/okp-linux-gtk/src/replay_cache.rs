@@ -537,6 +537,7 @@ fn cache_owner_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::history::HistoryStore;
     use okp_core::media_download::DownloadedMedia;
 
     #[test]
