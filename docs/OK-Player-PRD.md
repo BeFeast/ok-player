@@ -160,6 +160,7 @@ Single consolidated source of truth. IDs cross-reference the detailed requiremen
 | Local files incl. NFS/SMB as paths/UNC (§10) | Sources | MVP |
 | Direct `http(s)://` stream/file URLs (§10) | Sources | MVP |
 | YouTube in-app browse/play via yt-dlp (§10.2) | Sources | Day-2 (reserve slot now) |
+| Save one public online video to an explicit destination (§10.2.1) | Sources | Day-2 |
 | Audio: track switch, delay nudge, output device, >100% boost, normalization (§11) | Playback | MVP |
 | Hardware decoding auto (§11) | Playback | MVP |
 | Geometry (aspect/zoom/pan/rotate/deinterlace) in "rarely used" menu (§11) | Playback | MVP |
@@ -332,6 +333,13 @@ Three input surfaces, all reaching libmpv through ordinary file paths or URLs. *
 
 ### 10.2 YouTube window [Day-2] — reservation only
 Reserve IA for a dedicated in-app YouTube surface: a panel/window with search, result list, and native playback of the yt-dlp-resolved stream. **Do not build a generic web browser.** Incur no design debt now beyond a clean entry point (an "Open YouTube" command slot and a URL field that recognizes YouTube links). Quality/format selection is a yt-dlp concern surfaced minimally; defer detailed controls.
+
+#### 10.2.1 Save public online video [Day-2]
+
+- **One explicit Save action:** “Save video…” is available for the current online source and URL rows in History. It snapshots the original page URL; a cached playback path never replaces that identity. Local History rows do not show this action.
+- **Destination before acquisition:** a native Save As chooser opens before a new full-media download. A completed replay-cache hit supplies its real suffix; an uncached Save requests a finalized Matroska file and suggests `.mkv`. Picker cancellation starts no Save-owned download or copy, and changing a suffix cannot relabel a container.
+- **Shared download lifecycle:** Save reuses the replay-cache downloader contract for public on-demand media, while owning separate cancellation so it cannot stop a cache consumer. Missing tooling, rejected live/playlist sources, download/mux failures, cancellation and write failures remain visible. Private/authenticated video, cookies, live recording and batch download are outside this action.
+- **Durable user ownership:** finalized media is copied through an exclusively created sibling partial and atomically published without replacing an existing destination. Progress remains non-blocking through download/finalization and copy. Only a complete publication is recorded in the human-readable URL-to-saved-path index; saved files are never cache-eviction targets and History keeps the URL.
 
 ### 10.3 Playlist, queue & play modes
 - **Folder-as-playlist [MVP]:** opening one file auto-loads its containing folder as the active playlist (natural/alphanumeric sort) — the primary playlist behavior.

@@ -16,13 +16,13 @@ okp-mpv = { path = "../okp-mpv" }
 relm4.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 ureq.workspace = true
 velopack.workspace = true
 zbus.workspace = true
 
 [dev-dependencies]
 okp-test-fixtures = { path = "../okp-test-fixtures" }
-tempfile.workspace = true
 
 [build-dependencies]
 cc.workspace = true

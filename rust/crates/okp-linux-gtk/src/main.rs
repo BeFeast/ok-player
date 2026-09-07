@@ -93,6 +93,7 @@ mod playback;
 mod playlist_ops;
 mod presentation;
 mod replay_cache;
+mod save_video;
 mod screenshots;
 mod settings;
 mod settings_pages;
@@ -128,6 +129,7 @@ pub(crate) use playback::*;
 pub(crate) use playlist_ops::*;
 pub(crate) use presentation::*;
 pub(crate) use replay_cache::*;
+pub(crate) use save_video::*;
 pub(crate) use settings_pages::*;
 pub(crate) use settings_switch::*;
 pub(crate) use settings_window::*;
@@ -286,6 +288,7 @@ struct PlayerState {
     progress_reporter: progress_report::ProgressReporter,
     scribe_subtitles: scribe_subtitles::ScribeSubtitleState,
     history: history::HistoryStore,
+    save_video: SaveVideoSession,
     settings: settings::SettingsStore,
     screenshot_jobs: screenshots::ScreenshotJobs,
     linux_update: LinuxUpdateSession,

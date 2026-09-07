@@ -928,6 +928,28 @@ fn history_row(
     popover.set_child(Some(&action_list));
 
     let commands = okp_core::history::history_row_commands(&item.source());
+    if commands.contains(&okp_core::history::HistoryRowCommand::SaveVideo) {
+        let save = history_action_button("okp-go-down-symbolic", "Save video…");
+        let save_parent = parent.clone();
+        let save_state = Rc::clone(&state);
+        let save_toast = Rc::clone(&status_toast);
+        let save_source = item.source();
+        let save_title = item.title.clone();
+        let save_popover = popover.clone();
+        save.connect_clicked(move |_| {
+            save_popover.popdown();
+            if let PlaylistItem::Url(url) = &save_source {
+                start_save_video(
+                    &save_parent,
+                    Rc::clone(&save_state),
+                    Rc::clone(&save_toast),
+                    url.clone(),
+                    Some(save_title.clone()),
+                );
+            }
+        });
+        action_list.append(&save);
+    }
     if commands.contains(&okp_core::history::HistoryRowCommand::RemoveFromHistory) {
         let remove = history_action_button("okp-list-remove-symbolic", "Remove from history");
         let remove_surface = surface.clone();

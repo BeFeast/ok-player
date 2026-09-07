@@ -278,6 +278,10 @@ pub(crate) fn resolved_player_commands(
             PlayerCommandContext {
                 has_media: has_loaded_media_state(&state),
                 has_local_media: state.current_file.is_some(),
+                has_online_media: matches!(
+                    current_history_source(&state),
+                    Some(PlaylistItem::Url(_))
+                ),
                 has_video_geometry: state.current_video_dimensions.is_some(),
                 playlist_count: state.playlist.len(),
                 repeat_mode: state.playlist.repeat(),
@@ -923,6 +927,15 @@ pub(crate) fn dispatch_player_command_action(
         Id::OpenFileLocation => {
             popover.popdown();
             open_current_file_location(state, status_toast);
+        }
+        Id::SaveVideo => {
+            popover.popdown();
+            let source = current_history_source(&state.borrow());
+            if let Some(PlaylistItem::Url(url)) = source {
+                start_save_video(parent, Rc::clone(state), Rc::clone(status_toast), url, None);
+            } else {
+                status_toast.show("Save video is available for online sources");
+            }
         }
         Id::SaveFrame => {
             popover.popdown();

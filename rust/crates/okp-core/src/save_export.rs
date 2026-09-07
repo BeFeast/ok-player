@@ -19,6 +19,162 @@ use serde::{Deserialize, Serialize};
 pub const SAVED_VIDEO_INDEX_VERSION: u32 = 1;
 const COPY_CHUNK_BYTES: usize = 256 * 1024;
 
+/// Media available when the native destination chooser opens. A cache hit
+/// carries its real completed suffix; an uncached explicit Save uses the shared
+/// downloader's guaranteed Matroska finalization contract.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SaveMediaPlan {
+    ReadyCache { source: PathBuf, extension: String },
+    DownloadMatroska,
+}
+
+impl SaveMediaPlan {
+    pub fn required_extension(&self) -> &str {
+        match self {
+            Self::ReadyCache { extension, .. } => extension,
+            Self::DownloadMatroska => "mkv",
+        }
+    }
+}
+
+/// Everything captured at action time. The native callback owns this value, so
+/// a later playback/source transition cannot retarget the operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SaveVideoSnapshot {
+    pub original_url: String,
+    pub title: String,
+    pub format_selector: Option<String>,
+    pub private_at_start: bool,
+    pub media: SaveMediaPlan,
+}
+
+impl SaveVideoSnapshot {
+    pub fn suggested_filename(&self) -> String {
+        suggested_filename(&self.title, self.media.required_extension())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SavePickerOutcome {
+    Selected(PathBuf),
+    Cancelled,
+    Failed(String),
+}
+
+/// Portable post-picker decision. Only the two accepted variants authorize
+/// Save-owned background work.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SavePickerDecision {
+    NoWork,
+    PickerFailed(String),
+    ExtensionMismatch {
+        target: PathBuf,
+        required_extension: String,
+    },
+    ExportReady {
+        request: SaveExportRequest,
+        private_at_start: bool,
+    },
+    DownloadReady {
+        original_url: String,
+        target: PathBuf,
+        format_selector: Option<String>,
+        private_at_start: bool,
+    },
+}
+
+pub fn decide_after_picker(
+    snapshot: SaveVideoSnapshot,
+    outcome: SavePickerOutcome,
+) -> SavePickerDecision {
+    let target = match outcome {
+        SavePickerOutcome::Cancelled => return SavePickerDecision::NoWork,
+        SavePickerOutcome::Failed(error) => return SavePickerDecision::PickerFailed(error),
+        SavePickerOutcome::Selected(target) => target,
+    };
+
+    let required_extension = normalized_extension(snapshot.media.required_extension());
+    if required_extension.is_empty()
+        || target
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(normalized_extension)
+            .as_deref()
+            != Some(required_extension.as_str())
+    {
+        return SavePickerDecision::ExtensionMismatch {
+            target,
+            required_extension,
+        };
+    }
+
+    match snapshot.media {
+        SaveMediaPlan::ReadyCache { source, .. } => SavePickerDecision::ExportReady {
+            request: SaveExportRequest::new(snapshot.original_url, source, target),
+            private_at_start: snapshot.private_at_start,
+        },
+        SaveMediaPlan::DownloadMatroska => SavePickerDecision::DownloadReady {
+            original_url: snapshot.original_url,
+            target,
+            format_selector: snapshot.format_selector,
+            private_at_start: snapshot.private_at_start,
+        },
+    }
+}
+
+/// An explicit Save may finish in private mode, but its URL-to-path metadata is
+/// suppressible session state. Privacy at either edge wins so a mid-job toggle
+/// cannot leak what was saved.
+pub const fn should_persist_saved_mapping(
+    private_at_start: bool,
+    private_at_completion: bool,
+) -> bool {
+    !private_at_start && !private_at_completion
+}
+
+pub fn suggested_filename(title: &str, extension: &str) -> String {
+    let mut stem = String::with_capacity(title.len().min(120));
+    let mut previous_was_space = false;
+    for character in title.trim().chars() {
+        if stem.chars().count() >= 120 {
+            break;
+        }
+        let replacement = if character.is_control()
+            || matches!(
+                character,
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+            ) {
+            ' '
+        } else {
+            character
+        };
+        if replacement.is_whitespace() {
+            if !previous_was_space && !stem.is_empty() {
+                stem.push(' ');
+            }
+            previous_was_space = true;
+        } else {
+            stem.push(replacement);
+            previous_was_space = false;
+        }
+    }
+    let stem = stem.trim_matches([' ', '.']);
+    let stem = if stem.is_empty() { "video" } else { stem };
+    let extension = normalized_extension(extension);
+    if extension.is_empty() {
+        stem.to_owned()
+    } else {
+        format!("{stem}.{extension}")
+    }
+}
+
+fn normalized_extension(extension: &str) -> String {
+    extension
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase()
+}
+
 /// An owned snapshot of the Save action. Later player source changes cannot
 /// alter the original URL, pinned source, or destination carried by a job.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -577,5 +733,113 @@ mod tests {
     #[test]
     fn saved_index_rejects_unknown_versions() {
         assert!(SavedVideoIndex::load(r#"{"version":99,"videos":{}}"#).is_none());
+    }
+
+    #[test]
+    fn picker_cancel_and_failure_authorize_no_save_work() {
+        let snapshot = SaveVideoSnapshot {
+            original_url: "https://example.test/video".to_owned(),
+            title: "Video".to_owned(),
+            format_selector: None,
+            private_at_start: false,
+            media: SaveMediaPlan::DownloadMatroska,
+        };
+
+        assert_eq!(
+            decide_after_picker(snapshot.clone(), SavePickerOutcome::Cancelled),
+            SavePickerDecision::NoWork
+        );
+        assert_eq!(
+            decide_after_picker(
+                snapshot,
+                SavePickerOutcome::Failed("portal unavailable".to_owned())
+            ),
+            SavePickerDecision::PickerFailed("portal unavailable".to_owned())
+        );
+    }
+
+    #[test]
+    fn ready_cache_is_exported_without_authorizing_a_download() {
+        let snapshot = SaveVideoSnapshot {
+            original_url: "https://example.test/video".to_owned(),
+            title: "A / B".to_owned(),
+            format_selector: Some("best[height<=1080]".to_owned()),
+            private_at_start: false,
+            media: SaveMediaPlan::ReadyCache {
+                source: PathBuf::from("/cache/ready.webm"),
+                extension: "WEBM".to_owned(),
+            },
+        };
+        assert_eq!(snapshot.suggested_filename(), "A B.webm");
+
+        assert_eq!(
+            decide_after_picker(
+                snapshot,
+                SavePickerOutcome::Selected(PathBuf::from("/videos/chosen.WeBm"))
+            ),
+            SavePickerDecision::ExportReady {
+                request: SaveExportRequest::new(
+                    "https://example.test/video",
+                    "/cache/ready.webm",
+                    "/videos/chosen.WeBm"
+                ),
+                private_at_start: false
+            }
+        );
+    }
+
+    #[test]
+    fn uncached_save_requests_matroska_only_after_picker_accepts() {
+        let snapshot = SaveVideoSnapshot {
+            original_url: "https://example.test/video".to_owned(),
+            title: "Public: video?".to_owned(),
+            format_selector: Some("bestvideo*+bestaudio/best".to_owned()),
+            private_at_start: true,
+            media: SaveMediaPlan::DownloadMatroska,
+        };
+        assert_eq!(snapshot.suggested_filename(), "Public video.mkv");
+
+        assert_eq!(
+            decide_after_picker(
+                snapshot,
+                SavePickerOutcome::Selected(PathBuf::from("/videos/public.mkv"))
+            ),
+            SavePickerDecision::DownloadReady {
+                original_url: "https://example.test/video".to_owned(),
+                target: PathBuf::from("/videos/public.mkv"),
+                format_selector: Some("bestvideo*+bestaudio/best".to_owned()),
+                private_at_start: true
+            }
+        );
+    }
+
+    #[test]
+    fn picker_extension_must_match_the_finalized_container() {
+        let snapshot = SaveVideoSnapshot {
+            original_url: "https://example.test/video".to_owned(),
+            title: "Video".to_owned(),
+            format_selector: None,
+            private_at_start: false,
+            media: SaveMediaPlan::DownloadMatroska,
+        };
+
+        assert_eq!(
+            decide_after_picker(
+                snapshot,
+                SavePickerOutcome::Selected(PathBuf::from("/videos/not-really.mp4"))
+            ),
+            SavePickerDecision::ExtensionMismatch {
+                target: PathBuf::from("/videos/not-really.mp4"),
+                required_extension: "mkv".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn privacy_at_either_job_edge_suppresses_only_saved_path_metadata() {
+        assert!(should_persist_saved_mapping(false, false));
+        assert!(!should_persist_saved_mapping(true, false));
+        assert!(!should_persist_saved_mapping(false, true));
+        assert!(!should_persist_saved_mapping(true, true));
     }
 }

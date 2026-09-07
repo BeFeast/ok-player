@@ -76,6 +76,7 @@ impl HistoryWriteMode {
 /// Source classification is shared so shells never manufacture a filesystem path from a URL.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HistoryRowCommand {
+    SaveVideo,
     RemoveFromHistory,
     MoveToTrash,
 }
@@ -84,7 +85,10 @@ const LOCAL_HISTORY_COMMANDS: [HistoryRowCommand; 2] = [
     HistoryRowCommand::RemoveFromHistory,
     HistoryRowCommand::MoveToTrash,
 ];
-const URL_HISTORY_COMMANDS: [HistoryRowCommand; 1] = [HistoryRowCommand::RemoveFromHistory];
+const URL_HISTORY_COMMANDS: [HistoryRowCommand; 2] = [
+    HistoryRowCommand::SaveVideo,
+    HistoryRowCommand::RemoveFromHistory,
+];
 
 /// Commands that are valid for the original persisted source identity.
 pub fn history_row_commands(source: &PlaylistItem) -> &'static [HistoryRowCommand] {
@@ -1512,7 +1516,10 @@ mod tests {
         );
         assert_eq!(
             history_row_commands(&url),
-            &[HistoryRowCommand::RemoveFromHistory]
+            &[
+                HistoryRowCommand::SaveVideo,
+                HistoryRowCommand::RemoveFromHistory
+            ]
         );
         assert!(trash_unloads_current_source(&local, Some(&local)));
         assert!(!trash_unloads_current_source(&local, Some(&url)));

@@ -114,6 +114,7 @@ pub enum PlayerCommandId {
     CloseMedia,
     MediaInfo,
     OpenFileLocation,
+    SaveVideo,
     SaveFrame,
     SaveFrameWithSubtitles,
     CopyFrame,
@@ -166,6 +167,7 @@ impl PlayerCommandId {
             Self::CloseMedia => "close-media",
             Self::MediaInfo => "media-info",
             Self::OpenFileLocation => "open-file-location",
+            Self::SaveVideo => "save-video",
             Self::SaveFrame => "save-frame",
             Self::SaveFrameWithSubtitles => "save-frame-with-subtitles",
             Self::CopyFrame => "copy-frame",
@@ -297,6 +299,7 @@ const TOOLS_ADVANCED_MENU_COMMANDS: &[PlayerCommandId] = &[
     PlayerCommandId::SavePlaylist,
     PlayerCommandId::MediaInfo,
     PlayerCommandId::OpenFileLocation,
+    PlayerCommandId::SaveVideo,
     PlayerCommandId::SaveFrameWithSubtitles,
     PlayerCommandId::CopyFrame,
     PlayerCommandId::ExportClip,
@@ -318,6 +321,7 @@ pub struct PlayerCommandSpec {
 pub struct PlayerCommandContext {
     pub has_media: bool,
     pub has_local_media: bool,
+    pub has_online_media: bool,
     pub has_video_geometry: bool,
     pub playlist_count: usize,
     pub repeat_mode: RepeatMode,
@@ -335,6 +339,7 @@ impl Default for PlayerCommandContext {
         Self {
             has_media: false,
             has_local_media: false,
+            has_online_media: false,
             has_video_geometry: false,
             playlist_count: 0,
             repeat_mode: RepeatMode::Off,
@@ -649,6 +654,13 @@ const COMMANDS: &[PlayerCommandSpec] = &[
         None,
     ),
     command(
+        PlayerCommandId::SaveVideo,
+        PlayerCommandGroup::MediaFile,
+        "Save video…",
+        &["download", "online video", "save as", "export"],
+        None,
+    ),
+    command(
         PlayerCommandId::SaveFrame,
         PlayerCommandGroup::Tools,
         "Screenshot",
@@ -791,6 +803,7 @@ fn resolve_command(
         Id::AddToQueue | Id::PlayNext | Id::OpenFileLocation | Id::AddBookmark => {
             context.has_local_media
         }
+        Id::SaveVideo => context.has_online_media,
         Id::SavePlaylist => context.playlist_count > 0,
         Id::FitWindowToMedia => context.has_video_geometry,
         Id::ExportClip => false,
@@ -951,6 +964,7 @@ mod tests {
         let context = PlayerCommandContext {
             has_media: true,
             has_local_media: true,
+            has_online_media: true,
             has_video_geometry: true,
             playlist_count: 3,
             repeat_mode: RepeatMode::All,
@@ -1001,6 +1015,34 @@ mod tests {
                 .map(|command| command.id)
                 .collect::<Vec<_>>(),
             vec![PlayerCommandId::FitWindowToMedia]
+        );
+    }
+
+    #[test]
+    fn save_video_is_enabled_only_for_original_online_identity() {
+        let resolve = |context| {
+            resolve_player_commands(PlayerCommandSurface::More, context, |_| None)
+                .into_iter()
+                .find(|command| command.id == PlayerCommandId::SaveVideo)
+                .unwrap()
+        };
+
+        assert!(!resolve(PlayerCommandContext::default()).enabled);
+        assert!(
+            resolve(PlayerCommandContext {
+                has_media: true,
+                has_online_media: true,
+                ..PlayerCommandContext::default()
+            })
+            .enabled
+        );
+        assert!(
+            !resolve(PlayerCommandContext {
+                has_media: true,
+                has_local_media: true,
+                ..PlayerCommandContext::default()
+            })
+            .enabled
         );
     }
 
