@@ -3,6 +3,7 @@ use super::*;
 use std::io;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use okp_core::media_download::{
     DownloadContainer, DownloadJobId, DownloadPurpose, MediaDownloadEvent, MediaDownloadOutcome,
@@ -571,6 +572,7 @@ impl Drop for SaveVideoJob {
     }
 }
 
+#[allow(deprecated)]
 fn activate_save_job(
     parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
@@ -734,12 +736,14 @@ impl SaveProgressStage {
     }
 }
 
+#[allow(deprecated)]
 struct SaveProgressDialog {
     dialog: gtk::Dialog,
     status: gtk::Label,
     progress: gtk::ProgressBar,
 }
 
+#[allow(deprecated)]
 impl SaveProgressDialog {
     #[allow(deprecated)]
     fn new(parent: &gtk::ApplicationWindow, title: &str) -> Self {
