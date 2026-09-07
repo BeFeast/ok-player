@@ -54,6 +54,8 @@ pub struct Settings {
     pub screenshots: ScreenshotSettings,
     #[serde(default, skip_serializing_if = "PrivacySettings::is_empty")]
     pub privacy: PrivacySettings,
+    #[serde(default)]
+    pub online_video: OnlineVideoSettings,
 }
 
 impl Default for Settings {
@@ -69,6 +71,7 @@ impl Default for Settings {
             advanced: AdvancedSettings::default(),
             screenshots: ScreenshotSettings::default(),
             privacy: PrivacySettings::default(),
+            online_video: OnlineVideoSettings::default(),
         }
     }
 }
@@ -446,6 +449,26 @@ impl PrivacySettings {
     }
 }
 
+/// Online-video preferences shared by desktop shells.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OnlineVideoSettings {
+    /// Keep a complete local replay of eligible public on-demand videos.
+    #[serde(default = "default_replay_cache_enabled")]
+    pub replay_cache_enabled: bool,
+}
+
+impl Default for OnlineVideoSettings {
+    fn default() -> Self {
+        Self {
+            replay_cache_enabled: default_replay_cache_enabled(),
+        }
+    }
+}
+
+const fn default_replay_cache_enabled() -> bool {
+    true
+}
+
 fn default_auto_check() -> bool {
     true
 }
@@ -522,6 +545,7 @@ impl WindowsSettings {
             privacy: PrivacySettings {
                 history_retention_days: self.history_retention_days,
             },
+            online_video: OnlineVideoSettings::default(),
         }
     }
 }
@@ -542,6 +566,7 @@ mod tests {
         assert!(Settings::default().updates.auto_check);
         // A default install is on the public channel; enrollment is explicit.
         assert_eq!(Settings::default().updates.channel, UpdateChannel::Public);
+        assert!(Settings::default().online_video.replay_cache_enabled);
     }
 
     #[test]
@@ -736,6 +761,7 @@ mod tests {
         assert!(settings.appearance.is_empty());
         assert!(settings.screenshots.is_empty());
         assert!(settings.privacy.is_empty());
+        assert!(settings.online_video.replay_cache_enabled);
     }
 
     #[test]
@@ -752,6 +778,24 @@ mod tests {
         let restored = Settings::load(&json).expect("canonical document should load");
 
         assert_eq!(restored, settings);
+    }
+
+    #[test]
+    fn online_video_replay_cache_is_default_on_and_round_trips_an_explicit_disable() {
+        let older =
+            Settings::load(r#"{ "version": 2 }"#).expect("older canonical settings should load");
+        assert!(older.online_video.replay_cache_enabled);
+
+        let mut disabled = older;
+        disabled.online_video.replay_cache_enabled = false;
+        let json = serde_json::to_string(&disabled).expect("serialize online-video settings");
+        let document: serde_json::Value =
+            serde_json::from_str(&json).expect("serialized settings should be JSON");
+        assert_eq!(
+            document["online_video"]["replay_cache_enabled"],
+            serde_json::Value::Bool(false)
+        );
+        assert_eq!(Settings::load(&json), Some(disabled));
     }
 
     #[test]
@@ -887,5 +931,6 @@ mod tests {
         assert_eq!(settings.version, SETTINGS_VERSION);
         assert_eq!(settings.playback.volume, None);
         assert!(settings.updates.auto_check); // default-on when the key is absent
+        assert!(settings.online_video.replay_cache_enabled);
     }
 }

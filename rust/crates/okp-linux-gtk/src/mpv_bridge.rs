@@ -1617,6 +1617,7 @@ pub(crate) fn connect_state_poll(
     let playing_media = Cell::new(false);
     glib::timeout_add_local(Duration::from_millis(200), move || {
         let auto_fit_dimensions = drain_mpv_events(&state, &status_toast);
+        poll_replay_cache(&state, &status_toast);
         drain_wayland_presentation_feedback(&state);
         apply_pending_nfo_titles(&state);
         // Only a loaded source may size the window. libmpv can still publish a dimension

@@ -81,6 +81,7 @@ mod history_view;
 mod integration;
 mod keyboard;
 mod lyrics;
+mod media_download;
 mod media_info;
 mod mpris;
 mod mpv_bridge;
@@ -91,6 +92,7 @@ mod panels;
 mod playback;
 mod playlist_ops;
 mod presentation;
+mod replay_cache;
 mod screenshots;
 mod settings;
 mod settings_pages;
@@ -125,6 +127,7 @@ pub(crate) use panels::*;
 pub(crate) use playback::*;
 pub(crate) use playlist_ops::*;
 pub(crate) use presentation::*;
+pub(crate) use replay_cache::*;
 pub(crate) use settings_pages::*;
 pub(crate) use settings_switch::*;
 pub(crate) use settings_window::*;
@@ -255,6 +258,11 @@ struct PlayerState {
     hwdec_guard: Option<HwdecGuard>,
     current_file: Option<PathBuf>,
     current_url: Option<String>,
+    /// Physical local target used for a cached URL replay. Logical identity stays in
+    /// `current_url`; this path exists only for engine-event matching and pin lifetime.
+    replay_engine_path: Option<PathBuf>,
+    replay_cache_pin: Option<okp_core::replay_cache::ReplayCachePin>,
+    replay_cache: replay_cache::ReplayCacheRuntime,
     current_nfo_title: okp_core::nfo_metadata::NfoTitleState,
     nfo_title_jobs: NfoTitleJobs,
     source_generation: u64,

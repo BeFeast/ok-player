@@ -229,6 +229,10 @@ impl SettingsStore {
         HistoryRetention::from_days(self.data.privacy.history_retention_days)
     }
 
+    pub fn replay_cache_enabled(&self) -> bool {
+        self.data.online_video.replay_cache_enabled
+    }
+
     pub fn set_volume(&mut self, volume: f64) {
         let Some(volume) = normalized_volume(Some(volume)) else {
             return;
@@ -447,6 +451,13 @@ impl SettingsStore {
         }
     }
 
+    pub fn set_replay_cache_enabled(&mut self, enabled: bool) {
+        if self.replay_cache_enabled() != enabled {
+            self.data.online_video.replay_cache_enabled = enabled;
+            self.dirty = true;
+        }
+    }
+
     pub fn save(&mut self) -> io::Result<()> {
         if !self.dirty {
             return Ok(());
@@ -661,6 +672,44 @@ mod tests {
             HistoryRetention::from_days(reloaded.privacy.history_retention_days),
             HistoryRetention::Days365
         );
+        dir.close().expect("temp settings dir should be removed");
+    }
+
+    #[test]
+    fn replay_cache_defaults_on_and_toggle_marks_dirty_once() {
+        let mut settings = store();
+        assert!(settings.replay_cache_enabled());
+
+        settings.set_replay_cache_enabled(false);
+        assert!(!settings.replay_cache_enabled());
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_replay_cache_enabled(false);
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn replay_cache_setting_saves_and_reloads_through_the_portable_schema() {
+        let dir = unique_temp_dir("okp-replay-cache-settings");
+        let path = dir.path().join("settings.json");
+        let mut settings = SettingsStore {
+            path: path.clone(),
+            data: Settings::default(),
+            dirty: false,
+        };
+
+        settings.set_replay_cache_enabled(false);
+        settings.save().expect("replay-cache setting should save");
+
+        let json = fs::read_to_string(&path).expect("settings should be readable");
+        let data = Settings::load(&json).expect("portable settings should reload");
+        let reloaded = SettingsStore {
+            path,
+            data,
+            dirty: false,
+        };
+        assert!(!reloaded.replay_cache_enabled());
         dir.close().expect("temp settings dir should be removed");
     }
 

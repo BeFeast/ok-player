@@ -2512,7 +2512,11 @@ pub(crate) fn drain_mpv_events(
                 diagnostic_messages,
                 last_duration,
             } if reason.is_eof() => {
-                if !apply_endfile_eof_diagnostic(state, path.as_deref(), &diagnostic_messages) {
+                let failed =
+                    apply_endfile_eof_diagnostic(state, path.as_deref(), &diagnostic_messages);
+                if failed && fallback_cached_replay_to_url(state, path.as_deref()) {
+                    status_toast.show("Cached replay was unavailable — streaming instead");
+                } else if !failed {
                     if state.borrow().playlist.repeat() != RepeatMode::One {
                         finish_current_progress(state, path.as_deref(), last_duration);
                     }
@@ -2537,7 +2541,11 @@ pub(crate) fn drain_mpv_events(
                 // too, with URL Retry disabled. The
                 // staleness guard (drop an error whose source was superseded) lives in
                 // `apply_endfile_error` so it is unit-testable without an engine.
-                apply_endfile_error(state, error, path.as_deref(), &diagnostic_messages);
+                if fallback_cached_replay_to_url(state, path.as_deref()) {
+                    status_toast.show("Cached replay was unavailable — streaming instead");
+                } else {
+                    apply_endfile_error(state, error, path.as_deref(), &diagnostic_messages);
+                }
             }
             MpvEvent::CommandReply { request_id, error } => {
                 complete_screenshot_capture(state, status_toast, request_id, error);

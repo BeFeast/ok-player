@@ -2014,6 +2014,125 @@ pub(crate) fn settings_private_session_row(
     row
 }
 
+pub(crate) fn settings_replay_cache_section(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
+    let section = settings_section("Online video");
+    let detail = gtk::Label::new(Some(
+        "First playback starts streaming immediately. When Replay cache is on, a complete local copy can make later History playback instant.",
+    ));
+    detail.add_css_class("okp-update-status");
+    detail.set_xalign(0.0);
+    detail.set_width_chars(1);
+    detail.set_max_width_chars(58);
+    detail.set_wrap(true);
+    section.append(&detail);
+
+    let (enabled, snapshot) = {
+        let state = state.borrow();
+        (
+            state.settings.replay_cache_enabled(),
+            state.replay_cache.status_snapshot(),
+        )
+    };
+
+    let toggle_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    toggle_row.add_css_class("okp-settings-switch-row");
+
+    let toggle_text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    toggle_text.set_hexpand(true);
+    let toggle_label = gtk::Label::new(Some("Replay cache"));
+    toggle_label.add_css_class("okp-info-label");
+    toggle_label.set_xalign(0.0);
+    toggle_text.append(&toggle_label);
+    let toggle_detail = gtk::Label::new(Some(
+        "Keeps up to 5 GiB of completed videos; a download may temporarily use up to 5 GiB more. Private sessions, live videos and playlists are excluded.",
+    ));
+    toggle_detail.add_css_class("okp-update-status");
+    toggle_detail.set_xalign(0.0);
+    toggle_detail.set_width_chars(1);
+    toggle_detail.set_max_width_chars(50);
+    toggle_detail.set_wrap(true);
+    toggle_text.append(&toggle_detail);
+    toggle_row.append(&toggle_text);
+
+    let toggle_state_label = gtk::Label::new(Some(if enabled { "On" } else { "Off" }));
+    toggle_state_label.add_css_class("okp-settings-state-pill");
+    toggle_state_label.set_valign(gtk::Align::Center);
+    toggle_row.append(&toggle_state_label);
+
+    let toggle = settings_switch_button(enabled, "Replay cache");
+    let toggle_state = Rc::clone(&state);
+    let toggle_toast = Rc::clone(&status_toast);
+    toggle.connect_clicked(move |button| {
+        let requested = !button.has_css_class("is-active");
+        set_replay_cache_enabled(&toggle_state, &toggle_toast, requested);
+
+        let enabled = toggle_state.borrow().settings.replay_cache_enabled();
+        set_settings_switch_active(button, enabled);
+        toggle_state_label.set_text(if enabled { "On" } else { "Off" });
+    });
+    toggle_row.append(&toggle);
+    section.append(&toggle_row);
+
+    let status_row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    status_row.add_css_class("okp-settings-row");
+
+    let status_name = gtk::Label::new(Some("Status"));
+    status_name.add_css_class("okp-info-label");
+    status_name.set_xalign(0.0);
+    status_name.set_width_chars(14);
+    status_row.append(&status_name);
+
+    let status_label = gtk::Label::new(Some(&snapshot.label()));
+    status_label.add_css_class("okp-info-value");
+    status_label.set_xalign(0.0);
+    status_label.set_hexpand(true);
+    status_label.set_width_chars(1);
+    status_label.set_ellipsize(pango::EllipsizeMode::End);
+    status_row.append(&status_label);
+
+    let cancel_button = gtk::Button::with_label("Cancel");
+    cancel_button.add_css_class("okp-settings-button");
+    cancel_button.set_sensitive(snapshot.is_downloading());
+    let cancel_state = Rc::clone(&state);
+    let cancel_toast = Rc::clone(&status_toast);
+    cancel_button.connect_clicked(move |button| {
+        if cancel_replay_cache_download(&cancel_state, &cancel_toast) {
+            button.set_sensitive(false);
+        }
+    });
+    status_row.append(&cancel_button);
+
+    let clear_button = gtk::Button::with_label("Clear cache");
+    clear_button.add_css_class("okp-settings-button");
+    let clear_state = Rc::clone(&state);
+    let clear_toast = Rc::clone(&status_toast);
+    clear_button.connect_clicked(move |_| clear_replay_cache(&clear_state, &clear_toast));
+    status_row.append(&clear_button);
+    section.append(&status_row);
+
+    let section_weak = section.downgrade();
+    let status_label_weak = status_label.downgrade();
+    let cancel_button_weak = cancel_button.downgrade();
+    glib::timeout_add_local(Duration::from_millis(250), move || {
+        let (Some(_section), Some(status_label), Some(cancel_button)) = (
+            section_weak.upgrade(),
+            status_label_weak.upgrade(),
+            cancel_button_weak.upgrade(),
+        ) else {
+            return glib::ControlFlow::Break;
+        };
+        let snapshot = state.borrow().replay_cache.status_snapshot();
+        status_label.set_text(&snapshot.label());
+        cancel_button.set_sensitive(snapshot.is_downloading());
+        glib::ControlFlow::Continue
+    });
+
+    section
+}
+
 pub(crate) fn settings_history_retention_row(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,

@@ -45,6 +45,8 @@ BuildRequires:  procps-ng
 
 Requires:       mpv-libs%{?_isa}
 Requires:       xdg-utils
+Recommends:     yt-dlp
+Recommends:     /usr/bin/ffmpeg
 # GTK4 reaches OpenGL ES through libepoxy's dlopen, so the binary has no
 # DT_NEEDED entry for it and rpm's automatic dependency extraction cannot see
 # it. A root that satisfies only the linked closure has no libGLESv2.so.2 and

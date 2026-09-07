@@ -1,0 +1,516 @@
+use super::*;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use okp_core::media_download::{
+    DownloadContainer, DownloadJobId, DownloadPurpose, MediaDownloadEvent, MediaDownloadOutcome,
+    MediaDownloadRequest,
+};
+use okp_core::replay_cache::{
+    AcquiredReplay, DEFAULT_REPLAY_CACHE_CAPACITY_BYTES, ReplayCache, ReplayCacheStaging,
+};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ReplayCacheStatusSnapshot {
+    Idle,
+    Disabled,
+    Private,
+    ToolUnavailable,
+    Downloading { percent: Option<u8> },
+    Ready,
+    Error(String),
+}
+
+impl ReplayCacheStatusSnapshot {
+    pub(crate) fn label(&self) -> String {
+        match self {
+            Self::Idle => "Ready for eligible public videos".to_owned(),
+            Self::Disabled => "Replay cache is off".to_owned(),
+            Self::Private => "Paused for private session".to_owned(),
+            Self::ToolUnavailable => "yt-dlp is not installed".to_owned(),
+            Self::Downloading {
+                percent: Some(percent),
+            } => format!("Saving replay — {percent}%"),
+            Self::Downloading { percent: None } => "Saving replay…".to_owned(),
+            Self::Ready => "Replay ready for History".to_owned(),
+            Self::Error(message) => message.clone(),
+        }
+    }
+
+    pub(crate) fn is_downloading(&self) -> bool {
+        matches!(self, Self::Downloading { .. })
+    }
+}
+
+#[derive(Clone, Debug)]
+struct StreamCandidate {
+    url: String,
+    source_generation: u64,
+    format_selector: Option<String>,
+}
+
+struct ActiveReplayDownload {
+    job_id: DownloadJobId,
+    staging: ReplayCacheStaging,
+}
+
+pub(crate) struct ReplayCacheRuntime {
+    root: PathBuf,
+    cache: Option<ReplayCache>,
+    cache_open_attempted: bool,
+    downloader: media_download::MediaDownloader,
+    tool_available: bool,
+    candidate: Option<StreamCandidate>,
+    active: Option<ActiveReplayDownload>,
+    staging_sequence: u64,
+    status: ReplayCacheStatusSnapshot,
+}
+
+impl Default for ReplayCacheRuntime {
+    fn default() -> Self {
+        let executable = find_executable(youtube_open::YOUTUBE_RESOLVER);
+        let tool_available = executable.is_some();
+        let downloader = executable.map_or_else(
+            media_download::MediaDownloader::new,
+            media_download::MediaDownloader::with_executable,
+        );
+        Self {
+            root: replay_cache_dir(),
+            cache: None,
+            cache_open_attempted: false,
+            downloader,
+            tool_available,
+            candidate: None,
+            active: None,
+            staging_sequence: unix_now_u64(),
+            status: if tool_available {
+                ReplayCacheStatusSnapshot::Idle
+            } else {
+                ReplayCacheStatusSnapshot::ToolUnavailable
+            },
+        }
+    }
+}
+
+impl ReplayCacheRuntime {
+    pub(crate) fn status_snapshot(&self) -> ReplayCacheStatusSnapshot {
+        self.status.clone()
+    }
+
+    pub(crate) fn offer_stream(
+        &mut self,
+        url: String,
+        source_generation: u64,
+        enabled: bool,
+        private_session: bool,
+        format_selector: Option<String>,
+    ) {
+        self.candidate = None;
+        if !enabled {
+            self.status = ReplayCacheStatusSnapshot::Disabled;
+            return;
+        }
+        if private_session {
+            self.status = ReplayCacheStatusSnapshot::Private;
+            return;
+        }
+        if !self.tool_available {
+            self.status = ReplayCacheStatusSnapshot::ToolUnavailable;
+            return;
+        }
+        if self.active.is_none() {
+            self.status = ReplayCacheStatusSnapshot::Idle;
+            self.candidate = Some(StreamCandidate {
+                url,
+                source_generation,
+                format_selector,
+            });
+        }
+    }
+
+    pub(crate) fn source_changed(&mut self) {
+        self.candidate = None;
+    }
+
+    pub(crate) fn acquire(
+        &mut self,
+        source_url: &str,
+        format_selector: Option<&str>,
+    ) -> Option<AcquiredReplay> {
+        let now = unix_now_i64();
+        let cache = self.cache()?;
+        match cache.acquire_for_format(source_url, format_selector, now) {
+            Ok(replay) => replay,
+            Err(error) => {
+                eprintln!("Failed to read replay cache: {error}");
+                self.status = ReplayCacheStatusSnapshot::Error(
+                    "Replay cache could not be read — streaming instead".to_owned(),
+                );
+                None
+            }
+        }
+    }
+
+    pub(crate) fn invalidate(&mut self, source_url: &str) {
+        let Some(cache) = self.cache() else {
+            return;
+        };
+        if let Err(error) = cache.invalidate(source_url) {
+            eprintln!("Failed to invalidate replay cache entry: {error}");
+        }
+    }
+
+    fn cache(&mut self) -> Option<&ReplayCache> {
+        if self.cache.is_none() && !self.cache_open_attempted {
+            self.cache_open_attempted = true;
+            match ReplayCache::open(&self.root, DEFAULT_REPLAY_CACHE_CAPACITY_BYTES) {
+                Ok(cache) => self.cache = Some(cache),
+                Err(error) => {
+                    eprintln!("Failed to open replay cache: {error}");
+                    self.status = ReplayCacheStatusSnapshot::Error(
+                        "Replay cache storage is unavailable".to_owned(),
+                    );
+                }
+            }
+        }
+        self.cache.as_ref()
+    }
+
+    fn poll(
+        &mut self,
+        source_generation: u64,
+        current_url: Option<&str>,
+        duration: Option<f64>,
+        playing: bool,
+        enabled: bool,
+        private_session: bool,
+    ) -> Vec<String> {
+        if !enabled || private_session {
+            self.candidate = None;
+            self.cancel_active();
+            self.status = if private_session {
+                ReplayCacheStatusSnapshot::Private
+            } else {
+                ReplayCacheStatusSnapshot::Disabled
+            };
+        } else if self.tool_available {
+            self.try_start(source_generation, current_url, duration, playing);
+        }
+
+        self.drain_events(enabled && !private_session)
+    }
+
+    fn try_start(
+        &mut self,
+        source_generation: u64,
+        current_url: Option<&str>,
+        duration: Option<f64>,
+        playing: bool,
+    ) {
+        if self.active.is_some() || !playing {
+            return;
+        }
+        let Some(duration) = duration.filter(|duration| duration.is_finite() && *duration > 0.0)
+        else {
+            return;
+        };
+        let Some(candidate) = self.candidate.clone() else {
+            return;
+        };
+        if candidate.source_generation != source_generation
+            || current_url != Some(candidate.url.as_str())
+        {
+            self.candidate = None;
+            return;
+        }
+
+        // A duration is the shell's first non-live proof. The native adapter performs
+        // the authoritative playlist/live probe before writing any media bytes.
+        let _ = duration;
+        if self
+            .acquire(&candidate.url, candidate.format_selector.as_deref())
+            .is_some()
+        {
+            self.candidate = None;
+            self.status = ReplayCacheStatusSnapshot::Ready;
+            return;
+        }
+
+        self.staging_sequence = self.staging_sequence.wrapping_add(1).max(1);
+        let staging_id = DownloadJobId(self.staging_sequence);
+        let Some(cache) = self.cache() else {
+            self.candidate = None;
+            return;
+        };
+        let staging = match cache.begin_download_for_format(
+            &candidate.url,
+            staging_id,
+            candidate.format_selector.as_deref(),
+        ) {
+            Ok(staging) => staging,
+            Err(error) => {
+                eprintln!("Failed to prepare replay download: {error}");
+                self.status = ReplayCacheStatusSnapshot::Error(
+                    "Replay cache could not prepare a download".to_owned(),
+                );
+                self.candidate = None;
+                return;
+            }
+        };
+        let mut request = match MediaDownloadRequest::public_vod(
+            candidate.url.clone(),
+            staging.download_target(),
+            DownloadPurpose::ReplayCache,
+            DownloadContainer::Preserve,
+            staging.max_bytes(),
+        ) {
+            Ok(request) => request,
+            Err(error) => {
+                if let Some(cache) = self.cache()
+                    && let Err(cleanup_error) = cache.abandon_download(staging)
+                {
+                    eprintln!("Failed to abandon rejected replay staging: {cleanup_error}");
+                }
+                eprintln!("Replay download request was rejected: {error}");
+                self.candidate = None;
+                return;
+            }
+        };
+        request.format_selector = candidate.format_selector.clone();
+        match self.downloader.request(request) {
+            Ok(job_id) => {
+                self.active = Some(ActiveReplayDownload { job_id, staging });
+                self.candidate = None;
+                self.status = ReplayCacheStatusSnapshot::Downloading { percent: None };
+            }
+            Err(error) => {
+                if let Some(cache) = self.cache()
+                    && let Err(cleanup_error) = cache.abandon_download(staging)
+                {
+                    eprintln!("Failed to abandon busy replay staging: {cleanup_error}");
+                }
+                eprintln!("Replay downloader was busy: {error}");
+                self.candidate = None;
+            }
+        }
+    }
+
+    fn drain_events(&mut self, allow_promotion: bool) -> Vec<String> {
+        let mut notices = Vec::new();
+        for event in self.downloader.drain_events() {
+            match event {
+                MediaDownloadEvent::Started { .. } => {}
+                MediaDownloadEvent::Progress(progress)
+                    if self.active.as_ref().map(|active| active.job_id)
+                        == Some(progress.job_id) =>
+                {
+                    self.status = ReplayCacheStatusSnapshot::Downloading {
+                        percent: progress.percent(),
+                    };
+                }
+                MediaDownloadEvent::Progress(_) => {}
+                MediaDownloadEvent::Terminal { job_id, outcome }
+                    if self.active.as_ref().map(|active| active.job_id) == Some(job_id) =>
+                {
+                    let active = self.active.take().expect("matching replay job");
+                    match outcome {
+                        MediaDownloadOutcome::Completed(media) => {
+                            if !allow_promotion {
+                                self.abandon(active.staging);
+                                continue;
+                            }
+                            let completed = self.cache().and_then(|cache| {
+                                match cache.complete_download(active.staging, media, unix_now_i64())
+                                {
+                                    Ok(_) => Some(()),
+                                    Err(error) => {
+                                        eprintln!("Failed to promote replay download: {error}");
+                                        None
+                                    }
+                                }
+                            });
+                            if completed.is_some() {
+                                self.status = ReplayCacheStatusSnapshot::Ready;
+                                notices.push("Replay ready for History".to_owned());
+                            } else {
+                                self.status = ReplayCacheStatusSnapshot::Error(
+                                    "Downloaded replay could not be stored".to_owned(),
+                                );
+                            }
+                        }
+                        MediaDownloadOutcome::Cancelled => {
+                            self.abandon(active.staging);
+                            self.status = ReplayCacheStatusSnapshot::Idle;
+                            notices.push("Replay download canceled".to_owned());
+                        }
+                        MediaDownloadOutcome::Rejected(reason) => {
+                            self.abandon(active.staging);
+                            self.status = ReplayCacheStatusSnapshot::Idle;
+                            eprintln!("Replay download excluded: {reason}");
+                        }
+                        MediaDownloadOutcome::Failed { message } => {
+                            self.abandon(active.staging);
+                            eprintln!("Replay download failed: {message}");
+                            self.status = ReplayCacheStatusSnapshot::Error(
+                                "Replay download did not complete".to_owned(),
+                            );
+                        }
+                    }
+                }
+                MediaDownloadEvent::Terminal { .. } => {}
+            }
+        }
+        notices
+    }
+
+    fn abandon(&mut self, staging: ReplayCacheStaging) {
+        if let Some(cache) = self.cache()
+            && let Err(error) = cache.abandon_download(staging)
+        {
+            eprintln!("Failed to clean replay staging: {error}");
+        }
+    }
+
+    fn cancel_active(&mut self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|active| self.downloader.cancel(active.job_id))
+    }
+
+    fn clear(&mut self) -> Result<(usize, usize), String> {
+        let Some(cache) = self.cache() else {
+            return Err("Replay cache storage is unavailable".to_owned());
+        };
+        cache
+            .clear_unpinned()
+            .map(|result| (result.removed, result.retained_pinned))
+            .map_err(|error| error.to_string())
+    }
+
+    fn shutdown(&mut self) {
+        self.candidate = None;
+        self.cancel_active();
+        self.downloader.shutdown();
+        if let Some(active) = self.active.take() {
+            self.abandon(active.staging);
+        }
+    }
+}
+
+pub(crate) fn poll_replay_cache(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    let snapshot = {
+        let state = state.borrow();
+        (
+            state.source_generation,
+            state.current_url.clone(),
+            state
+                .mpv
+                .as_ref()
+                .and_then(|mpv| mpv.observed_playback_state().duration),
+            state.media_load_state == network_media::MediaLoadState::Playing,
+            state.settings.replay_cache_enabled(),
+            state.private_session,
+        )
+    };
+    let notices = state.borrow_mut().replay_cache.poll(
+        snapshot.0,
+        snapshot.1.as_deref(),
+        snapshot.2,
+        snapshot.3,
+        snapshot.4,
+        snapshot.5,
+    );
+    for notice in notices {
+        status_toast.show(&notice);
+    }
+}
+
+pub(crate) fn set_replay_cache_enabled(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+    enabled: bool,
+) {
+    let mut state = state.borrow_mut();
+    state.settings.set_replay_cache_enabled(enabled);
+    if let Err(error) = state.settings.save() {
+        eprintln!("Failed to save replay-cache setting: {error}");
+        status_toast.show("Could not save replay-cache setting");
+        return;
+    }
+    if enabled {
+        state.replay_cache.status = if state.replay_cache.tool_available {
+            ReplayCacheStatusSnapshot::Idle
+        } else {
+            ReplayCacheStatusSnapshot::ToolUnavailable
+        };
+        status_toast.show("Replay cache on");
+    } else {
+        state.replay_cache.candidate = None;
+        state.replay_cache.cancel_active();
+        state.replay_cache.status = ReplayCacheStatusSnapshot::Disabled;
+        status_toast.show("Replay cache off");
+    }
+}
+
+pub(crate) fn cancel_replay_cache_download(
+    state: &Rc<RefCell<PlayerState>>,
+    status_toast: &StatusToast,
+) -> bool {
+    let cancelled = state.borrow_mut().replay_cache.cancel_active();
+    if cancelled {
+        status_toast.show("Canceling replay download…");
+    }
+    cancelled
+}
+
+pub(crate) fn clear_replay_cache(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusToast) {
+    match state.borrow_mut().replay_cache.clear() {
+        Ok((0, 0)) => status_toast.show("Replay cache was already empty"),
+        Ok((removed, 0)) => status_toast.show(&format!(
+            "Cleared {removed} cached replay{}",
+            if removed == 1 { "" } else { "s" }
+        )),
+        Ok((removed, pinned)) => status_toast.show(&format!(
+            "Cleared {removed}; kept {pinned} active replay{}",
+            if pinned == 1 { "" } else { "s" }
+        )),
+        Err(error) => {
+            eprintln!("Failed to clear replay cache: {error}");
+            status_toast.show("Could not clear replay cache");
+        }
+    }
+}
+
+pub(crate) fn suspend_replay_cache_for_private_session(state: &Rc<RefCell<PlayerState>>) {
+    let mut state = state.borrow_mut();
+    state.replay_cache.candidate = None;
+    state.replay_cache.cancel_active();
+    state.replay_cache.status = ReplayCacheStatusSnapshot::Private;
+}
+
+pub(crate) fn shutdown_replay_cache(state: &Rc<RefCell<PlayerState>>) {
+    state.borrow_mut().replay_cache.shutdown();
+}
+
+fn replay_cache_dir() -> PathBuf {
+    if let Some(cache_home) = env::var_os("XDG_CACHE_HOME").filter(|value| !value.is_empty()) {
+        return PathBuf::from(cache_home).join("ok-player/replay-cache");
+    }
+    if let Some(home) = env::var_os("HOME").filter(|value| !value.is_empty()) {
+        return PathBuf::from(home).join(".cache/ok-player/replay-cache");
+    }
+    env::temp_dir().join("ok-player/replay-cache")
+}
+
+fn unix_now_i64() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or(0)
+}
+
+fn unix_now_u64() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(1)
+}

@@ -400,10 +400,7 @@ pub(crate) fn load_history_source(state: &Rc<RefCell<PlayerState>>, source: Play
             load_media_path(state, path);
             true
         }
-        PlaylistItem::Url(url) => {
-            load_media_url(state, url);
-            true
-        }
+        PlaylistItem::Url(url) => load_history_url(state, url),
     }
 }
 

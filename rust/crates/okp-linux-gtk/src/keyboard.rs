@@ -382,6 +382,7 @@ pub(crate) fn connect_progress_persistence(
         }
         close_companion_windows(&close_state);
         save_current_progress(&close_state, false);
+        shutdown_replay_cache(&close_state);
         // Unmap before any destroy-path libmpv work. After minimize + secondary
         // present (#518), a still-mapped shell can survive Alt+F4 while unrealize
         // joins render teardown — the candidate waiter then sees IsViewable forever.

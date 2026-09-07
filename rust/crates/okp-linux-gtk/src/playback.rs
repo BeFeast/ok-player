@@ -986,6 +986,10 @@ pub(crate) fn toggle_private_session(state: &Rc<RefCell<PlayerState>>, status_to
         state.private_session
     };
 
+    if enabled {
+        suspend_replay_cache_for_private_session(state);
+    }
+
     status_toast.show(if enabled {
         "Private session on — not saving history"
     } else {

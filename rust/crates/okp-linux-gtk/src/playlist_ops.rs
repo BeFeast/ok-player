@@ -146,7 +146,7 @@ fn apply_endfile_diagnostic(
         eprintln!("ignoring stale EndFile diagnostic after the source was cleared");
         return false;
     };
-    let stale = ended_path.is_some_and(|ended| !current_source.matches_engine_path(ended));
+    let stale = ended_path.is_some_and(|ended| !current_engine_path_matches(state, ended));
     if stale {
         eprintln!(
             "ignoring stale EndFile diagnostic for a superseded source ({})",
@@ -168,6 +168,8 @@ pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     }
     state.current_file = None;
     state.current_url = None;
+    state.replay_engine_path = None;
+    state.replay_cache_pin = None;
     state.current_nfo_title = okp_core::nfo_metadata::NfoTitleState::NotApplicable;
     state.current_video_dimensions = None;
     advance_source_generation(&mut state);
@@ -220,11 +222,12 @@ pub(crate) fn load_media_url(state: &Rc<RefCell<PlayerState>>, url: String) {
     match result {
         Some(Ok(())) => {
             let source = PlaylistItem::Url(url.clone());
-            remember_loaded_url(state, url);
+            remember_loaded_url(state, url.clone());
             state
                 .borrow_mut()
                 .history
                 .begin_source_open(&source, okp_core::history::HistoryOpenIntent::Explicit);
+            arm_replay_cache_candidate(state, url);
         }
         Some(Err(error)) => {
             eprintln!("Failed to load URL '{url}': {error}");
@@ -232,13 +235,64 @@ pub(crate) fn load_media_url(state: &Rc<RefCell<PlayerState>>, url: String) {
         }
         None => {
             let source = PlaylistItem::Url(url.clone());
-            remember_loaded_url(state, url);
+            remember_loaded_url(state, url.clone());
             state
                 .borrow_mut()
                 .history
                 .begin_source_open(&source, okp_core::history::HistoryOpenIntent::Explicit);
+            arm_replay_cache_candidate(state, url);
         }
     }
+}
+
+/// Reopen a History URL through a completed local replay when one is valid. The
+/// original page URL remains the logical source in every case; only the path handed to
+/// libmpv differs. A cache miss or an immediately rejected local file follows the
+/// ordinary streaming route.
+pub(crate) fn load_history_url(state: &Rc<RefCell<PlayerState>>, url: String) -> bool {
+    if !is_media_url(&url) {
+        return false;
+    }
+
+    let selector = configured_url_load_options(&state.borrow().settings, &url)
+        .ytdl_format()
+        .map(str::to_owned);
+    let cached = state
+        .borrow_mut()
+        .replay_cache
+        .acquire(&url, selector.as_deref());
+    let Some(cached) = cached else {
+        load_media_url(state, url);
+        return true;
+    };
+
+    save_current_progress(state, false);
+    let path = cached.path.clone();
+    let result = {
+        let state = state.borrow();
+        load_new_source(&state, |mpv| mpv.load_file(&path))
+    };
+    if matches!(result, Some(Err(_))) {
+        drop(cached);
+        state.borrow_mut().replay_cache.invalidate(&url);
+        load_media_url(state, url);
+        return true;
+    }
+
+    let source = PlaylistItem::Url(url.clone());
+    remember_loaded_url(state, url.clone());
+    {
+        let mut state = state.borrow_mut();
+        if let Some(mpv) = state.mpv.as_ref() {
+            mpv.set_media_source(Some(path.clone()));
+        }
+        state.replay_engine_path = Some(path);
+        state.replay_cache_pin = Some(cached.pin);
+        state
+            .history
+            .begin_source_open(&source, okp_core::history::HistoryOpenIntent::Explicit);
+    }
+    true
 }
 
 pub(crate) fn load_media_path_internal(
@@ -545,6 +599,19 @@ pub(crate) fn remember_loaded_url_with_playlist(
         .clone()
         .map(network_media::LoadFailureSource::url);
     state.last_load_diagnostic = None;
+}
+
+fn arm_replay_cache_candidate(state: &Rc<RefCell<PlayerState>>, url: String) {
+    let mut state = state.borrow_mut();
+    let generation = state.source_generation;
+    let enabled = state.settings.replay_cache_enabled();
+    let format_selector = configured_url_load_options(&state.settings, &url)
+        .ytdl_format()
+        .map(str::to_owned);
+    let private_session = state.private_session;
+    state
+        .replay_cache
+        .offer_stream(url, generation, enabled, private_session, format_selector);
 }
 
 pub(crate) fn load_playlist_item_with_playlist(
@@ -915,6 +982,9 @@ fn track_selection_id(selection: launch_args::TrackSelection) -> Option<i64> {
 }
 
 fn advance_source_generation(state: &mut PlayerState) {
+    state.replay_engine_path = None;
+    state.replay_cache_pin = None;
+    state.replay_cache.source_changed();
     state.url_history_load_confirmed = false;
     state.source_generation = state.source_generation.wrapping_add(1);
     state.current_video_dimensions = None;
@@ -1235,6 +1305,9 @@ pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: 
             .unwrap_or_default();
 
         let title_update = match &source {
+            PlaylistItem::Url(_) if state.replay_engine_path.is_some() => {
+                okp_core::nfo_metadata::HistoryTitleUpdate::Preserve
+            }
             PlaylistItem::Url(_) => {
                 let title = current_media_title(&state);
                 if title.trim().is_empty() {
@@ -1311,7 +1384,7 @@ pub(crate) fn record_successful_url_open(state: &Rc<RefCell<PlayerState>>) {
             .as_ref()
             .and_then(|mpv| mpv.observed_playback_state().duration);
         let title = current_media_title(&state);
-        let title_update = if title.trim().is_empty() {
+        let title_update = if state.replay_engine_path.is_some() || title.trim().is_empty() {
             okp_core::nfo_metadata::HistoryTitleUpdate::Preserve
         } else {
             okp_core::nfo_metadata::HistoryTitleUpdate::Set(title)
@@ -1339,14 +1412,15 @@ pub(crate) fn record_ready_url_poster(state: &Rc<RefCell<PlayerState>>, engine_p
     let Some(engine_path) = engine_path else {
         return;
     };
-    let Some(source) = current_load_failure_source(state) else {
+    let Some(_source) = current_load_failure_source(state) else {
         return;
     };
-    if !source.matches_engine_path(engine_path) {
+    if !current_engine_path_matches(state, engine_path) {
         return;
     }
     let mut state = state.borrow_mut();
-    if state.private_session
+    if state.replay_engine_path.is_some()
+        || state.private_session
         || !state.url_history_load_confirmed
         || state.media_load_state != network_media::MediaLoadState::Playing
     {
@@ -1377,10 +1451,10 @@ pub(crate) fn finish_current_progress(
     // of file for the previous source can be drained after the user has opened another
     // one, and finishing needs no engine state at all, so without this guard it would
     // happily mark the newly opened file watched and erase its resume point.
-    let Some(current_source) = current_load_failure_source(state) else {
+    let Some(_current_source) = current_load_failure_source(state) else {
         return;
     };
-    if ended_path.is_some_and(|ended| !current_source.matches_engine_path(ended)) {
+    if ended_path.is_some_and(|ended| !current_engine_path_matches(state, ended)) {
         eprintln!("ignoring stale EndFile completion for a superseded source");
         return;
     }
@@ -1429,6 +1503,58 @@ pub(crate) fn finish_current_progress(
         duration,
         true,
     );
+}
+
+pub(crate) fn current_engine_path_matches(
+    state: &Rc<RefCell<PlayerState>>,
+    engine_path: &str,
+) -> bool {
+    let state = state.borrow();
+    if let Some(path) = state.replay_engine_path.as_ref() {
+        return path.to_string_lossy() == engine_path;
+    }
+    state.current_url.as_ref().map_or_else(
+        || {
+            state
+                .current_file
+                .as_ref()
+                .is_some_and(|path| path.to_string_lossy() == engine_path)
+        },
+        |url| url == engine_path,
+    )
+}
+
+/// Invalidate a cached local target that the engine rejected and immediately retry its
+/// original URL. A stale EndFile event for an older path cannot trigger this route.
+pub(crate) fn fallback_cached_replay_to_url(
+    state: &Rc<RefCell<PlayerState>>,
+    ended_path: Option<&str>,
+) -> bool {
+    let url = {
+        let state = state.borrow();
+        if state.replay_engine_path.is_none()
+            || ended_path.is_some_and(|path| {
+                state
+                    .replay_engine_path
+                    .as_ref()
+                    .is_none_or(|active| active.to_string_lossy() != path)
+            })
+        {
+            return false;
+        }
+        state.current_url.clone()
+    };
+    let Some(url) = url else {
+        return false;
+    };
+    {
+        let mut state = state.borrow_mut();
+        state.replay_engine_path = None;
+        state.replay_cache_pin = None;
+        state.replay_cache.invalidate(&url);
+    }
+    load_media_url(state, url);
+    true
 }
 
 pub(crate) fn build_folder_playlist(path: &Path) -> Vec<PlaylistItem> {
