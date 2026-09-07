@@ -533,3 +533,104 @@ fn cache_owner_alive(pid: u32) -> bool {
             || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use okp_core::media_download::DownloadedMedia;
+
+    #[test]
+    fn history_replay_keeps_url_title_and_path_bound_poster_after_another_source() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = ReplayCache::open(root.path().join("replay"), 1024).unwrap();
+        let url = "https://example.com/episode";
+        let staging = cache.begin_download(url, DownloadJobId(1)).unwrap();
+        let media = staging
+            .download_target()
+            .staging_directory
+            .join("media.mp4");
+        fs::write(&media, b"complete").unwrap();
+        let path = cache
+            .complete_download(staging, DownloadedMedia::new(media, 8).unwrap(), 1)
+            .unwrap()
+            .path;
+        let history_path = root.path().join("history.json");
+        let mut history = HistoryStore::open_test(history_path.clone());
+        history.record_source_opened(
+            &PlaylistItem::Url(url.into()),
+            Some(100.0),
+            false,
+            okp_core::nfo_metadata::HistoryTitleUpdate::Set("Original episode".into()),
+        );
+        history.save().unwrap();
+        let state = Rc::new(RefCell::new(PlayerState {
+            history,
+            replay_cache: ReplayCacheRuntime {
+                root: root.path().join("replay"),
+                cache: Some(cache),
+                cache_open_attempted: true,
+                ..ReplayCacheRuntime::default()
+            },
+            screenshot_jobs: screenshots::ScreenshotJobs::with_poster_directory(
+                root.path().join("posters"),
+            ),
+            ..PlayerState::default()
+        }));
+        remember_loaded_url(&state, "https://example.com/previous".into());
+        assert!(load_history_url(&state, url.into()));
+        assert_eq!(state.borrow().current_url.as_deref(), Some(url));
+        assert!(state.borrow().current_file.is_none());
+        assert_eq!(state.borrow().replay_engine_path.as_ref(), Some(&path));
+        assert!(!current_engine_path_matches(
+            &state,
+            "https://example.com/previous"
+        ));
+        assert!(current_engine_path_matches(&state, path.to_str().unwrap()));
+        state.borrow_mut().media_load_state = network_media::MediaLoadState::Playing;
+        record_successful_url_open(&state);
+        record_ready_url_poster(&state, Some("https://example.com/previous"));
+        assert_eq!(state.borrow().screenshot_jobs.poster_request_count(), 0);
+        record_ready_url_poster(&state, path.to_str());
+        assert_eq!(state.borrow().screenshot_jobs.poster_request_count(), 1);
+        let history = fs::read_to_string(history_path).unwrap();
+        assert!(history.contains(url));
+        assert!(history.contains("Original episode"));
+        assert!(!history.contains(path.to_str().unwrap()));
+        fs::remove_file(path).unwrap();
+        assert!(load_history_url(&state, url.into()));
+        assert!(state.borrow().replay_engine_path.is_none());
+        assert_eq!(state.borrow().current_url.as_deref(), Some(url));
+    }
+
+    #[test]
+    fn private_history_open_does_not_acquire_or_start_persistent_cache() {
+        let root = tempfile::tempdir().unwrap();
+        let cache_root = root.path().join("replay");
+        let state = Rc::new(RefCell::new(PlayerState {
+            private_session: true,
+            history: HistoryStore::open_test(root.path().join("history.json")),
+            replay_cache: ReplayCacheRuntime {
+                root: cache_root.clone(),
+                ..ReplayCacheRuntime::default()
+            },
+            ..PlayerState::default()
+        }));
+        assert!(load_history_url(
+            &state,
+            "https://example.com/private-session".into()
+        ));
+        let mut state = state.borrow_mut();
+        assert!(state.replay_engine_path.is_none());
+        state.replay_cache.poll(
+            1,
+            Some("https://example.com/private-session"),
+            Some(30.0),
+            true,
+            true,
+            true,
+        );
+        assert!(state.replay_cache.active.is_none());
+        assert!(!state.replay_cache.cache_open_attempted);
+        assert!(!cache_root.exists());
+    }
+}

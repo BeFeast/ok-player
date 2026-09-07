@@ -254,6 +254,11 @@ pub(crate) fn load_history_url(state: &Rc<RefCell<PlayerState>>, url: String) ->
         return false;
     }
 
+    if state.borrow().private_session || !state.borrow().settings.replay_cache_enabled() {
+        load_media_url(state, url);
+        return true;
+    }
+
     let selector = configured_url_load_options(&state.borrow().settings, &url)
         .ytdl_format()
         .map(str::to_owned);
@@ -1419,8 +1424,7 @@ pub(crate) fn record_ready_url_poster(state: &Rc<RefCell<PlayerState>>, engine_p
         return;
     }
     let mut state = state.borrow_mut();
-    if state.replay_engine_path.is_some()
-        || state.private_session
+    if state.private_session
         || !state.url_history_load_confirmed
         || state.media_load_state != network_media::MediaLoadState::Playing
     {
