@@ -225,22 +225,17 @@ fn reconcile_player_after_trash(
             // libmpv refuses its stop command. Advancing the generation drops late callbacks.
             eprintln!("Failed to stop media after moving it to Trash: {error}");
         }
+        let mut playlist = state.borrow().playlist.clone();
+        playlist.remove_unavailable_source(source);
         clear_loaded_media_state(state);
+        state.borrow_mut().playlist = playlist;
         return;
     }
 
-    let mut state = state.borrow_mut();
-    let mut matching = state
+    state
+        .borrow_mut()
         .playlist
-        .items()
-        .iter()
-        .enumerate()
-        .filter_map(|(index, item)| (item == source).then_some(index))
-        .collect::<Vec<_>>();
-    matching.reverse();
-    for index in matching {
-        state.playlist.remove(index);
-    }
+        .remove_unavailable_source(source);
 }
 
 #[cfg(test)]
@@ -348,16 +343,65 @@ mod tests {
     }
 
     #[test]
+    fn automatic_playlist_loads_preserve_removal_guard_for_local_and_url() {
+        let root = tempfile::tempdir().expect("temporary history directory");
+        let local = root.path().join("movie.mp4");
+        fs::write(&local, b"fixture").expect("local media identity");
+        for (index, source) in [
+            PlaylistItem::Local(local),
+            PlaylistItem::Url("https://example.test/watch/803".to_owned()),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut history =
+                seeded_store(root.path().join(format!("history-{index}.json")), &source);
+            history.remove_source_persisted(&source, true).unwrap();
+            let state = Rc::new(RefCell::new(PlayerState {
+                history,
+                ..PlayerState::default()
+            }));
+
+            // The actual EOF/repeat call chain must preserve the removal guard, including
+            // the underlying path/URL loader and remember-loaded callbacks.
+            assert!(load_playlist_item_with_playlist(
+                &state,
+                source.clone(),
+                vec![source.clone()],
+                false,
+            ));
+            assert!(state.borrow().history.is_source_suppressed(&source));
+            state.borrow_mut().history.record_source_opened(
+                &source,
+                None,
+                false,
+                okp_core::nfo_metadata::HistoryTitleUpdate::Preserve,
+            );
+            assert!(state.borrow().history.search("").is_empty());
+
+            // A user-driven playlist selection follows the same route with explicit intent.
+            assert!(load_playlist_item_with_playlist(
+                &state,
+                source.clone(),
+                vec![source.clone()],
+                true,
+            ));
+            assert!(!state.borrow().history.is_source_suppressed(&source));
+        }
+    }
+
+    #[test]
     fn successful_trash_unloads_only_matching_playback_and_prunes_inactive_queue_item() {
         let current = PlaylistItem::Local(PathBuf::from("/media/current.mkv"));
         let trashed = PlaylistItem::Local(PathBuf::from("/media/queued.mkv"));
+        let retained = PlaylistItem::Local(PathBuf::from("/media/retained.mkv"));
         let state = Rc::new(RefCell::new(PlayerState {
             current_file: match &current {
                 PlaylistItem::Local(path) => Some(path.clone()),
                 PlaylistItem::Url(_) => None,
             },
             playlist: Playlist::from_items(
-                vec![current.clone(), trashed.clone()],
+                vec![current.clone(), trashed.clone(), retained.clone()],
                 Some(&current),
                 false,
             ),
@@ -368,12 +412,13 @@ mod tests {
         {
             let state = state.borrow();
             assert_eq!(current_history_source(&state), Some(current.clone()));
-            assert_eq!(state.playlist.items(), std::slice::from_ref(&current));
+            assert_eq!(state.playlist.items(), &[current.clone(), retained.clone()]);
         }
 
         reconcile_player_after_trash(&state, &current, true);
         let state = state.borrow();
         assert!(current_history_source(&state).is_none());
-        assert!(state.playlist.items().is_empty());
+        assert_eq!(state.playlist.items(), std::slice::from_ref(&retained));
+        assert_eq!(state.playlist.current_index(), None);
     }
 }

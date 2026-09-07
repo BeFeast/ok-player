@@ -567,6 +567,26 @@ impl Playlist {
         true
     }
 
+    /// Retire a source that is no longer available, retaining every other queued item.
+    /// Unlike a queue edit, this may remove the playing source after the shell unloads it.
+    pub fn remove_unavailable_source(&mut self, source: &PlaylistItem) -> usize {
+        let before = self.items.len();
+        let current = self.current_index.and_then(|index| {
+            (self.items[index] != *source).then(|| {
+                self.items[..index]
+                    .iter()
+                    .filter(|item| *item != source)
+                    .count()
+            })
+        });
+        self.items.retain(|item| item != source);
+        self.current_index = current;
+        if self.items.len() != before {
+            self.rebuild_order();
+        }
+        before - self.items.len()
+    }
+
     /// Remove every queued item except the playing item.
     pub fn clear_queue(&mut self) -> bool {
         if self.items.len() <= 1 {
