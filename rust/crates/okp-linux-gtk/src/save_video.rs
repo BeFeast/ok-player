@@ -241,6 +241,19 @@ enum SaveJobPoll {
     },
 }
 
+fn after_download_copy_start(
+    result: Result<(), String>,
+    preserve_source: impl FnOnce() -> PreparedSave,
+) -> SaveJobPoll {
+    match result {
+        Ok(()) => SaveJobPoll::Pending,
+        Err(message) => SaveJobPoll::ChooseAgain {
+            message,
+            prepared: preserve_source(),
+        },
+    }
+}
+
 impl SaveVideoJob {
     fn download(
         parent: &gtk::ApplicationWindow,
@@ -469,10 +482,7 @@ impl SaveVideoJob {
                             media.path,
                             self.target.clone(),
                         );
-                        match self.begin_copy(request) {
-                            Ok(()) => SaveJobPoll::Pending,
-                            Err(error) => SaveJobPoll::Failed(error),
-                        }
+                        after_download_copy_start(self.begin_copy(request), || self.take_prepared())
                     }
                     MediaDownloadOutcome::Cancelled => SaveJobPoll::Cancelled,
                     MediaDownloadOutcome::Rejected(reason) => {
@@ -930,6 +940,51 @@ fn saved_video_index_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completed_download_survives_copy_start_failure_and_retries_without_download() {
+        let destination = tempfile::tempdir().unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        let source = staging.path().join("completed.mkv");
+        fs::write(&source, b"completed downloaded media").unwrap();
+        let prepared = PreparedSave {
+            snapshot: Box::new(SaveVideoSnapshot {
+                original_url: "https://example.com/video".to_owned(),
+                title: "Completed video".to_owned(),
+                format_selector: None,
+                private_at_start: false,
+                media: SaveMediaPlan::ReadyCache {
+                    source: source.clone(),
+                    extension: "mkv".to_owned(),
+                },
+            }),
+            source_guard: Some(SaveSourceGuard::DownloadStaging {
+                _directory: staging,
+            }),
+        };
+        let outcome =
+            after_download_copy_start(Err("injected thread spawn failure".to_owned()), || prepared);
+        let SaveJobPoll::ChooseAgain { message, prepared } = outcome else {
+            panic!("the completed source must remain available for destination retry");
+        };
+        assert!(message.contains("injected thread spawn failure"));
+        assert_eq!(fs::read(&source).unwrap(), b"completed downloaded media");
+        let target = destination.path().join("saved.mkv");
+        let decision = decide_after_picker(
+            (*prepared.snapshot).clone(),
+            SavePickerOutcome::Selected(target.clone()),
+        );
+        let SavePickerDecision::ExportReady { request, .. } = decision else {
+            panic!("retry must copy the completed source without another download");
+        };
+        export_saved_video(request, &SaveExportCancellation::default(), |_| {}).unwrap();
+        drop(prepared);
+        assert!(
+            !source.exists(),
+            "staging is cleaned when the retry completes"
+        );
+        assert_eq!(fs::read(target).unwrap(), b"completed downloaded media");
+    }
 
     #[test]
     fn native_picker_distinguishes_local_selection_cancel_and_failure() {
