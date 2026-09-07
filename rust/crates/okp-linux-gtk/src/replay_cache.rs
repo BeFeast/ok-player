@@ -163,7 +163,12 @@ impl ReplayCacheRuntime {
         if self.cache.is_none() && !self.cache_open_attempted {
             self.cache_open_attempted = true;
             match ReplayCache::open(&self.root, DEFAULT_REPLAY_CACHE_CAPACITY_BYTES) {
-                Ok(cache) => self.cache = Some(cache),
+                Ok(cache) => {
+                    if let Err(error) = cache.recover_abandoned(cache_owner_alive) {
+                        eprintln!("Failed to reclaim abandoned replay files: {error}");
+                    }
+                    self.cache = Some(cache);
+                }
                 Err(error) => {
                     eprintln!("Failed to open replay cache: {error}");
                     self.status = ReplayCacheStatusSnapshot::Error(
@@ -380,9 +385,12 @@ impl ReplayCacheRuntime {
         let Some(cache) = self.cache() else {
             return Err("Replay cache storage is unavailable".to_owned());
         };
+        let recovered = cache
+            .recover_abandoned(cache_owner_alive)
+            .map_err(|error| error.to_string())?;
         cache
             .clear_unpinned()
-            .map(|result| (result.removed, result.retained_pinned))
+            .map(|result| (result.removed + recovered, result.retained_pinned))
             .map_err(|error| error.to_string())
     }
 
@@ -513,4 +521,15 @@ fn unix_now_u64() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos() as u64)
         .unwrap_or(1)
+}
+
+fn cache_owner_alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return true;
+    };
+    // Signal zero performs a liveness check without signalling the process.
+    unsafe {
+        libc::kill(pid, 0) == 0
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
 }

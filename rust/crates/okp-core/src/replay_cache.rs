@@ -359,6 +359,38 @@ impl ReplayCache {
         Ok(changed)
     }
 
+    /// Reclaim only artifacts from terminated owners. The native adapter supplies
+    /// process liveness, keeping platform/process APIs out of the cache policy.
+    pub fn recover_abandoned(&self, owner_alive: impl Fn(u32) -> bool) -> io::Result<usize> {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut removed = 0;
+        for directory in ["staging", "files"] {
+            for item in fs::read_dir(inner.root.join(directory))? {
+                let item = item?;
+                let name = item.file_name();
+                let Some(name) = name.to_str() else {
+                    continue;
+                };
+                let Some(owner) = artifact_owner(name) else {
+                    continue;
+                };
+                if owner_alive(owner)
+                    || (directory == "files"
+                        && inner.index.entries.values().any(|entry| entry.file == name))
+                {
+                    continue;
+                }
+                if item.file_type()?.is_dir() {
+                    fs::remove_dir_all(item.path())?;
+                } else {
+                    fs::remove_file(item.path())?;
+                }
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
     pub fn clear_unpinned(&self) -> io::Result<ReplayCacheClear> {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let candidates = eviction_order(&inner);
@@ -372,6 +404,18 @@ impl ReplayCache {
             retained_pinned: inner.index.entries.len(),
         })
     }
+}
+
+fn artifact_owner(name: &str) -> Option<u32> {
+    let mut parts = name.splitn(4, '-');
+    if parts.next()? != "job" {
+        return None;
+    }
+    let owner = parts.next()?.parse::<u32>().ok().filter(|id| *id != 0)?;
+    parts.next()?.parse::<u64>().ok()?;
+    let suffix = parts.next()?;
+    let hash = suffix.split('.').next()?;
+    (hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(owner)
 }
 
 fn valid_name(name: &str) -> bool {
@@ -510,6 +554,35 @@ mod tests {
         assert!(!a.exists());
         assert!(b.exists() && c.exists());
         assert!(cache.acquire("https://example.com/a", 4).unwrap().is_none());
+    }
+
+    #[test]
+    fn restart_recovers_dead_owned_partials_and_orphans_but_keeps_live_and_unknown_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ReplayCache::open(dir.path(), 20).unwrap();
+        let retained = complete(&cache, "https://example.com/a", 1, None);
+        let dead = dir.path().join("staging/job-13-1-0123456789abcdef");
+        let live = dir.path().join("staging/job-12-1-0123456789abcdef");
+        let orphan = dir.path().join("files/job-13-2-0123456789abcdef.mp4");
+        let unknown = dir.path().join("staging/user-folder");
+        for path in [&dead, &live, &unknown] {
+            fs::create_dir(path).unwrap();
+            fs::write(path.join("partial"), b"partial").unwrap();
+        }
+        fs::write(&orphan, b"orphan").unwrap();
+        drop(cache);
+        let reopened = ReplayCache::open(dir.path(), 20).unwrap();
+        assert_eq!(reopened.recover_abandoned(|owner| owner == 12).unwrap(), 2);
+        assert!(!dead.exists() && !orphan.exists());
+        assert!(live.exists() && unknown.exists() && retained.exists());
+        assert_eq!(reopened.recover_abandoned(|_| false).unwrap(), 1);
+        assert!(unknown.exists());
+        assert!(
+            reopened
+                .acquire("https://example.com/a", 2)
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
