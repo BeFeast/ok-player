@@ -116,6 +116,8 @@ impl ScreenshotJobs {
     /// main context; a cache hit reports `None`, so reopening an already-captured URL sends no
     /// engine command and performs no network work.
     pub fn prepare_url_poster(&mut self, original_url: String, source_generation: u64) {
+        self.poster_requests
+            .retain(|(generation, _)| *generation == source_generation);
         if !self
             .poster_requests
             .insert((source_generation, original_url.clone()))
@@ -208,32 +210,25 @@ fn prepare_url_poster_capture(
 }
 
 fn publish_url_poster_capture(target: UrlPosterCaptureTarget) -> io::Result<PathBuf> {
-    if let Err(error) = validate_capture_output(&target.temp_path) {
-        remove_temporary_capture(&target.temp_path);
-        return Err(error);
-    }
+    let result = publish_url_poster_capture_inner(&target);
+    remove_temporary_capture(&target.temp_path);
+    result
+}
 
+fn publish_url_poster_capture_inner(target: &UrlPosterCaptureTarget) -> io::Result<PathBuf> {
+    validate_capture_output(&target.temp_path)?;
     if is_nonempty_regular_file(&target.poster_path) {
-        remove_temporary_capture(&target.temp_path);
-        return Ok(target.poster_path);
+        return Ok(target.poster_path.clone());
     }
     if target.poster_path.exists() {
         fs::remove_file(&target.poster_path)?;
     }
-
     let directory = target.poster_path.parent().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "poster has no cache directory")
     })?;
     fs::create_dir_all(directory)?;
-    let destination_stage = match copy_to_destination_stage(&target.temp_path, directory, "jpg") {
-        Ok(path) => path,
-        Err(error) => {
-            remove_temporary_capture(&target.temp_path);
-            return Err(error);
-        }
-    };
-
-    let result = match rename_noreplace(&destination_stage, &target.poster_path) {
+    let destination_stage = copy_to_destination_stage(&target.temp_path, directory, "jpg")?;
+    match rename_noreplace(&destination_stage, &target.poster_path) {
         Ok(()) => Ok(target.poster_path.clone()),
         Err(error)
             if error.kind() == io::ErrorKind::AlreadyExists
@@ -246,9 +241,7 @@ fn publish_url_poster_capture(target: UrlPosterCaptureTarget) -> io::Result<Path
             remove_temporary_capture(&destination_stage);
             Err(error)
         }
-    };
-    remove_temporary_capture(&target.temp_path);
-    result
+    }
 }
 
 fn is_nonempty_regular_file(path: &Path) -> bool {
@@ -676,6 +669,48 @@ mod tests {
             restarted.is_none(),
             "a persisted frame must suppress another capture after restart"
         );
+    }
+
+    #[test]
+    fn url_poster_publication_failures_remove_staged_frames() {
+        let root = unique_temp_dir("okp-url-poster-failure-cleanup");
+        for blocked_parent in [false, true] {
+            let staged = root.path().join(format!("frame-{blocked_parent}.jpg"));
+            fs::write(&staged, b"decoded frame").unwrap();
+            let blocked = root.path().join(format!("blocked-{blocked_parent}"));
+            let poster_path = if blocked_parent {
+                fs::write(&blocked, b"not a directory").unwrap();
+                blocked.join("poster.jpg")
+            } else {
+                fs::create_dir(&blocked).unwrap();
+                blocked
+            };
+            let result = publish_url_poster_capture(UrlPosterCaptureTarget {
+                temp_path: staged.clone(),
+                poster_path,
+                original_url: "https://example.com/video".to_owned(),
+                source_generation: 1,
+            });
+            assert!(
+                result.is_err(),
+                "blocked destination must reject publication"
+            );
+            assert!(
+                !staged.exists(),
+                "failed publication must remove the staged frame"
+            );
+        }
+    }
+
+    #[test]
+    fn url_poster_requests_remember_only_the_current_source_generation() {
+        let root = unique_temp_dir("okp-url-poster-request-bound");
+        let mut jobs = ScreenshotJobs::with_poster_directory(root.path().to_path_buf());
+        for generation in 1..=3 {
+            jobs.prepare_url_poster("https://example.com/video".to_owned(), generation);
+            jobs.prepare_url_poster("https://example.com/video".to_owned(), generation);
+            assert_eq!(jobs.poster_request_count(), 1);
+        }
     }
 
     #[test]
