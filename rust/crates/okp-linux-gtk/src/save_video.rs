@@ -998,6 +998,9 @@ fn saved_video_index_path() -> PathBuf {
 }
 
 #[cfg(test)]
+pub(crate) static SAVE_SHUTDOWN_CONTEXT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1067,6 +1070,7 @@ mod tests {
 
     #[test]
     fn normal_application_shutdown_waits_for_owned_partial_cleanup() {
+        let _serial = SAVE_SHUTDOWN_CONTEXT_TEST_LOCK.lock().unwrap();
         let context = glib::MainContext::default();
         let _context_guard = context.acquire().unwrap();
         let main_loop = glib::MainLoop::new(Some(&context), false);

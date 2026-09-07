@@ -123,55 +123,27 @@ fn monitor_log_tokens_are_single_line_and_nonempty() {
 
 #[test]
 fn player_close_returns_to_gtk_before_mpv_teardown() {
-    let keyboard = include_str!("keyboard.rs");
-    let close_handler = keyboard
-        .split("window.connect_close_request")
-        .nth(1)
-        .and_then(|source| source.split("glib::Propagation::Proceed").next())
-        .expect("main-window close handler");
+    let _serial = SAVE_SHUTDOWN_CONTEXT_TEST_LOCK.lock().unwrap();
+    let context = glib::MainContext::default();
+    let _context_guard = context.acquire().unwrap();
+    let application = gtk::gio::Application::new(None, gtk::gio::ApplicationFlags::NON_UNIQUE);
+    let teardown_started = Rc::new(Cell::new(false));
+    let observed_teardown = Rc::clone(&teardown_started);
 
-    assert!(close_handler.contains("close_companion_windows"));
-    assert!(close_handler.contains("save_current_progress"));
-    assert!(close_handler.contains("set_visible(false)"));
-    assert!(close_handler.contains("close_app.quit()"));
-    assert!(close_handler.contains("glib::idle_add_local_once"));
-    assert!(close_handler.contains("AppShutdownWatchdog::arm()"));
-    assert!(!close_handler.contains("mem::forget"));
+    finish_after_save_shutdown(&application, None, move || observed_teardown.set(true));
+    assert!(
+        !teardown_started.get(),
+        "the close handler must return before engine teardown starts"
+    );
 
-    let (before_idle, idle_body) = close_handler
-        .split_once("glib::idle_add_local_once")
-        .expect("close_request must defer engine teardown to an idle callback");
-    for forbidden in ["mpv.stop(", "with_mpv("] {
-        assert!(
-            !before_idle.contains(forbidden),
-            "close_request must not enter libmpv before the shell unmaps: {forbidden}"
-        );
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !teardown_started.get() && Instant::now() < deadline {
+        context.iteration(false);
+        std::thread::yield_now();
     }
     assert!(
-        before_idle.contains("mpv.take()"),
-        "close_request must take the engine before hide/unrealize"
-    );
-    assert!(
-        before_idle.find("mpv.take()").expect("take")
-            < before_idle.find("set_visible(false)").expect("hide"),
-        "engine must leave PlayerState before set_visible triggers unrealize"
-    );
-    assert!(
-        idle_body.find("close_app.quit()").expect("quit")
-            < idle_body.find("drop(engine)").expect("drop engine"),
-        "idle close path must quit GTK before normal engine teardown"
-    );
-    assert!(
-        idle_body
-            .find("AppShutdownWatchdog::arm()")
-            .expect("watchdog")
-            < idle_body.find("drop(engine)").expect("drop engine"),
-        "engine teardown must be covered by the process-exit watchdog"
-    );
-    assert!(
-        idle_body.contains("render_loop.stop_and_join()")
-            && idle_body.contains("exit_without_destructors(0)"),
-        "stalled native rendering must cross the process boundary before engine teardown"
+        teardown_started.get(),
+        "the GTK main context must run the deferred engine teardown"
     );
 }
 

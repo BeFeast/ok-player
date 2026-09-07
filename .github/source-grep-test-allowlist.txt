@@ -106,7 +106,6 @@ rust/crates/okp-linux-gtk/src/tests.rs::settings_first_map_builds_only_the_reque
 #     bound nothing the tracker could see;
 #   * playback_chrome_keeps_the_canonical_redlines was cleared by a `.contains`
 #     search on a constant stylesheet - searching a string is not running code.
-rust/crates/okp-linux-gtk/src/tests.rs::player_close_returns_to_gtk_before_mpv_teardown
 rust/crates/okp-linux-gtk/src/tests.rs::video_hardware_decode_uses_the_shared_settings_switch_geometry
 rust/crates/okp-linux-gtk/src/tests.rs::media_info_identity_is_app_owned_cairo_geometry
 rust/crates/okp-core/tests/isolated_xvfb_session.rs::portability_media_smokes_use_isolated_sessions_and_wait_for_xfwm
