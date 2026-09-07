@@ -300,6 +300,8 @@ struct PlayerState {
     /// loading, buffering, and error surfaces read from. Pure core (see
     /// [`okp_core::network_media`]); the shell only transitions and renders it.
     media_load_state: network_media::MediaLoadState,
+    /// Successful URL load for this source generation, retained across error/stop.
+    url_history_load_confirmed: bool,
     /// Portable mute/restore memory shared by the OSC button and keyboard path.
     volume_state: volume::VolumeState,
     /// Latest optimistic UI/shortcut projection awaiting the matching mpv observation.

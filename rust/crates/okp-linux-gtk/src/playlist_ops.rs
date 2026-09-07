@@ -854,6 +854,7 @@ fn track_selection_id(selection: launch_args::TrackSelection) -> Option<i64> {
 }
 
 fn advance_source_generation(state: &mut PlayerState) {
+    state.url_history_load_confirmed = false;
     state.source_generation = state.source_generation.wrapping_add(1);
     state.current_video_dimensions = None;
     state
@@ -1159,7 +1160,7 @@ pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: 
         };
         if !network_media::history_progress_is_eligible(
             matches!(source, PlaylistItem::Url(_)),
-            state.media_load_state,
+            state.url_history_load_confirmed,
         ) {
             return;
         }
@@ -1259,6 +1260,7 @@ pub(crate) fn record_successful_url_open(state: &Rc<RefCell<PlayerState>>) {
 
     let (url, duration, private_session, title_update) = snapshot;
     let mut state = state.borrow_mut();
+    state.url_history_load_confirmed = true;
     state.history.record_source_opened(
         &PlaylistItem::Url(url),
         duration,

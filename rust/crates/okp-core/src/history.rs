@@ -177,7 +177,10 @@ impl History {
         let (stored_position, finished) = if update.duration == 0.0 {
             // Zero means the engine has not exposed a finite duration. Do not persist a
             // free-running live position that could later be mistaken for a seek target.
-            (0.0, update.finished)
+            (
+                0.0,
+                update.finished || self.files.get(key).is_some_and(|record| record.finished),
+            )
         } else {
             let complete_at = crate::recents_shelf::completion_start(update.duration);
             let final_stretch = update.position >= complete_at;
@@ -1289,6 +1292,25 @@ mod tests {
             assert_eq!(record.title.as_deref(), Some("Resolved title"));
             assert_eq!(history.resume_position(key), Some(120.0));
         }
+    }
+
+    #[test]
+    fn unknown_duration_sample_preserves_recorded_completion() {
+        let key = "https://example.com/live";
+        let mut history = History::default();
+        let update = HistoryProgressUpdate {
+            position: 75.0,
+            duration: 0.0,
+            finished: false,
+            updated_at_unix: 10,
+            title: HistoryTitleUpdate::Preserve,
+        };
+        history.record_progress(key, update.clone(), HistoryWriteMode::Record);
+        history.mark_finished(key, 20, HistoryWriteMode::Record);
+        history.record_progress(key, update, HistoryWriteMode::Record);
+        assert!(history.files[key].finished);
+        assert_eq!(history.files[key].duration, 0.0);
+        assert_eq!(history.resume_position(key), None);
     }
 
     #[test]

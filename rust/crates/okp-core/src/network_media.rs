@@ -29,9 +29,10 @@ pub enum MediaLoadState {
 }
 
 /// Local final saves remain eligible after stop/error transitions. URL history
-/// requires a successful load so merely submitting a failed URL creates no entry.
-pub fn history_progress_is_eligible(is_url: bool, state: MediaLoadState) -> bool {
-    !is_url || state == MediaLoadState::Playing
+/// requires a confirmed load in the current source generation. Confirmation survives
+/// stop/error UI transitions but resets on every new open, including the same URL.
+pub fn history_progress_is_eligible(is_url: bool, load_confirmed: bool) -> bool {
+    !is_url || load_confirmed
 }
 
 /// True when the duration is known (finite and positive). A live stream or a
@@ -210,7 +211,7 @@ mod tests {
                 ("/media/movie.mp4", false),
                 ("https://example.com/video", true),
             ] {
-                if history_progress_is_eligible(is_url, state) {
+                if history_progress_is_eligible(is_url, state == MediaLoadState::Playing) {
                     history.record_progress(
                         key,
                         HistoryProgressUpdate {

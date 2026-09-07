@@ -7650,6 +7650,39 @@ fn history_reopen_uses_the_persisted_source_route() {
 }
 
 #[test]
+fn confirmed_url_final_save_survives_failure_but_not_a_failed_reopen() {
+    let root = tempfile::tempdir().expect("temporary history directory");
+    let url = "https://example.com/watch?v=same";
+    let state = Rc::new(RefCell::new(PlayerState {
+        history: history::HistoryStore::open_test(root.path().join("history.json")),
+        ..PlayerState::default()
+    }));
+    remember_loaded_url(&state, url.to_owned());
+    assert!(!state.borrow().url_history_load_confirmed);
+    state.borrow_mut().media_load_state = network_media::MediaLoadState::Playing;
+    record_successful_url_open(&state);
+    set_load_failure(&state, url.to_owned(), "late network error".to_owned());
+    let eligible = || {
+        let state = state.borrow();
+        network_media::history_progress_is_eligible(true, state.url_history_load_confirmed)
+    };
+    assert!(
+        eligible(),
+        "confirmed URL must retain final-save eligibility after failure"
+    );
+    assert_eq!(state.borrow().history.search("").len(), 1);
+    remember_loaded_url(&state, url.to_owned());
+    set_load_failure(&state, url.to_owned(), "reopen failed".to_owned());
+    assert!(
+        !eligible(),
+        "an old history row cannot authorize a failed new load"
+    );
+    assert_eq!(state.borrow().history.search("").len(), 1);
+    clear_loaded_media_state(&state);
+    assert!(!state.borrow().url_history_load_confirmed);
+}
+
+#[test]
 fn only_a_confirmed_non_private_url_open_creates_the_initial_row() {
     let root = tempfile::tempdir().expect("temporary history directory");
     let history_path = root.path().join("history.json");
