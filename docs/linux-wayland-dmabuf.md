@@ -11,18 +11,22 @@ mpv's screenshot encoder keeps the builder ABI without shadowing the target
 JPEG used by TIFF/GDK modules. Every bundled ELF carries an origin-relative
 runtime path, so neither the executable nor a transitive media library can
 silently select a different host copy. The dynamic loader, glibc, ALSA, the
-remaining image-codec libraries, and graphics-driver ABI libraries stay
-target-provided and are checked by the cross-distro packaging gate. The Debian
-package declares `libasound2 | libasound2t64`, `libwebp7`, `libwebpmux3`, and
-`libpng16-16 | libpng16-16t64`. Fedora remains on its explicit system-mpv
-packaging contract.
+remaining image-codec libraries, and the coherent VA-API client family stay
+target-provided and are checked by the cross-distro packaging gate. This keeps
+libva's driver ABI and driver search path paired with the target's graphics
+stack. The Debian package declares `libasound2 | libasound2t64`, `libva2`,
+`libva-drm2`, `libva-wayland2`, `libva-x11-2`, `libwebp7`, `libwebpmux3`, and
+`libpng16-16 | libpng16-16t64`; VA-API device drivers remain optional so mpv
+can retain its software-decode fallback. AppImage hosts supply those VA-API
+clients as part of their graphics stack. Fedora remains on its explicit
+system-mpv packaging contract.
 
 Shipping Debian and AppImage artifacts are built inside the repository's
 digest-pinned Debian 13 builder image, which is the oldest supported runtime.
 This bounds the bundled media closure to the support-floor glibc ABI. The
 target desktop still supplies the complete glibc family, ALSA, GTK,
-TIFF/WebP/PNG image-codec families, Wayland/X11, and graphics-driver ABI
-libraries according to the package dependency and portability contracts.
+TIFF/WebP/PNG image-codec families, Wayland/X11, VA-API clients, and graphics
+drivers according to the package dependency and portability contracts.
 Package verification runs independently on Debian testing and Ubuntu 26.04.
 
 The embed patch is kept at

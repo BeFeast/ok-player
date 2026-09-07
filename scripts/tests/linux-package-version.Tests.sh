@@ -254,6 +254,19 @@ fi
 
 PACKAGED_CANDIDATE="$(dpkg-deb -f "$CANDIDATE_DEB" Version)"
 PACKAGED_RELEASE="$(dpkg-deb -f "$RELEASE_DEB" Version)"
+PACKAGED_DEPENDS="$(dpkg-deb -f "$CANDIDATE_DEB" Depends)"
+for dependency in libva2 libva-drm2 libva-wayland2 libva-x11-2; do
+  if printf '%s\n' "$PACKAGED_DEPENDS" \
+      | sed -E 's/\([^)]*\)//g' \
+      | tr ',|' '\n\n' \
+      | sed -E 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+      | grep -Fx "$dependency" >/dev/null; then
+    pass "the produced .deb declares host VA-API client $dependency"
+  else
+    fail "packaged VA-API dependencies" \
+      "the .deb does not declare required host client $dependency"
+  fi
+done
 if [[ "$PACKAGED_CANDIDATE" == "$(okp_debian_version_for_build 0.11.0-beta.0.209)" ]] \
   && [[ "$PACKAGED_RELEASE" == "$(okp_debian_version_for_build 0.11.0)" ]]; then
   pass "the produced .deb carries the encoded version ($PACKAGED_CANDIDATE, $PACKAGED_RELEASE)"
