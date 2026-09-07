@@ -952,7 +952,7 @@ fn history_row(
         action_list.append(&remove);
     }
     if commands.contains(&okp_core::history::HistoryRowCommand::MoveToTrash) {
-        let trash = history_action_button("user-trash-symbolic", "Move to Trash…");
+        let trash = history_action_button("okp-edit-clear-symbolic", "Move to Trash…");
         let trash_surface = surface;
         let trash_parent = parent.clone();
         let trash_state = Rc::clone(&state);
