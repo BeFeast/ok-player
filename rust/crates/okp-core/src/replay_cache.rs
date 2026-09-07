@@ -241,10 +241,10 @@ impl ReplayCache {
         if required != 0 {
             return Err(io::Error::other("cache capacity is exhausted"));
         }
-        if let Some(old) = inner.index.entries.get(&staging.source_url) {
-            if inner.pins.contains_key(&old.file) {
-                return Err(io::Error::other("existing replay is in use"));
-            }
+        if let Some(old) = inner.index.entries.get(&staging.source_url)
+            && inner.pins.contains_key(&old.file)
+        {
+            return Err(io::Error::other("existing replay is in use"));
         }
         let name = format!(
             "{}.{}",
