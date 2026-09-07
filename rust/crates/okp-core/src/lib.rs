@@ -50,6 +50,7 @@ pub mod project_health;
 pub mod recents_shelf;
 pub mod release_preparation;
 pub mod replay_cache;
+pub mod save_export;
 pub mod screenshot;
 pub mod scribe_subtitles;
 pub mod seek_readout;
