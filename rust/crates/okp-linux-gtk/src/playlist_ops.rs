@@ -1255,16 +1255,10 @@ pub(crate) fn record_successful_url_open(state: &Rc<RefCell<PlayerState>>) {
         } else {
             okp_core::nfo_metadata::HistoryTitleUpdate::Set(title)
         };
-        (
-            url,
-            duration,
-            state.private_session,
-            title_update,
-            state.source_generation,
-        )
+        (url, duration, state.private_session, title_update)
     };
 
-    let (url, duration, private_session, title_update, source_generation) = snapshot;
+    let (url, duration, private_session, title_update) = snapshot;
     let mut state = state.borrow_mut();
     state.url_history_load_confirmed = true;
     state.history.record_source_opened(
@@ -1276,11 +1270,32 @@ pub(crate) fn record_successful_url_open(state: &Rc<RefCell<PlayerState>>) {
     if let Err(error) = state.history.save() {
         eprintln!("Failed to save history: {error}");
     }
-    if !private_session {
-        state
-            .screenshot_jobs
-            .prepare_url_poster(url, source_generation);
+}
+
+/// Capture only after the engine has presented the loaded source. FileLoaded can
+/// precede decoder restart and still expose the previous video's screenshot frame.
+pub(crate) fn record_ready_url_poster(state: &Rc<RefCell<PlayerState>>, engine_path: Option<&str>) {
+    let Some(engine_path) = engine_path else {
+        return;
+    };
+    let Some(source) = current_load_failure_source(state) else {
+        return;
+    };
+    if !source.matches_engine_path(engine_path) {
+        return;
     }
+    let mut state = state.borrow_mut();
+    if state.private_session
+        || !state.url_history_load_confirmed
+        || state.media_load_state != network_media::MediaLoadState::Playing
+    {
+        return;
+    }
+    let Some(url) = state.current_url.clone() else {
+        return;
+    };
+    let generation = state.source_generation;
+    state.screenshot_jobs.prepare_url_poster(url, generation);
 }
 
 /// Record that the current file was watched to its end.

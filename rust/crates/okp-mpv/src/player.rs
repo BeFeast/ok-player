@@ -366,6 +366,11 @@ pub enum MpvEvent {
     VideoReconfig {
         video_dimensions: Option<VideoDimensions>,
     },
+    /// Decoding/presentation has resumed after loading or seeking. Unlike FileLoaded,
+    /// this is emitted only after the new source has a frame ready for capture.
+    PlaybackRestart {
+        path: Option<String>,
+    },
     Shutdown,
 }
 

@@ -2476,7 +2476,7 @@ pub(crate) fn drain_mpv_events(
                 try_pending_playback_preferences(state);
                 // Companion launch hints win over remembered track preferences for this open only.
                 try_pending_launch_tracks(state);
-                // A frame is up — the source is playing, not loading anymore.
+                // The source is loaded; its first frame can arrive later at PlaybackRestart.
                 // `Failed` here can only come from a failure libmpv confirmed
                 // (an `EndFile` error, or EOF carrying a codec diagnostic):
                 // opening anything new resets the surface to `Loading` first,
@@ -2499,6 +2499,9 @@ pub(crate) fn drain_mpv_events(
                 if env::var_os("OKP_DEBUG_IDLE_RETURN_SMOKE").is_some() {
                     eprintln!("idle-return-smoke: file-loaded");
                 }
+            }
+            MpvEvent::PlaybackRestart { path } => {
+                record_ready_url_poster(state, path.as_deref());
             }
             MpvEvent::VideoReconfig { video_dimensions } => {
                 auto_fit_dimensions = auto_fit_dimensions.or(video_dimensions);

@@ -179,7 +179,8 @@ pub fn url_poster_cache_key(url: &str) -> String {
     use std::fmt::Write as _;
 
     let mut hasher = Sha256::new();
-    hasher.update(b"ok-player:url-poster:v1\0");
+    // v1 could capture a preceding source before decoder restart; ignore those cache entries.
+    hasher.update(b"ok-player:url-poster:v2\0");
     hasher.update(url.as_bytes());
     let mut key = String::with_capacity(68);
     key.push_str("url-");

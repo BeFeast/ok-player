@@ -459,6 +459,11 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                 flags.chapters = true;
                 flags.media_info = true;
             }
+            ffi::MPV_EVENT_PLAYBACK_RESTART => {
+                lifecycle.push(MpvEvent::PlaybackRestart {
+                    path: shared.reader.path(),
+                });
+            }
             ffi::MPV_EVENT_VIDEO_RECONFIG => {
                 let video_dimensions = shared.reader.video_dimensions().ok().flatten();
                 if video_dimensions.is_some() {

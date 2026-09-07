@@ -7650,6 +7650,46 @@ fn history_reopen_uses_the_persisted_source_route() {
 }
 
 #[test]
+fn url_poster_waits_for_the_current_sources_first_presentable_frame() {
+    let root = tempfile::tempdir().unwrap();
+    let state = Rc::new(RefCell::new(PlayerState {
+        history: history::HistoryStore::open_test(root.path().join("history.json")),
+        screenshot_jobs: screenshots::ScreenshotJobs::with_poster_directory(
+            root.path().join("posters"),
+        ),
+        ..PlayerState::default()
+    }));
+    let previous = "https://x.com/example/status/1";
+    let current = "https://www.youtube.com/watch?v=current";
+    remember_loaded_url(&state, current.to_owned());
+    state.borrow_mut().media_load_state = network_media::MediaLoadState::Playing;
+    record_successful_url_open(&state);
+    assert_eq!(
+        state.borrow().history.search("").len(),
+        1,
+        "FileLoaded still records History"
+    );
+    assert_eq!(
+        state.borrow().screenshot_jobs.poster_request_count(),
+        0,
+        "FileLoaded must not capture the prior decoded frame"
+    );
+    record_ready_url_poster(&state, Some(previous));
+    record_ready_url_poster(&state, None);
+    assert_eq!(
+        state.borrow().screenshot_jobs.poster_request_count(),
+        0,
+        "an old or unbound restart must not authorize capture"
+    );
+    state.borrow_mut().private_session = true;
+    record_ready_url_poster(&state, Some(current));
+    assert_eq!(state.borrow().screenshot_jobs.poster_request_count(), 0);
+    state.borrow_mut().private_session = false;
+    record_ready_url_poster(&state, Some(current));
+    assert_eq!(state.borrow().screenshot_jobs.poster_request_count(), 1);
+}
+
+#[test]
 fn confirmed_url_final_save_survives_failure_but_not_a_failed_reopen() {
     let root = tempfile::tempdir().expect("temporary history directory");
     let url = "https://example.com/watch?v=same";
@@ -7664,6 +7704,8 @@ fn confirmed_url_final_save_survives_failure_but_not_a_failed_reopen() {
     assert!(!state.borrow().url_history_load_confirmed);
     state.borrow_mut().media_load_state = network_media::MediaLoadState::Playing;
     record_successful_url_open(&state);
+    assert_eq!(state.borrow().screenshot_jobs.poster_request_count(), 0);
+    record_ready_url_poster(&state, Some(url));
     assert_eq!(state.borrow().screenshot_jobs.poster_request_count(), 1);
     set_load_failure(&state, url.to_owned(), "late network error".to_owned());
     let eligible = || {
@@ -7730,6 +7772,8 @@ fn only_a_confirmed_non_private_url_open_creates_the_initial_row() {
     assert_eq!(rows[0].source(), PlaylistItem::Url(url.to_owned()));
     assert_eq!(rows[0].duration, 0.0);
     assert_eq!(rows[0].state_label, "Duration unknown");
+    assert_eq!(state.borrow().screenshot_jobs.poster_request_count(), 0);
+    record_ready_url_poster(&state, Some(url));
     assert_eq!(state.borrow().screenshot_jobs.poster_request_count(), 1);
 }
 
