@@ -111,8 +111,8 @@ pub(crate) fn runtime_decoder_notice(
         diagnostic_messages,
         configured_codec_environment(),
     )?;
-    let current_source = current_load_failure_source(state)?;
-    if warned_path.is_some_and(|warned| !current_source.matches_engine_path(warned)) {
+    current_load_failure_source(state)?;
+    if warned_path.is_some_and(|warned| !current_engine_path_matches(state, warned)) {
         return None;
     }
     eprintln!("libmpv logged a decoder problem; playback continues");
@@ -208,6 +208,14 @@ pub(crate) fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
 }
 
 pub(crate) fn load_media_url(state: &Rc<RefCell<PlayerState>>, url: String) {
+    load_media_url_with_intent(state, url, okp_core::history::HistoryOpenIntent::Explicit);
+}
+
+fn load_media_url_with_intent(
+    state: &Rc<RefCell<PlayerState>>,
+    url: String,
+    intent: okp_core::history::HistoryOpenIntent,
+) {
     if !is_media_url(&url) {
         return;
     }
@@ -226,7 +234,7 @@ pub(crate) fn load_media_url(state: &Rc<RefCell<PlayerState>>, url: String) {
             state
                 .borrow_mut()
                 .history
-                .begin_source_open(&source, okp_core::history::HistoryOpenIntent::Explicit);
+                .begin_source_open(&source, intent);
             arm_replay_cache_candidate(state, url);
         }
         Some(Err(error)) => {
@@ -239,7 +247,7 @@ pub(crate) fn load_media_url(state: &Rc<RefCell<PlayerState>>, url: String) {
             state
                 .borrow_mut()
                 .history
-                .begin_source_open(&source, okp_core::history::HistoryOpenIntent::Explicit);
+                .begin_source_open(&source, intent);
             arm_replay_cache_candidate(state, url);
         }
     }
@@ -1553,11 +1561,12 @@ pub(crate) fn fallback_cached_replay_to_url(
     };
     {
         let mut state = state.borrow_mut();
-        state.replay_engine_path = None;
+        // Keep the physical identity until load_media_url saves outgoing progress;
+        // cached media titles must not replace the original page title in History.
         state.replay_cache_pin = None;
         state.replay_cache.invalidate(&url);
     }
-    load_media_url(state, url);
+    load_media_url_with_intent(state, url, okp_core::history::HistoryOpenIntent::Automatic);
     true
 }
 

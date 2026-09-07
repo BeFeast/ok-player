@@ -225,7 +225,7 @@ impl ReplayCache {
         if source.parent() != Some(staging.directory.as_path()) {
             return Err(invalid("completed media is outside staging"));
         }
-        let mut evicted = 0;
+        let mut eviction_urls = Vec::new();
         let total = owned_bytes(&inner.root.join("files"))?
             .saturating_add(owned_bytes(&inner.root.join("staging"))?);
         let mut required = total.saturating_sub(inner.capacity);
@@ -234,9 +234,8 @@ impl ReplayCache {
                 break;
             }
             let bytes = inner.index.entries.get(&url).map_or(0, |e| e.byte_len);
-            remove_entry(&mut inner, &url)?;
+            eviction_urls.push(url);
             required = required.saturating_sub(bytes);
-            evicted += 1;
         }
         if required != 0 {
             return Err(io::Error::other("cache capacity is exhausted"));
@@ -263,23 +262,31 @@ impl ReplayCache {
             file: name,
             extension: media.extension,
             byte_len: media.byte_len,
-            modified_ns: modified_ns(&fs::metadata(&destination)?),
+            modified_ns: modified_ns(&metadata),
             last_used: now_unix,
             format_selector: staging.format_selector.clone(),
         };
-        let old = inner
+        // Persist the complete replacement index before reclaiming old media.
+        // A failed promotion must leave previously usable replays intact.
+        let previous_index = inner.index.clone();
+        let evicted = eviction_urls.len();
+        let mut retired = eviction_urls
+            .into_iter()
+            .filter_map(|url| inner.index.entries.remove(&url))
+            .collect::<Vec<_>>();
+        if let Some(old) = inner
             .index
             .entries
-            .insert(staging.source_url.clone(), entry);
+            .insert(staging.source_url.clone(), entry)
+        {
+            retired.push(old);
+        }
         if let Err(error) = persist(&inner) {
-            inner.index.entries.remove(&staging.source_url);
-            if let Some(old) = old {
-                inner.index.entries.insert(staging.source_url.clone(), old);
-            }
+            inner.index = previous_index;
             let _ = fs::remove_file(&destination);
             return Err(error);
         }
-        if let Some(old) = old {
+        for old in retired {
             let _ = fs::remove_file(inner.root.join("files").join(old.file));
         }
         Ok(ReplayCacheCommit {
@@ -498,6 +505,58 @@ mod tests {
             .unwrap()
             .path
     }
+    #[test]
+    fn failed_promotion_preserves_previously_usable_cache_files() {
+        for failure in ["pinned", "destination", "persist"] {
+            let root = tempfile::tempdir().unwrap();
+            let cache = ReplayCache::open(root.path(), 8).unwrap();
+            let first = complete(&cache, "https://example.com/first", 1, None);
+            let second = complete(&cache, "https://example.com/second", 2, None);
+            let url = "https://example.com/second";
+            let staging = cache.begin_download(url, DownloadJobId(3)).unwrap();
+            let media_path = staging
+                .download_target()
+                .staging_directory
+                .join("media.mp4");
+            fs::write(&media_path, [5, 6, 7, 8]).unwrap();
+            let pin = (failure == "pinned").then(|| cache.acquire(url, 3).unwrap().unwrap());
+            if failure == "destination" {
+                let name = format!(
+                    "{}.mp4",
+                    staging.directory.file_name().unwrap().to_string_lossy()
+                );
+                fs::write(root.path().join("files").join(name), b"").unwrap();
+            }
+            let blocked_index = root
+                .path()
+                .join(format!("index-{}.tmp", std::process::id()));
+            if failure == "persist" {
+                fs::create_dir(&blocked_index).unwrap();
+            }
+            assert!(
+                cache
+                    .complete_download(staging, DownloadedMedia::new(media_path, 4).unwrap(), 4)
+                    .is_err(),
+                "{failure}"
+            );
+            assert_eq!(fs::read(&first).unwrap(), [1, 2, 3, 4], "{failure}");
+            assert_eq!(fs::read(&second).unwrap(), [1, 2, 3, 4], "{failure}");
+            if failure == "persist" {
+                fs::remove_dir(blocked_index).unwrap();
+            }
+            drop(pin);
+            let reopened = ReplayCache::open(root.path(), 8).unwrap();
+            assert!(
+                reopened
+                    .acquire("https://example.com/first", 5)
+                    .unwrap()
+                    .is_some(),
+                "{failure}"
+            );
+            assert!(reopened.acquire(url, 5).unwrap().is_some(), "{failure}");
+        }
+    }
+
     #[test]
     fn complete_replay_preserves_original_url_and_format_without_extractor() {
         let dir = tempfile::tempdir().unwrap();

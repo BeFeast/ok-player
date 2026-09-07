@@ -119,12 +119,12 @@ impl ReplayCacheRuntime {
         }
         if self.active.is_none() {
             self.status = ReplayCacheStatusSnapshot::Idle;
-            self.candidate = Some(StreamCandidate {
-                url,
-                source_generation,
-                format_selector,
-            });
         }
+        self.candidate = Some(StreamCandidate {
+            url,
+            source_generation,
+            format_selector,
+        });
     }
 
     pub(crate) fn source_changed(&mut self) {
@@ -201,7 +201,16 @@ impl ReplayCacheRuntime {
             self.try_start(source_generation, current_url, duration, playing);
         }
 
-        self.drain_events(enabled && !private_session)
+        let notices = self.drain_events(enabled && !private_session);
+        // Policy remains authoritative after queued progress/terminal events.
+        if !enabled || private_session {
+            self.status = if private_session {
+                ReplayCacheStatusSnapshot::Private
+            } else {
+                ReplayCacheStatusSnapshot::Disabled
+            };
+        }
+        notices
     }
 
     fn try_start(
@@ -539,6 +548,140 @@ mod tests {
     use super::*;
     use crate::history::HistoryStore;
     use okp_core::media_download::DownloadedMedia;
+
+    #[test]
+    fn switched_stream_remains_eligible_when_previous_download_finishes() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = ReplayCache::open(root.path(), 1024).unwrap();
+        let url = "https://example.com/current";
+        let completed = cache.begin_download(url, DownloadJobId(1)).unwrap();
+        let file = completed
+            .download_target()
+            .staging_directory
+            .join("media.mp4");
+        fs::write(&file, b"complete").unwrap();
+        cache
+            .complete_download(completed, DownloadedMedia::new(file, 8).unwrap(), 1)
+            .unwrap();
+        let previous = cache
+            .begin_download("https://example.com/previous", DownloadJobId(2))
+            .unwrap();
+        let mut runtime = ReplayCacheRuntime {
+            cache: Some(cache),
+            cache_open_attempted: true,
+            tool_available: true,
+            active: Some(ActiveReplayDownload {
+                job_id: DownloadJobId(2),
+                staging: previous,
+            }),
+            ..ReplayCacheRuntime::default()
+        };
+        runtime.source_changed();
+        runtime.offer_stream(url.into(), 7, true, false, None);
+        runtime.try_start(7, Some(url), Some(30.0), true);
+        assert_eq!(runtime.active.as_ref().unwrap().job_id, DownloadJobId(2));
+        let previous = runtime.active.take().unwrap();
+        runtime.abandon(previous.staging);
+        runtime.poll(7, Some(url), Some(30.0), true, true, false);
+        assert_eq!(runtime.status_snapshot(), ReplayCacheStatusSnapshot::Ready);
+        assert!(runtime.candidate.is_none());
+    }
+
+    #[test]
+    fn disabled_and_private_policy_survive_queued_download_terminal() {
+        for private in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let mut runtime = ReplayCacheRuntime {
+                root: root.path().to_owned(),
+                tool_available: true,
+                downloader: media_download::MediaDownloader::with_executable(PathBuf::from(
+                    "/bin/false",
+                )),
+                ..ReplayCacheRuntime::default()
+            };
+            let url = "https://example.com/video";
+            runtime.offer_stream(url.into(), 1, true, false, None);
+            runtime.try_start(1, Some(url), Some(30.0), true);
+            assert!(runtime.active.is_some());
+            runtime.downloader.shutdown();
+            runtime.poll(1, Some(url), Some(30.0), true, false, private);
+            assert!(runtime.active.is_none());
+            assert_eq!(
+                runtime.status_snapshot(),
+                if private {
+                    ReplayCacheStatusSnapshot::Private
+                } else {
+                    ReplayCacheStatusSnapshot::Disabled
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn cached_fallback_preserves_history_title_and_current_decoder_notices() {
+        let root = tempfile::tempdir().unwrap();
+        let url = "https://example.com/episode";
+        let physical = root.path().join("cached.mp4");
+        let mut history = HistoryStore::open_test(root.path().join("history.json"));
+        history.record_source_opened(
+            &PlaylistItem::Url(url.into()),
+            Some(30.0),
+            false,
+            okp_core::nfo_metadata::HistoryTitleUpdate::Set("Original episode title".into()),
+        );
+        let state = Rc::new(RefCell::new(PlayerState {
+            history,
+            current_url: Some(url.into()),
+            replay_engine_path: Some(physical.clone()),
+            url_history_load_confirmed: true,
+            mpv: Some(Mpv::new().expect("libmpv is required by the existing GTK suite")),
+            replay_cache: ReplayCacheRuntime {
+                root: root.path().join("cache"),
+                ..ReplayCacheRuntime::default()
+            },
+            ..PlayerState::default()
+        }));
+        let messages = ["vd: Failed to initialize a decoder for codec h264".to_owned()];
+        assert!(runtime_decoder_notice(&state, physical.to_str(), &messages).is_some());
+        assert!(runtime_decoder_notice(&state, Some("/stale.mp4"), &messages).is_none());
+        assert!(!fallback_cached_replay_to_url(&state, Some("/stale.mp4")));
+        assert!(fallback_cached_replay_to_url(&state, physical.to_str()));
+        assert_eq!(state.borrow().current_url.as_deref(), Some(url));
+        assert!(state.borrow().replay_engine_path.is_none());
+        let persisted = fs::read_to_string(root.path().join("history.json")).unwrap();
+        assert!(persisted.contains("Original episode title"));
+    }
+
+    #[test]
+    fn cached_fallback_does_not_restore_an_explicitly_removed_history_row() {
+        let root = tempfile::tempdir().unwrap();
+        let url = "https://example.com/removed";
+        let source = PlaylistItem::Url(url.into());
+        let mut history = HistoryStore::open_test(root.path().join("history.json"));
+        history.record_source_opened(
+            &source,
+            Some(30.0),
+            false,
+            okp_core::nfo_metadata::HistoryTitleUpdate::Set("Removed".into()),
+        );
+        history.remove_source_persisted(&source, true).unwrap();
+        let physical = root.path().join("cached.mp4");
+        let state = Rc::new(RefCell::new(PlayerState {
+            history,
+            current_url: Some(url.into()),
+            replay_engine_path: Some(physical.clone()),
+            replay_cache: ReplayCacheRuntime {
+                root: root.path().join("cache"),
+                ..ReplayCacheRuntime::default()
+            },
+            ..PlayerState::default()
+        }));
+        assert!(fallback_cached_replay_to_url(&state, physical.to_str()));
+        state.borrow_mut().media_load_state = network_media::MediaLoadState::Playing;
+        record_successful_url_open(&state);
+        assert!(state.borrow().history.is_source_suppressed(&source));
+        assert!(state.borrow().history.search("").is_empty());
+    }
 
     #[test]
     fn history_replay_keeps_url_title_and_path_bound_poster_after_another_source() {
