@@ -41,7 +41,7 @@ enum SaveSourceGuard {
 }
 
 struct PreparedSave {
-    snapshot: SaveVideoSnapshot,
+    snapshot: Box<SaveVideoSnapshot>,
     source_guard: Option<SaveSourceGuard>,
 }
 
@@ -89,7 +89,7 @@ pub(crate) fn start_save_video(
         };
         match acquired {
             Some(acquired) => PreparedSave {
-                snapshot: SaveVideoSnapshot {
+                snapshot: Box::new(SaveVideoSnapshot {
                     original_url,
                     title,
                     format_selector,
@@ -98,17 +98,17 @@ pub(crate) fn start_save_video(
                         source: acquired.path,
                         extension: acquired.extension,
                     },
-                },
+                }),
                 source_guard: Some(SaveSourceGuard::ReplayCache { _pin: acquired.pin }),
             },
             None => PreparedSave {
-                snapshot: SaveVideoSnapshot {
+                snapshot: Box::new(SaveVideoSnapshot {
                     original_url,
                     title,
                     format_selector,
                     private_at_start,
                     media: SaveMediaPlan::DownloadMatroska,
-                },
+                }),
                 source_guard: None,
             },
         }
@@ -133,7 +133,7 @@ fn open_prepared_save_picker(
     }
 
     let parent_for_result = parent.clone();
-    open_save_destination_dialog(parent, prepared.snapshot.clone(), move |decision| {
+    open_save_destination_dialog(parent, (*prepared.snapshot).clone(), move |decision| {
         {
             let mut player = state.borrow_mut();
             player.save_video.picker_open = false;
@@ -218,7 +218,7 @@ enum CopyEvent {
 }
 
 struct SaveVideoJob {
-    snapshot: SaveVideoSnapshot,
+    snapshot: Box<SaveVideoSnapshot>,
     source_guard: Option<SaveSourceGuard>,
     target: PathBuf,
     work: SaveJobWork,
