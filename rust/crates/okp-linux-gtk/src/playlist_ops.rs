@@ -1154,12 +1154,15 @@ pub(crate) fn speed_matches(left: f64, right: f64) -> bool {
 pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: bool) {
     let snapshot = {
         let state = state.borrow();
-        if state.media_load_state != network_media::MediaLoadState::Playing {
-            return;
-        }
         let Some(source) = current_history_source(&state) else {
             return;
         };
+        if !network_media::history_progress_is_eligible(
+            matches!(source, PlaylistItem::Url(_)),
+            state.media_load_state,
+        ) {
+            return;
+        }
         let Some(playback) = state.mpv.as_ref().map(|mpv| mpv.observed_playback_state()) else {
             return;
         };

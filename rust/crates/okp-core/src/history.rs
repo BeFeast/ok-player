@@ -194,9 +194,16 @@ impl History {
         };
 
         let record = self.files.entry(key.to_owned()).or_default();
-        record.position = stored_position;
-        record.duration = update.duration;
-        record.finished = finished;
+        // An unknown sample adds recency/title information, not evidence that an
+        // already known resume point or duration has disappeared.
+        if update.duration > 0.0 || !record.duration.is_finite() || record.duration <= 0.0 {
+            record.position = stored_position;
+            record.duration = update.duration;
+            record.finished = finished;
+        } else if update.finished {
+            record.position = 0.0;
+            record.finished = true;
+        }
         record.updated_at_unix = update.updated_at_unix;
         match update.title {
             HistoryTitleUpdate::Preserve => {}
@@ -225,13 +232,10 @@ impl History {
             .duration
             .filter(|duration| duration.is_finite() && *duration > 0.0)
             .unwrap_or(0.0);
-        let record = self
-            .files
-            .entry(key.to_owned())
-            .or_insert_with(|| FileEntry {
-                duration,
-                ..FileEntry::default()
-            });
+        let record = self.files.entry(key.to_owned()).or_default();
+        if duration > 0.0 {
+            record.duration = duration;
+        }
         record.updated_at_unix = update.updated_at_unix;
         match update.title {
             HistoryTitleUpdate::Preserve => {}
@@ -1242,6 +1246,107 @@ mod tests {
         assert_eq!(entry.duration, 0.0);
         assert!(!entry.finished);
         assert_eq!(entry.title.as_deref(), Some("Live channel"));
+        assert_eq!(history.resume_position(key), None);
+    }
+
+    #[test]
+    fn successful_reopen_applies_known_duration_and_preserves_other_state() {
+        let key = "https://example.com/watch?v=stable";
+        for old_duration in [0.0, 600.0] {
+            let mut history = History::default();
+            history.files.insert(
+                key.to_owned(),
+                FileEntry {
+                    duration: old_duration,
+                    position: 120.0,
+                    preferences: Preferences {
+                        speed: Some(1.5),
+                        ..Preferences::default()
+                    },
+                    ..FileEntry::default()
+                },
+            );
+            let update = HistoryOpenUpdate {
+                duration: Some(500.0),
+                updated_at_unix: 20,
+                title: HistoryTitleUpdate::Set("Resolved title".to_owned()),
+            };
+            let before = history.clone();
+            assert_eq!(
+                history.record_opened(key, update.clone(), HistoryWriteMode::Private),
+                HistoryWriteResult::Suppressed
+            );
+            assert_eq!(history, before);
+            assert_eq!(
+                history.record_opened(key, update, HistoryWriteMode::Record),
+                HistoryWriteResult::Changed
+            );
+            let record = &history.files[key];
+            assert_eq!(record.duration, 500.0);
+            assert_eq!(record.position, 120.0);
+            assert_eq!(record.preferences, before.files[key].preferences);
+            assert_eq!(record.updated_at_unix, 20);
+            assert_eq!(record.title.as_deref(), Some("Resolved title"));
+            assert_eq!(history.resume_position(key), Some(120.0));
+        }
+    }
+
+    #[test]
+    fn unknown_progress_preserves_known_resume_and_private_state() {
+        let key = "https://example.com/watch?v=stable";
+        let mut history = History::default();
+        history.files.insert(
+            key.to_owned(),
+            FileEntry {
+                position: 120.0,
+                duration: 600.0,
+                preferences: Preferences {
+                    speed: Some(1.5),
+                    ..Preferences::default()
+                },
+                ..FileEntry::default()
+            },
+        );
+        let update = HistoryProgressUpdate {
+            position: 0.0,
+            duration: 0.0,
+            finished: false,
+            updated_at_unix: 20,
+            title: HistoryTitleUpdate::Set("Refreshed title".to_owned()),
+        };
+        let before = history.clone();
+        assert_eq!(
+            history.record_progress(key, update.clone(), HistoryWriteMode::Private),
+            HistoryWriteResult::Suppressed
+        );
+        assert_eq!(history, before);
+        assert_eq!(
+            history.record_progress(key, update.clone(), HistoryWriteMode::Record),
+            HistoryWriteResult::Changed
+        );
+        assert_eq!(history.files[key].duration, 600.0);
+        assert_eq!(history.resume_position(key), Some(120.0));
+        assert_eq!(
+            history.files[key].preferences,
+            before.files[key].preferences
+        );
+        assert_eq!(history.files[key].title.as_deref(), Some("Refreshed title"));
+        assert_eq!(history.files[key].updated_at_unix, 20);
+
+        // An explicit end event still clears resume without discarding known duration.
+        history.record_progress(
+            key,
+            HistoryProgressUpdate {
+                finished: true,
+                ..update.clone()
+            },
+            HistoryWriteMode::Record,
+        );
+        assert_eq!(history.files[key].duration, 600.0);
+        assert_eq!(history.files[key].position, 0.0);
+        assert!(history.files[key].finished);
+        history.record_progress(key, update, HistoryWriteMode::Record);
+        assert!(history.files[key].finished);
         assert_eq!(history.resume_position(key), None);
     }
 

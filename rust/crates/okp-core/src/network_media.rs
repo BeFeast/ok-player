@@ -28,6 +28,12 @@ pub enum MediaLoadState {
     Failed,
 }
 
+/// Local final saves remain eligible after stop/error transitions. URL history
+/// requires a successful load so merely submitting a failed URL creates no entry.
+pub fn history_progress_is_eligible(is_url: bool, state: MediaLoadState) -> bool {
+    !is_url || state == MediaLoadState::Playing
+}
+
 /// True when the duration is known (finite and positive). A live stream or a
 /// not-yet-resolved network file reports no duration, so the transport readout falls
 /// back to the `--:--` sentinel (see [`crate::time_code::format_duration`]) instead of
@@ -187,6 +193,48 @@ pub fn failure_detail(source: &LoadFailureSource, reason: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_final_saves_remain_eligible_but_unsuccessful_urls_do_not() {
+        use crate::history::{History, HistoryProgressUpdate, HistoryWriteMode};
+        use crate::nfo_metadata::HistoryTitleUpdate;
+
+        for state in [
+            MediaLoadState::Idle,
+            MediaLoadState::Loading,
+            MediaLoadState::Failed,
+            MediaLoadState::Playing,
+        ] {
+            let mut history = History::default();
+            for (key, is_url) in [
+                ("/media/movie.mp4", false),
+                ("https://example.com/video", true),
+            ] {
+                if history_progress_is_eligible(is_url, state) {
+                    history.record_progress(
+                        key,
+                        HistoryProgressUpdate {
+                            position: 120.0,
+                            duration: 600.0,
+                            finished: false,
+                            updated_at_unix: 10,
+                            title: HistoryTitleUpdate::Preserve,
+                        },
+                        HistoryWriteMode::Record,
+                    );
+                }
+            }
+            assert_eq!(
+                history.resume_position("/media/movie.mp4"),
+                Some(120.0),
+                "local final save in {state:?}"
+            );
+            assert_eq!(
+                history.files.contains_key("https://example.com/video"),
+                state == MediaLoadState::Playing
+            );
+        }
+    }
 
     #[test]
     fn duration_is_known_only_for_finite_positive() {
