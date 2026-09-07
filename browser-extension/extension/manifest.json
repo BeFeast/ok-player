@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Open in OK Player",
+  "version": "1.0.0",
+  "description": "Open a video link, video source, or page in the installed OK Player.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuFmE+pL9RrdQE0ZZVkQkmoHs1CAVRfAj5xoGOYd+WHPEmGTXaz7GhfLBRDEVoSnfswkc4UyCBAPzRmtVDn9OhOBLJPSFc/BD92+ibXkzreEzPBOjrHbLyIcWbwCVaGPXNZ8MatLLgV65WrJ8TzEHkgYOTgHDFeXkcSa1OTLfIJUMowCHt3Zrk75bd4om1aZiIzbOoePqthwGkjN0H3Av7GPC6YJlBsxtSNjnifqDnFbpxzWBnf1QzUrt4d8MA14su/qJPN+qLAnR9tncp10xg+7snmnesC6w21n3swKnBbXENc1YqvWBaOWX3miM1rkA9Tg98cs2wr8grhGgpE3NYQIDAQAB",
+  "permissions": [
+    "activeTab",
+    "contextMenus",
+    "nativeMessaging"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Open current page in OK Player"
+  }
+}

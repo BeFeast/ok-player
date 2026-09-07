@@ -76,6 +76,13 @@ jobs:
           python3 scripts/check-source-grep-tests.py --root .
           ${{ github.event_name == 'pull_request' && '--require-base-ref' || '' }}
 
+      - name: Browser extension and native host tests
+        env:
+          PYTHONDONTWRITEBYTECODE: 1
+        run: |
+          node --test browser-extension/tests/bridge.test.mjs
+          python3 -m unittest discover -s browser-extension/tests -p 'test_*.py' -v
+
       - name: Install policy test dependencies
         run: |
           sudo apt-get update -qq

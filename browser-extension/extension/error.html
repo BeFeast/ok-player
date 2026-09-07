@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>OK Player could not open this URL</title>
+    <style>
+      :root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+      body { margin: 0 auto; max-width: 42rem; padding: 3rem 1.5rem; }
+      h1 { font-size: 1.5rem; }
+      code { overflow-wrap: anywhere; }
+      .detail { opacity: 0.8; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Could not open in OK Player</h1>
+      <p id="message">The browser integration could not handle this request.</p>
+      <p id="action"></p>
+      <p class="detail">Opening a URL starts a player request; it does not guarantee that a private, login-required, or unavailable video can be played.</p>
+    </main>
+    <script type="module" src="error.js"></script>
+  </body>
+</html>
