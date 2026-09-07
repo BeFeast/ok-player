@@ -383,7 +383,7 @@ pub(crate) fn connect_progress_persistence(
         close_companion_windows(&close_state);
         save_current_progress(&close_state, false);
         shutdown_replay_cache(&close_state);
-        shutdown_save_video(&close_state);
+        let save_worker = shutdown_save_video(&close_state);
         // Unmap before any destroy-path libmpv work. After minimize + secondary
         // present (#518), a still-mapped shell can survive Alt+F4 while unrealize
         // joins render teardown — the candidate waiter then sees IsViewable forever.
@@ -402,7 +402,8 @@ pub(crate) fn connect_progress_persistence(
             eprintln!("window close lifecycle: window hidden");
         }
         let close_app = close_app.clone();
-        glib::idle_add_local_once(move || {
+        let shutdown_app = close_app.clone();
+        finish_after_save_shutdown(&shutdown_app, save_worker, move || {
             let shutdown_watchdog = AppShutdownWatchdog::arm();
             if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
                 eprintln!("window close lifecycle: idle quit");

@@ -1,7 +1,7 @@
 use super::*;
 
 use std::io;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -42,7 +42,7 @@ enum SaveSourceGuard {
 
 struct PreparedSave {
     snapshot: Box<SaveVideoSnapshot>,
-    source_guard: Option<SaveSourceGuard>,
+    source_guard: Option<Arc<SaveSourceGuard>>,
 }
 
 pub(crate) fn start_save_video(
@@ -63,22 +63,16 @@ pub(crate) fn start_save_video(
             .ytdl_format()
             .map(str::to_owned);
         let private_at_start = player.private_session;
-        let title = requested_title
-            .filter(|title| !title.trim().is_empty())
-            .or_else(|| {
-                player
-                    .history
-                    .search("")
-                    .into_iter()
-                    .find(|item| item.path == original_url)
-                    .map(|item| item.title)
-            })
-            .or_else(|| {
-                (current_history_source(&player) == Some(PlaylistItem::Url(original_url.clone())))
-                    .then(|| current_media_title(&player))
-                    .filter(|title| !title.trim().is_empty())
-            })
-            .unwrap_or_else(|| "Online video".to_owned());
+        let current_title = (current_history_source(&player)
+            == Some(PlaylistItem::Url(original_url.clone())))
+        .then(|| current_media_title(&player));
+        let history_title = player
+            .history
+            .search("")
+            .into_iter()
+            .find(|item| item.path == original_url)
+            .map(|item| item.title);
+        let title = save_video_title(requested_title, current_title, history_title);
 
         let acquired = if private_at_start {
             None
@@ -99,7 +93,9 @@ pub(crate) fn start_save_video(
                         extension: acquired.extension,
                     },
                 }),
-                source_guard: Some(SaveSourceGuard::ReplayCache { _pin: acquired.pin }),
+                source_guard: Some(Arc::new(SaveSourceGuard::ReplayCache {
+                    _pin: acquired.pin,
+                })),
             },
             None => PreparedSave {
                 snapshot: Box::new(SaveVideoSnapshot {
@@ -115,6 +111,18 @@ pub(crate) fn start_save_video(
     };
 
     open_prepared_save_picker(parent, state, status_toast, prepared);
+}
+
+fn save_video_title(
+    requested: Option<String>,
+    current: Option<String>,
+    history: Option<String>,
+) -> String {
+    [requested, current, history]
+        .into_iter()
+        .flatten()
+        .find(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| "Online video".to_owned())
 }
 
 fn open_prepared_save_picker(
@@ -219,7 +227,7 @@ enum CopyEvent {
 
 struct SaveVideoJob {
     snapshot: Box<SaveVideoSnapshot>,
-    source_guard: Option<SaveSourceGuard>,
+    source_guard: Option<Arc<SaveSourceGuard>>,
     target: PathBuf,
     work: SaveJobWork,
     progress: SaveProgressDialog,
@@ -337,9 +345,9 @@ impl SaveVideoJob {
                 });
             }
         };
-        prepared.source_guard = Some(SaveSourceGuard::DownloadStaging {
+        prepared.source_guard = Some(Arc::new(SaveSourceGuard::DownloadStaging {
             _directory: staging,
-        });
+        }));
         let progress = SaveProgressDialog::new(parent, &prepared.snapshot.title);
         Ok(Self {
             snapshot: prepared.snapshot,
@@ -381,9 +389,13 @@ impl SaveVideoJob {
         let (sender, receiver) = mpsc::channel();
         let cancellation = SaveExportCancellation::default();
         let worker_cancellation = cancellation.clone();
+        // Keep the source pinned until the copy actually returns, even if the
+        // GTK owner closes while a filesystem operation is still in flight.
+        let source_guard = self.source_guard.clone();
         let worker = thread::Builder::new()
             .name("okp-save-video-copy".to_owned())
             .spawn(move || {
+                let _source_guard = source_guard;
                 let progress_sender = sender.clone();
                 let result = export_saved_video(request, &worker_cancellation, move |progress| {
                     let _ = progress_sender.send(CopyEvent::Progress(progress));
@@ -569,17 +581,20 @@ impl Drop for SaveVideoJob {
             }
             SaveJobWork::Copying {
                 cancellation,
-                mut worker,
+                worker,
                 ..
-            } => {
-                cancellation.cancel();
-                if let Some(worker) = worker.take() {
-                    let _ = worker.join();
-                }
-            }
+            } => cancel_copy_on_shutdown(cancellation, worker),
             SaveJobWork::Idle => {}
         }
     }
+}
+
+fn cancel_copy_on_shutdown(cancellation: SaveExportCancellation, worker: Option<JoinHandle<()>>) {
+    cancellation.cancel();
+    // Cancellation is cooperative: blocked filesystem I/O cannot be joined
+    // on the GTK thread. The copy owns its source guard and partial file until
+    // it returns, so releasing the handle does not release those resources.
+    drop(worker);
 }
 
 #[allow(deprecated)]
@@ -691,7 +706,7 @@ fn activate_save_job(
     });
 }
 
-pub(crate) fn shutdown_save_video(state: &Rc<RefCell<PlayerState>>) {
+pub(crate) fn shutdown_save_video(state: &Rc<RefCell<PlayerState>>) -> Option<JoinHandle<()>> {
     let active = {
         let mut player = state.borrow_mut();
         player.save_video.picker_open = false;
@@ -702,7 +717,52 @@ pub(crate) fn shutdown_save_video(state: &Rc<RefCell<PlayerState>>) {
         && let Ok(mut job) = active.try_borrow_mut()
     {
         job.cancel();
+        let work = std::mem::replace(&mut job.work, SaveJobWork::Idle);
+        if let SaveJobWork::Copying { worker, .. } = work {
+            return worker;
+        }
+        job.work = work;
     }
+    None
+}
+
+pub(crate) fn finish_after_save_shutdown(
+    application: &impl IsA<gtk::gio::Application>,
+    worker: Option<JoinHandle<()>>,
+    finish: impl FnOnce() + 'static,
+) {
+    let Some(worker) = worker else {
+        glib::idle_add_local_once(finish);
+        return;
+    };
+    // Keep the loop alive briefly after its last window closes so normal I/O
+    // can observe cancellation and remove its owned partial before app.quit().
+    let hold = application.hold();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut worker = Some(worker);
+    let mut finish = Some(finish);
+    let mut hold = Some(hold);
+    glib::timeout_add_local(Duration::from_millis(10), move || {
+        let completed = worker.as_ref().is_some_and(|worker| worker.is_finished());
+        if !completed && Instant::now() < deadline {
+            return glib::ControlFlow::Continue;
+        }
+        if completed {
+            if let Some(worker) = worker.take() {
+                let _ = worker.join();
+            }
+        } else {
+            // A blocked kernel operation cannot be cancelled safely in-process.
+            // App exit stays bounded; crash/forced-exit cleanup is best effort.
+            eprintln!("Save copy did not stop within its shutdown grace period");
+            drop(worker.take());
+        }
+        if let Some(finish) = finish.take() {
+            finish();
+        }
+        drop(hold.take());
+        glib::ControlFlow::Break
+    });
 }
 
 fn unix_now_for_save() -> i64 {
@@ -942,6 +1002,107 @@ mod tests {
     use super::*;
 
     #[test]
+    fn current_save_title_precedes_stale_history_with_snapshot_fallbacks() {
+        assert_eq!(
+            save_video_title(None, Some("Current title".into()), Some("Old title".into())),
+            "Current title"
+        );
+        assert_eq!(
+            save_video_title(
+                Some("Selected row".into()),
+                None,
+                Some("Stored title".into())
+            ),
+            "Selected row"
+        );
+        assert_eq!(
+            save_video_title(None, Some(" ".into()), Some("Stored title".into())),
+            "Stored title"
+        );
+    }
+
+    #[test]
+    fn copy_shutdown_returns_while_blocked_worker_retains_owned_source() {
+        let staging = tempfile::tempdir().unwrap();
+        let source = staging.path().join("completed.mkv");
+        fs::write(&source, b"completed media").unwrap();
+        let source_guard = Arc::new(SaveSourceGuard::DownloadStaging {
+            _directory: staging,
+        });
+        let cancellation = SaveExportCancellation::default();
+        let observed_cancellation = cancellation.clone();
+        let (release, blocked) = mpsc::channel();
+        let (finished, completion) = mpsc::channel();
+        let copy_guard = Arc::clone(&source_guard);
+        let worker = thread::spawn(move || {
+            blocked.recv().unwrap();
+            drop(copy_guard);
+            finished.send(()).unwrap();
+        });
+        let (returned, returned_receiver) = mpsc::channel();
+        let shutdown = thread::spawn(move || {
+            cancel_copy_on_shutdown(cancellation, Some(worker));
+            drop(source_guard);
+            returned.send(()).unwrap();
+        });
+        let returned_before_release = returned_receiver
+            .recv_timeout(Duration::from_millis(500))
+            .is_ok();
+        let source_survived = source.exists();
+        let was_cancelled = observed_cancellation.is_cancelled();
+        release.send(()).unwrap();
+        completion.recv_timeout(Duration::from_secs(2)).unwrap();
+        shutdown.join().unwrap();
+        assert!(
+            returned_before_release,
+            "shutdown must not join blocked filesystem I/O"
+        );
+        assert!(was_cancelled);
+        assert!(
+            source_survived,
+            "copy retains source ownership until it returns"
+        );
+        assert!(!source.exists(), "copy completion releases owned staging");
+    }
+
+    #[test]
+    fn normal_application_shutdown_waits_for_owned_partial_cleanup() {
+        let context = glib::MainContext::default();
+        let _context_guard = context.acquire().unwrap();
+        let main_loop = glib::MainLoop::new(Some(&context), false);
+        let application = gtk::gio::Application::new(None, gtk::gio::ApplicationFlags::NON_UNIQUE);
+        let staging = tempfile::tempdir().unwrap();
+        let source = staging.path().join("completed.mkv");
+        fs::write(&source, b"completed media").unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let target = destination.path().join("saved.mkv");
+        let cancellation = SaveExportCancellation::default();
+        let worker_cancellation = cancellation.clone();
+        let (started, ready) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let _source_guard = staging;
+            let result = export_saved_video(
+                SaveExportRequest::new("https://example.com/video", source, target),
+                &worker_cancellation,
+                |_| {
+                    started.send(()).unwrap();
+                    resume.recv().unwrap();
+                },
+            );
+            assert!(matches!(result, Err(SaveExportError::Cancelled)));
+        });
+        ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(fs::read_dir(destination.path()).unwrap().count(), 1);
+        cancellation.cancel();
+        let quit_loop = main_loop.clone();
+        finish_after_save_shutdown(&application, Some(worker), move || quit_loop.quit());
+        release.send(()).unwrap();
+        main_loop.run();
+        assert_eq!(fs::read_dir(destination.path()).unwrap().count(), 0);
+    }
+
+    #[test]
     fn completed_download_survives_copy_start_failure_and_retries_without_download() {
         let destination = tempfile::tempdir().unwrap();
         let staging = tempfile::tempdir().unwrap();
@@ -958,9 +1119,9 @@ mod tests {
                     extension: "mkv".to_owned(),
                 },
             }),
-            source_guard: Some(SaveSourceGuard::DownloadStaging {
+            source_guard: Some(Arc::new(SaveSourceGuard::DownloadStaging {
                 _directory: staging,
-            }),
+            })),
         };
         let outcome =
             after_download_copy_start(Err("injected thread spawn failure".to_owned()), || prepared);
