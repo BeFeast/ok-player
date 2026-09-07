@@ -1143,6 +1143,26 @@ pub(crate) const OKP_STYLESHEET: &str = "
             box-shadow: none;
         }
 
+        menubutton.okp-history-row-actions > button {
+            min-width: 32px;
+            min-height: 32px;
+            padding: 0;
+            border-radius: 7px;
+        }
+
+        .okp-history-actions-popover {
+            min-width: 190px;
+            padding: 6px;
+        }
+
+        button.okp-history-menu-action {
+            min-height: 34px;
+            padding: 6px 10px;
+            border: none;
+            border-radius: 6px;
+            box-shadow: none;
+        }
+
         .is-light button.okp-history-row { color: #161616; }
         .is-dark button.okp-history-row { color: rgba(255, 255, 255, 0.92); }
         .is-light button.okp-history-row:hover { background: rgba(0, 0, 0, 0.04); }

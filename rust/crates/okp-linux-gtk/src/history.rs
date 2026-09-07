@@ -7,8 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use okp_core::history::Preferences as PlaybackPreferences;
 use okp_core::history::{
-    History as HistoryFile, HistoryOpenUpdate, HistoryProgressUpdate, HistoryWriteMode,
-    HistoryWriteResult,
+    History as HistoryFile, HistoryOpenIntent, HistoryOpenUpdate, HistoryProgressUpdate,
+    HistoryRecordingSession, HistoryWriteMode, HistoryWriteResult,
 };
 use okp_core::nfo_metadata::HistoryTitleUpdate;
 use okp_core::playlist::PlaylistItem;
@@ -19,6 +19,7 @@ pub struct HistoryStore {
     path: PathBuf,
     data: HistoryFile,
     listable_paths: BTreeSet<String>,
+    recording_session: HistoryRecordingSession,
     dirty: bool,
     read_failed: bool,
     cleared: bool,
@@ -57,6 +58,7 @@ impl HistoryStore {
             path,
             data,
             listable_paths,
+            recording_session: HistoryRecordingSession::default(),
             dirty: false,
             read_failed,
             cleared: false,
@@ -77,7 +79,9 @@ impl HistoryStore {
     }
 
     pub fn retry_read(&mut self) {
+        let recording_session = std::mem::take(&mut self.recording_session);
         *self = Self::open();
+        self.recording_session = recording_session;
     }
 
     #[cfg(test)]
@@ -122,6 +126,7 @@ impl HistoryStore {
         title_update: HistoryTitleUpdate,
     ) {
         let key = source.history_key();
+        let mode = self.write_mode(source, private_session);
         let result = self.data.record_progress(
             &key,
             HistoryProgressUpdate {
@@ -131,7 +136,7 @@ impl HistoryStore {
                 updated_at_unix: unix_now(),
                 title: title_update,
             },
-            HistoryWriteMode::from_private(private_session),
+            mode,
         );
         if result == HistoryWriteResult::Changed {
             self.listable_paths.insert(key);
@@ -149,6 +154,7 @@ impl HistoryStore {
         title_update: HistoryTitleUpdate,
     ) {
         let key = source.history_key();
+        let mode = self.write_mode(source, private_session);
         let result = self.data.record_opened(
             &key,
             HistoryOpenUpdate {
@@ -156,12 +162,28 @@ impl HistoryStore {
                 updated_at_unix: unix_now(),
                 title: title_update,
             },
-            HistoryWriteMode::from_private(private_session),
+            mode,
         );
         if result == HistoryWriteResult::Changed {
             self.listable_paths.insert(key);
             self.dirty = true;
         }
+    }
+
+    /// Release a per-source removal guard only for a user-initiated reopen.
+    pub fn begin_source_open(&mut self, source: &PlaylistItem, intent: HistoryOpenIntent) {
+        self.recording_session.source_opened(source, intent);
+    }
+
+    /// Keep lifecycle writes for `source` out of History for the rest of this playback
+    /// session. Used after a successful Trash even when the following History save fails.
+    pub fn suppress_source(&mut self, source: &PlaylistItem) {
+        self.recording_session.suppress(source);
+    }
+
+    #[cfg(test)]
+    pub fn is_source_suppressed(&self, source: &PlaylistItem) -> bool {
+        self.recording_session.is_suppressed(source)
     }
 
     /// Mark `path` watched to the end, clearing its resume position so the next open
@@ -178,11 +200,8 @@ impl HistoryStore {
         private_session: bool,
     ) -> Option<f64> {
         let key = source.history_key();
-        let result = self.data.mark_finished(
-            &key,
-            unix_now(),
-            HistoryWriteMode::from_private(private_session),
-        );
+        let mode = self.write_mode(source, private_session);
+        let result = self.data.mark_finished(&key, unix_now(), mode);
         if result != HistoryWriteResult::Changed {
             return None;
         }
@@ -209,12 +228,9 @@ impl HistoryStore {
         private_session: bool,
     ) -> HistoryWriteResult {
         let key = history_key(path);
-        let result = self.data.add_bookmark(
-            &key,
-            time,
-            unix_now(),
-            HistoryWriteMode::from_private(private_session),
-        );
+        let source = PlaylistItem::Local(path.to_path_buf());
+        let mode = self.write_mode(&source, private_session);
+        let result = self.data.add_bookmark(&key, time, unix_now(), mode);
         if result == HistoryWriteResult::Changed {
             self.listable_paths.insert(key);
             self.dirty = true;
@@ -303,12 +319,10 @@ impl HistoryStore {
         private_session: bool,
     ) {
         let key = source.history_key();
-        let result = self.data.record_preferences(
-            &key,
-            preferences,
-            unix_now(),
-            HistoryWriteMode::from_private(private_session),
-        );
+        let mode = self.write_mode(source, private_session);
+        let result = self
+            .data
+            .record_preferences(&key, preferences, unix_now(), mode);
         if result == HistoryWriteResult::Changed {
             self.listable_paths.insert(key);
             self.dirty = true;
@@ -343,6 +357,31 @@ impl HistoryStore {
         okp_core::recents_shelf::search_where(&self.data, query, |path| {
             self.listable_paths.contains(path)
         })
+    }
+
+    /// Remove one exact local-or-URL identity and persist it atomically. If `active` is true,
+    /// every later incidental write for that source is suppressed until an explicit reopen.
+    /// A failed save restores both the record and the session guard.
+    pub fn remove_source_persisted(
+        &mut self,
+        source: &PlaylistItem,
+        active: bool,
+    ) -> io::Result<bool> {
+        let before = self.snapshot();
+        let key = source.history_key();
+        if !self.data.remove(&key) {
+            return Ok(false);
+        }
+        self.listable_paths.remove(&key);
+        if active {
+            self.recording_session.suppress(source);
+        }
+        self.dirty = true;
+        if let Err(error) = self.save() {
+            self.restore(before);
+            return Err(error);
+        }
+        Ok(true)
     }
 
     pub fn clear(&mut self) {
@@ -399,10 +438,15 @@ impl HistoryStore {
         Ok(())
     }
 
+    fn write_mode(&self, source: &PlaylistItem, private_session: bool) -> HistoryWriteMode {
+        self.recording_session.write_mode(source, private_session)
+    }
+
     fn snapshot(&self) -> HistoryStoreSnapshot {
         HistoryStoreSnapshot {
             data: self.data.clone(),
             listable_paths: self.listable_paths.clone(),
+            recording_session: self.recording_session.clone(),
             dirty: self.dirty,
             read_failed: self.read_failed,
             cleared: self.cleared,
@@ -412,6 +456,7 @@ impl HistoryStore {
     fn restore(&mut self, snapshot: HistoryStoreSnapshot) {
         self.data = snapshot.data;
         self.listable_paths = snapshot.listable_paths;
+        self.recording_session = snapshot.recording_session;
         self.dirty = snapshot.dirty;
         self.read_failed = snapshot.read_failed;
         self.cleared = snapshot.cleared;
@@ -421,6 +466,7 @@ impl HistoryStore {
 struct HistoryStoreSnapshot {
     data: HistoryFile,
     listable_paths: BTreeSet<String>,
+    recording_session: HistoryRecordingSession,
     dirty: bool,
     read_failed: bool,
     cleared: bool,
@@ -464,6 +510,7 @@ mod tests {
             path: PathBuf::from("unused.json"),
             data: HistoryFile::default(),
             listable_paths: BTreeSet::new(),
+            recording_session: HistoryRecordingSession::default(),
             dirty: false,
             read_failed: false,
             cleared: false,
@@ -478,6 +525,7 @@ mod tests {
             path: PathBuf::from("/dev/null/history.json"),
             data: HistoryFile::default(),
             listable_paths: BTreeSet::new(),
+            recording_session: HistoryRecordingSession::default(),
             dirty: false,
             read_failed: false,
             cleared: false,
@@ -996,5 +1044,129 @@ mod tests {
             3
         );
         assert!(HistoryStore::open_path(history_path).search("").is_empty());
+    }
+
+    #[test]
+    fn local_and_url_removal_persist_without_touching_local_media() {
+        let root = tempfile::tempdir().expect("temporary history directory");
+        let history_path = root.path().join("history.json");
+        let media_path = root.path().join("keep-media.mkv");
+        fs::write(&media_path, b"media fixture").expect("local media fixture");
+        let local = PlaylistItem::Local(media_path.clone());
+        let url = PlaylistItem::Url("https://example.test/watch?id=keep".to_owned());
+        let mut history = HistoryStore::open_path(history_path.clone());
+        history.record_source_with_title(
+            &local,
+            60.0,
+            300.0,
+            false,
+            false,
+            HistoryTitleUpdate::Preserve,
+        );
+        history.record_source_opened(&url, None, false, HistoryTitleUpdate::Preserve);
+        history.save().expect("seed persisted history");
+
+        assert!(
+            history
+                .remove_source_persisted(&local, false)
+                .expect("persist local removal")
+        );
+        assert_eq!(
+            fs::read(&media_path).ok().as_deref(),
+            Some(b"media fixture".as_slice())
+        );
+        let reloaded = HistoryStore::open_path(history_path.clone());
+        assert_eq!(
+            reloaded
+                .search("")
+                .iter()
+                .map(HistoryItem::source)
+                .collect::<Vec<_>>(),
+            vec![url.clone()]
+        );
+
+        assert!(
+            history
+                .remove_source_persisted(&url, false)
+                .expect("persist URL removal")
+        );
+        assert!(HistoryStore::open_path(history_path).search("").is_empty());
+        assert!(media_path.is_file());
+    }
+
+    #[test]
+    fn failed_removal_save_restores_record_and_session_writes() {
+        let mut history = unwritable_store();
+        let source = PlaylistItem::Url("https://example.test/watch".to_owned());
+        history.record_source_opened(&source, None, false, HistoryTitleUpdate::Preserve);
+
+        history
+            .remove_source_persisted(&source, true)
+            .expect_err("save must fail on an unwritable path");
+
+        assert_eq!(history.search("").len(), 1);
+        assert!(!history.is_source_suppressed(&source));
+        history.record_source_with_title(
+            &source,
+            30.0,
+            300.0,
+            false,
+            false,
+            HistoryTitleUpdate::Preserve,
+        );
+        assert_eq!(history.resume_position_for_source(&source), Some(30.0));
+    }
+
+    #[test]
+    fn active_removal_blocks_every_late_write_until_explicit_reopen() {
+        let root = tempfile::tempdir().expect("temporary history directory");
+        let history_path = root.path().join("history.json");
+        let source = PlaylistItem::Url("https://example.test/live/channel".to_owned());
+        let mut history = HistoryStore::open_path(history_path.clone());
+        history.record_source_opened(&source, None, false, HistoryTitleUpdate::Preserve);
+        history.save().expect("seed persisted history");
+
+        assert!(
+            history
+                .remove_source_persisted(&source, true)
+                .expect("persist active removal")
+        );
+        assert!(history.is_source_suppressed(&source));
+
+        // These are the periodic unknown-duration open, progress/preferences, and EOF paths.
+        history.record_source_opened(&source, None, false, HistoryTitleUpdate::Preserve);
+        history.record_source_with_title(
+            &source,
+            30.0,
+            300.0,
+            false,
+            false,
+            HistoryTitleUpdate::Preserve,
+        );
+        history.record_source_preferences(
+            &source,
+            PlaybackPreferences {
+                speed: Some(1.25),
+                ..PlaybackPreferences::default()
+            },
+            false,
+        );
+        assert_eq!(history.mark_source_finished(&source, false), None);
+        history.save().expect("exit save after removal");
+        assert!(history.search("").is_empty());
+        assert!(
+            HistoryStore::open_path(history_path.clone())
+                .search("")
+                .is_empty()
+        );
+
+        history.begin_source_open(&source, HistoryOpenIntent::Automatic);
+        history.record_source_opened(&source, None, false, HistoryTitleUpdate::Preserve);
+        assert!(history.search("").is_empty());
+
+        history.begin_source_open(&source, HistoryOpenIntent::Explicit);
+        history.record_source_opened(&source, None, false, HistoryTitleUpdate::Preserve);
+        history.save().expect("persist explicit reopen");
+        assert_eq!(HistoryStore::open_path(history_path).search("").len(), 1);
     }
 }

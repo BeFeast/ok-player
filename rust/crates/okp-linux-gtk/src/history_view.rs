@@ -641,7 +641,8 @@ fn history_page(
     header.add_css_class("okp-history-header");
     let back = gtk::Button::from_icon_name("okp-go-previous-symbolic");
     back.add_css_class("okp-history-back-button");
-    back.connect_clicked(move |_| surface.show_welcome());
+    let back_surface = surface.clone();
+    back.connect_clicked(move |_| back_surface.show_welcome());
     header.append(&back);
     let title = gtk::Label::new(Some("History"));
     title.add_css_class("okp-history-title");
@@ -695,6 +696,7 @@ fn history_page(
                 &rows_host,
                 &all_items,
                 query,
+                surface.clone(),
                 Rc::clone(&state),
                 &parent,
                 Rc::clone(&status_toast),
@@ -735,10 +737,12 @@ fn history_page_shell() -> (gtk::ScrolledWindow, gtk::Box) {
     (scroller, content)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_history_rows(
     host: &gtk::Box,
     items: &[HistoryItem],
     query: &str,
+    surface: EmptySurface,
     state: Rc<RefCell<PlayerState>>,
     parent: &gtk::ApplicationWindow,
     status_toast: Rc<StatusToast>,
@@ -770,6 +774,7 @@ fn render_history_rows(
         for item in filtered {
             host.append(&history_row(
                 item,
+                surface.clone(),
                 Rc::clone(&state),
                 parent,
                 Rc::clone(&status_toast),
@@ -803,6 +808,7 @@ fn render_history_rows(
         for item in bucket_items {
             host.append(&history_row(
                 item,
+                surface.clone(),
                 Rc::clone(&state),
                 parent,
                 Rc::clone(&status_toast),
@@ -816,10 +822,11 @@ fn render_history_rows(
 
 fn history_row(
     item: &HistoryItem,
+    surface: EmptySurface,
     state: Rc<RefCell<PlayerState>>,
     parent: &gtk::ApplicationWindow,
     status_toast: Rc<StatusToast>,
-) -> gtk::Button {
+) -> gtk::Overlay {
     let button = gtk::Button::new();
     button.add_css_class("okp-history-row");
     button.set_has_frame(false);
@@ -857,6 +864,7 @@ fn history_row(
     right.set_halign(gtk::Align::End);
     right.set_valign(gtk::Align::Center);
     right.set_size_request(HISTORY_METADATA_WIDTH, -1);
+    right.set_margin_end(36);
     let when = local_datetime(item.updated_at_unix)
         .map(|value| history_format::when_label(value, fallback_local_datetime()))
         .unwrap_or_else(|| "Opened previously".to_owned());
@@ -891,14 +899,90 @@ fn history_row(
     button.set_child(Some(&row));
 
     let source = item.source();
-    let parent = parent.clone();
+    let play_state = Rc::clone(&state);
+    let play_parent = parent.clone();
+    let play_toast = Rc::clone(&status_toast);
     button.connect_clicked(move |_| {
-        if !load_history_source(&state, source.clone()) {
-            status_toast.show("History file is no longer available");
+        if !load_history_source(&play_state, source.clone()) {
+            play_toast.show("History file is no longer available");
             return;
         }
-        parent.present();
+        play_parent.present();
     });
+
+    let overlay = gtk::Overlay::new();
+    overlay.add_css_class("okp-history-row-wrap");
+    overlay.set_child(Some(&button));
+
+    let actions = gtk::MenuButton::builder()
+        .icon_name("okp-view-more-symbolic")
+        .build();
+    actions.add_css_class("okp-history-row-actions");
+    actions.set_has_frame(false);
+    actions.set_tooltip_text(Some("History actions"));
+    actions.set_halign(gtk::Align::End);
+    actions.set_valign(gtk::Align::Center);
+    actions.set_margin_end(8);
+
+    let action_list = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    action_list.add_css_class("okp-history-actions-popover");
+    let popover = gtk::Popover::new();
+    popover.set_has_arrow(false);
+    popover.set_child(Some(&action_list));
+
+    let commands = okp_core::history::history_row_commands(&item.source());
+    if commands.contains(&okp_core::history::HistoryRowCommand::RemoveFromHistory) {
+        let remove = history_action_button("okp-list-remove-symbolic", "Remove from history");
+        let remove_surface = surface.clone();
+        let remove_parent = parent.clone();
+        let remove_state = Rc::clone(&state);
+        let remove_toast = Rc::clone(&status_toast);
+        let remove_source = item.source();
+        let remove_popover = popover.clone();
+        remove.connect_clicked(move |_| {
+            remove_popover.popdown();
+            remove_history_source(
+                &remove_surface,
+                &remove_parent,
+                &remove_state,
+                &remove_toast,
+                &remove_source,
+            );
+        });
+        action_list.append(&remove);
+    }
+    if commands.contains(&okp_core::history::HistoryRowCommand::MoveToTrash) {
+        let trash = history_action_button("user-trash-symbolic", "Move to Trash…");
+        let trash_surface = surface;
+        let trash_parent = parent.clone();
+        let trash_state = Rc::clone(&state);
+        let trash_toast = Rc::clone(&status_toast);
+        let trash_source = item.source();
+        let trash_popover = popover.clone();
+        trash.connect_clicked(move |_| {
+            trash_popover.popdown();
+            open_move_to_trash_dialog(
+                trash_surface.clone(),
+                &trash_parent,
+                Rc::clone(&trash_state),
+                Rc::clone(&trash_toast),
+                trash_source.clone(),
+            );
+        });
+        action_list.append(&trash);
+    }
+    actions.set_popover(Some(&popover));
+    overlay.add_overlay(&actions);
+    overlay
+}
+
+fn history_action_button(icon_name: &str, label: &str) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .icon_name(icon_name)
+        .label(label)
+        .build();
+    button.add_css_class("okp-history-menu-action");
+    button.set_has_frame(false);
     button
 }
 

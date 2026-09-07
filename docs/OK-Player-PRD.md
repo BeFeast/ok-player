@@ -392,6 +392,8 @@ Persisted per media file (keyed to path; stable keying for moved files is a Late
 - **Configurable retention** (count or age limit).
 - **Private / "don't remember" mode** — a session/global toggle suppressing position, history, and recents recording while active.
 - **Clear history** — one action wipes recents/history (optionally resume points); discoverable in Settings → Advanced.
+- **Remove from history** — each local-file or URL row can be removed without touching the media. History and Continue Watching update immediately and persist the removal. Removing the active source keeps playback running and suppresses incidental recording until an explicit reopen.
+- **Move to Trash** — a separate local-file-only row command asks for confirmation, with Cancel as the default. Use recoverable desktop Trash without a permanent-delete fallback. Cancel or Trash failure leaves History unchanged; success removes the entry and unloads matching active playback. Report a History save failure after successful Trash as a partial result. Sidecars and other media remain untouched.
 - Privacy state gates every path that records *what was watched* (history, recents, resume index). Sidecar bookmarks/chapters are user-authored content and are **not** suppressed by private mode.
 
 ---

@@ -18,11 +18,12 @@
 //!
 //! See `docs/core-compatibility.md` for the full migration story and the field map.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::nfo_metadata::HistoryTitleUpdate;
+use crate::playlist::PlaylistItem;
 use crate::video_geometry::VideoGeometry;
 
 /// Version stamped into the canonical document. Bumped from the Linux alpha `1` to mark
@@ -55,6 +56,9 @@ pub enum HistoryWriteMode {
     #[default]
     Record,
     Private,
+    /// The user removed this source while it was still the active playback session.
+    /// Every incidental write stays suppressed until a later explicit reopen.
+    RemovedFromHistory,
 }
 
 impl HistoryWriteMode {
@@ -64,6 +68,85 @@ impl HistoryWriteMode {
         } else {
             Self::Record
         }
+    }
+}
+
+/// A command exposed for one History row.
+///
+/// Source classification is shared so shells never manufacture a filesystem path from a URL.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HistoryRowCommand {
+    RemoveFromHistory,
+    MoveToTrash,
+}
+
+const LOCAL_HISTORY_COMMANDS: [HistoryRowCommand; 2] = [
+    HistoryRowCommand::RemoveFromHistory,
+    HistoryRowCommand::MoveToTrash,
+];
+const URL_HISTORY_COMMANDS: [HistoryRowCommand; 1] = [HistoryRowCommand::RemoveFromHistory];
+
+/// Commands that are valid for the original persisted source identity.
+pub fn history_row_commands(source: &PlaylistItem) -> &'static [HistoryRowCommand] {
+    match source {
+        PlaylistItem::Local(_) => &LOCAL_HISTORY_COMMANDS,
+        PlaylistItem::Url(_) => &URL_HISTORY_COMMANDS,
+    }
+}
+
+/// Whether a successful Trash operation must unload the current source.
+///
+/// Only an exactly matching local identity can trigger an unload. A URL can therefore never be
+/// confused with a filesystem path, even if its text resembles one.
+pub fn trash_unloads_current_source(
+    source: &PlaylistItem,
+    current_source: Option<&PlaylistItem>,
+) -> bool {
+    matches!(source, PlaylistItem::Local(_)) && current_source == Some(source)
+}
+
+/// What caused a source to be handed to the player.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HistoryOpenIntent {
+    /// A user-facing open, retry, or playlist selection.
+    Explicit,
+    /// Repeat, auto-advance, or another lifecycle-driven load.
+    Automatic,
+}
+
+/// Session-only suppression for active sources removed from History.
+///
+/// The guard is deliberately independent from `record_opened`: periodic saves use that method
+/// for duration-unknown URLs, so treating every call as a reopen would immediately resurrect a
+/// removed stream. Only [`HistoryOpenIntent::Explicit`] releases the matching identity.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HistoryRecordingSession {
+    suppressed_sources: BTreeSet<String>,
+}
+
+impl HistoryRecordingSession {
+    pub fn suppress(&mut self, source: &PlaylistItem) {
+        self.suppressed_sources.insert(source.history_key());
+    }
+
+    pub fn source_opened(&mut self, source: &PlaylistItem, intent: HistoryOpenIntent) {
+        if intent == HistoryOpenIntent::Explicit {
+            self.suppressed_sources.remove(&source.history_key());
+        }
+    }
+
+    pub fn write_mode(&self, source: &PlaylistItem, private_session: bool) -> HistoryWriteMode {
+        if private_session {
+            HistoryWriteMode::Private
+        } else if self.suppressed_sources.contains(&source.history_key()) {
+            HistoryWriteMode::RemovedFromHistory
+        } else {
+            HistoryWriteMode::Record
+        }
+    }
+
+    pub fn is_suppressed(&self, source: &PlaylistItem) -> bool {
+        self.suppressed_sources.contains(&source.history_key())
     }
 }
 
@@ -163,7 +246,7 @@ impl History {
         update: HistoryProgressUpdate,
         mode: HistoryWriteMode,
     ) -> HistoryWriteResult {
-        if mode == HistoryWriteMode::Private {
+        if mode != HistoryWriteMode::Record {
             return HistoryWriteResult::Suppressed;
         }
         if key.is_empty()
@@ -224,7 +307,7 @@ impl History {
         update: HistoryOpenUpdate,
         mode: HistoryWriteMode,
     ) -> HistoryWriteResult {
-        if mode == HistoryWriteMode::Private {
+        if mode != HistoryWriteMode::Record {
             return HistoryWriteResult::Suppressed;
         }
         if key.is_empty() {
@@ -267,7 +350,7 @@ impl History {
         updated_at_unix: i64,
         mode: HistoryWriteMode,
     ) -> HistoryWriteResult {
-        if mode == HistoryWriteMode::Private {
+        if mode != HistoryWriteMode::Record {
             return HistoryWriteResult::Suppressed;
         }
         let Some(record) = self.files.get_mut(key) else {
@@ -292,7 +375,7 @@ impl History {
         updated_at_unix: i64,
         mode: HistoryWriteMode,
     ) -> HistoryWriteResult {
-        if mode == HistoryWriteMode::Private {
+        if mode != HistoryWriteMode::Record {
             return HistoryWriteResult::Suppressed;
         }
         if key.is_empty() || preferences.is_empty() {
@@ -314,7 +397,7 @@ impl History {
         updated_at_unix: i64,
         mode: HistoryWriteMode,
     ) -> HistoryWriteResult {
-        if mode == HistoryWriteMode::Private {
+        if mode != HistoryWriteMode::Record {
             return HistoryWriteResult::Suppressed;
         }
         if key.is_empty() {
@@ -333,6 +416,12 @@ impl History {
         self.files
             .get_mut(key)
             .is_some_and(|record| crate::bookmarks::remove(&mut record.bookmarks, time))
+    }
+
+    /// Remove one exact persisted source identity and all History-owned state attached to it.
+    /// The source media and every other record are outside this operation.
+    pub fn remove(&mut self, key: &str) -> bool {
+        self.files.remove(key).is_some()
     }
 
     /// Remove every record and return how many were present.
@@ -1407,5 +1496,144 @@ mod tests {
         assert_eq!(entry.updated_at_unix, 20);
         assert_eq!(entry.title.as_deref(), Some("Updated title"));
         assert_eq!(history.resume_position(key), Some(120.0));
+    }
+
+    #[test]
+    fn history_commands_keep_urls_out_of_the_filesystem_lane() {
+        let local = PlaylistItem::Local("/media/movie.mkv".into());
+        let url = PlaylistItem::Url("https://cdn.example.test/tmp/movie.mkv".to_owned());
+
+        assert_eq!(
+            history_row_commands(&local),
+            &[
+                HistoryRowCommand::RemoveFromHistory,
+                HistoryRowCommand::MoveToTrash
+            ]
+        );
+        assert_eq!(
+            history_row_commands(&url),
+            &[HistoryRowCommand::RemoveFromHistory]
+        );
+        assert!(trash_unloads_current_source(&local, Some(&local)));
+        assert!(!trash_unloads_current_source(&local, Some(&url)));
+        assert!(!trash_unloads_current_source(&url, Some(&url)));
+    }
+
+    #[test]
+    fn removing_one_identity_drops_only_its_history_owned_state() {
+        let mut history = History::default();
+        history.files.insert(
+            "/media/remove.mkv".to_owned(),
+            FileEntry {
+                bookmarks: vec![12.0],
+                chapters: vec![ChapterMark {
+                    time: 20.0,
+                    title: "Keep sidecar data outside History".to_owned(),
+                }],
+                ..FileEntry::default()
+            },
+        );
+        history
+            .files
+            .insert("https://example.test/keep".to_owned(), FileEntry::default());
+
+        assert!(history.remove("/media/remove.mkv"));
+        assert!(!history.remove("/media/remove.mkv"));
+        assert_eq!(
+            history.files.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["https://example.test/keep"]
+        );
+    }
+
+    #[test]
+    fn removed_active_source_stays_suppressed_until_an_explicit_reopen() {
+        let source = PlaylistItem::Url("https://example.test/live/channel".to_owned());
+        let key = source.history_key();
+        let mut history = History::default();
+        history.files.insert(key.clone(), FileEntry::default());
+        let mut session = HistoryRecordingSession::default();
+
+        assert!(history.remove(&key));
+        session.suppress(&source);
+        assert_eq!(
+            session.write_mode(&source, false),
+            HistoryWriteMode::RemovedFromHistory
+        );
+
+        let mode = session.write_mode(&source, false);
+        assert_eq!(
+            history.record_opened(
+                &key,
+                HistoryOpenUpdate {
+                    duration: None,
+                    updated_at_unix: 10,
+                    title: HistoryTitleUpdate::Preserve,
+                },
+                mode,
+            ),
+            HistoryWriteResult::Suppressed
+        );
+        assert_eq!(
+            history.record_progress(
+                &key,
+                HistoryProgressUpdate {
+                    position: 30.0,
+                    duration: 300.0,
+                    finished: false,
+                    updated_at_unix: 11,
+                    title: HistoryTitleUpdate::Preserve,
+                },
+                mode,
+            ),
+            HistoryWriteResult::Suppressed
+        );
+        assert_eq!(
+            history.record_preferences(
+                &key,
+                Preferences {
+                    speed: Some(1.25),
+                    ..Preferences::default()
+                },
+                12,
+                mode,
+            ),
+            HistoryWriteResult::Suppressed
+        );
+        assert_eq!(
+            history.mark_finished(&key, 13, mode),
+            HistoryWriteResult::Suppressed
+        );
+        assert!(!history.files.contains_key(&key));
+
+        session.source_opened(&source, HistoryOpenIntent::Automatic);
+        assert!(session.is_suppressed(&source));
+        assert_eq!(
+            history.record_opened(
+                &key,
+                HistoryOpenUpdate {
+                    duration: None,
+                    updated_at_unix: 14,
+                    title: HistoryTitleUpdate::Preserve,
+                },
+                session.write_mode(&source, false),
+            ),
+            HistoryWriteResult::Suppressed
+        );
+
+        session.source_opened(&source, HistoryOpenIntent::Explicit);
+        assert!(!session.is_suppressed(&source));
+        assert_eq!(
+            history.record_opened(
+                &key,
+                HistoryOpenUpdate {
+                    duration: None,
+                    updated_at_unix: 15,
+                    title: HistoryTitleUpdate::Preserve,
+                },
+                session.write_mode(&source, false),
+            ),
+            HistoryWriteResult::Changed
+        );
+        assert!(history.files.contains_key(&key));
     }
 }

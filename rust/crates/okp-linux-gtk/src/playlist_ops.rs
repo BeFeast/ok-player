@@ -218,12 +218,26 @@ pub(crate) fn load_media_url(state: &Rc<RefCell<PlayerState>>, url: String) {
     };
 
     match result {
-        Some(Ok(())) => remember_loaded_url(state, url),
+        Some(Ok(())) => {
+            let source = PlaylistItem::Url(url.clone());
+            remember_loaded_url(state, url);
+            state
+                .borrow_mut()
+                .history
+                .begin_source_open(&source, okp_core::history::HistoryOpenIntent::Explicit);
+        }
         Some(Err(error)) => {
             eprintln!("Failed to load URL '{url}': {error}");
             set_load_failure(state, url, format!("libmpv error {error}"));
         }
-        None => remember_loaded_url(state, url),
+        None => {
+            let source = PlaylistItem::Url(url.clone());
+            remember_loaded_url(state, url);
+            state
+                .borrow_mut()
+                .history
+                .begin_source_open(&source, okp_core::history::HistoryOpenIntent::Explicit);
+        }
     }
 }
 
@@ -245,12 +259,26 @@ pub(crate) fn load_media_path_internal(
     };
 
     match result {
-        Some(Ok(())) => remember_loaded_media(state, path),
+        Some(Ok(())) => {
+            let source = PlaylistItem::Local(path.clone());
+            remember_loaded_media(state, path);
+            state
+                .borrow_mut()
+                .history
+                .begin_source_open(&source, okp_core::history::HistoryOpenIntent::Explicit);
+        }
         Some(Err(error)) => {
             eprintln!("Failed to load media '{}': {error}", path.display());
             set_local_load_failure(state, path, format!("libmpv error {error}"));
         }
-        None => remember_loaded_media(state, path),
+        None => {
+            let source = PlaylistItem::Local(path.clone());
+            remember_loaded_media(state, path);
+            state
+                .borrow_mut()
+                .history
+                .begin_source_open(&source, okp_core::history::HistoryOpenIntent::Explicit);
+        }
     }
 }
 
@@ -525,12 +553,22 @@ pub(crate) fn load_playlist_item_with_playlist(
     playlist: Vec<PlaylistItem>,
     save_previous: bool,
 ) -> bool {
-    match item {
+    let source = item.clone();
+    let loaded = match item {
         PlaylistItem::Local(path) => {
             load_media_path_with_playlist(state, path, playlist, save_previous)
         }
         PlaylistItem::Url(url) => load_media_url_with_playlist(state, url, playlist, save_previous),
+    };
+    // All current callers that save the previous item are user-driven selections. EOF passes
+    // `false`, so repeat/auto-advance never releases a per-session History removal guard.
+    if loaded && save_previous {
+        state
+            .borrow_mut()
+            .history
+            .begin_source_open(&source, okp_core::history::HistoryOpenIntent::Explicit);
     }
+    loaded
 }
 
 pub(crate) fn load_m3u_playlist(
