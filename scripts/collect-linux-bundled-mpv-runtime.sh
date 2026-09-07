@@ -15,9 +15,10 @@ for tool in awk basename cmp cp ldd mkdir patchelf readelf rm sha256sum sort; do
 done
 [[ -f "$LIBMPV" ]] || { echo "Bundled libmpv is missing: $LIBMPV" >&2; exit 1; }
 
-# The target desktop owns libc, graphics, GTK, X11/Wayland, Cairo/Pango, font,
-# audio, image-codec, and session libraries. JPEG is the exception because mpv
-# links it directly and Debian/Ubuntu expose incompatible SONAMEs. The collector
+# The target desktop owns libc, graphics (including the coherent VA-API client
+# family that loads its drivers), GTK, X11/Wayland, Cairo/Pango, font, audio,
+# image-codec, and session libraries. JPEG is the exception because mpv links
+# it directly and Debian/Ubuntu expose incompatible SONAMEs. The collector
 # carries that exact builder ABI under a private OK Player SONAME so it cannot
 # shadow the JPEG ABI used by target TIFF/GDK modules.
 
