@@ -10,6 +10,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use okp_core::poster_frame::url_poster_cache_key;
 use okp_core::screenshot::{
     SavedCaptureContext, SavedCaptureValidity, candidate_filename, saved_capture_validity,
 };
@@ -29,10 +30,23 @@ pub struct SavedCaptureTarget {
     format: ScreenshotFormat,
 }
 
+/// A clean decoded frame captured from a successfully loaded URL and staged for atomic
+/// publication into the History poster cache. The original URL and source generation bind the
+/// asynchronous command to the media that requested it; a later load cannot publish its frame
+/// under this target's identity.
+#[derive(Debug)]
+pub struct UrlPosterCaptureTarget {
+    pub temp_path: PathBuf,
+    pub poster_path: PathBuf,
+    pub original_url: String,
+    pub source_generation: u64,
+}
+
 #[derive(Debug)]
 pub enum PendingCapture {
     Saved(SavedCaptureTarget),
     Clipboard(PathBuf),
+    UrlPoster(UrlPosterCaptureTarget),
 }
 
 #[derive(Debug)]
@@ -40,6 +54,8 @@ pub enum ScreenshotJobResult {
     SavedPrepared(Result<SavedCaptureTarget, String>),
     ClipboardPrepared(Result<PathBuf, String>),
     SavedPublished(Result<PathBuf, String>),
+    UrlPosterPrepared(Result<Option<UrlPosterCaptureTarget>, String>),
+    UrlPosterPublished(Result<PathBuf, String>),
 }
 
 #[derive(Debug)]
@@ -47,6 +63,8 @@ pub struct ScreenshotJobs {
     sender: mpsc::Sender<ScreenshotJobResult>,
     receiver: mpsc::Receiver<ScreenshotJobResult>,
     pending: std::collections::HashMap<u64, PendingCapture>,
+    poster_requests: std::collections::HashSet<(u64, String)>,
+    poster_directory: PathBuf,
 }
 
 impl Default for ScreenshotJobs {
@@ -56,6 +74,8 @@ impl Default for ScreenshotJobs {
             sender,
             receiver,
             pending: std::collections::HashMap::new(),
+            poster_requests: std::collections::HashSet::new(),
+            poster_directory: crate::thumbnails::poster_cache_dir(),
         }
     }
 }
@@ -92,6 +112,26 @@ impl ScreenshotJobs {
         });
     }
 
+    /// Prepare one URL-poster capture per source generation. Directory work stays off GTK's
+    /// main context; a cache hit reports `None`, so reopening an already-captured URL sends no
+    /// engine command and performs no network work.
+    pub fn prepare_url_poster(&mut self, original_url: String, source_generation: u64) {
+        if !self
+            .poster_requests
+            .insert((source_generation, original_url.clone()))
+        {
+            return;
+        }
+
+        let sender = self.sender.clone();
+        let directory = self.poster_directory.clone();
+        thread::spawn(move || {
+            let result = prepare_url_poster_capture(directory, original_url, source_generation)
+                .map_err(|error| error.to_string());
+            let _ = sender.send(ScreenshotJobResult::UrlPosterPrepared(result));
+        });
+    }
+
     pub fn publish_saved(&self, target: SavedCaptureTarget) {
         let sender = self.sender.clone();
         thread::spawn(move || {
@@ -99,6 +139,14 @@ impl ScreenshotJobs {
             let result = publish_saved_capture(target)
                 .map_err(|error| destination_error(&error_directory, error));
             let _ = sender.send(ScreenshotJobResult::SavedPublished(result));
+        });
+    }
+
+    pub fn publish_url_poster(&self, target: UrlPosterCaptureTarget) {
+        let sender = self.sender.clone();
+        thread::spawn(move || {
+            let result = publish_url_poster_capture(target).map_err(|error| error.to_string());
+            let _ = sender.send(ScreenshotJobResult::UrlPosterPublished(result));
         });
     }
 
@@ -113,6 +161,98 @@ impl ScreenshotJobs {
     pub fn take_pending(&mut self, request_id: u64) -> Option<PendingCapture> {
         self.pending.remove(&request_id)
     }
+
+    #[cfg(test)]
+    pub fn with_poster_directory(poster_directory: PathBuf) -> Self {
+        Self {
+            poster_directory,
+            ..Self::default()
+        }
+    }
+
+    #[cfg(test)]
+    pub fn poster_request_count(&self) -> usize {
+        self.poster_requests.len()
+    }
+}
+
+fn prepare_url_poster_capture(
+    directory: PathBuf,
+    original_url: String,
+    source_generation: u64,
+) -> io::Result<Option<UrlPosterCaptureTarget>> {
+    fs::create_dir_all(&directory)?;
+    if !directory.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            "poster cache destination is not a directory",
+        ));
+    }
+
+    let poster_path = directory.join(format!("{}.jpg", url_poster_cache_key(&original_url)));
+    if is_nonempty_regular_file(&poster_path) {
+        return Ok(None);
+    }
+    if poster_path.exists() {
+        fs::remove_file(&poster_path)?;
+    }
+
+    let staging_directory = prepare_screenshot_staging_dir()?;
+    let temp_path = unique_temp_path(&staging_directory, "history-poster", "jpg")?;
+    Ok(Some(UrlPosterCaptureTarget {
+        temp_path,
+        poster_path,
+        original_url,
+        source_generation,
+    }))
+}
+
+fn publish_url_poster_capture(target: UrlPosterCaptureTarget) -> io::Result<PathBuf> {
+    if let Err(error) = validate_capture_output(&target.temp_path) {
+        remove_temporary_capture(&target.temp_path);
+        return Err(error);
+    }
+
+    if is_nonempty_regular_file(&target.poster_path) {
+        remove_temporary_capture(&target.temp_path);
+        return Ok(target.poster_path);
+    }
+    if target.poster_path.exists() {
+        fs::remove_file(&target.poster_path)?;
+    }
+
+    let directory = target.poster_path.parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "poster has no cache directory")
+    })?;
+    fs::create_dir_all(directory)?;
+    let destination_stage = match copy_to_destination_stage(&target.temp_path, directory, "jpg") {
+        Ok(path) => path,
+        Err(error) => {
+            remove_temporary_capture(&target.temp_path);
+            return Err(error);
+        }
+    };
+
+    let result = match rename_noreplace(&destination_stage, &target.poster_path) {
+        Ok(()) => Ok(target.poster_path.clone()),
+        Err(error)
+            if error.kind() == io::ErrorKind::AlreadyExists
+                && is_nonempty_regular_file(&target.poster_path) =>
+        {
+            remove_temporary_capture(&destination_stage);
+            Ok(target.poster_path.clone())
+        }
+        Err(error) => {
+            remove_temporary_capture(&destination_stage);
+            Err(error)
+        }
+    };
+    remove_temporary_capture(&target.temp_path);
+    result
+}
+
+fn is_nonempty_regular_file(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
 }
 
 pub fn prepare_saved_capture(
@@ -510,6 +650,54 @@ fn unix_millis() -> u128 {
 mod tests {
     use super::*;
     use okp_test_fixtures::unique_temp_dir;
+
+    #[test]
+    fn url_poster_capture_publishes_atomically_and_restart_preparation_hits_cache() {
+        let root = unique_temp_dir("okp-url-poster-publish");
+        let directory = root.path().join("continue-watching-posters");
+        let url = "https://example.com/watch?v=original&token=required#chapter";
+        let target = prepare_url_poster_capture(directory.clone(), url.to_owned(), 7)
+            .expect("prepare URL poster")
+            .expect("cache miss needs capture");
+        let temp_path = target.temp_path.clone();
+        let poster_path = target.poster_path.clone();
+        assert_eq!(target.original_url, url);
+        assert_eq!(target.source_generation, 7);
+        fs::write(&temp_path, b"decoded frame").expect("libmpv frame fixture");
+
+        let published = publish_url_poster_capture(target).expect("publish URL poster");
+        assert_eq!(published, poster_path);
+        assert_eq!(fs::read(&published).unwrap(), b"decoded frame");
+        assert!(!temp_path.exists());
+
+        let restarted = prepare_url_poster_capture(directory, url.to_owned(), 8)
+            .expect("restart URL poster lookup");
+        assert!(
+            restarted.is_none(),
+            "a persisted frame must suppress another capture after restart"
+        );
+    }
+
+    #[test]
+    fn url_poster_capture_targets_are_bound_to_the_exact_original_url() {
+        let root = unique_temp_dir("okp-url-poster-identity");
+        let directory = root.path().join("continue-watching-posters");
+        let first = prepare_url_poster_capture(
+            directory.clone(),
+            "https://example.com/watch?id=one".to_owned(),
+            1,
+        )
+        .unwrap()
+        .unwrap();
+        let second =
+            prepare_url_poster_capture(directory, "https://example.com/watch?id=two".to_owned(), 2)
+                .unwrap()
+                .unwrap();
+
+        assert_ne!(first.poster_path, second.poster_path);
+        remove_temporary_capture(&first.temp_path);
+        remove_temporary_capture(&second.temp_path);
+    }
 
     #[test]
     fn publish_saved_capture_never_overwrites_a_collision() {

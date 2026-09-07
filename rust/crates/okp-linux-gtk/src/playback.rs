@@ -266,14 +266,29 @@ pub(crate) fn drain_screenshot_jobs(state: &Rc<RefCell<PlayerState>>, status_toa
                     screenshots::PendingCapture::Clipboard(path),
                 );
             }
+            screenshots::ScreenshotJobResult::UrlPosterPrepared(Ok(Some(target))) => {
+                dispatch_screenshot_capture(
+                    state,
+                    status_toast,
+                    screenshots::PendingCapture::UrlPoster(target),
+                );
+            }
+            screenshots::ScreenshotJobResult::UrlPosterPrepared(Ok(None)) => {}
             screenshots::ScreenshotJobResult::SavedPublished(Ok(path)) => {
                 eprintln!("Screenshot saved to {}", path.display());
                 status_toast.show_saved_screenshot(&path);
+            }
+            screenshots::ScreenshotJobResult::UrlPosterPublished(Ok(path)) => {
+                eprintln!("History poster cached at {}", path.display());
             }
             screenshots::ScreenshotJobResult::SavedPrepared(Err(error))
             | screenshots::ScreenshotJobResult::SavedPublished(Err(error)) => {
                 eprintln!("Failed to save screenshot: {error}");
                 status_toast.show(&error);
+            }
+            screenshots::ScreenshotJobResult::UrlPosterPrepared(Err(error))
+            | screenshots::ScreenshotJobResult::UrlPosterPublished(Err(error)) => {
+                eprintln!("Failed to cache History poster: {error}");
             }
             screenshots::ScreenshotJobResult::ClipboardPrepared(Err(error)) => {
                 eprintln!("Failed to prepare clipboard capture: {error}");
@@ -318,9 +333,24 @@ fn dispatch_screenshot_capture(
         }
     }
 
+    if let screenshots::PendingCapture::UrlPoster(target) = &capture {
+        let is_current_successful_public_load = {
+            let state = state.borrow();
+            state.source_generation == target.source_generation
+                && !state.private_session
+                && state.media_load_state == network_media::MediaLoadState::Playing
+                && state.current_url.as_deref() == Some(target.original_url.as_str())
+        };
+        if !is_current_successful_public_load {
+            screenshots::remove_temporary_capture(&target.temp_path);
+            return;
+        }
+    }
+
     let (path, include_subtitles) = match &capture {
         screenshots::PendingCapture::Saved(target) => (&target.temp_path, target.include_subtitles),
         screenshots::PendingCapture::Clipboard(path) => (path, false),
+        screenshots::PendingCapture::UrlPoster(target) => (&target.temp_path, false),
     };
     let request = {
         let state = state.borrow();
@@ -343,9 +373,12 @@ fn dispatch_screenshot_capture(
             }
         }
         Err(error) => {
+            let user_initiated = !matches!(&capture, screenshots::PendingCapture::UrlPoster(_));
             remove_pending_capture_temp(&capture);
             eprintln!("Failed to start screenshot capture: {error}");
-            status_toast.show(capture_failure_message(&capture));
+            if user_initiated {
+                status_toast.show(capture_failure_message(&capture));
+            }
         }
     }
 }
@@ -362,10 +395,13 @@ pub(crate) fn complete_screenshot_capture(
     };
 
     if error < 0 {
+        let user_initiated = !matches!(&capture, screenshots::PendingCapture::UrlPoster(_));
         remove_pending_capture_temp(&capture);
         let detail = okp_mpv::error_description(error);
         eprintln!("Screenshot command failed with code {error}: {detail}");
-        status_toast.show(&format!("{}: {detail}", capture_failure_message(&capture)));
+        if user_initiated {
+            status_toast.show(&format!("{}: {detail}", capture_failure_message(&capture)));
+        }
         return;
     }
 
@@ -375,6 +411,17 @@ pub(crate) fn complete_screenshot_capture(
         }
         screenshots::PendingCapture::Clipboard(path) => {
             finish_clipboard_capture(path, status_toast)
+        }
+        screenshots::PendingCapture::UrlPoster(target) => {
+            let still_bound_to_source = {
+                let state = state.borrow();
+                state.source_generation == target.source_generation && !state.private_session
+            };
+            if still_bound_to_source {
+                state.borrow().screenshot_jobs.publish_url_poster(target);
+            } else {
+                screenshots::remove_temporary_capture(&target.temp_path);
+            }
         }
     }
 }
@@ -404,6 +451,9 @@ fn remove_pending_capture_temp(capture: &screenshots::PendingCapture) {
             screenshots::remove_temporary_capture(&target.temp_path)
         }
         screenshots::PendingCapture::Clipboard(path) => screenshots::remove_temporary_capture(path),
+        screenshots::PendingCapture::UrlPoster(target) => {
+            screenshots::remove_temporary_capture(&target.temp_path)
+        }
     }
 }
 
@@ -411,6 +461,7 @@ fn capture_failure_message(capture: &screenshots::PendingCapture) -> &'static st
     match capture {
         screenshots::PendingCapture::Saved(_) => "Screenshot failed",
         screenshots::PendingCapture::Clipboard(_) => "Couldn't copy the frame",
+        screenshots::PendingCapture::UrlPoster(_) => "History poster capture failed",
     }
 }
 

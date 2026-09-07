@@ -1255,20 +1255,31 @@ pub(crate) fn record_successful_url_open(state: &Rc<RefCell<PlayerState>>) {
         } else {
             okp_core::nfo_metadata::HistoryTitleUpdate::Set(title)
         };
-        (url, duration, state.private_session, title_update)
+        (
+            url,
+            duration,
+            state.private_session,
+            title_update,
+            state.source_generation,
+        )
     };
 
-    let (url, duration, private_session, title_update) = snapshot;
+    let (url, duration, private_session, title_update, source_generation) = snapshot;
     let mut state = state.borrow_mut();
     state.url_history_load_confirmed = true;
     state.history.record_source_opened(
-        &PlaylistItem::Url(url),
+        &PlaylistItem::Url(url.clone()),
         duration,
         private_session,
         title_update,
     );
     if let Err(error) = state.history.save() {
         eprintln!("Failed to save history: {error}");
+    }
+    if !private_session {
+        state
+            .screenshot_jobs
+            .prepare_url_poster(url, source_generation);
     }
 }
 

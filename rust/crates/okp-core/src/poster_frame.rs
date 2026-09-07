@@ -17,6 +17,8 @@
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
+use sha2::{Digest, Sha256};
+
 use crate::media_formats;
 use crate::network_path;
 
@@ -166,6 +168,27 @@ pub fn poster_cache_key(path: &str, len: u64, modified_secs: u64, modified_nanos
     format!("{:016x}", hasher.finish())
 }
 
+/// Stable cache identity for a frame captured while an online source is successfully playing.
+///
+/// Unlike a local file, a URL has no durable size or modification time to fold into the key.
+/// Hash the exact original History identity instead: query strings and fragments can distinguish
+/// media, and an extractor's temporary resolved stream address must never replace that identity.
+/// SHA-256 is used rather than Rust's implementation-defined default hasher because this poster
+/// cannot be regenerated merely by rendering History after an application/toolchain upgrade.
+pub fn url_poster_cache_key(url: &str) -> String {
+    use std::fmt::Write as _;
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"ok-player:url-poster:v1\0");
+    hasher.update(url.as_bytes());
+    let mut key = String::with_capacity(68);
+    key.push_str("url-");
+    for byte in hasher.finalize() {
+        write!(key, "{byte:02x}").expect("writing into a String cannot fail");
+    }
+    key
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,6 +335,26 @@ mod tests {
         assert_ne!(
             base,
             poster_cache_key("/media/other.mkv", 1_024, 1_700_000_000, 0)
+        );
+    }
+
+    #[test]
+    fn url_cache_key_is_stable_and_preserves_the_exact_original_identity() {
+        let original = "https://example.com/watch?v=stable&id=one#chapter";
+        assert_eq!(
+            url_poster_cache_key(original),
+            url_poster_cache_key(original),
+            "the same persisted URL must find its poster after restart"
+        );
+        assert_ne!(
+            url_poster_cache_key(original),
+            url_poster_cache_key("https://example.com/watch?v=stable&id=two#chapter"),
+            "different original URLs must never share a captured frame"
+        );
+        assert_ne!(
+            url_poster_cache_key(original),
+            url_poster_cache_key("https://cdn.example.net/temporary/video.m3u8?expires=1"),
+            "a resolved stream address is a different identity from the reopen URL"
         );
     }
 }

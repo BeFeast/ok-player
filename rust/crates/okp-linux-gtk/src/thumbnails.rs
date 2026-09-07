@@ -13,9 +13,10 @@ use std::thread;
 use std::time::{Duration, UNIX_EPOCH};
 
 use okp_core::image_luma;
+use okp_core::playlist::PlaylistItem;
 use okp_core::poster_frame::{
     PosterFrameScorer, PosterSource, PosterVerdict, classify_source, poster_cache_key,
-    poster_sample_offsets,
+    poster_sample_offsets, url_poster_cache_key,
 };
 use okp_core::recents_shelf::HistoryItem;
 use okp_mpv::Chapter;
@@ -587,9 +588,10 @@ impl PosterShelf {
     }
 
     /// Resolve one row to a poster path if the cache already holds one, enqueuing bounded
-    /// generation when it does not. Returns `None` (an honest placeholder) for anything that
-    /// is not a present local video, and for a file whose durable sentinel says it has no
-    /// usable frame — without ever re-deriving it.
+    /// generation for a missing local-video poster. URL posters are captured from successful
+    /// playback and are lookup-only here: rendering History never resolves or downloads the
+    /// online source. Audio/network paths and a local file whose durable sentinel says it has
+    /// no usable frame keep the honest placeholder.
     fn resolve(&self, item: &HistoryItem, allow_generation: bool) -> Option<String> {
         // Deterministic render hook for the visual smokes: a poster placed by file stem in
         // OKP_POSTER_FIXTURE_DIR is used verbatim, so the render/projection path can be proven
@@ -605,8 +607,19 @@ impl PosterShelf {
             }
         }
 
+        if let PlaylistItem::Url(url) = item.source() {
+            let poster = self.dir.join(format!("{}.jpg", url_poster_cache_key(&url)));
+            if is_nonempty_file(&poster) {
+                return Some(poster.to_string_lossy().into_owned());
+            }
+            if poster.exists() {
+                let _ = fs::remove_file(&poster);
+            }
+            return None; // cache miss stays offline and is retried only after later playback
+        }
+
         if classify_source(&item.path) != PosterSource::LocalVideo {
-            return None; // audio-only / URL / network: honest non-video fallback, no decode
+            return None; // audio-only / network path: honest non-video fallback, no decode
         }
         let metadata = fs::metadata(&item.path).ok()?;
         if !metadata.is_file() {
@@ -698,7 +711,7 @@ pub(crate) fn suspend_poster_generation() {
     }
 }
 
-fn poster_cache_dir() -> PathBuf {
+pub(crate) fn poster_cache_dir() -> PathBuf {
     cache_base().join("continue-watching-posters")
 }
 
@@ -1029,6 +1042,10 @@ mod tests {
         poster_cache_key(&media.to_string_lossy(), metadata.len(), secs, nanos)
     }
 
+    fn url_poster_path(dir: &Path, url: &str) -> PathBuf {
+        dir.join(format!("{}.jpg", url_poster_cache_key(url)))
+    }
+
     /// A shelf whose injected processor records each processed media path, so queue/dedup
     /// behaviour is observable without a decoder.
     fn recording_shelf(dir: PathBuf) -> (PosterShelf, mpsc::Receiver<PathBuf>) {
@@ -1059,6 +1076,54 @@ mod tests {
             processed.recv_timeout(Duration::from_millis(100)).is_err(),
             "a cache hit must not enqueue generation"
         );
+    }
+
+    #[test]
+    fn resolve_reuses_a_persisted_url_poster_after_restart_without_network_work() {
+        let dir = unique_dir("cached-url");
+        let url = "http://127.0.0.1:9/watch?id=original#frame";
+        let poster = url_poster_path(&dir, url);
+        touch(&poster, b"captured jpeg");
+
+        let (first_shelf, first_processed) = recording_shelf(dir.clone());
+        let mut first_launch = vec![video_item(url, 600.0)];
+        first_shelf.project(&mut first_launch, false);
+        assert_eq!(first_launch[0].poster_path.as_deref(), poster.to_str());
+        assert!(
+            first_processed
+                .recv_timeout(Duration::from_millis(100))
+                .is_err(),
+            "a URL cache hit must not enqueue a decoder or touch the network"
+        );
+        drop(first_shelf);
+
+        let (restarted_shelf, restarted_processed) = recording_shelf(dir);
+        let mut after_restart = vec![video_item(url, 600.0)];
+        restarted_shelf.project(&mut after_restart, false);
+        assert_eq!(after_restart[0].poster_path.as_deref(), poster.to_str());
+        assert!(
+            restarted_processed
+                .recv_timeout(Duration::from_millis(100))
+                .is_err(),
+            "restart lookup must remain a cache-only operation"
+        );
+    }
+
+    #[test]
+    fn different_url_identities_do_not_share_a_persisted_poster() {
+        let dir = unique_dir("distinct-urls");
+        let first_url = "https://example.com/watch?id=one&token=same";
+        let second_url = "https://example.com/watch?id=two&token=same";
+        let first_poster = url_poster_path(&dir, first_url);
+        touch(&first_poster, b"first captured jpeg");
+
+        let (shelf, processed) = recording_shelf(dir);
+        let mut items = vec![video_item(first_url, 600.0), video_item(second_url, 600.0)];
+        shelf.project(&mut items, false);
+
+        assert_eq!(items[0].poster_path.as_deref(), first_poster.to_str());
+        assert_eq!(items[1].poster_path, None);
+        assert!(processed.recv_timeout(Duration::from_millis(100)).is_err());
     }
 
     #[test]
@@ -1162,7 +1227,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_url_and_audio_rows_keep_an_honest_fallback_without_enqueuing() {
+    fn missing_url_network_and_audio_rows_keep_an_honest_fallback_without_enqueuing() {
         let dir = unique_dir("fallbacks");
         let audio = dir.join("song.flac");
         touch(&audio, b"fake audio bytes");
