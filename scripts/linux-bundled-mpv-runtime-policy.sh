@@ -37,11 +37,15 @@ okp_linux_namespaced_media_soname() {
   printf 'libokp-%s\n' "$soname"
 }
 
-# Audio client stacks are host integration, same class as glibc and mesa:
-# libpipewire dlopens the host SPA plugin tree and speaks the host daemon
-# protocol, libpulse/libjack talk to host daemons. A bundled copy from a
-# different distro era mixes client and plugin ABIs - the first container
-# candidate shipped Debian libpipewire onto Ubuntu hosts and produced
+# Audio client stacks and the VA-API client family are host integration, the
+# same class as glibc and Mesa. libva loads the target's VA driver, whose entry
+# point ABI and installation directory must match the target libva rather than
+# the distribution that built the bundled media closure.
+#
+# For audio, libpipewire dlopens the host SPA plugin tree and speaks the host
+# daemon protocol, while libpulse/libjack talk to host daemons. A bundled copy
+# from a different distro era mixes client and plugin ABIs - the first
+# container candidate shipped Debian libpipewire onto Ubuntu hosts and produced
 # garbled audio plus an audio-clock-stalled video path (#670).
 #
 # The AppImage consequently assumes the host provides these client stacks -
@@ -49,7 +53,9 @@ okp_linux_namespaced_media_soname() {
 # GTK. A desktop capable of running the GTK4 shell without any of
 # pipewire/pulse/jack client libraries is not a supported target; the .deb
 # declares them as Depends and the portability launch gate proves
-# resolvability on both supported distro eras.
+# resolvability on both supported distro eras. The directly linked VA clients
+# are required even when no usable VA device or driver is present; mpv can then
+# take its existing software-decode fallback.
 okp_is_linux_platform_runtime() {
   okp_is_linux_glibc_runtime "$1" && return 0
   case "$1" in
@@ -62,6 +68,7 @@ okp_is_linux_platform_runtime() {
       libharfbuzz.so.* | libgraphite2.so.* | libfribidi.so.* | \
       libmount.so.* | libblkid.so.* | libselinux.so.* | libpcre2-*.so.* | \
       libffi.so.* | libdbus-1.so.* | libsystemd.so.* | libudev.so.* | \
+      libva.so.* | libva-drm.so.* | libva-wayland.so.* | libva-x11.so.* | \
       libpipewire-*.so.* | libpulse.so.* | libpulsecommon-*.so | \
       libjack.so.* | \
       libasound*.so* | libjpeg*.so* | libturbojpeg*.so* | libtiff*.so* | \
