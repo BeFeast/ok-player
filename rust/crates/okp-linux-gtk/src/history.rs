@@ -7,9 +7,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use okp_core::history::Preferences as PlaybackPreferences;
 use okp_core::history::{
-    History as HistoryFile, HistoryProgressUpdate, HistoryWriteMode, HistoryWriteResult,
+    History as HistoryFile, HistoryOpenUpdate, HistoryProgressUpdate, HistoryWriteMode,
+    HistoryWriteResult,
 };
 use okp_core::nfo_metadata::HistoryTitleUpdate;
+use okp_core::playlist::PlaylistItem;
 use okp_core::recents_shelf::{HistoryItem, WelcomeShelf};
 
 #[derive(Debug)]
@@ -30,7 +32,10 @@ impl Default for HistoryStore {
 
 impl HistoryStore {
     pub fn open() -> Self {
-        let path = history_path();
+        Self::open_path(history_path())
+    }
+
+    fn open_path(path: PathBuf) -> Self {
         let (data, read_failed) = match fs::read_to_string(&path) {
             Ok(json) => match HistoryFile::load(&json) {
                 Some(data) => (data, false),
@@ -58,6 +63,11 @@ impl HistoryStore {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn open_test(path: PathBuf) -> Self {
+        Self::open_path(path)
+    }
+
     pub fn read_failed(&self) -> bool {
         self.read_failed
     }
@@ -82,6 +92,7 @@ impl HistoryStore {
         );
     }
 
+    #[cfg(test)]
     pub fn record_with_title(
         &mut self,
         path: &Path,
@@ -91,7 +102,26 @@ impl HistoryStore {
         private_session: bool,
         title_update: HistoryTitleUpdate,
     ) {
-        let key = history_key(path);
+        self.record_source_with_title(
+            &PlaylistItem::Local(path.to_path_buf()),
+            position,
+            duration,
+            finished,
+            private_session,
+            title_update,
+        );
+    }
+
+    pub fn record_source_with_title(
+        &mut self,
+        source: &PlaylistItem,
+        position: f64,
+        duration: f64,
+        finished: bool,
+        private_session: bool,
+        title_update: HistoryTitleUpdate,
+    ) {
+        let key = source.history_key();
         let result = self.data.record_progress(
             &key,
             HistoryProgressUpdate {
@@ -109,11 +139,45 @@ impl HistoryStore {
         }
     }
 
+    /// Record the engine's successful-open lifecycle edge. Unlike progress samples,
+    /// this remains valid for live sources whose duration is unknown.
+    pub fn record_source_opened(
+        &mut self,
+        source: &PlaylistItem,
+        duration: Option<f64>,
+        private_session: bool,
+        title_update: HistoryTitleUpdate,
+    ) {
+        let key = source.history_key();
+        let result = self.data.record_opened(
+            &key,
+            HistoryOpenUpdate {
+                duration,
+                updated_at_unix: unix_now(),
+                title: title_update,
+            },
+            HistoryWriteMode::from_private(private_session),
+        );
+        if result == HistoryWriteResult::Changed {
+            self.listable_paths.insert(key);
+            self.dirty = true;
+        }
+    }
+
     /// Mark `path` watched to the end, clearing its resume position so the next open
     /// starts at zero. Returns the entry's stored duration when a record was actually
     /// changed, so the caller can report the completion it just observed.
+    #[cfg(test)]
     pub fn mark_finished(&mut self, path: &Path, private_session: bool) -> Option<f64> {
-        let key = history_key(path);
+        self.mark_source_finished(&PlaylistItem::Local(path.to_path_buf()), private_session)
+    }
+
+    pub fn mark_source_finished(
+        &mut self,
+        source: &PlaylistItem,
+        private_session: bool,
+    ) -> Option<f64> {
+        let key = source.history_key();
         let result = self.data.mark_finished(
             &key,
             unix_now(),
@@ -211,16 +275,34 @@ impl HistoryStore {
     }
 
     pub fn resume_position(&self, path: &Path) -> Option<f64> {
-        self.data.resume_position(&history_key(path))
+        self.resume_position_for_source(&PlaylistItem::Local(path.to_path_buf()))
     }
 
+    pub fn resume_position_for_source(&self, source: &PlaylistItem) -> Option<f64> {
+        self.data.resume_position(&source.history_key())
+    }
+
+    #[cfg(test)]
     pub fn record_preferences(
         &mut self,
         path: &Path,
         preferences: PlaybackPreferences,
         private_session: bool,
     ) {
-        let key = history_key(path);
+        self.record_source_preferences(
+            &PlaylistItem::Local(path.to_path_buf()),
+            preferences,
+            private_session,
+        );
+    }
+
+    pub fn record_source_preferences(
+        &mut self,
+        source: &PlaylistItem,
+        preferences: PlaybackPreferences,
+        private_session: bool,
+    ) {
+        let key = source.history_key();
         let result = self.data.record_preferences(
             &key,
             preferences,
@@ -234,9 +316,16 @@ impl HistoryStore {
     }
 
     pub fn playback_preferences(&self, path: &Path) -> Option<PlaybackPreferences> {
+        self.playback_preferences_for_source(&PlaylistItem::Local(path.to_path_buf()))
+    }
+
+    pub fn playback_preferences_for_source(
+        &self,
+        source: &PlaylistItem,
+    ) -> Option<PlaybackPreferences> {
         self.data
             .files
-            .get(&history_key(path))
+            .get(&source.history_key())
             .map(|record| record.preferences.clone())
             .filter(|preferences| !preferences.is_empty())
     }
@@ -793,5 +882,119 @@ mod tests {
         ));
         assert!(is_history_path_listable("https://example.com/movie.mkv"));
         assert!(is_history_path_listable(r"\\server\share\movie.mkv"));
+    }
+
+    #[test]
+    fn url_history_records_persists_lists_and_restores_original_load_identity() {
+        let root = tempfile::tempdir().expect("temporary history directory");
+        let history_path = root.path().join("history.json");
+        let local_path = root.path().join("local-regression.mkv");
+        fs::write(&local_path, b"fixture").expect("local history fixture");
+
+        let finite_url = "https://example.com/watch?v=stable-id&token=required%2Fvalue#chapter";
+        let resolved_cdn_url = "https://cdn.example.net/expiring/stream.m3u8?expires=1";
+        let finite_source = PlaylistItem::Url(finite_url.to_owned());
+        let live_source = PlaylistItem::Url("https://example.com/live/channel".to_owned());
+        let private_source = PlaylistItem::Url("https://example.com/private".to_owned());
+        let local_source = PlaylistItem::Local(local_path.clone());
+        let mut history = HistoryStore::open_path(history_path.clone());
+
+        history.record_source_opened(
+            &finite_source,
+            Some(600.0),
+            false,
+            HistoryTitleUpdate::Set("Stable page title".to_owned()),
+        );
+        history.record_source_with_title(
+            &finite_source,
+            120.0,
+            600.0,
+            false,
+            false,
+            HistoryTitleUpdate::Preserve,
+        );
+        history.record_source_with_title(
+            &finite_source,
+            180.0,
+            600.0,
+            false,
+            false,
+            HistoryTitleUpdate::Set("Updated page title".to_owned()),
+        );
+        // A private replay may neither change the prior row nor add a new one.
+        history.record_source_with_title(
+            &finite_source,
+            300.0,
+            600.0,
+            false,
+            true,
+            HistoryTitleUpdate::Set("Private title".to_owned()),
+        );
+        history.record_source_opened(
+            &private_source,
+            Some(300.0),
+            true,
+            HistoryTitleUpdate::Set("Private source".to_owned()),
+        );
+        history.record_source_opened(
+            &live_source,
+            None,
+            false,
+            HistoryTitleUpdate::Set("Live channel".to_owned()),
+        );
+        history.record_source_with_title(
+            &local_source,
+            60.0,
+            300.0,
+            false,
+            false,
+            HistoryTitleUpdate::Set("Local regression".to_owned()),
+        );
+        history.save().expect("persist URL history");
+
+        let mut reloaded = HistoryStore::open_path(history_path.clone());
+        let rows = reloaded.search("");
+        assert_eq!(
+            rows.len(),
+            3,
+            "duplicate and private opens must not add rows"
+        );
+
+        let finite = rows
+            .iter()
+            .find(|item| item.path == finite_url)
+            .expect("finite URL row after restart");
+        assert_eq!(finite.source(), finite_source);
+        assert_eq!(finite.title, "Updated page title");
+        assert_eq!(finite.position, 180.0);
+        assert_eq!(finite.duration, 600.0);
+        assert_eq!(
+            reloaded.resume_position_for_source(&finite.source()),
+            Some(180.0)
+        );
+        assert_ne!(finite.path, resolved_cdn_url);
+
+        let live = rows
+            .iter()
+            .find(|item| item.source() == live_source)
+            .expect("duration-unknown URL row after restart");
+        assert_eq!(live.duration, 0.0);
+        assert_eq!(live.progress, 0.0);
+        assert_eq!(live.state_label, "Duration unknown");
+        assert_eq!(reloaded.resume_position_for_source(&live.source()), None);
+
+        let local = rows
+            .iter()
+            .find(|item| item.source() == local_source)
+            .expect("local history row after URL changes");
+        assert_eq!(local.position, 60.0);
+        assert_eq!(local.duration, 300.0);
+        assert!(!rows.iter().any(|item| item.source() == private_source));
+
+        assert_eq!(
+            reloaded.clear_persisted().expect("clear persisted history"),
+            3
+        );
+        assert!(HistoryStore::open_path(history_path).search("").is_empty());
     }
 }

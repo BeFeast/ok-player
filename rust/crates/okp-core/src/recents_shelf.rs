@@ -8,6 +8,7 @@
 
 use crate::history::{FileEntry, History};
 use crate::history_format::{self, HistoryStateKind};
+use crate::playlist::PlaylistItem;
 
 /// A history row prepared for either the welcome shelf or the full History surface.
 #[derive(Clone, Debug, PartialEq)]
@@ -22,6 +23,13 @@ pub struct HistoryItem {
     pub state_label: String,
     pub updated_at_unix: i64,
     pub poster_path: Option<String>,
+}
+
+impl HistoryItem {
+    /// Recover the original load route from this persisted history identity.
+    pub fn source(&self) -> PlaylistItem {
+        PlaylistItem::from_history_key(&self.path)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

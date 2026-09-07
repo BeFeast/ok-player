@@ -148,6 +148,13 @@ pub fn derive_state(position: f64, duration: f64, finished: bool) -> HistoryRowS
             label: String::new(),
         };
     }
+    if !duration.is_finite() || duration <= 0.0 {
+        return HistoryRowState {
+            kind: HistoryStateKind::Barely,
+            percent: 0.0,
+            label: "Duration unknown".to_owned(),
+        };
+    }
     let percent = if duration > 0.0 {
         position / duration
     } else {
@@ -273,10 +280,11 @@ mod tests {
     }
 
     #[test]
-    fn derive_state_zero_duration_is_barely_with_clamped_minute() {
+    fn derive_state_zero_duration_does_not_invent_progress_or_runtime() {
         let s = derive_state(0.0, 0.0, false);
         assert_eq!(s.kind, HistoryStateKind::Barely);
-        assert_eq!(s.label, "1m in · 0%");
+        assert_eq!(s.percent, 0.0);
+        assert_eq!(s.label, "Duration unknown");
     }
 
     // ---- bucket_for ----

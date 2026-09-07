@@ -384,9 +384,27 @@ pub(crate) fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>) -
     content.append(&location);
     button.set_child(Some(&content));
 
-    let path = PathBuf::from(&item.path);
-    button.connect_clicked(move |_| load_media_path(&state, path.clone()));
+    let source = item.source();
+    button.connect_clicked(move |_| {
+        load_history_source(&state, source.clone());
+    });
     button
+}
+
+/// Reopen a persisted History identity through the same load route as its original open.
+/// Returns `false` only when a local file disappeared after the History model was built.
+pub(crate) fn load_history_source(state: &Rc<RefCell<PlayerState>>, source: PlaylistItem) -> bool {
+    match source {
+        PlaylistItem::Local(path) if !path.is_file() => false,
+        PlaylistItem::Local(path) => {
+            load_media_path(state, path);
+            true
+        }
+        PlaylistItem::Url(url) => {
+            load_media_url(state, url);
+            true
+        }
+    }
 }
 
 fn recent_history_column(
@@ -872,14 +890,13 @@ fn history_row(
     row.append(&right);
     button.set_child(Some(&row));
 
-    let path = PathBuf::from(&item.path);
+    let source = item.source();
     let parent = parent.clone();
     button.connect_clicked(move |_| {
-        if !path.is_file() {
+        if !load_history_source(&state, source.clone()) {
             status_toast.show("History file is no longer available");
             return;
         }
-        load_media_path(&state, path.clone());
         parent.present();
     });
     button

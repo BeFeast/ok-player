@@ -268,7 +268,7 @@ struct PlayerState {
     pending_resume: Option<PendingResume>,
     pending_launch_tracks: Option<PendingLaunchTracks>,
     next_launch_directives: Option<LaunchDirectives>,
-    pending_preferences: Option<(PathBuf, history::PlaybackPreferences)>,
+    pending_preferences: Option<(PlaylistItem, history::PlaybackPreferences)>,
     thumbnail_request_key: Option<String>,
     hover_thumbnail_request_key: Option<String>,
     chapters_snapshot: Vec<Chapter>,

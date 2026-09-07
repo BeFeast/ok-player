@@ -2483,10 +2483,18 @@ pub(crate) fn drain_mpv_events(
                 // and a decoder log message no longer fails a source at all. So
                 // leave a confirmed failure standing rather than letting a late
                 // `FileLoaded` erase its diagnostic.
-                let mut state = state.borrow_mut();
-                if state.media_load_state != network_media::MediaLoadState::Failed {
-                    state.media_load_state = network_media::MediaLoadState::Playing;
-                    state.last_load_diagnostic = None;
+                let record_url_open = {
+                    let mut state = state.borrow_mut();
+                    if state.media_load_state != network_media::MediaLoadState::Failed {
+                        state.media_load_state = network_media::MediaLoadState::Playing;
+                        state.last_load_diagnostic = None;
+                        state.current_url.is_some()
+                    } else {
+                        false
+                    }
+                };
+                if record_url_open {
+                    record_successful_url_open(state);
                 }
                 if env::var_os("OKP_DEBUG_IDLE_RETURN_SMOKE").is_some() {
                     eprintln!("idle-return-smoke: file-loaded");

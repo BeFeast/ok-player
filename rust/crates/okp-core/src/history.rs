@@ -87,6 +87,20 @@ pub struct HistoryProgressUpdate {
     pub title: HistoryTitleUpdate,
 }
 
+/// Fields known when the engine confirms that a source opened successfully.
+///
+/// A live stream can have no finite duration for its entire lifetime. History still
+/// records that successful open with the schema's existing zero-duration representation,
+/// while [`crate::recents_shelf::is_resumable`] continues to reject it. Reopening an
+/// existing item preserves its prior progress until a later playback sample replaces it,
+/// so confirming a load never erases an eligible resume point before the shell can apply it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryOpenUpdate {
+    pub duration: Option<f64>,
+    pub updated_at_unix: i64,
+    pub title: HistoryTitleUpdate,
+}
+
 impl History {
     /// Load a history document from raw JSON, migrating whichever on-disk dialect it is.
     /// Returns `None` for input that matches no known dialect so the shell can fall back
@@ -154,25 +168,70 @@ impl History {
         }
         if key.is_empty()
             || !update.duration.is_finite()
-            || update.duration <= 0.0
+            || update.duration < 0.0
             || !update.position.is_finite()
         {
             return HistoryWriteResult::Unchanged;
         }
 
-        let complete_at = crate::recents_shelf::completion_start(update.duration);
-        let final_stretch = update.position >= complete_at;
-        let stored_position = if update.finished || final_stretch {
-            0.0
+        let (stored_position, finished) = if update.duration == 0.0 {
+            // Zero means the engine has not exposed a finite duration. Do not persist a
+            // free-running live position that could later be mistaken for a seek target.
+            (0.0, update.finished)
         } else {
-            update.position.clamp(0.0, update.duration)
+            let complete_at = crate::recents_shelf::completion_start(update.duration);
+            let final_stretch = update.position >= complete_at;
+            let position = if update.finished || final_stretch {
+                0.0
+            } else {
+                update.position.clamp(0.0, update.duration)
+            };
+            let existing_finished = self.files.get(key).is_some_and(|record| record.finished);
+            (
+                position,
+                update.finished || (existing_finished && final_stretch),
+            )
         };
 
         let record = self.files.entry(key.to_owned()).or_default();
-        let existing_finished = record.finished;
         record.position = stored_position;
         record.duration = update.duration;
-        record.finished = update.finished || (existing_finished && final_stretch);
+        record.finished = finished;
+        record.updated_at_unix = update.updated_at_unix;
+        match update.title {
+            HistoryTitleUpdate::Preserve => {}
+            HistoryTitleUpdate::Clear => record.title = None,
+            HistoryTitleUpdate::Set(title) => record.title = Some(title),
+        }
+        HistoryWriteResult::Changed
+    }
+
+    /// Record a successful source open even when the engine has no finite duration.
+    /// Existing progress is retained until an observed playback sample supersedes it.
+    pub fn record_opened(
+        &mut self,
+        key: &str,
+        update: HistoryOpenUpdate,
+        mode: HistoryWriteMode,
+    ) -> HistoryWriteResult {
+        if mode == HistoryWriteMode::Private {
+            return HistoryWriteResult::Suppressed;
+        }
+        if key.is_empty() {
+            return HistoryWriteResult::Unchanged;
+        }
+
+        let duration = update
+            .duration
+            .filter(|duration| duration.is_finite() && *duration > 0.0)
+            .unwrap_or(0.0);
+        let record = self
+            .files
+            .entry(key.to_owned())
+            .or_insert_with(|| FileEntry {
+                duration,
+                ..FileEntry::default()
+            });
         record.updated_at_unix = update.updated_at_unix;
         match update.title {
             HistoryTitleUpdate::Preserve => {}
@@ -1156,5 +1215,70 @@ mod tests {
         assert!(history.files.contains_key("/media/recent.mkv"));
         assert!(history.files.contains_key("/media/unknown.mkv"));
         assert_eq!(history.prune_older_than(now, 0), 0);
+    }
+
+    #[test]
+    fn unknown_duration_progress_is_recorded_without_a_resume_target() {
+        let key = "https://example.com/live/channel?quality=source";
+        let mut history = History::default();
+
+        assert_eq!(
+            history.record_progress(
+                key,
+                HistoryProgressUpdate {
+                    position: 173.0,
+                    duration: 0.0,
+                    finished: false,
+                    updated_at_unix: 42,
+                    title: HistoryTitleUpdate::Set("Live channel".to_owned()),
+                },
+                HistoryWriteMode::Record,
+            ),
+            HistoryWriteResult::Changed
+        );
+
+        let entry = history.files.get(key).expect("live URL history entry");
+        assert_eq!(entry.position, 0.0);
+        assert_eq!(entry.duration, 0.0);
+        assert!(!entry.finished);
+        assert_eq!(entry.title.as_deref(), Some("Live channel"));
+        assert_eq!(history.resume_position(key), None);
+    }
+
+    #[test]
+    fn successful_reopen_refreshes_identity_without_erasing_saved_progress() {
+        let key = "https://example.com/watch?v=stable-id&list=queue";
+        let mut history = History::default();
+        history.record_progress(
+            key,
+            HistoryProgressUpdate {
+                position: 120.0,
+                duration: 600.0,
+                finished: false,
+                updated_at_unix: 10,
+                title: HistoryTitleUpdate::Set("Original title".to_owned()),
+            },
+            HistoryWriteMode::Record,
+        );
+
+        assert_eq!(
+            history.record_opened(
+                key,
+                HistoryOpenUpdate {
+                    duration: None,
+                    updated_at_unix: 20,
+                    title: HistoryTitleUpdate::Set("Updated title".to_owned()),
+                },
+                HistoryWriteMode::Record,
+            ),
+            HistoryWriteResult::Changed
+        );
+
+        let entry = history.files.get(key).expect("reopened URL history entry");
+        assert_eq!(entry.position, 120.0);
+        assert_eq!(entry.duration, 600.0);
+        assert_eq!(entry.updated_at_unix, 20);
+        assert_eq!(entry.title.as_deref(), Some("Updated title"));
+        assert_eq!(history.resume_position(key), Some(120.0));
     }
 }

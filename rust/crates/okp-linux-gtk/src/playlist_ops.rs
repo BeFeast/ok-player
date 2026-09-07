@@ -188,6 +188,19 @@ pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     state.last_load_diagnostic = None;
 }
 
+pub(crate) fn current_history_source(state: &PlayerState) -> Option<PlaylistItem> {
+    state
+        .current_file
+        .as_ref()
+        .map(|path| PlaylistItem::Local(path.clone()))
+        .or_else(|| {
+            state
+                .current_url
+                .as_ref()
+                .map(|url| PlaylistItem::Url(url.clone()))
+        })
+}
+
 pub(crate) fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
     load_media_path_internal(state, path, true);
 }
@@ -300,7 +313,7 @@ pub(crate) fn remember_loaded_media_with_playlist(
         playlist.insert(0, PlaylistItem::Local(path.clone()));
     }
     let retry_source = network_media::LoadFailureSource::local(path.clone());
-    let preferences_path = path.clone();
+    let preferences_source = PlaylistItem::Local(path.clone());
     let nfo_path = path.clone();
     let mut state = state.borrow_mut();
     advance_source_generation(&mut state);
@@ -343,7 +356,7 @@ pub(crate) fn remember_loaded_media_with_playlist(
         subtitle: directives.subtitle,
         audio: directives.audio,
     });
-    state.pending_preferences = preferences.map(|preferences| (preferences_path, preferences));
+    state.pending_preferences = preferences.map(|preferences| (preferences_source, preferences));
     // A local file is also loading until `FileLoaded` fires (near-instant on a local
     // disk, but the surface is shared with network sources for consistency).
     state.media_load_state = network_media::MediaLoadState::Loading;
@@ -432,15 +445,26 @@ pub(crate) fn remember_loaded_url_with_playlist(
         playlist.insert(0, PlaylistItem::Url(url.clone()));
     }
 
+    let source = PlaylistItem::Url(url.clone());
     let mut state = state.borrow_mut();
     advance_source_generation(&mut state);
     let directives = state.next_launch_directives.take().unwrap_or_default();
+    let remembered_resume = if state.private_session || !state.settings.resume_enabled() {
+        None
+    } else {
+        state.history.resume_position_for_source(&source)
+    };
+    let preferences = if state.private_session {
+        None
+    } else {
+        state.history.playback_preferences_for_source(&source)
+    };
     reset_video_transform_for_new_media(&mut state);
     state.ab_loop = AbLoopState::default();
     if let Some(mpv) = state.mpv.as_ref() {
         mpv.set_media_source(None);
     }
-    let current = PlaylistItem::Url(url.clone());
+    let current = source.clone();
     state.current_file = None;
     state.current_url = Some(url);
     state.current_nfo_title = okp_core::nfo_metadata::NfoTitleState::NotApplicable;
@@ -450,16 +474,18 @@ pub(crate) fn remember_loaded_url_with_playlist(
     state.chapters_snapshot.clear();
     state.pending_subtitles.clear();
     state.pending_resume =
-        launch_args::resolve_resume(directives.resume_seconds, None).map(|target| PendingResume {
-            source_generation: state.source_generation,
-            target,
+        launch_args::resolve_resume(directives.resume_seconds, remembered_resume).map(|target| {
+            PendingResume {
+                source_generation: state.source_generation,
+                target,
+            }
         });
     state.pending_launch_tracks = directives.has_tracks().then_some(PendingLaunchTracks {
         source_generation: state.source_generation,
         subtitle: directives.subtitle,
         audio: directives.audio,
     });
-    state.pending_preferences = None;
+    state.pending_preferences = preferences.map(|preferences| (source, preferences));
     // A network source is now handed to the engine — show the loading surface until
     // the `FileLoaded` lifecycle event fires (or a failure is reported).
     state.media_load_state = network_media::MediaLoadState::Loading;
@@ -758,7 +784,8 @@ pub(crate) fn restart_current_file(state: &Rc<RefCell<PlayerState>>) -> bool {
     let preferences = state.borrow().history.playback_preferences(&path);
     let mut state = state.borrow_mut();
     state.pending_resume = None;
-    state.pending_preferences = preferences.map(|preferences| (path, preferences));
+    state.pending_preferences =
+        preferences.map(|preferences| (PlaylistItem::Local(path), preferences));
     true
 }
 
@@ -840,15 +867,14 @@ pub(crate) fn try_pending_playback_preferences(state: &Rc<RefCell<PlayerState>>)
         let state = state.borrow();
         state.pending_preferences.clone()
     };
-    let Some((path, preferences)) = pending else {
+    let Some((source, preferences)) = pending else {
         return;
     };
 
-    let is_current = state
-        .borrow()
-        .current_file
-        .as_ref()
-        .is_some_and(|current| current == &path);
+    let is_current = {
+        let state = state.borrow();
+        source.is_current(state.current_file.as_deref(), state.current_url.as_deref())
+    };
     if !is_current {
         state.borrow_mut().pending_preferences = None;
         return;
@@ -1002,7 +1028,7 @@ fn save_current_preferences_impl(
 ) {
     let snapshot = {
         let state = state.borrow();
-        let Some(path) = state.current_file.clone() else {
+        let Some(source) = current_history_source(&state) else {
             return;
         };
         let Some(preferences) = state.mpv.as_ref().map(read_current_playback_preferences) else {
@@ -1015,14 +1041,14 @@ fn save_current_preferences_impl(
             audio_delay_override,
         );
 
-        (path, preferences, state.private_session)
+        (source, preferences, state.private_session)
     };
 
-    let (path, preferences, private_session) = snapshot;
+    let (source, preferences, private_session) = snapshot;
     let mut state = state.borrow_mut();
     state
         .history
-        .record_preferences(&path, preferences, private_session);
+        .record_source_preferences(&source, preferences, private_session);
     if let Err(error) = state.history.save() {
         eprintln!("Failed to save playback preferences: {error}");
     }
@@ -1032,17 +1058,17 @@ pub(crate) fn save_current_video_geometry(
     state: &Rc<RefCell<PlayerState>>,
     geometry: VideoGeometry,
 ) {
-    let (path, private_session) = {
+    let (source, private_session) = {
         let state = state.borrow();
-        let Some(path) = state.current_file.clone() else {
+        let Some(source) = current_history_source(&state) else {
             return;
         };
-        (path, state.private_session)
+        (source, state.private_session)
     };
 
     let mut state = state.borrow_mut();
-    state.history.record_preferences(
-        &path,
+    state.history.record_source_preferences(
+        &source,
         history::PlaybackPreferences {
             video_geometry: Some(geometry.normalized()),
             ..history::PlaybackPreferences::default()
@@ -1128,7 +1154,10 @@ pub(crate) fn speed_matches(left: f64, right: f64) -> bool {
 pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: bool) {
     let snapshot = {
         let state = state.borrow();
-        let Some(path) = state.current_file.clone() else {
+        if state.media_load_state != network_media::MediaLoadState::Playing {
+            return;
+        }
+        let Some(source) = current_history_source(&state) else {
             return;
         };
         let Some(playback) = state.mpv.as_ref().map(|mpv| mpv.observed_playback_state()) else {
@@ -1140,48 +1169,102 @@ pub(crate) fn save_current_progress(state: &Rc<RefCell<PlayerState>>, finished: 
             .map(read_current_playback_preferences)
             .unwrap_or_default();
 
-        (
-            state.private_session,
-            path,
-            playback,
-            preferences,
-            state
+        let title_update = match &source {
+            PlaylistItem::Url(_) => {
+                let title = current_media_title(&state);
+                if title.trim().is_empty() {
+                    okp_core::nfo_metadata::HistoryTitleUpdate::Preserve
+                } else {
+                    okp_core::nfo_metadata::HistoryTitleUpdate::Set(title)
+                }
+            }
+            PlaylistItem::Local(_) => state
                 .current_nfo_title
                 .history_update(state.private_session),
+        };
+
+        (
+            state.private_session,
+            source,
+            playback,
+            preferences,
+            title_update,
         )
     };
 
-    let (private_session, path, playback, preferences, title_update) = snapshot;
-    let Some(duration) = playback.duration else {
-        return;
-    };
+    let (private_session, source, playback, preferences, title_update) = snapshot;
     let position = playback.time_pos.unwrap_or(0.0);
-    if !duration.is_finite() || duration <= 0.0 || !position.is_finite() {
-        return;
-    }
+    let duration = playback
+        .duration
+        .filter(|duration| duration.is_finite() && *duration > 0.0);
 
     let mut state = state.borrow_mut();
-    state.history.record_with_title(
-        &path,
-        position.clamp(0.0, duration),
-        duration,
-        finished,
-        private_session,
-        title_update,
-    );
+    if let Some(duration) = duration.filter(|_| position.is_finite()) {
+        state.history.record_source_with_title(
+            &source,
+            position.clamp(0.0, duration),
+            duration,
+            finished,
+            private_session,
+            title_update,
+        );
+    } else if matches!(source, PlaylistItem::Url(_)) {
+        state
+            .history
+            .record_source_opened(&source, None, private_session, title_update);
+    }
     state
         .history
-        .record_preferences(&path, preferences, private_session);
+        .record_source_preferences(&source, preferences, private_session);
     if let Err(error) = state.history.save() {
         eprintln!("Failed to save history: {error}");
     }
-    state.progress_reporter.observe(
-        private_session,
-        path.to_string_lossy().as_ref(),
-        position,
+    if let Some(duration) = duration.filter(|_| position.is_finite()) {
+        state.progress_reporter.observe(
+            private_session,
+            &source.history_key(),
+            position,
+            duration,
+            finished,
+        );
+    }
+}
+
+/// Persist the successful `FileLoaded` edge for a URL. This is separate from the
+/// periodic progress sample because a live source may never expose a finite duration.
+pub(crate) fn record_successful_url_open(state: &Rc<RefCell<PlayerState>>) {
+    let snapshot = {
+        let state = state.borrow();
+        if state.media_load_state != network_media::MediaLoadState::Playing {
+            return;
+        }
+        let Some(url) = state.current_url.clone() else {
+            return;
+        };
+        let duration = state
+            .mpv
+            .as_ref()
+            .and_then(|mpv| mpv.observed_playback_state().duration);
+        let title = current_media_title(&state);
+        let title_update = if title.trim().is_empty() {
+            okp_core::nfo_metadata::HistoryTitleUpdate::Preserve
+        } else {
+            okp_core::nfo_metadata::HistoryTitleUpdate::Set(title)
+        };
+        (url, duration, state.private_session, title_update)
+    };
+
+    let (url, duration, private_session, title_update) = snapshot;
+    let mut state = state.borrow_mut();
+    state.history.record_source_opened(
+        &PlaylistItem::Url(url),
         duration,
-        finished,
+        private_session,
+        title_update,
     );
+    if let Err(error) = state.history.save() {
+        eprintln!("Failed to save history: {error}");
+    }
 }
 
 /// Record that the current file was watched to its end.
@@ -1210,16 +1293,16 @@ pub(crate) fn finish_current_progress(
         return;
     }
 
-    let (private_session, path) = {
+    let (private_session, source) = {
         let state = state.borrow();
-        let Some(path) = state.current_file.clone() else {
+        let Some(source) = current_history_source(&state) else {
             return;
         };
-        (state.private_session, path)
+        (state.private_session, source)
     };
 
     let mut state = state.borrow_mut();
-    let Some(duration) = state.history.mark_finished(&path, private_session) else {
+    let Some(duration) = state.history.mark_source_finished(&source, private_session) else {
         // No history row: a clip shorter than the persistence interval, or an open
         // that went straight to the end. Finishing must not start listing files that
         // were never listed, so the history stays untouched — but reporting progress
@@ -1230,7 +1313,7 @@ pub(crate) fn finish_current_progress(
         if let Some(duration) = ended_duration.filter(|value| value.is_finite() && *value > 0.0) {
             state.progress_reporter.observe(
                 private_session,
-                path.to_string_lossy().as_ref(),
+                &source.history_key(),
                 duration,
                 duration,
                 true,
@@ -1249,7 +1332,7 @@ pub(crate) fn finish_current_progress(
     // because an earlier sample already crossed the threshold.
     state.progress_reporter.observe(
         private_session,
-        path.to_string_lossy().as_ref(),
+        &source.history_key(),
         duration,
         duration,
         true,

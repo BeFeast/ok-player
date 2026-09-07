@@ -4096,6 +4096,49 @@ fn explicit_launch_resume_overrides_remembered_position_for_one_open_only() {
 }
 
 #[test]
+fn reopening_a_url_restores_eligible_progress_and_preferences_by_original_identity() {
+    let url = "https://example.com/watch?v=stable-id&token=required%2Fvalue";
+    let source = PlaylistItem::Url(url.to_owned());
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+    {
+        let mut state = state.borrow_mut();
+        state.history.record_source_with_title(
+            &source,
+            180.0,
+            600.0,
+            false,
+            false,
+            okp_core::nfo_metadata::HistoryTitleUpdate::Set("Saved title".to_owned()),
+        );
+        state.history.record_source_preferences(
+            &source,
+            history::PlaybackPreferences {
+                speed: Some(1.25),
+                ..history::PlaybackPreferences::default()
+            },
+            false,
+        );
+    }
+
+    remember_loaded_url_with_playlist(&state, url.to_owned(), vec![source.clone()]);
+
+    let state = state.borrow();
+    let resume = state.pending_resume.expect("remembered URL resume");
+    assert_eq!(resume.target.origin, launch_args::ResumeOrigin::Remembered);
+    assert_eq!(resume.target.seconds, 180.0);
+    assert_eq!(
+        state.pending_preferences,
+        Some((
+            source,
+            history::PlaybackPreferences {
+                speed: Some(1.25),
+                ..history::PlaybackPreferences::default()
+            }
+        ))
+    );
+}
+
+#[test]
 fn unique_media_paths_keeps_order_and_skips_non_media_duplicates() {
     let paths = vec![
         PathBuf::from("/media/a.mkv"),
@@ -7573,6 +7616,69 @@ fn recents_fixture_item(title: &str, location: &str) -> HistoryItem {
         updated_at_unix: 1_700_000_000,
         poster_path: None,
     }
+}
+
+#[test]
+fn history_reopen_uses_the_persisted_source_route() {
+    let original_url = "https://example.com/watch?v=stable-id&token=required%2Fvalue#chapter";
+    let state = Rc::new(RefCell::new(PlayerState::default()));
+
+    assert!(load_history_source(
+        &state,
+        PlaylistItem::Url(original_url.to_owned()),
+    ));
+    {
+        let state = state.borrow();
+        assert_eq!(state.current_url.as_deref(), Some(original_url));
+        assert!(state.current_file.is_none());
+        assert_eq!(
+            state.retry_load_source,
+            Some(network_media::LoadFailureSource::url(original_url))
+        );
+    }
+
+    let root = tempfile::tempdir().expect("temporary local-media directory");
+    let local_path = root.path().join("local-regression.mkv");
+    std::fs::write(&local_path, b"fixture").expect("local media fixture");
+    assert!(load_history_source(
+        &state,
+        PlaylistItem::Local(local_path.clone()),
+    ));
+    let state = state.borrow();
+    assert_eq!(state.current_file, Some(local_path));
+    assert!(state.current_url.is_none());
+}
+
+#[test]
+fn only_a_confirmed_non_private_url_open_creates_the_initial_row() {
+    let root = tempfile::tempdir().expect("temporary history directory");
+    let history_path = root.path().join("history.json");
+    let url = "https://example.com/live/channel";
+    let state = Rc::new(RefCell::new(PlayerState {
+        current_url: Some(url.to_owned()),
+        media_load_state: network_media::MediaLoadState::Failed,
+        history: history::HistoryStore::open_test(history_path),
+        ..PlayerState::default()
+    }));
+
+    record_successful_url_open(&state);
+    assert!(state.borrow().history.search("").is_empty());
+
+    {
+        let mut state = state.borrow_mut();
+        state.media_load_state = network_media::MediaLoadState::Playing;
+        state.private_session = true;
+    }
+    record_successful_url_open(&state);
+    assert!(state.borrow().history.search("").is_empty());
+
+    state.borrow_mut().private_session = false;
+    record_successful_url_open(&state);
+    let rows = state.borrow().history.search("");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].source(), PlaylistItem::Url(url.to_owned()));
+    assert_eq!(rows[0].duration, 0.0);
+    assert_eq!(rows[0].state_label, "Duration unknown");
 }
 
 #[test]

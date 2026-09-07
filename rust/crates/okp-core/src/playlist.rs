@@ -71,6 +71,28 @@ pub enum PlaylistItem {
 }
 
 impl PlaylistItem {
+    /// Restore the stable media identity persisted by History.
+    ///
+    /// URLs are kept byte-for-byte so query parameters required by an extractor or
+    /// direct-media endpoint survive a restart. Everything else remains a local path;
+    /// this deliberately does not require the path to exist because availability is a
+    /// shell concern and removable media may be offline while history is loaded.
+    pub fn from_history_key(key: &str) -> Self {
+        if media_formats::is_playable_url(Some(key)) {
+            Self::Url(key.to_owned())
+        } else {
+            Self::Local(PathBuf::from(key))
+        }
+    }
+
+    /// Stable, lossless key used by the shared history document.
+    pub fn history_key(&self) -> String {
+        match self {
+            Self::Local(path) => path.to_string_lossy().into_owned(),
+            Self::Url(url) => url.clone(),
+        }
+    }
+
     /// Wrap a local path if it has a recognized media extension.
     pub fn local(path: PathBuf) -> Option<Self> {
         media_formats::is_media(&path).then_some(Self::Local(path))
@@ -637,6 +659,22 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+
+    #[test]
+    fn history_identity_round_trips_original_url_without_normalization() {
+        let url = "https://example.com/watch?v=stable-id&token=required%2Fvalue#chapter";
+        let source = PlaylistItem::from_history_key(url);
+
+        assert_eq!(source, PlaylistItem::Url(url.to_owned()));
+        assert_eq!(source.history_key(), url);
+
+        let local = PlaylistItem::from_history_key("/media/archive/movie.mkv");
+        assert_eq!(
+            local,
+            PlaylistItem::Local(PathBuf::from("/media/archive/movie.mkv"))
+        );
+        assert_eq!(local.history_key(), "/media/archive/movie.mkv");
+    }
 
     fn local(path: &str) -> PlaylistItem {
         PlaylistItem::Local(PathBuf::from(path))
