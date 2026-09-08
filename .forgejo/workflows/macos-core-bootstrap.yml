@@ -107,7 +107,8 @@ jobs:
           export PATH="$toolchain/bin:/usr/bin:/bin:/usr/sbin:/sbin"
           export RUSTC="$toolchain/bin/rustc"
           export CARGO_HOME="$HOME/.ok-player-ci/cargo"
-          export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+          SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+          export SDKROOT
           export MACOSX_DEPLOYMENT_TARGET=13.0
           export CARGO_BUILD_JOBS=4
           export CARGO_INCREMENTAL=0
