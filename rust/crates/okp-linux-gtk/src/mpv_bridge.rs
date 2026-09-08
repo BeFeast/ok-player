@@ -1046,9 +1046,10 @@ fn connect_gtk_mpv(
             let seq = sequence.get().wrapping_add(1);
             sequence.set(seq);
             let counter = area.frame_clock().map(|clock| clock.frame_counter()).unwrap_or(-1);
-            frame_binding.set((seq, counter));
             let request = render_timing.borrow_mut().as_mut()
                 .map(|probe| { probe.drain(recorder); probe.request(seq, counter) });
+            frame_binding.set(okp_core::presentation_evidence::gtk_feedback_binding(
+                frame_binding.get(), (seq, counter), request));
             recorder.record_gtk_timing(seq, counter, "render-entry", serde_json::json!({
                 "feedback_request": request, "surface_scope": "gtk-top-level",
                 "avsync": state.mpv.as_ref().and_then(Mpv::observed_avsync),
