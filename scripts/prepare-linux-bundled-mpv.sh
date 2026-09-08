@@ -10,11 +10,12 @@ UPSTREAM_TAG="v0.40.0"
 UPSTREAM_COMMIT="e48ac7ce08462f5e33af6ef9deeac6fa87eef01e"
 EMBED_PATCH="$ROOT/rust/patches/mpv-v0.40.0-wayland-embed.patch"
 FFMPEG_PATCH="$ROOT/rust/patches/mpv-v0.40.0-ffmpeg-8.patch"
+CLIPBOARD_PATCH="$ROOT/rust/patches/mpv-v0.40.0-wayland-clipboard.patch"
 
 source "$ROOT/scripts/linux-candidate-toolchain.sh"
 okp_candidate_toolchain_preflight
 
-patch_key="$(okp_candidate_tool sha256sum "$EMBED_PATCH" "$FFMPEG_PATCH" \
+patch_key="$(okp_candidate_tool sha256sum "$EMBED_PATCH" "$FFMPEG_PATCH" "$CLIPBOARD_PATCH" \
   | okp_candidate_tool sha256sum \
   | okp_candidate_tool cut -c1-16)"
 WORK_ROOT="${OKP_BUNDLED_MPV_ROOT:-$TARGET_DIR/okp-bundled-mpv}"

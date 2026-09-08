@@ -1,0 +1,28 @@
+From: mpv upstream
+Subject: clipboard-wayland: retire hung-up offers after reading buffered data
+
+Combined backport of:
+- d20ded876d27497d3fe6a9494add8106b507a45c
+- 896b3400f3cad286533dbb9cc3658ce18ed9966c
+
+The first change prevents a closed selection pipe from remaining permanently
+ready. The follow-up ordering is included so POLLIN data is consumed before a
+simultaneous HUP destroys the offer.
+
+diff --git a/player/clipboard/clipboard-wayland.c b/player/clipboard/clipboard-wayland.c
+index c4a5e50472..b3da3ff134 100644
+--- a/player/clipboard/clipboard-wayland.c
++++ b/player/clipboard/clipboard-wayland.c
+@@ -354,6 +354,12 @@ static bool clipboard_wayland_dispatch_events(struct clipboard_wayland_priv *wl,
+     if (fds[3].revents & POLLIN)
+         get_selection_data(wl, wl->primary_selection_offer, true);
+ 
++    if (fds[2].revents & (POLLERR | POLLHUP | POLLNVAL))
++        destroy_offer(wl->selection_offer);
++
++    if (fds[3].revents & (POLLERR | POLLHUP | POLLNVAL))
++        destroy_offer(wl->primary_selection_offer);
++
+     wl_display_dispatch_pending(wl->display);
+     return true;
+ }

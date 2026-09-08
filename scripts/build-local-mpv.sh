@@ -8,12 +8,14 @@ OUT="${2:?usage: build-local-mpv.sh <mpv-source-tree> <output-dir>}"
 SCRIPT_DIR="$(cd -- "${BASH_SOURCE[0]%/*}" && pwd)"
 EMBED_PATCH="$SCRIPT_DIR/../rust/patches/mpv-v0.40.0-wayland-embed.patch"
 FFMPEG_PATCH="$SCRIPT_DIR/../rust/patches/mpv-v0.40.0-ffmpeg-8.patch"
+CLIPBOARD_PATCH="$SCRIPT_DIR/../rust/patches/mpv-v0.40.0-wayland-clipboard.patch"
 
 source "$SCRIPT_DIR/linux-candidate-toolchain.sh"
 okp_candidate_toolchain_preflight
 [[ -f "$SOURCE/meson.build" ]] || { echo "Not an mpv source tree: $SOURCE" >&2; exit 2; }
 [[ -f "$EMBED_PATCH" ]] || { echo "Missing Wayland embed patch" >&2; exit 2; }
 [[ -f "$FFMPEG_PATCH" ]] || { echo "Missing FFmpeg compatibility patch" >&2; exit 2; }
+[[ -f "$CLIPBOARD_PATCH" ]] || { echo "Missing Wayland clipboard patch" >&2; exit 2; }
 
 SOURCE="$(okp_candidate_tool realpath "$SOURCE")"
 okp_candidate_tool mkdir -p "$OUT"
@@ -36,6 +38,7 @@ apply_patch_once() {
 
 apply_patch_once "$EMBED_PATCH" "Wayland embed patch"
 apply_patch_once "$FFMPEG_PATCH" "FFmpeg 8 compatibility patch"
+apply_patch_once "$CLIPBOARD_PATCH" "Wayland clipboard HUP patch"
 
 okp_candidate_tool meson setup "$BUILD" "$SOURCE" --wipe \
   --buildtype=debugoptimized \
@@ -46,6 +49,7 @@ okp_candidate_tool meson setup "$BUILD" "$SOURCE" --wipe \
   -Dtests=true \
   -Dc_args='-fno-omit-frame-pointer' \
   -Dc_link_args='-Wl,--build-id'
+"$SCRIPT_DIR/tests/mpv-wayland-clipboard-hup.Tests.sh" "$SOURCE" "$BUILD"
 okp_candidate_tool meson compile -C "$BUILD"
 okp_candidate_tool meson install -C "$BUILD"
 
