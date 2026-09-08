@@ -345,10 +345,10 @@ mod tests {
     #[test]
     fn read_sidecar_uses_same_basename_title() {
         let dir = unique_temp_dir("okp-nfo-same-basename");
-        let media = dir.path().join("Movie.mkv");
+        let media = dir.path().join("Feature.mkv");
         fs::write(&media, b"media").expect("media fixture");
         fs::write(
-            dir.path().join("Movie.nfo"),
+            dir.path().join("Feature.nfo"),
             b"<movie><title>Curated Movie Title</title><year>2024</year></movie>",
         )
         .expect("nfo fixture");
@@ -366,9 +366,9 @@ mod tests {
     #[test]
     fn read_sidecar_falls_through_malformed_same_basename() {
         let dir = unique_temp_dir("okp-nfo-folder-fallback");
-        let media = dir.path().join("Movie.mkv");
+        let media = dir.path().join("Feature.mkv");
         fs::write(&media, b"media").expect("media fixture");
-        fs::write(dir.path().join("Movie.nfo"), b"not xml <<<").expect("malformed nfo");
+        fs::write(dir.path().join("Feature.nfo"), b"not xml <<<").expect("malformed nfo");
         fs::write(
             dir.path().join("movie.nfo"),
             b"<movie><title>Folder Fallback</title></movie>",
