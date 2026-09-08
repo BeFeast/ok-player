@@ -1425,6 +1425,10 @@ impl Mpv {
         }
 
         let api = CString::new("opengl")?;
+        #[cfg(target_os = "macos")]
+        let get_proc_address =
+            get_proc_address as unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void;
+        #[cfg(not(target_os = "macos"))]
         let get_proc_address = if native_wayland_display.is_some() {
             get_egl_proc_address as unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void
         } else {

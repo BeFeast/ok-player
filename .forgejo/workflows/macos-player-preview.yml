@@ -1,0 +1,83 @@
+name: macOS player preview
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character source commit
+        required: true
+        type: string
+      forgejo_endpoint:
+        description: Forgejo scheme and numeric IPv4 endpoint
+        required: true
+        type: string
+      rust_toolchain_relative:
+        description: Existing Rust toolchain relative to runner home
+        required: true
+        type: string
+      run_smoke:
+        description: Open a bounded local-fixture playback window and close it automatically
+        required: true
+        default: 'false'
+        type: boolean
+jobs:
+  player:
+    name: Build Apple Silicon app
+    runs-on: macos
+    timeout-minutes: 25
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      FORGEJO_ENDPOINT: ${{ inputs.forgejo_endpoint }}
+      TOOLCHAIN_RELATIVE: ${{ inputs.rust_toolchain_relative }}
+      RUN_SMOKE: ${{ inputs.run_smoke }}
+    steps:
+      - name: Build app with existing tools and pinned local dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$FORGEJO_ENDPOINT" =~ ^https?://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(:[0-9]+)?$ ]]
+          [[ "$TOOLCHAIN_RELATIVE" != /* && "$TOOLCHAIN_RELATIVE" != *..* ]]
+          test "$(uname -m)" = arm64
+          stage="$(mktemp -d "$RUNNER_TEMP/okp-player.XXXXXX")"
+          receipt="$HOME/.local/state/ok-player/macos-preview/${{ github.run_id }}-${{ github.run_attempt }}"
+          mkdir -p "$receipt"
+          printf 'OKP_MACOS_RECEIPT=%s\n' "$receipt" >> "$GITHUB_ENV"
+          trap 'rm -rf -- "$stage"' EXIT
+          export PATH="$HOME/$TOOLCHAIN_RELATIVE/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+          export RUSTC="$HOME/$TOOLCHAIN_RELATIVE/bin/rustc"
+          export CARGO_HOME="$HOME/.ok-player-ci/cargo"
+          export CARGO_TARGET_DIR="$stage/target"
+          export CARGO_BUILD_JOBS=4
+          export OKP_MACOS_OUTPUT="$receipt"
+          { sw_vers; rustc -vV; xcrun swiftc --version; xcrun --sdk macosx --show-sdk-version; } > "$receipt/toolchain.txt"
+          git init -q "$stage/source"
+          git -C "$stage/source" remote add origin "$FORGEJO_ENDPOINT/BeFeast/ok-player.git"
+          git -C "$stage/source" -c http.followRedirects=false fetch --no-tags --depth=1 origin "$SOURCE_SHA"
+          git -C "$stage/source" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$stage/source" rev-parse HEAD)" = "$SOURCE_SHA"
+          printf '%s\n' "$SOURCE_SHA" > "$receipt/source-sha.txt"
+          curl --fail --silent --show-error "$FORGEJO_ENDPOINT/api/packages/BeFeast/generic/ok-player-macos-runtime/media-kit-v0.7.2-arm64/ok-player-macos-runtime-media-kit-v0.7.2-arm64.tar.gz" -o "$stage/runtime.tar.gz"
+          printf '67d30ffb8ae3e5961dbc5764fc7a3c4251454bc847e6da1fb55517262f524dc6  %s\n' "$stage/runtime.tar.gz" | shasum -a 256 -c -
+          tar -xzf "$stage/runtime.tar.gz" -C "$stage"
+          export OKP_MPV_PREFIX="$stage/ok-player-macos-runtime"
+          bash "$stage/source/scripts/build-macos-preview.sh"
+          if test "$RUN_SMOKE" = true; then
+            curl --fail --silent --show-error "$FORGEJO_ENDPOINT/api/packages/BeFeast/generic/ok-player-macos-fixtures/v1/h264-aac-smoke.mp4" -o "$stage/smoke.mp4"
+            printf '6e885d08198409e63ea80e28f0353d094949c66a8d3d121d32d382629810c0b0  %s\n' "$stage/smoke.mp4" | shasum -a 256 -c -
+            mkdir "$stage/relocated"
+            ditto "$receipt/OK Player.app" "$stage/relocated/OK Player.app"
+            env -u DYLD_LIBRARY_PATH "$stage/relocated/OK Player.app/Contents/MacOS/ok-player" --smoke-test "$stage/smoke.mp4" > "$receipt/smoke.log" 2>&1
+          fi
+      - name: Upload player and native evidence
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e
+        env:
+          ACTIONS_RESULTS_URL: ${{ inputs.forgejo_endpoint }}
+        with:
+          name: macos-player-${{ inputs.source_sha }}-${{ github.run_id }}
+          path: |
+            ${{ env.OKP_MACOS_RECEIPT }}/ok-player-macos-arm64.zip
+            ${{ env.OKP_MACOS_RECEIPT }}/*.log
+            ${{ env.OKP_MACOS_RECEIPT }}/*.txt
+          if-no-files-found: error
+          retention-days: 30
