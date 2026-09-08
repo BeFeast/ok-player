@@ -7615,6 +7615,9 @@ fn closed_side_panel_does_not_intercept_an_underlying_action() {
         let user_visible = Rc::new(Cell::new(false));
         let pinned = Rc::new(Cell::new(false));
         let chrome = ChromeVisibility::new();
+        // The window links the outer revealer to playback chrome. Showing
+        // controls can reveal that outer layer while the user panel stays closed.
+        chrome.add_linked_revealer(&panel_revealer);
         set_side_panel_user_visible(
             &panel_revealer,
             &fade_revealer,
@@ -7647,14 +7650,11 @@ fn closed_side_panel_does_not_intercept_an_underlying_action() {
             false,
         );
 
-        assert!(
-            !panel_action.is_sensitive(),
-            "closing the panel must disable input for every descendant"
-        );
-        assert!(
-            history_action.is_sensitive(),
-            "closing the panel must not disable the underlying action"
-        );
+        chrome.show_persistently();
+        settle();
+        assert!(panel_revealer.reveals_child());
+        assert!(!fade_revealer.reveals_child());
+        assert!(!user_visible.get());
 
         let picked = overlay
             .pick(point_x, point_y, gtk::PickFlags::DEFAULT)
@@ -7663,6 +7663,14 @@ fn closed_side_panel_does_not_intercept_an_underlying_action() {
             picked == history_action.clone().upcast::<gtk::Widget>()
                 || picked.is_ancestor(&history_action),
             "closed side panel must pass pointer targeting through to the underlying action, picked {picked:?}"
+        );
+        assert!(
+            !panel_action.is_sensitive(),
+            "closing the panel must disable input for every descendant"
+        );
+        assert!(
+            history_action.is_sensitive(),
+            "closing the panel must not disable the underlying action"
         );
 
         window.close();
