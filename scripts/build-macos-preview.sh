@@ -22,7 +22,7 @@ cp "$OKP_MPV_PREFIX/provenance.json" "$app/Contents/Resources/runtime-provenance
 headers=("$CARGO_TARGET_DIR"/aarch64-apple-darwin/release/build/okp-ffi-*/out/okp_core.h)
 test "${#headers[@]}" -eq 1
 xcrun swiftc -swift-version 5 -O -target arm64-apple-macosx13.0 -sdk "$SDKROOT" \
-  -import-objc-header "${headers[0]}" "$root/macos/Player.swift" \
+  -I "$(dirname "${headers[0]}")" -import-objc-header "$root/macos/Bridge.h" "$root/macos/Player.swift" \
   -L "$app/Contents/Frameworks" -lokp_ffi -framework AppKit -framework OpenGL \
   -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
   -o "$app/Contents/MacOS/ok-player" 2>&1 | tee "$output/swift-build.log"

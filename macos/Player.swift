@@ -30,7 +30,7 @@ final class VideoView: NSOpenGLView {
         if !rendererReady {
             var interval: GLint = 1
             context.setValues(&interval, for: .swapInterval)
-            guard okp_live_session_create_render_context(session) == OkpLiveResult_Ok else {
+            guard okp_mac_result_ok(okp_live_session_create_render_context(session)) else {
                 onError?("Could not create the video renderer")
                 return
             }
@@ -39,7 +39,7 @@ final class VideoView: NSOpenGLView {
         let pixels = convertToBacking(bounds)
         guard pixels.width > 0, pixels.height > 0 else { return }
         glBindFramebuffer(GLenum(GL_FRAMEBUFFER), 0)
-        if okp_live_session_render(session, Int32(pixels.width), Int32(pixels.height)) == OkpLiveResult_Ok {
+        if okp_mac_result_ok(okp_live_session_render(session, Int32(pixels.width), Int32(pixels.height))) {
             context.flushBuffer()
             renderCount += 1
         } else { onError?("Video rendering failed") }
@@ -102,7 +102,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         ])
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         var error = [CChar](repeating: 0, count: 2048)
-        session = okp_live_session_new(&error, error.count)
+        session = okp_live_session_new(&error, numericCast(error.count))
         guard let session else { fail(String(cString: error)); return }
         video.session = session
         video.onError = { [weak self] message in self?.fail(message) }
@@ -127,14 +127,14 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let session else { return }
         errorShown = false
         let result = path.withCString { okp_live_session_open_file(session, $0) }
-        if result.result != OkpLiveResult_Ok { fail(lastError()); return }
+        if !okp_mac_result_ok(result.result) { fail(lastError()); return }
         window.title = "\((path as NSString).lastPathComponent) — OK Player"
         status.stringValue = "Opening…"
     }
     @objc func togglePause() { if let session { _ = okp_live_session_toggle_pause(session) } }
     func lastError() -> String {
         var bytes = [CChar](repeating: 0, count: 4096)
-        _ = okp_live_session_last_error(session, &bytes, bytes.count)
+        _ = okp_live_session_last_error(session, &bytes, numericCast(bytes.count))
         return String(cString: bytes)
     }
     @objc func tick() {
@@ -144,7 +144,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let snapshot = okp_live_session_poll(session)
         if snapshot.error { fail(lastError()); return }
         loaded = loaded || snapshot.loaded
-        let paused = snapshot.status == OkpPlaybackStatus_Paused
+        let paused = okp_mac_is_paused(snapshot.status)
         pause.title = paused ? "Play" : "Pause"
         if snapshot.time_pos_known {
             status.stringValue = String(format: "%.0f / %.0f s", snapshot.time_pos, snapshot.duration)
