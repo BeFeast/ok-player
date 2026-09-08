@@ -56,6 +56,96 @@ unsafe extern "C" {
 type GetDisplayHandle = unsafe extern "C" fn(*mut gdk::ffi::GdkDisplay) -> *mut c_void;
 type GetSurfaceHandle = unsafe extern "C" fn(*mut gdk::ffi::GdkSurface) -> *mut c_void;
 
+#[repr(C)]
+#[derive(Default)]
+struct GtkTimingRecord {
+    render_sequence: u64,
+    frame_counter: i64,
+    observed_ns: u64,
+    presented_ns: u64,
+    output_sequence: u64,
+    kind: u32,
+    clock_id: u32,
+    surface_id: u32,
+    refresh_ns: u32,
+    flags: u32,
+}
+
+unsafe extern "C" {
+    fn okp_gtk_timing_create(display: *mut c_void, surface: *mut c_void) -> *mut c_void;
+    fn okp_gtk_timing_request(owner: *mut c_void, sequence: u64, counter: i64) -> i32;
+    fn okp_gtk_timing_take(owner: *mut c_void, record: *mut GtkTimingRecord) -> bool;
+    fn okp_gtk_timing_destroy(owner: *mut c_void) -> u32;
+}
+
+/// GTK-main-thread owner of diagnostic protocol objects, never the GDK surface.
+pub(crate) struct GtkPresentationTiming(NonNull<c_void>);
+
+impl GtkPresentationTiming {
+    pub(crate) fn create(widget: &impl IsA<gtk::Widget>) -> Result<Self, String> {
+        use gtk::glib::translate::ToGlibPtr;
+        let display = widget.display();
+        if !is_wayland_display(display.type_().name()) {
+            return Err("not-wayland".to_owned());
+        }
+        let surface = widget
+            .native()
+            .and_then(|native| native.surface())
+            .ok_or_else(|| "surface-unavailable".to_owned())?;
+        let get_display = resolve_display_symbol(c"gdk_wayland_display_get_wl_display")?;
+        let get_surface = resolve_surface_symbol(c"gdk_wayland_surface_get_wl_surface")?;
+        let pointer = unsafe {
+            okp_gtk_timing_create(
+                get_display(display.to_glib_none().0),
+                get_surface(surface.to_glib_none().0),
+            )
+        };
+        NonNull::new(pointer)
+            .map(Self)
+            .ok_or_else(|| "diagnostic-unavailable".to_owned())
+    }
+
+    pub(crate) fn finish(self) -> u32 {
+        let cancelled = unsafe { okp_gtk_timing_destroy(self.0.as_ptr()) };
+        std::mem::forget(self);
+        cancelled
+    }
+
+    pub(crate) fn request(&mut self, sequence: u64, counter: i64) -> i32 {
+        unsafe { okp_gtk_timing_request(self.0.as_ptr(), sequence, counter) }
+    }
+
+    pub(crate) fn drain(&mut self, recorder: &PresentationRecorder) {
+        let mut record = GtkTimingRecord::default();
+        while unsafe { okp_gtk_timing_take(self.0.as_ptr(), &mut record) } {
+            let phase = match record.kind {
+                1 => "presented",
+                2 => "discarded",
+                3 => "clock",
+                4 => "unsupported",
+                _ => "overflow",
+            };
+            recorder.record_gtk_timing(record.render_sequence, record.frame_counter, phase,
+                serde_json::json!({
+                    "clock_id": record.clock_id,
+                    "clock_comparable": record.clock_id == 1,
+                    "clock_status": if record.clock_id == 1 { "monotonic" } else { "unsupported-clock" },
+                    "presented_ns": record.presented_ns,
+                    "callback_observed_ns": record.observed_ns,
+                    "output_sequence": record.output_sequence,
+                    "refresh_ns": record.refresh_ns, "flags": record.flags,
+                    "surface_id": record.surface_id, "surface_scope": "gtk-top-level",
+                }));
+        }
+    }
+}
+
+impl Drop for GtkPresentationTiming {
+    fn drop(&mut self) {
+        unsafe { okp_gtk_timing_destroy(self.0.as_ptr()) };
+    }
+}
+
 pub(crate) struct NativeVideoPlane {
     pointer: NonNull<NativePlaneOpaque>,
     width: AtomicI32,

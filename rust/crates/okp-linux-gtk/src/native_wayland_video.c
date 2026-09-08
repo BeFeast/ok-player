@@ -16,6 +16,192 @@
 
 #define OKP_FEEDBACK_RING_CAPACITY 1024
 
+/* GTK diagnostics borrow the existing top-level surface. All these objects
+ * stay on GTK's default event queue/main thread; no commit or display read is
+ * performed here. Registry discovery is asynchronous and opt-in. */
+#define GTK_TIMING_CAPACITY 64
+struct okp_gtk_timing_record {
+    uint64_t render_sequence;
+    int64_t frame_counter;
+    uint64_t observed_ns, presented_ns, output_sequence;
+    uint32_t kind, clock_id, surface_id, refresh_ns, flags;
+};
+struct okp_gtk_timing;
+struct gtk_timing_pending {
+    struct okp_gtk_timing *owner;
+    struct wp_presentation_feedback *feedback;
+    struct okp_gtk_timing_record record;
+};
+struct okp_gtk_timing {
+    struct wl_registry *registry;
+    struct wp_presentation *presentation;
+    struct wl_callback *discovery;
+    struct wl_surface *surface; /* borrowed */
+    uint32_t clock_id, global_name;
+    bool discovered;
+    int64_t last_counter;
+    struct gtk_timing_pending *pending[GTK_TIMING_CAPACITY];
+    struct okp_gtk_timing_record records[GTK_TIMING_CAPACITY];
+    size_t read, write, lost;
+};
+
+static uint64_t monotonic_ns(void);
+
+static void gtk_timing_push(struct okp_gtk_timing *owner,
+                            struct okp_gtk_timing_record record) {
+    size_t next = (owner->write + 1) % GTK_TIMING_CAPACITY;
+    if (next == owner->read) { owner->lost++; return; }
+    record.observed_ns = monotonic_ns();
+    owner->records[owner->write] = record;
+    owner->write = next;
+}
+
+static void gtk_timing_release(struct gtk_timing_pending *pending) {
+    for (size_t i = 0; i < GTK_TIMING_CAPACITY; i++) {
+        if (pending->owner->pending[i] == pending)
+            pending->owner->pending[i] = NULL;
+    }
+    wp_presentation_feedback_destroy(pending->feedback);
+    free(pending);
+}
+
+static void gtk_timing_output(void *data, struct wp_presentation_feedback *feedback,
+                              struct wl_output *output) {
+    (void)data; (void)feedback; (void)output;
+}
+
+static void gtk_timing_presented(void *data, struct wp_presentation_feedback *feedback,
+    uint32_t hi, uint32_t lo, uint32_t ns, uint32_t refresh,
+    uint32_t seq_hi, uint32_t seq_lo, uint32_t flags) {
+    (void)feedback;
+    struct gtk_timing_pending *pending = data;
+    pending->record.kind = 1;
+    pending->record.clock_id = pending->owner->clock_id;
+    pending->record.presented_ns = (((uint64_t)hi << 32) | lo) * 1000000000ULL + ns;
+    pending->record.output_sequence = ((uint64_t)seq_hi << 32) | seq_lo;
+    pending->record.refresh_ns = refresh;
+    pending->record.flags = flags;
+    gtk_timing_push(pending->owner, pending->record);
+    gtk_timing_release(pending);
+}
+
+static void gtk_timing_discarded(void *data, struct wp_presentation_feedback *feedback) {
+    (void)feedback;
+    struct gtk_timing_pending *pending = data;
+    pending->record.kind = 2;
+    pending->record.clock_id = pending->owner->clock_id;
+    gtk_timing_push(pending->owner, pending->record);
+    gtk_timing_release(pending);
+}
+
+static const struct wp_presentation_feedback_listener gtk_timing_listener = {
+    gtk_timing_output, gtk_timing_presented, gtk_timing_discarded,
+};
+
+static void gtk_timing_clock(void *data, struct wp_presentation *presentation,
+                             uint32_t clock_id) {
+    (void)presentation;
+    struct okp_gtk_timing *owner = data;
+    owner->clock_id = clock_id;
+    gtk_timing_push(owner, (struct okp_gtk_timing_record){.kind = 3, .clock_id = clock_id});
+}
+static const struct wp_presentation_listener gtk_timing_clock_listener = {gtk_timing_clock};
+
+static void gtk_timing_global(void *data, struct wl_registry *registry,
+                              uint32_t name, const char *interface, uint32_t version) {
+    struct okp_gtk_timing *owner = data;
+    if (!owner->presentation && version >= 1 && !strcmp(interface, "wp_presentation")) {
+        owner->presentation = wl_registry_bind(registry, name, &wp_presentation_interface, 1);
+        owner->global_name = name;
+        wp_presentation_add_listener(owner->presentation, &gtk_timing_clock_listener, owner);
+    }
+}
+static void gtk_timing_removed(void *data, struct wl_registry *registry, uint32_t name) {
+    (void)registry;
+    struct okp_gtk_timing *owner = data;
+    if (owner->presentation && name == owner->global_name) {
+        wp_presentation_destroy(owner->presentation);
+        owner->presentation = NULL;
+        gtk_timing_push(owner, (struct okp_gtk_timing_record){.kind = 4});
+    }
+}
+static const struct wl_registry_listener gtk_timing_registry_listener = {
+    gtk_timing_global, gtk_timing_removed,
+};
+static void gtk_timing_discovered(void *data, struct wl_callback *callback, uint32_t serial) {
+    (void)serial;
+    struct okp_gtk_timing *owner = data;
+    owner->discovered = true;
+    owner->discovery = NULL;
+    wl_callback_destroy(callback);
+    if (!owner->presentation)
+        gtk_timing_push(owner, (struct okp_gtk_timing_record){.kind = 4});
+}
+static const struct wl_callback_listener gtk_timing_sync_listener = {gtk_timing_discovered};
+
+struct okp_gtk_timing *okp_gtk_timing_create(struct wl_display *display,
+                                           struct wl_surface *surface) {
+    if (!display || !surface || !getenv("OKP_PRESENT_LOG")) return NULL;
+    struct okp_gtk_timing *owner = calloc(1, sizeof(*owner));
+    if (!owner) return NULL;
+    owner->surface = surface;
+    owner->clock_id = UINT32_MAX;
+    owner->last_counter = -1;
+    owner->registry = wl_display_get_registry(display);
+    wl_registry_add_listener(owner->registry, &gtk_timing_registry_listener, owner);
+    owner->discovery = wl_display_sync(display);
+    wl_callback_add_listener(owner->discovery, &gtk_timing_sync_listener, owner);
+    return owner;
+}
+
+/* 1=requested, 0=discovery pending, 2=duplicate frame, 3=capacity,
+ * 4=unsupported. Feedback is attached to GTK's next commit, never our own. */
+int okp_gtk_timing_request(struct okp_gtk_timing *owner, uint64_t sequence, int64_t counter) {
+    if (!owner) return 4;
+    if (!owner->presentation) return owner->discovered ? 4 : 0;
+    if (owner->last_counter == counter) return 2;
+    size_t slot = 0;
+    while (slot < GTK_TIMING_CAPACITY && owner->pending[slot]) slot++;
+    if (slot == GTK_TIMING_CAPACITY) return 3;
+    struct gtk_timing_pending *pending = calloc(1, sizeof(*pending));
+    if (!pending) return 3;
+    pending->owner = owner;
+    pending->record.render_sequence = sequence;
+    pending->record.frame_counter = counter;
+    pending->record.surface_id = wl_proxy_get_id((struct wl_proxy *)owner->surface);
+    pending->feedback = wp_presentation_feedback(owner->presentation, owner->surface);
+    if (!pending->feedback) { free(pending); return 3; }
+    owner->pending[slot] = pending;
+    owner->last_counter = counter;
+    wp_presentation_feedback_add_listener(pending->feedback, &gtk_timing_listener, pending);
+    return 1;
+}
+
+bool okp_gtk_timing_take(struct okp_gtk_timing *owner, struct okp_gtk_timing_record *record) {
+    if (owner->read == owner->write) {
+        if (!owner->lost) return false;
+        *record = (struct okp_gtk_timing_record){.kind = 5, .output_sequence = owner->lost};
+        owner->lost = 0;
+        return true;
+    }
+    *record = owner->records[owner->read];
+    owner->read = (owner->read + 1) % GTK_TIMING_CAPACITY;
+    return true;
+}
+
+uint32_t okp_gtk_timing_destroy(struct okp_gtk_timing *owner) {
+    if (!owner) return 0;
+    uint32_t cancelled = 0;
+    for (size_t i = 0; i < GTK_TIMING_CAPACITY; i++) {
+        if (owner->pending[i]) { gtk_timing_release(owner->pending[i]); cancelled++; }
+    }
+    if (owner->discovery) wl_callback_destroy(owner->discovery);
+    if (owner->presentation) wp_presentation_destroy(owner->presentation);
+    wl_registry_destroy(owner->registry);
+    free(owner);
+    return cancelled;
+}
+
 enum okp_wayland_feedback_kind {
     OKP_WAYLAND_FEEDBACK_PRESENTED = 1,
     OKP_WAYLAND_FEEDBACK_DISCARDED = 2,

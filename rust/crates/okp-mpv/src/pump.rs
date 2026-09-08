@@ -80,6 +80,7 @@ const SHUTDOWN_JOIN_POLL_INTERVAL: Duration = Duration::from_millis(5);
 pub(crate) struct Snapshot {
     pub(crate) playback: PlaybackState,
     pub(crate) playback_diagnostics: PlaybackDiagnostics,
+    avsync: Option<f64>,
     pub(crate) ab_loop: AbLoopState,
     pub(crate) subtitle_delay: f64,
     pub(crate) subtitle_scale: f64,
@@ -98,6 +99,7 @@ impl Default for Snapshot {
         Self {
             playback: PlaybackState::default(),
             playback_diagnostics: PlaybackDiagnostics::default(),
+            avsync: None,
             ab_loop: AbLoopState::default(),
             subtitle_delay: 0.0,
             audio_delay: 0.0,
@@ -139,6 +141,7 @@ impl RecomputeFlags {
 /// pointer, so the whole struct is only `Send`/`Sync` by our own guarantee that
 /// the libmpv client API is thread-safe.
 struct PumpShared {
+    presentation_log: bool,
     reader: RawReader,
     snapshot: Mutex<Snapshot>,
     events: Mutex<Vec<MpvEvent>>,
@@ -179,6 +182,7 @@ impl EventPump {
         observe_audio_devices: bool,
     ) -> Self {
         let shared = Arc::new(PumpShared {
+            presentation_log: std::env::var_os("OKP_PRESENT_LOG").is_some(),
             reader: RawReader::new(handle),
             snapshot: Mutex::new(Snapshot::default()),
             events: Mutex::new(Vec::new()),
@@ -229,6 +233,10 @@ impl EventPump {
 
     pub(crate) fn playback_state(&self) -> PlaybackState {
         lock(&self.shared.snapshot).playback
+    }
+
+    pub(crate) fn avsync(&self) -> Option<f64> {
+        lock(&self.shared.snapshot).avsync
     }
 
     pub(crate) fn playback_diagnostics(&self) -> PlaybackDiagnostics {
@@ -645,6 +653,7 @@ fn recompute(shared: &Arc<PumpShared>, flags: RecomputeFlags) {
     {
         *lock(&shared.last_duration) = Some(duration);
     }
+    let avsync = shared.presentation_log.then(|| reader.avsync()).flatten();
     let playback_diagnostics = reader.playback_diagnostics().unwrap_or_default();
     let ab_loop = reader.ab_loop_state().unwrap_or_default();
     let subtitle_delay = reader.subtitle_delay().unwrap_or(0.0);
@@ -658,6 +667,7 @@ fn recompute(shared: &Arc<PumpShared>, flags: RecomputeFlags) {
         let mut snapshot = lock(&shared.snapshot);
         snapshot.playback = playback;
         snapshot.playback_diagnostics = playback_diagnostics;
+        snapshot.avsync = avsync;
         snapshot.ab_loop = ab_loop;
         snapshot.subtitle_delay = subtitle_delay;
         snapshot.audio_delay = audio_delay;

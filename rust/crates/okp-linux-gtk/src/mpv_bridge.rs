@@ -951,6 +951,15 @@ fn connect_gtk_mpv(
     state: Rc<RefCell<PlayerState>>,
     startup_launch: StartupLaunchGate,
 ) {
+    let timing = Rc::new(RefCell::new(None::<GtkPresentationTiming>));
+    let sequence = Rc::new(std::cell::Cell::new(0_u64));
+    let frame_binding = Rc::new(std::cell::Cell::new((0_u64, -1_i64)));
+    let after_paint = Rc::new(RefCell::new(
+        None::<(gdk::FrameClock, glib::SignalHandlerId)>,
+    ));
+    let realize_timing = Rc::clone(&timing);
+    let realize_binding = Rc::clone(&frame_binding);
+    let realize_after_paint = Rc::clone(&after_paint);
     let realize_state = Rc::clone(&state);
     video_area.connect_realize(move |area| {
         area.make_current();
@@ -983,6 +992,26 @@ fn connect_gtk_mpv(
         // (GLib main-context) thread, so the tripwire armed above stays green.
         start_event_pump_for_session(&mut mpv);
 
+        if let Some(recorder) = realize_state.borrow().presentation_recorder.clone() {
+            match GtkPresentationTiming::create(area) {
+                Ok(probe) => *realize_timing.borrow_mut() = Some(probe),
+                Err(reason) => recorder.record_gtk_timing(0, -1, "unavailable",
+                    serde_json::json!({"reason": reason})),
+            }
+            if let Some(clock) = area.frame_clock() {
+                let binding = Rc::clone(&realize_binding);
+                let probe = Rc::clone(&realize_timing);
+                let handler = clock.connect_after_paint(move |clock| {
+                    let (seq, counter) = binding.get();
+                    if counter == clock.frame_counter() {
+                        recorder.record_gtk_timing(seq, counter, "after-paint",
+                            serde_json::json!({"actual_presentation": false}));
+                    }
+                    if let Some(probe) = probe.borrow_mut().as_mut() { probe.drain(&recorder); }
+                });
+                *realize_after_paint.borrow_mut() = Some((clock, handler));
+            }
+        }
         realize_state.borrow_mut().mpv = Some(mpv);
         schedule_audio_device_restore(&realize_state);
         try_pending_audio_device_restore(&realize_state);
@@ -995,6 +1024,7 @@ fn connect_gtk_mpv(
             (width > 0 && height > 0).then_some(okp_mpv::RenderTargetSize { width, height });
     });
 
+    let render_timing = Rc::clone(&timing);
     let render_state = Rc::clone(&state);
     video_area.connect_render(move |area, _context| {
         area.make_current();
@@ -1011,20 +1041,63 @@ fn connect_gtk_mpv(
             widget_height,
             scale_factor,
         );
-        if let Some(mpv) = state.mpv.as_mut()
-            && let Err(error) = mpv.render(target_size.width, target_size.height)
-        {
-            eprintln!("mpv render failed: {error}");
+        let recorder = state.presentation_recorder.clone();
+        let diagnostic = recorder.as_ref().map(|recorder| {
+            let seq = sequence.get().wrapping_add(1);
+            sequence.set(seq);
+            let counter = area.frame_clock().map(|clock| clock.frame_counter()).unwrap_or(-1);
+            frame_binding.set((seq, counter));
+            let request = render_timing.borrow_mut().as_mut()
+                .map(|probe| { probe.drain(recorder); probe.request(seq, counter) });
+            recorder.record_gtk_timing(seq, counter, "render-entry", serde_json::json!({
+                "feedback_request": request, "surface_scope": "gtk-top-level",
+                "avsync": state.mpv.as_ref().and_then(Mpv::observed_avsync),
+                "time_pos": state.mpv.as_ref().map(Mpv::observed_playback_state).and_then(|p| p.time_pos),
+            }));
+            (seq, counter)
+        });
+        let mut timing_sample = None;
+        if let Some(mpv) = state.mpv.as_mut() {
+            let result = if diagnostic.is_some() {
+                mpv.render_with_timing(target_size.width, target_size.height)
+                    .map(|sample| timing_sample = sample)
+            } else { mpv.render(target_size.width, target_size.height) };
+            if let Err(error) = result { eprintln!("mpv render failed: {error}"); }
         }
-        if let Some(recorder) = state.presentation_recorder.as_ref() {
+        if let Some(recorder) = recorder.as_ref() {
             recorder.record_present(target_size, "gtk-glarea-render");
+            if let Some((seq, counter)) = diagnostic {
+                let calibration = timing_sample.and_then(|(_, target, engine, before, after)|
+                    okp_core::presentation_evidence::calibrate_gtk_target(target, engine, before, after));
+                recorder.record_gtk_timing(seq, counter, "render-return", serde_json::json!({
+                    "frame_flags": timing_sample.map(|n| n.0),
+                    "target_raw_ns": timing_sample.map(|n| n.1),
+                    "mpv_time_ns": timing_sample.map(|n| n.2),
+                    "monotonic_before_ns": timing_sample.map(|n| n.3),
+                    "monotonic_after_ns": timing_sample.map(|n| n.4),
+                    "target_monotonic_ns": calibration,
+                    "target_status": if calibration.is_some() { "calibrated" } else { "unavailable" },
+                }));
+            }
         }
 
         glib::Propagation::Stop
     });
 
+    // Application quit can end the main loop without unrealizing the GLArea.
+    // Release protocol objects and flush the writer on both lifecycle paths.
+    if let Some(application) = gtk::gio::Application::default() {
+        let shutdown_state = Rc::clone(&state);
+        let shutdown_timing = Rc::clone(&timing);
+        let shutdown_paint = Rc::clone(&after_paint);
+        application.connect_shutdown(move |_| {
+            finish_gtk_timing(&shutdown_state, &shutdown_timing, &shutdown_paint);
+            shutdown_state.borrow_mut().presentation_recorder.take();
+        });
+    }
     let unrealize_state = Rc::clone(&state);
     video_area.connect_unrealize(move |area| {
+        finish_gtk_timing(&unrealize_state, &timing, &after_paint);
         area.make_current();
         if let Some(mpv) = unrealize_state.borrow_mut().mpv.as_mut() {
             mpv.destroy_render_context();
@@ -1036,6 +1109,31 @@ fn connect_gtk_mpv(
         tick_area.queue_render();
         glib::ControlFlow::Continue
     });
+}
+
+fn finish_gtk_timing(
+    state: &Rc<RefCell<PlayerState>>,
+    timing: &Rc<RefCell<Option<GtkPresentationTiming>>>,
+    after_paint: &Rc<RefCell<Option<(gdk::FrameClock, glib::SignalHandlerId)>>>,
+) {
+    if let Some((clock, handler)) = after_paint.borrow_mut().take() {
+        clock.disconnect(handler);
+    }
+    if let Some(mut probe) = timing.borrow_mut().take() {
+        let recorder = state.borrow().presentation_recorder.clone();
+        if let Some(recorder) = recorder.as_ref() {
+            probe.drain(recorder);
+        }
+        let cancelled = probe.finish();
+        if let Some(recorder) = recorder {
+            recorder.record_gtk_timing(
+                0,
+                -1,
+                "teardown",
+                serde_json::json!({"pending_cancelled": cancelled, "pending_after_cleanup": 0}),
+            );
+        }
+    }
 }
 
 fn connect_software_mpv(
