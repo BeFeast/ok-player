@@ -1847,7 +1847,7 @@ impl Mpv {
         &mut self,
         width: i32,
         height: i32,
-    ) -> Result<Option<(u64, i64, i64, u64, u64)>, MpvError> {
+    ) -> Result<Option<RenderTimingSample>, MpvError> {
         if width <= 0 || height <= 0 {
             return Ok(None);
         }
@@ -3888,6 +3888,10 @@ mod tests {
         );
     }
 }
+
+/// Raw render flags, target and engine clocks, and the enclosing monotonic bracket.
+#[cfg(target_os = "linux")]
+pub type RenderTimingSample = (u64, i64, i64, u64, u64);
 
 #[cfg(target_os = "linux")]
 fn render_monotonic_ns() -> u64 {
