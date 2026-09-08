@@ -132,7 +132,7 @@ jobs:
           sudo apt-get update
           # dbus backs the mock-portal file-reveal tests; xvfb, xfwm4 and xdotool back the
           # display-backed toast and window-geometry smokes.
-          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build appstream appstream-compose squashfs-tools unzip dbus xvfb xfwm4 xdotool x11-utils x11-xserver-utils imagemagick
+          sudo apt-get install -y build-essential pkg-config libwayland-dev wayland-protocols libgtk-4-dev libadwaita-1-dev libmpv-dev libgl1-mesa-dev libegl1-mesa-dev libglx-dev mpv ffmpeg cmake ninja-build appstream appstream-compose squashfs-tools unzip dbus xvfb xfwm4 xdotool x11-utils x11-xserver-utils imagemagick
 
       # Named one by one rather than globbed: a suite CI never reaches looks exactly like
       # a suite with nothing to say (#720). It runs after the dependency step because it
@@ -152,6 +152,9 @@ jobs:
           toolchain: 1.98.1
           components: clippy, rustfmt
           cache-workspaces: rust
+
+      - name: GTK presentation timing owner tests
+        run: ./scripts/tests/gtk-presentation-timing.Tests.sh
 
       - name: Format
         working-directory: rust

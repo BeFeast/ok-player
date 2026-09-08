@@ -203,6 +203,31 @@ impl PresentationRecorder {
         });
     }
 
+    pub(crate) fn record_gtk_timing(
+        &self,
+        sequence: u64,
+        counter: i64,
+        phase: &str,
+        details: serde_json::Value,
+    ) {
+        // This opt-in high-frequency path is bounded independently of ordinary
+        // session/action evidence. Lost diagnostics never delay playback.
+        let mut state = self.queue.state.lock().unwrap_or_else(|p| p.into_inner());
+        if state.pending.len() >= 4096 {
+            return;
+        }
+        state.pending.push(QueuedPresentationRecord::Evidence {
+            record: PresentationRecord::GtkRenderTiming {
+                monotonic_ns: monotonic_ns(),
+                render_sequence: sequence,
+                frame_counter: counter,
+                phase: phase.to_owned(),
+                details,
+            },
+            flush: false,
+        });
+    }
+
     pub(crate) fn record_action(&self, action: PresentationAction) {
         self.write(QueuedPresentationRecord::Evidence {
             record: PresentationRecord::Action {

@@ -468,6 +468,13 @@ impl RawReader {
         })
     }
 
+    pub(crate) fn avsync(&self) -> Option<f64> {
+        self.get_double("avsync")
+            .ok()
+            .flatten()
+            .filter(|v| v.is_finite())
+    }
+
     pub(crate) fn playback_diagnostics(&self) -> Result<PlaybackDiagnostics, MpvError> {
         Ok(PlaybackDiagnostics {
             hwdec_current: self.get_string("hwdec-current")?,
@@ -1301,6 +1308,10 @@ impl Mpv {
             .unwrap_or_default()
     }
 
+    pub fn observed_avsync(&self) -> Option<f64> {
+        self.pump.as_ref().and_then(EventPump::avsync)
+    }
+
     pub fn observed_playback_diagnostics(&self) -> PlaybackDiagnostics {
         self.pump
             .as_ref()
@@ -1792,6 +1803,30 @@ impl Mpv {
         self.set_subtitle_scale(self.observed_subtitle_scale() + delta)
     }
 
+    /// Read render API metadata only; never synchronously query core properties.
+    /// The pinned v0.40 engine returns target_time in nanoseconds despite the
+    /// stale microsecond wording in render.h. Preserve the raw clock sample.
+    #[cfg(target_os = "linux")]
+    fn next_frame_timing(&self) -> Option<(u64, i64, i64)> {
+        let context = self.render_context?;
+        let mut info = ffi::mpv_render_frame_info::default();
+        let result = unsafe {
+            ffi::mpv_render_context_get_info(
+                context.as_ptr(),
+                ffi::mpv_render_param {
+                    param_type: ffi::MPV_RENDER_PARAM_NEXT_FRAME_INFO,
+                    data: (&mut info as *mut ffi::mpv_render_frame_info).cast(),
+                },
+            )
+        };
+        if result < 0 {
+            return None;
+        }
+        Some((info.flags, info.target_time, unsafe {
+            ffi::mpv_get_time_ns(self.handle.as_ptr())
+        }))
+    }
+
     pub fn render(&mut self, width: i32, height: i32) -> Result<(), MpvError> {
         if width <= 0 || height <= 0 {
             return Ok(());
@@ -1803,6 +1838,27 @@ impl Mpv {
         handle.report_swap();
 
         Ok(())
+    }
+
+    /// Same rendering order as render(), with one opt-in metadata observation
+    /// after update and immediately before consuming the queued frame.
+    #[cfg(target_os = "linux")]
+    pub fn render_with_timing(
+        &mut self,
+        width: i32,
+        height: i32,
+    ) -> Result<Option<RenderTimingSample>, MpvError> {
+        if width <= 0 || height <= 0 {
+            return Ok(None);
+        }
+        let handle = self.render_update_handle()?;
+        let _ = handle.update_has_frame();
+        let before = render_monotonic_ns();
+        let next = self.next_frame_timing();
+        let after = render_monotonic_ns();
+        handle.render_current_frame(width, height)?;
+        handle.report_swap();
+        Ok(next.map(|(flags, target, engine)| (flags, target, engine, before, after)))
     }
 
     pub fn render_software(
@@ -2645,6 +2701,24 @@ fn path_to_cstring(path: &Path) -> Result<CString, NulError> {
 #[cfg(not(unix))]
 fn path_to_cstring(path: &Path) -> Result<CString, NulError> {
     CString::new(path.to_string_lossy().as_bytes())
+}
+
+/// Raw render flags, target and engine clocks, and the enclosing monotonic bracket.
+#[cfg(target_os = "linux")]
+pub type RenderTimingSample = (u64, i64, i64, u64, u64);
+
+#[cfg(target_os = "linux")]
+fn render_monotonic_ns() -> u64 {
+    let mut timestamp = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut timestamp) } != 0 {
+        return 0;
+    }
+    (timestamp.tv_sec as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(timestamp.tv_nsec as u64)
 }
 
 #[cfg(test)]

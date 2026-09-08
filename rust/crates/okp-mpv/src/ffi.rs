@@ -112,6 +112,16 @@ pub const MPV_RENDER_PARAM_OPENGL_FBO: c_int = 3;
 pub const MPV_RENDER_PARAM_FLIP_Y: c_int = 4;
 pub const MPV_RENDER_PARAM_WL_DISPLAY: c_int = 9;
 pub const MPV_RENDER_PARAM_ADVANCED_CONTROL: c_int = 10;
+#[cfg(target_os = "linux")]
+pub const MPV_RENDER_PARAM_NEXT_FRAME_INFO: c_int = 11;
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+#[derive(Default)]
+pub struct mpv_render_frame_info {
+    pub flags: u64,
+    pub target_time: i64,
+}
 pub const MPV_RENDER_PARAM_SW_SIZE: c_int = 17;
 pub const MPV_RENDER_PARAM_SW_FORMAT: c_int = 18;
 pub const MPV_RENDER_PARAM_SW_STRIDE: c_int = 19;
@@ -180,6 +190,13 @@ unsafe extern "C" {
         callback: Option<unsafe extern "C" fn(callback_ctx: *mut c_void)>,
         callback_ctx: *mut c_void,
     );
+    #[cfg(target_os = "linux")]
+    pub fn mpv_get_time_ns(ctx: *mut mpv_handle) -> i64;
+    #[cfg(target_os = "linux")]
+    pub fn mpv_render_context_get_info(
+        ctx: *mut mpv_render_context,
+        param: mpv_render_param,
+    ) -> c_int;
     pub fn mpv_render_context_update(ctx: *mut mpv_render_context) -> u64;
     pub fn mpv_render_context_render(
         ctx: *mut mpv_render_context,

@@ -7,7 +7,17 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PRESENTATION_EVIDENCE_SCHEMA_VERSION: u32 = 2;
+pub const PRESENTATION_EVIDENCE_SCHEMA_VERSION: u32 = 3;
+
+/// Map the pinned engine-relative nanosecond target into CLOCK_MONOTONIC.
+/// Keep the bracket in the emitted record; a stalled clock sample is unusable.
+pub fn calibrate_gtk_target(target: i64, engine: i64, before: u64, after: u64) -> Option<u64> {
+    if target <= 0 || engine <= 0 || before == 0 || after < before || after - before > 1_000_000 {
+        return None;
+    }
+    let midpoint = i128::from(before) + i128::from(after - before) / 2;
+    u64::try_from(midpoint + i128::from(target) - i128::from(engine)).ok()
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -21,6 +31,14 @@ pub enum PresentationBackend {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "event", rename_all = "kebab-case")]
 pub enum PresentationRecord {
+    /// Opt-in GTK boundaries; only `presented` is actual compositor feedback.
+    GtkRenderTiming {
+        monotonic_ns: u64,
+        render_sequence: u64,
+        frame_counter: i64,
+        phase: String,
+        details: serde_json::Value,
+    },
     Session {
         schema_version: u32,
         backend: PresentationBackend,
@@ -541,6 +559,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn gtk_target_calibration_uses_nanoseconds_and_rejects_bad_brackets() {
+        assert_eq!(
+            calibrate_gtk_target(1_020_000_000, 1_000_000_000, 90_000_000_000, 90_000_000_200),
+            Some(90_020_000_100)
+        );
+        assert_eq!(calibrate_gtk_target(0, 10, 100, 200), None);
+        assert_eq!(calibrate_gtk_target(100, 0, 100, 200), None);
+        assert_eq!(calibrate_gtk_target(100, 10, 200, 100), None);
+        assert_eq!(calibrate_gtk_target(100, 10, 100, 2_000_000), None);
+        assert_eq!(calibrate_gtk_target(1, 1000, 1, 1), None);
+    }
+
+    #[test]
     fn software_presentation_backend_has_a_stable_evidence_name() {
         let record = PresentationRecord::Session {
             schema_version: PRESENTATION_EVIDENCE_SCHEMA_VERSION,
@@ -549,7 +580,7 @@ mod tests {
 
         assert_eq!(
             serde_json::to_string(&record).expect("session evidence should serialize"),
-            r#"{"event":"session","schema_version":2,"backend":"lib-mpv-software"}"#
+            r#"{"event":"session","schema_version":3,"backend":"lib-mpv-software"}"#
         );
     }
 
@@ -714,7 +745,8 @@ mod tests {
             | PresentationRecord::CompositorPresented { monotonic_ns, .. }
             | PresentationRecord::CompositorDiscarded { monotonic_ns, .. }
             | PresentationRecord::Playback { monotonic_ns, .. }
-            | PresentationRecord::Action { monotonic_ns, .. } => *monotonic_ns,
+            | PresentationRecord::Action { monotonic_ns, .. }
+            | PresentationRecord::GtkRenderTiming { monotonic_ns, .. } => *monotonic_ns,
         });
 
         let errors = exercise_errors(&records, PresentationThresholds::default());
