@@ -9,6 +9,20 @@ use serde::{Deserialize, Serialize};
 
 pub const PRESENTATION_EVIDENCE_SCHEMA_VERSION: u32 = 3;
 
+/// Bind after-paint to the render that actually owns compositor feedback.
+/// Duplicate or unavailable requests must not replace an outstanding owner.
+pub fn gtk_feedback_binding(
+    previous: (u64, i64),
+    render: (u64, i64),
+    request_status: Option<i32>,
+) -> (u64, i64) {
+    if request_status == Some(1) {
+        render
+    } else {
+        previous
+    }
+}
+
 /// Map the pinned engine-relative nanosecond target into CLOCK_MONOTONIC.
 /// Keep the bracket in the emitted record; a stalled clock sample is unusable.
 pub fn calibrate_gtk_target(target: i64, engine: i64, before: u64, after: u64) -> Option<u64> {
@@ -557,6 +571,22 @@ fn presents_per_second(records: &[PresentationRecord], start_ns: u64, duration_n
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_gtk_renders_preserve_the_feedback_owner_for_after_paint() {
+        let owner = gtk_feedback_binding((0, -1), (21, 100), Some(1));
+        let after_duplicate = gtk_feedback_binding(owner, (22, 100), Some(2));
+        assert_eq!(after_duplicate, (21, 100));
+        for status in [None, Some(0), Some(3), Some(4)] {
+            let unavailable = gtk_feedback_binding(after_duplicate, (23, 101), status);
+            assert_eq!(unavailable, owner);
+            assert_ne!(
+                unavailable.1, 101,
+                "a new failed frame has no after-paint owner"
+            );
+        }
+        assert_eq!(gtk_feedback_binding(owner, (24, 101), Some(1)), (24, 101));
+    }
 
     #[test]
     fn gtk_target_calibration_uses_nanoseconds_and_rejects_bad_brackets() {
