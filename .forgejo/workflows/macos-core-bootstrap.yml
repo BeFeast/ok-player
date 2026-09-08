@@ -1,0 +1,191 @@
+name: macOS core bootstrap
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full lowercase OK Player commit SHA to test
+        required: true
+        type: string
+      forgejo_endpoint:
+        description: Forgejo scheme and numeric IPv4 endpoint, without a path
+        required: true
+        type: string
+      rust_toolchain_relative:
+        description: Existing Rust toolchain directory relative to the runner home
+        required: true
+        type: string
+
+jobs:
+  core-ffi:
+    name: macOS ARM64 core and C ABI
+    runs-on: macos
+    timeout-minutes: 25
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      FORGEJO_ENDPOINT: ${{ inputs.forgejo_endpoint }}
+      RUST_TOOLCHAIN_RELATIVE: ${{ inputs.rust_toolchain_relative }}
+      RECEIPT_RUN: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Build and exercise the existing core without installing tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          stage=""
+          exact_sha=""
+          receipt_endpoint=""
+          test_result=not_run
+          build_result=not_run
+          consumer_result=not_run
+          receipt="$HOME/.local/state/ok-player/macos-core-bootstrap/$RECEIPT_RUN"
+          checksum() {
+            test -f "$1" && shasum -a 256 "$1" | awk '{print $1}' || true
+          }
+          finish() {
+            rc=$?
+            trap - EXIT
+            set +e
+            set +u
+            evidence_rc=0
+            mkdir -p "$receipt" || evidence_rc=$?
+            printf 'requested_sha=%s\nexact_sha=%s\ntests=%s\nbuild=%s\nconsumer=%s\n' \
+              "$SOURCE_SHA" "$exact_sha" "$test_result" "$build_result" \
+              "$consumer_result" > "$receipt/results.txt" || evidence_rc=$?
+            if cd "$receipt"; then
+              files=()
+              for item in toolchain.txt source-sha.txt results.txt test.log build.log \
+                consumer-build.log consumer-run.log inspection.txt okp_core.h \
+                libokp_ffi.dylib abi-smoke abi-smoke.c; do
+                test ! -f "$item" || files+=("$item")
+              done
+              : > SHA256SUMS.txt || evidence_rc=$?
+              for item in "${files[@]}"; do
+                shasum -a 256 "$item" >> SHA256SUMS.txt || evidence_rc=$?
+              done
+              tar -czf core-ffi-arm64.tar.gz "${files[@]}" SHA256SUMS.txt \
+                || evidence_rc=$?
+              cat SHA256SUMS.txt || evidence_rc=$?
+            else
+              evidence_rc=$?
+            fi
+            dylib_sha="$(checksum "$receipt/libokp_ffi.dylib")"
+            header_sha="$(checksum "$receipt/okp_core.h")"
+            consumer_sha="$(checksum "$receipt/abi-smoke")"
+            bundle_sha="$(checksum "$receipt/core-ffi-arm64.tar.gz")"
+            test -n "$bundle_sha" || evidence_rc=1
+            if test -n "$stage"; then
+              rm -rf -- "$stage" || evidence_rc=$?
+            fi
+            if test "$rc" -eq 0 && test "$evidence_rc" -ne 0; then
+              rc="$evidence_rc"
+            fi
+            result=failure
+            test "$rc" -eq 0 && result=success
+            printf 'bundle_sha256=%s  %s\n' "$bundle_sha" \
+              "$receipt/core-ffi-arm64.tar.gz"
+            printf '{"exact_sha":"%s","result":"%s","tests":"%s","build":"%s","consumer":"%s","dylib_sha256":"%s","header_sha256":"%s","consumer_sha256":"%s","bundle_sha256":"%s","log_api":"%s/api/v1/repos/BeFeast/ok-player/actions/runs/%s/logs"}\n' \
+              "$exact_sha" "$result" "$test_result" "$build_result" \
+              "$consumer_result" "$dylib_sha" "$header_sha" "$consumer_sha" \
+              "$bundle_sha" "$receipt_endpoint" "${RECEIPT_RUN%%-*}" \
+              | tee "$receipt/receipt.json"
+            exit "$rc"
+          }
+          trap finish EXIT
+          mkdir -p "$receipt"
+          printf 'OKP_RECEIPT_DIR=%s\n' "$receipt" >> "$GITHUB_ENV"
+
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          ipv4_octet='(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])'
+          [[ "$FORGEJO_ENDPOINT" =~ ^https?://${ipv4_octet}\.${ipv4_octet}\.${ipv4_octet}\.${ipv4_octet}(:[0-9]{1,5})?$ ]]
+          receipt_endpoint="$FORGEJO_ENDPOINT"
+          test "$(uname -m)" = arm64
+          [[ "$RUST_TOOLCHAIN_RELATIVE" != /* && "$RUST_TOOLCHAIN_RELATIVE" != *..* ]]
+          toolchain="$HOME/$RUST_TOOLCHAIN_RELATIVE"
+          test -x "$toolchain/bin/cargo"
+          test -x "$toolchain/bin/rustc"
+          export PATH="$toolchain/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+          export RUSTC="$toolchain/bin/rustc"
+          export CARGO_HOME="$HOME/.ok-player-ci/cargo"
+          export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+          export MACOSX_DEPLOYMENT_TARGET=13.0
+          export CARGO_BUILD_JOBS=4
+          export CARGO_INCREMENTAL=0
+          mkdir -p "$CARGO_HOME"
+
+          {
+            sw_vers
+            uname -a
+            rustc -vV
+            cargo --version
+            printf 'sdk_path=%s\n' "$SDKROOT"
+            xcrun --sdk macosx --show-sdk-version
+            xcrun --sdk macosx clang --version
+            if swiftc_path="$(xcrun --find swiftc 2>/dev/null)"; then
+              printf 'swiftc_path=%s\n' "$swiftc_path"
+              xcrun swiftc --version || printf 'swiftc_version=unavailable\n'
+            else
+              printf 'swiftc=unavailable\n'
+            fi
+          } 2>&1 | tee "$receipt/toolchain.txt"
+
+          stage="$(mktemp -d "$RUNNER_TEMP/okp-macos.XXXXXX")"
+          git init -q "$stage/source"
+          cd "$stage/source"
+          git remote add origin "$FORGEJO_ENDPOINT/BeFeast/ok-player.git"
+          git -c http.followRedirects=false fetch --no-tags --depth=1 origin "$SOURCE_SHA"
+          git checkout -q --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          exact_sha="$SOURCE_SHA"
+          git rev-parse HEAD | tee "$receipt/source-sha.txt"
+
+          export CARGO_TARGET_DIR="$stage/target"
+          test_result=failed
+          cargo test --manifest-path rust/Cargo.toml --locked -p okp-core -p okp-ffi \
+            --target aarch64-apple-darwin 2>&1 | tee "$receipt/test.log"
+          test_result=passed
+          build_result=failed
+          cargo build --manifest-path rust/Cargo.toml --locked --release -p okp-ffi \
+            --target aarch64-apple-darwin 2>&1 | tee "$receipt/build.log"
+          build_result=passed
+
+          cp "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/libokp_ffi.dylib" "$receipt/"
+          headers=("$CARGO_TARGET_DIR"/aarch64-apple-darwin/release/build/okp-ffi-*/out/okp_core.h)
+          test "${#headers[@]}" -eq 1
+          test -f "${headers[0]}"
+          cp "${headers[0]}" "$receipt/"
+          printf '%s\n' '#include "okp_core.h"' '#include <assert.h>' \
+            'int main(void) {' '  assert(okp_core_abi_version() == 1);' \
+            '  struct OkpPlayerMachine *machine = okp_player_machine_new();' \
+            '  assert(machine != 0);' \
+            '  assert(okp_player_machine_status(machine) == OkpPlaybackStatus_Idle);' \
+            '  okp_player_machine_free(machine);' '  return 0;' '}' \
+            > "$receipt/abi-smoke.c"
+          consumer_result=failed
+          xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror \
+            "$receipt/abi-smoke.c" -I "$receipt" -L "$receipt" -lokp_ffi \
+            -Wl,-rpath,@executable_path -o "$receipt/abi-smoke" \
+            2>&1 | tee "$receipt/consumer-build.log"
+          DYLD_LIBRARY_PATH="$receipt" "$receipt/abi-smoke" \
+            2>&1 | tee "$receipt/consumer-run.log"
+          consumer_result=passed
+          {
+            file "$receipt/libokp_ffi.dylib" "$receipt/abi-smoke"
+            lipo -archs "$receipt/libokp_ffi.dylib"
+            lipo -archs "$receipt/abi-smoke"
+            otool -L "$receipt/libokp_ffi.dylib"
+            otool -L "$receipt/abi-smoke"
+          } 2>&1 | tee "$receipt/inspection.txt"
+
+      - name: Upload native core evidence
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        env:
+          ACTIONS_RESULTS_URL: ${{ inputs.forgejo_endpoint }}
+        with:
+          name: macos-core-ffi-${{ inputs.source_sha }}-${{ github.run_id }}
+          path: |
+            ${{ env.OKP_RECEIPT_DIR }}/core-ffi-arm64.tar.gz
+            ${{ env.OKP_RECEIPT_DIR }}/receipt.json
+          if-no-files-found: error
+          retention-days: 30
