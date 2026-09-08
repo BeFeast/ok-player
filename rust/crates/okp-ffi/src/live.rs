@@ -99,6 +99,8 @@ pub unsafe extern "C" fn okp_live_session_new(
         ("ao".to_owned(), "coreaudio".to_owned()),
         ("input-default-bindings".to_owned(), "no".to_owned()),
         ("input-vo-keyboard".to_owned(), "no".to_owned()),
+        // The pinned macOS runtime has no Lua, so it exposes no osc option.
+        #[cfg(not(target_os = "macos"))]
         ("osc".to_owned(), "no".to_owned()),
     ];
     match Mpv::new_with_options("auto-safe", &options) {
@@ -325,9 +327,9 @@ impl OkpLiveSession {
     fn dispatch(&mut self, command: PlayerCommand) -> OkpLiveCommandResult {
         self.last_error.clear();
         let engine = &self.engine;
-        let (outcome, engine_result) = self
-            .state
-            .dispatch(&command, |command| forward_command(engine, command));
+        let (outcome, engine_result) = self.state.dispatch(&command, |command, request_id| {
+            forward_command(engine, command, request_id)
+        });
         let result = match (&outcome, engine_result) {
             (_, Err(message)) => {
                 self.last_error = message;
@@ -380,14 +382,16 @@ impl OkpLiveSession {
             MpvEvent::EndFile {
                 reason,
                 diagnostic_messages,
+                path,
                 ..
             } => {
-                if let EndFileReason::Error(code) | EndFileReason::Unknown(code) = reason {
-                    let mut message = error_description(code);
-                    if let Some(diagnostic) = diagnostic_messages.last() {
-                        message.push_str(": ");
-                        message.push_str(diagnostic.trim());
-                    }
+                if !event_matches_source(
+                    self.state.machine().snapshot().source.as_ref(),
+                    path.as_deref(),
+                ) {
+                    return;
+                }
+                if let Some(message) = endfile_error(reason, &diagnostic_messages) {
                     self.last_error = message.clone();
                     self.state.apply_event(PlayerEvent::Error(PlayerError {
                         kind: PlayerErrorKind::LoadFailed,
@@ -437,7 +441,7 @@ impl OkpLiveSession {
     }
 }
 
-fn forward_command(engine: &Mpv, command: &PlayerCommand) -> Result<(), String> {
+fn forward_command(engine: &Mpv, command: &PlayerCommand, request_id: u64) -> Result<(), String> {
     let result = match command {
         PlayerCommand::Open(request) => {
             let loaded = match &request.source {
@@ -463,13 +467,24 @@ fn forward_command(engine: &Mpv, command: &PlayerCommand) -> Result<(), String> 
                 Ok(())
             })
         }
-        PlayerCommand::Close => engine.stop(),
+        PlayerCommand::Close => engine.command_async_with_userdata(&["stop"], request_id),
         PlayerCommand::Seek(request) => match request.mode {
-            SeekMode::Absolute => engine.seek_absolute(request.seconds),
-            SeekMode::Relative => engine.seek_relative(request.seconds),
+            SeekMode::Absolute => engine.command_async_with_userdata(
+                &["seek", &request.seconds.to_string(), "absolute+exact"],
+                request_id,
+            ),
+            SeekMode::Relative => engine.command_async_with_userdata(
+                &["seek", &request.seconds.to_string(), "relative+exact"],
+                request_id,
+            ),
         },
-        PlayerCommand::SetPaused(paused) => engine.set_paused(*paused),
-        PlayerCommand::TogglePause => engine.cycle_pause(),
+        PlayerCommand::SetPaused(paused) => engine.command_async_with_userdata(
+            &["set", "pause", if *paused { "yes" } else { "no" }],
+            request_id,
+        ),
+        PlayerCommand::TogglePause => {
+            engine.command_async_with_userdata(&["cycle", "pause"], request_id)
+        }
         PlayerCommand::SelectTrack { kind, id } => match kind {
             TrackKind::Audio => engine.select_audio(*id),
             TrackKind::Subtitle => engine.select_subtitle(*id),
@@ -484,6 +499,33 @@ fn forward_command(engine: &Mpv, command: &PlayerCommand) -> Result<(), String> 
         }
     };
     result.map_err(|error| error.to_string())
+}
+
+fn event_matches_source(current: Option<&PlaylistItem>, ended_path: Option<&str>) -> bool {
+    let Some(current) = current else { return false };
+    ended_path.is_none_or(|ended| match current {
+        PlaylistItem::Local(path) => path.to_string_lossy() == ended,
+        PlaylistItem::Url(url) => url == ended,
+    })
+}
+
+fn endfile_error(reason: EndFileReason, messages: &[String]) -> Option<String> {
+    match reason {
+        EndFileReason::Error(code) | EndFileReason::Unknown(code) => {
+            let mut message = error_description(code);
+            if let Some(diagnostic) = messages.last() {
+                message.push_str(": ");
+                message.push_str(diagnostic.trim());
+            }
+            Some(message)
+        }
+        EndFileReason::Eof => okp_core::playback_failure::diagnose_mpv_eof(
+            messages,
+            okp_core::playback_failure::CodecEnvironment::System,
+        )
+        .map(|diagnostic| diagnostic.detail),
+        _ => None,
+    }
 }
 
 fn core_end_reason(reason: EndFileReason) -> EndReason {
@@ -529,6 +571,23 @@ unsafe fn copy_text(text: &str, buffer: *mut c_char, capacity: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn superseded_source_errors_do_not_match_the_current_video() {
+        let current = PlaylistItem::Local("/media/b.mp4".into());
+        assert!(!event_matches_source(Some(&current), Some("/media/a.mp4")));
+        assert!(event_matches_source(Some(&current), Some("/media/b.mp4")));
+        assert!(event_matches_source(Some(&current), None));
+        assert!(!event_matches_source(None, None));
+    }
+
+    #[test]
+    fn decoder_failure_at_eof_is_reported_but_normal_eof_is_not() {
+        let messages = vec!["Failed to open codec".to_owned()];
+        assert!(endfile_error(EndFileReason::Eof, &messages).is_some());
+        assert!(endfile_error(EndFileReason::Eof, &[]).is_none());
+        assert!(endfile_error(EndFileReason::Stop, &messages).is_none());
+    }
 
     #[test]
     fn error_copy_reports_required_size_and_nul_terminates_truncation() {

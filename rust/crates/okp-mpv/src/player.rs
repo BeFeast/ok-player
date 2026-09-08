@@ -1936,7 +1936,12 @@ impl Mpv {
         self.command_async_with_userdata(args, 0)
     }
 
-    fn command_async_with_userdata(&self, args: &[&str], request_id: u64) -> Result<(), MpvError> {
+    /// Submit a command with its caller-owned correlation ID; replies reach the event pump.
+    pub fn command_async_with_userdata(
+        &self,
+        args: &[&str],
+        request_id: u64,
+    ) -> Result<(), MpvError> {
         let (_c_args, ptrs) = command_args(args)?;
         check(unsafe { ffi::mpv_command_async(self.handle.as_ptr(), request_id, ptrs.as_ptr()) })
     }

@@ -35,14 +35,14 @@ impl SessionMachine {
         forward: F,
     ) -> (CommandOutcome, Result<(), String>)
     where
-        F: FnOnce(&PlayerCommand) -> Result<(), String>,
+        F: FnOnce(&PlayerCommand, u64) -> Result<(), String>,
     {
         let outcome = self.machine.apply_command(command);
-        if !matches!(outcome, CommandOutcome::Accepted { .. }) {
+        let CommandOutcome::Accepted { request_id } = outcome else {
             return (outcome, Ok(()));
-        }
+        };
 
-        let result = forward(command);
+        let result = forward(command, request_id);
         if let Err(message) = &result {
             self.machine.apply_event(PlayerEvent::Error(PlayerError {
                 kind: if matches!(command, PlayerCommand::Open(_)) {
@@ -70,11 +70,48 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn accepted_command_forwards_the_core_request_id() {
+        let mut session = SessionMachine::new();
+        let forwarded_id = Cell::new(0);
+        let command =
+            PlayerCommand::Open(OpenRequest::new(PlaylistItem::Local("/media/a.mp4".into())));
+        let (outcome, result) = session.dispatch(&command, |_, request_id| {
+            forwarded_id.set(request_id);
+            Ok(())
+        });
+        let CommandOutcome::Accepted { request_id } = outcome else {
+            panic!("open rejected")
+        };
+        assert!(result.is_ok());
+        assert_ne!(request_id, 0);
+        assert_eq!(forwarded_id.get(), request_id);
+    }
+
+    #[test]
+    fn replaced_file_stop_then_loaded_remains_playable() {
+        let mut session = SessionMachine::new();
+        for path in ["/media/a.mp4", "/media/b.mp4"] {
+            let command = PlayerCommand::Open(OpenRequest::new(PlaylistItem::Local(path.into())));
+            let (outcome, result) = session.dispatch(&command, |_, _| Ok(()));
+            assert!(matches!(outcome, CommandOutcome::Accepted { .. }));
+            assert!(result.is_ok());
+        }
+        session.apply_event(PlayerEvent::Ended(EndReason::Stopped));
+        session.apply_event(PlayerEvent::Loaded {
+            duration: Some(12.0),
+        });
+        assert_eq!(session.machine().status(), PlaybackStatus::Playing);
+        let (outcome, _) = session.dispatch(&PlayerCommand::TogglePause, |_, _| Ok(()));
+        assert!(matches!(outcome, CommandOutcome::Accepted { .. }));
+        assert_eq!(session.machine().status(), PlaybackStatus::Paused);
+    }
+
+    #[test]
     fn rejected_command_never_reaches_engine() {
         let mut session = SessionMachine::new();
         let forwarded = Cell::new(false);
 
-        let (outcome, engine) = session.dispatch(&PlayerCommand::TogglePause, |_| {
+        let (outcome, engine) = session.dispatch(&PlayerCommand::TogglePause, |_, _| {
             forwarded.set(true);
             Ok(())
         });
@@ -92,7 +129,7 @@ mod tests {
             "/media/smoke.mp4",
         ))));
 
-        let (outcome, engine) = session.dispatch(&open, |_| Ok(()));
+        let (outcome, engine) = session.dispatch(&open, |_, _| Ok(()));
         assert!(matches!(outcome, CommandOutcome::Accepted { .. }));
         assert!(engine.is_ok());
         assert_eq!(session.machine().status(), PlaybackStatus::Opening);
@@ -102,7 +139,7 @@ mod tests {
         });
         assert_eq!(session.machine().status(), PlaybackStatus::Playing);
 
-        let (_, engine) = session.dispatch(&PlayerCommand::SetPaused(true), |_| Ok(()));
+        let (_, engine) = session.dispatch(&PlayerCommand::SetPaused(true), |_, _| Ok(()));
         assert!(engine.is_ok());
         assert_eq!(session.machine().status(), PlaybackStatus::Paused);
 
@@ -111,7 +148,7 @@ mod tests {
         ));
         assert_eq!(session.machine().status(), PlaybackStatus::Playing);
 
-        let (_, engine) = session.dispatch(&PlayerCommand::Close, |_| Ok(()));
+        let (_, engine) = session.dispatch(&PlayerCommand::Close, |_, _| Ok(()));
         assert!(engine.is_ok());
         assert_eq!(session.machine().status(), PlaybackStatus::Idle);
     }
@@ -123,7 +160,7 @@ mod tests {
             "/missing.mp4",
         ))));
 
-        let (_, engine) = session.dispatch(&open, |_| Err("engine refused fixture".to_owned()));
+        let (_, engine) = session.dispatch(&open, |_, _| Err("engine refused fixture".to_owned()));
 
         assert_eq!(engine.unwrap_err(), "engine refused fixture");
         assert_eq!(session.machine().status(), PlaybackStatus::Ended);
