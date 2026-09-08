@@ -14,7 +14,7 @@ final class VideoView: NSOpenGLView {
             UInt32(NSOpenGLPFAAlphaSize), 8,
             UInt32(NSOpenGLPFADoubleBuffer), 0
         ]
-        super.init(frame: .zero, pixelFormat: NSOpenGLPixelFormat(attributes: attributes)!)
+        super.init(frame: .zero, pixelFormat: NSOpenGLPixelFormat(attributes: attributes)!)!
         wantsBestResolutionOpenGLSurface = true
     }
     required init?(coder: NSCoder) { fatalError("Use init()") }
