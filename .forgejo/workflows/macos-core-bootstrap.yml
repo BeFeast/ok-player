@@ -141,7 +141,8 @@ jobs:
 
           export CARGO_TARGET_DIR="$stage/target"
           test_result=failed
-          cargo test --manifest-path rust/Cargo.toml --locked -p okp-core -p okp-ffi \
+          # Linux packaging integration harnesses run in their existing Linux CI lane.
+          cargo test --manifest-path rust/Cargo.toml --locked --lib -p okp-core -p okp-ffi \
             --target aarch64-apple-darwin 2>&1 | tee "$receipt/test.log"
           test_result=passed
           build_result=failed
