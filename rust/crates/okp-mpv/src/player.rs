@@ -1571,6 +1571,10 @@ impl Mpv {
         self.command_async(&["cycle", "pause"])
     }
 
+    pub fn set_paused(&self, paused: bool) -> Result<(), MpvError> {
+        self.command_async(&["set", "pause", if paused { "yes" } else { "no" }])
+    }
+
     pub fn stop(&self) -> Result<(), MpvError> {
         self.command_async(&["stop"])
     }
@@ -2572,6 +2576,7 @@ fn terminate_destroy_bounded(
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 unsafe extern "C" fn get_proc_address(_ctx: *mut c_void, name: *const c_char) -> *mut c_void {
     let glx = unsafe { ffi::glXGetProcAddressARB(name.cast::<u8>()) };
     if !glx.is_null() {
@@ -2581,6 +2586,15 @@ unsafe extern "C" fn get_proc_address(_ctx: *mut c_void, name: *const c_char) ->
     unsafe { ffi::eglGetProcAddress(name) }
 }
 
+#[cfg(target_os = "macos")]
+unsafe extern "C" fn get_proc_address(_ctx: *mut c_void, name: *const c_char) -> *mut c_void {
+    // OpenGL.framework is linked into this image by build.rs. Looking up through
+    // RTLD_DEFAULT is the supported libmpv callback shape on macOS and covers both
+    // legacy and core-profile entry points without a Linux GLX/EGL dependency.
+    unsafe { libc::dlsym(libc::RTLD_DEFAULT, name) }
+}
+
+#[cfg(not(target_os = "macos"))]
 unsafe extern "C" fn get_egl_proc_address(_ctx: *mut c_void, name: *const c_char) -> *mut c_void {
     let egl = unsafe { ffi::eglGetProcAddress(name) };
     if !egl.is_null() {

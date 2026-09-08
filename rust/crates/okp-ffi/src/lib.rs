@@ -1,12 +1,19 @@
-//! C-ABI scaffold projecting the `okp-core` player contract (core-extraction epic
-//! C10, issue #152).
+//! C ABI projecting the `okp-core` player contract.
 //!
 //! It wraps the pure [`okp_core::player::PlayerMachine`] behind an opaque handle and
 //! mirrors the core command/outcome/status enums as `#[repr(C)]` types a C consumer can
-//! build and read. The C header (`okp_core.h`) is generated from these declarations by
-//! cbindgen at build time — see `build.rs`. This is a scaffold: it exercises the whole
-//! contract shape end to end (command in, engine notification in, state out) without yet
-//! binding to a live engine, which arrives when `okp-mpv` becomes event-driven.
+//! build and read. With the `live-mpv` feature it also exports an opaque live session
+//! that owns this same state machine and the event-driven `okp-mpv` adapter. The C
+//! header (`okp_core.h`) is generated from these declarations by cbindgen at build time.
+
+#[cfg(any(feature = "live-mpv", test))]
+mod session_machine;
+
+#[cfg(feature = "live-mpv")]
+mod live;
+
+#[cfg(feature = "live-mpv")]
+pub use live::*;
 
 use std::ffi::{CStr, c_char};
 use std::path::PathBuf;

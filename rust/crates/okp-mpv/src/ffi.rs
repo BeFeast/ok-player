@@ -205,7 +205,9 @@ unsafe extern "C" {
     pub fn mpv_render_context_report_swap(ctx: *mut mpv_render_context);
     pub fn mpv_render_context_free(ctx: *mut mpv_render_context);
 
+    #[cfg(not(target_os = "macos"))]
     pub fn eglGetProcAddress(name: *const c_char) -> *mut c_void;
+    #[cfg(not(target_os = "macos"))]
     pub fn glXGetProcAddressARB(name: *const u8) -> *mut c_void;
     pub fn glGetIntegerv(pname: c_uint, data: *mut c_int);
     pub fn glViewport(x: c_int, y: c_int, width: c_int, height: c_int);

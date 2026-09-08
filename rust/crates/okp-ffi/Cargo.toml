@@ -9,9 +9,13 @@ rust-version.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+live-mpv = ["dep:okp-mpv"]
+
 [dependencies]
 okp-core = { path = "../okp-core" }
+okp-mpv = { path = "../okp-mpv", optional = true }
 
 [build-dependencies]
 cbindgen = "0.29"
-

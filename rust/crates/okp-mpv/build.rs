@@ -20,6 +20,10 @@ fn main() {
         }
     }
     println!("cargo:rustc-env=OKP_LINKED_MPV_VERSION={}", library.version);
-    println!("cargo:rustc-link-lib=GL");
-    println!("cargo:rustc-link-lib=EGL");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-lib=framework=OpenGL");
+    } else {
+        println!("cargo:rustc-link-lib=GL");
+        println!("cargo:rustc-link-lib=EGL");
+    }
 }
