@@ -1215,6 +1215,7 @@ pub(crate) fn build_controls(
     up_next_revealer.set_transition_type(gtk::RevealerTransitionType::SlideRight);
     up_next_revealer.set_reveal_child(false);
     up_next_revealer.set_can_target(false);
+    up_next_revealer.set_sensitive(false);
     up_next_revealer.set_child(Some(&side_panel_fade_revealer));
 
     let side_panel_user_visible = Rc::new(Cell::new(false));
@@ -1637,6 +1638,10 @@ pub(crate) fn set_side_panel_user_visible(
     visible: bool,
 ) {
     user_visible.set(visible);
+    // Both nested revealers remain mapped while their transitions settle. Sensitivity is
+    // inherited by descendants, so the visually closed panel cannot leave one of its child
+    // controls above an unrelated History action in GTK's pointer target tree.
+    revealer.set_sensitive(visible);
     revealer.set_can_target(visible);
     fade_revealer.set_reveal_child(visible);
     revealer.set_reveal_child(visible);

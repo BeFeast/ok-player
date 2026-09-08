@@ -7567,6 +7567,111 @@ fn on_gtk_thread<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -
 
 #[test]
 #[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
+fn closed_side_panel_does_not_intercept_an_underlying_action() {
+    on_gtk_thread(|| {
+        let history_action = gtk::Button::with_label("History actions");
+        history_action.set_hexpand(true);
+        history_action.set_vexpand(true);
+
+        let panel_action = gtk::Button::with_label("Side panel action");
+        panel_action.set_size_request(SIDE_PANEL_WIDTH, 120);
+        let panel_content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        panel_content.set_width_request(SIDE_PANEL_WIDTH);
+        panel_content.append(&panel_action);
+
+        let fade_revealer = gtk::Revealer::new();
+        fade_revealer.set_transition_duration(SIDE_PANEL_TRANSITION_MS);
+        fade_revealer.set_transition_type(gtk::RevealerTransitionType::Crossfade);
+        fade_revealer.set_child(Some(&panel_content));
+
+        let panel_revealer = gtk::Revealer::new();
+        panel_revealer.set_halign(gtk::Align::End);
+        panel_revealer.set_valign(gtk::Align::Fill);
+        panel_revealer.set_transition_duration(SIDE_PANEL_TRANSITION_MS);
+        panel_revealer.set_transition_type(gtk::RevealerTransitionType::SlideRight);
+        panel_revealer.set_child(Some(&fade_revealer));
+
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&history_action));
+        overlay.add_overlay(&panel_revealer);
+
+        let window = gtk::Window::new();
+        window.set_default_size(1120, 680);
+        window.set_child(Some(&overlay));
+        window.present();
+
+        let context = glib::MainContext::default();
+        let settle = || {
+            for _ in 0..40 {
+                while context.pending() {
+                    context.iteration(false);
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        };
+        settle();
+
+        let toggle = gtk::Button::new();
+        let user_visible = Rc::new(Cell::new(false));
+        let pinned = Rc::new(Cell::new(false));
+        let chrome = ChromeVisibility::new();
+        set_side_panel_user_visible(
+            &panel_revealer,
+            &fade_revealer,
+            &toggle,
+            &user_visible,
+            &pinned,
+            &chrome,
+            true,
+        );
+        settle();
+
+        let point_x = f64::from(overlay.allocated_width() - SIDE_PANEL_WIDTH / 2);
+        let point_y = 60.0;
+        let picked = overlay
+            .pick(point_x, point_y, gtk::PickFlags::DEFAULT)
+            .expect("open side panel should own its action point");
+        assert!(
+            picked == panel_action.clone().upcast::<gtk::Widget>()
+                || picked.is_ancestor(&panel_action),
+            "open side panel should be pointer-targetable, picked {picked:?}"
+        );
+
+        set_side_panel_user_visible(
+            &panel_revealer,
+            &fade_revealer,
+            &toggle,
+            &user_visible,
+            &pinned,
+            &chrome,
+            false,
+        );
+
+        assert!(
+            !panel_action.is_sensitive(),
+            "closing the panel must disable input for every descendant"
+        );
+        assert!(
+            history_action.is_sensitive(),
+            "closing the panel must not disable the underlying action"
+        );
+
+        let picked = overlay
+            .pick(point_x, point_y, gtk::PickFlags::DEFAULT)
+            .expect("the underlying action should remain targetable");
+        assert!(
+            picked == history_action.clone().upcast::<gtk::Widget>()
+                || picked.is_ancestor(&history_action),
+            "closed side panel must pass pointer targeting through to the underlying action, picked {picked:?}"
+        );
+
+        window.close();
+        settle();
+    });
+}
+
+#[test]
+#[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
 fn a_long_saved_path_cannot_widen_the_toast_labels() {
     on_gtk_thread(|| {
         let toast = StatusToast::new();
