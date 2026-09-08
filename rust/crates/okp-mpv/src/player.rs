@@ -2703,6 +2703,24 @@ fn path_to_cstring(path: &Path) -> Result<CString, NulError> {
     CString::new(path.to_string_lossy().as_bytes())
 }
 
+/// Raw render flags, target and engine clocks, and the enclosing monotonic bracket.
+#[cfg(target_os = "linux")]
+pub type RenderTimingSample = (u64, i64, i64, u64, u64);
+
+#[cfg(target_os = "linux")]
+fn render_monotonic_ns() -> u64 {
+    let mut timestamp = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut timestamp) } != 0 {
+        return 0;
+    }
+    (timestamp.tv_sec as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(timestamp.tv_nsec as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -3887,22 +3905,4 @@ mod tests {
             "scale must be forwarded unchanged"
         );
     }
-}
-
-/// Raw render flags, target and engine clocks, and the enclosing monotonic bracket.
-#[cfg(target_os = "linux")]
-pub type RenderTimingSample = (u64, i64, i64, u64, u64);
-
-#[cfg(target_os = "linux")]
-fn render_monotonic_ns() -> u64 {
-    let mut timestamp = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut timestamp) } != 0 {
-        return 0;
-    }
-    (timestamp.tv_sec as u64)
-        .saturating_mul(1_000_000_000)
-        .saturating_add(timestamp.tv_nsec as u64)
 }
