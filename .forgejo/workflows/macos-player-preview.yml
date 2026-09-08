@@ -66,7 +66,14 @@ jobs:
             printf '6e885d08198409e63ea80e28f0353d094949c66a8d3d121d32d382629810c0b0  %s\n' "$stage/smoke.mp4" | shasum -a 256 -c -
             mkdir "$stage/relocated"
             ditto "$receipt/OK Player.app" "$stage/relocated/OK Player.app"
-            env -u DYLD_LIBRARY_PATH "$stage/relocated/OK Player.app/Contents/MacOS/ok-player" --smoke-test "$stage/smoke.mp4" > "$receipt/smoke.log" 2>&1
+            python3 - "$stage/relocated/OK Player.app/Contents/MacOS/ok-player" "$stage/smoke.mp4" "$receipt/smoke.log" <<'PYTHON'
+          import os, subprocess, sys
+          env = os.environ.copy()
+          env.pop("DYLD_LIBRARY_PATH", None)
+          with open(sys.argv[3], "w") as log:
+              result = subprocess.run([sys.argv[1], "--smoke-test", sys.argv[2]], env=env, stdout=log, stderr=subprocess.STDOUT, timeout=40)
+          raise SystemExit(result.returncode)
+          PYTHON
           fi
       - name: Upload player and native evidence
         if: always()
