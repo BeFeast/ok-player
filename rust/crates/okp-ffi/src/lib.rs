@@ -7,6 +7,7 @@
 //! header (`okp_core.h`) is generated from these declarations by cbindgen at build time.
 
 #[cfg(any(feature = "live-mpv", test))]
+#[cfg(any(test, feature = "live-mpv"))]
 mod session_machine;
 
 #[cfg(feature = "live-mpv")]

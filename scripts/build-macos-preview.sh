@@ -17,6 +17,8 @@ cp "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/libokp_ffi.dylib" "$app/Conte
 cp "$OKP_MPV_PREFIX"/lib/*.dylib "$app/Contents/Frameworks/"
 cp "$root/macos/Info.plist" "$app/Contents/Info.plist"
 cp "$root/LICENSE" "$app/Contents/Resources/"
+cp "$root/macos/README.md" "$app/Contents/Resources/README.md"
+cp "$OKP_MPV_PREFIX/provenance.json" "$app/Contents/Resources/runtime-provenance.json"
 headers=("$CARGO_TARGET_DIR"/aarch64-apple-darwin/release/build/okp-ffi-*/out/okp_core.h)
 test "${#headers[@]}" -eq 1
 xcrun swiftc -swift-version 5 -O -target arm64-apple-macosx13.0 -sdk "$SDKROOT" \

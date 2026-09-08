@@ -95,6 +95,8 @@ pub unsafe extern "C" fn okp_live_session_new(
     error_capacity: usize,
 ) -> *mut OkpLiveSession {
     let options = [
+        #[cfg(target_os = "macos")]
+        ("ao".to_owned(), "coreaudio".to_owned()),
         ("input-default-bindings".to_owned(), "no".to_owned()),
         ("input-vo-keyboard".to_owned(), "no".to_owned()),
         ("osc".to_owned(), "no".to_owned()),

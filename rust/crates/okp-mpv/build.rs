@@ -1,21 +1,21 @@
 fn main() {
     println!("cargo:rerun-if-env-changed=OKP_MPV_PREFIX");
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        if let Some(prefix) = std::env::var_os("OKP_MPV_PREFIX") {
-            let prefix = std::path::PathBuf::from(prefix);
-            assert!(
-                prefix.join("lib/libmpv.dylib").is_file(),
-                "OKP_MPV_PREFIX must contain lib/libmpv.dylib"
-            );
-            println!(
-                "cargo:rustc-link-search=native={}",
-                prefix.join("lib").display()
-            );
-            println!("cargo:rustc-link-lib=dylib=mpv");
-            println!("cargo:rustc-link-lib=framework=OpenGL");
-            println!("cargo:rustc-env=OKP_LINKED_MPV_VERSION=2.1.0");
-            return;
-        }
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")
+        && let Some(prefix) = std::env::var_os("OKP_MPV_PREFIX")
+    {
+        let prefix = std::path::PathBuf::from(prefix);
+        assert!(
+            prefix.join("lib/libmpv.dylib").is_file(),
+            "OKP_MPV_PREFIX must contain lib/libmpv.dylib"
+        );
+        println!(
+            "cargo:rustc-link-search=native={}",
+            prefix.join("lib").display()
+        );
+        println!("cargo:rustc-link-lib=dylib=mpv");
+        println!("cargo:rustc-link-lib=framework=OpenGL");
+        println!("cargo:rustc-env=OKP_LINKED_MPV_VERSION=2.1.0");
+        return;
     }
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_LIBDIR");
