@@ -4883,6 +4883,22 @@ pub(crate) const OKP_STYLESHEET: &str = "
             color: #ffffff;
         }
 
+        /* High contrast keeps the light base beneath it, so the hero card and
+           the command block - white surfaces in the light scheme - have to be
+           reset or their white text vanishes. */
+        window.okp-settings-window.is-high-contrast .okp-about-identity {
+            background-color: #000000;
+            background-image: none;
+            border-color: #ffffff;
+            box-shadow: none;
+        }
+
+        window.okp-settings-window.is-high-contrast .okp-update-setup-commands {
+            background: #000000;
+            border-color: #ffffff;
+            color: #ffffff;
+        }
+
         window.okp-settings-window.is-high-contrast .okp-settings-titlebar-label,
         window.okp-settings-window.is-high-contrast .okp-settings-nav-row,
         window.okp-settings-window.is-high-contrast .okp-settings-window-control,
@@ -5167,6 +5183,18 @@ mod tests {
             rule_body(".is-high-contrast .okp-history-bucket-card")
                 .contains("border: 1px solid #ffffff;")
         );
+        // Settings keeps its light base under high contrast, so the surfaces
+        // this restyle turned white must be reset there too.
+        for selector in [
+            "window.okp-settings-window.is-high-contrast .okp-about-identity",
+            "window.okp-settings-window.is-high-contrast .okp-update-setup-commands",
+        ] {
+            let body = rule_body(selector);
+            assert!(
+                body.contains("#000000") && body.contains("border-color: #ffffff;"),
+                "{selector} must paint black on a white border, got {body}"
+            );
+        }
     }
 
     /// The declarations of the first rule that opens with exactly `selector`.
