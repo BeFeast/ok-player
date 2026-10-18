@@ -1336,6 +1336,14 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .is-high-contrast .okp-idle-titlebar-text,
+        .is-high-contrast .okp-welcome-recents-title,
+        .is-high-contrast .okp-welcome-recents-subtitle,
+        .is-high-contrast .okp-first-run-title,
+        .is-high-contrast .okp-first-run-copy,
+        .is-high-contrast .okp-private-hero-title,
+        .is-high-contrast .okp-private-hero-copy,
+        .is-high-contrast .okp-private-hero-icon,
+        .is-high-contrast .okp-idle-footer-status:not(.is-private),
         .is-high-contrast .okp-history-title,
         .is-high-contrast .okp-history-subtitle,
         .is-high-contrast .okp-history-result-caption,
@@ -1440,6 +1448,40 @@ pub(crate) const OKP_STYLESHEET: &str = "
             border: 1px solid #ffffff;
             box-shadow: none;
             color: #000000;
+        }
+
+        /* Every other surface the light scheme paints as a white card on this
+           canvas, with the labels inside it, since the canvas paints inherited
+           text white under high contrast. */
+        .is-high-contrast button.okp-recent-card,
+        .is-high-contrast button.okp-recents-history-button,
+        .is-high-contrast button.okp-idle-secondary-button,
+        .is-high-contrast button.okp-first-run-drop-target,
+        .is-high-contrast button.okp-welcome-drop-target,
+        .is-high-contrast .okp-history-private-banner {
+            background: #000000;
+            border: 1px solid #ffffff;
+            box-shadow: none;
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-recent-title,
+        .is-high-contrast .okp-recent-location,
+        .is-high-contrast .okp-drop-primary,
+        .is-high-contrast .okp-drop-secondary {
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-idle-primary-button,
+        .is-high-contrast button.okp-idle-primary-button:hover {
+            background: #ffffff;
+            border-color: #ffffff;
+            box-shadow: none;
+            color: #000000;
+        }
+
+        .is-high-contrast progressbar.okp-recent-progress progress {
+            background: #ffffff;
         }
 
         .okp-history-state-card {
@@ -3603,6 +3645,17 @@ pub(crate) const OKP_STYLESHEET: &str = "
             color: #ffffff;
         }
 
+        window.okp-media-info-window.is-high-contrast .okp-media-info-tab-strip {
+            background: #000000;
+            border-color: #ffffff;
+        }
+
+        window.okp-media-info-window.is-high-contrast button.okp-media-info-tab.is-active {
+            background: #ffffff;
+            box-shadow: none;
+            color: #000000;
+        }
+
         window.okp-media-info-window.is-high-contrast .okp-media-info-title,
         window.okp-media-info-window.is-high-contrast .okp-media-info-subtitle,
         window.okp-media-info-window.is-high-contrast .okp-media-info-path,
@@ -4922,6 +4975,41 @@ pub(crate) const OKP_STYLESHEET: &str = "
             color: #ffffff;
         }
 
+        /* The remaining light-scheme surfaces of the Settings window: insets,
+           chips, secondary buttons and the segmented track. The selected inset
+           row and segment invert, as the rail's selected row already does. */
+        window.okp-settings-window.is-high-contrast .okp-settings-rail-frame,
+        window.okp-settings-window.is-high-contrast .okp-settings-segmented,
+        window.okp-settings-window.is-high-contrast .okp-about-version-chip,
+        window.okp-settings-window.is-high-contrast .okp-about-copy-button,
+        window.okp-settings-window.is-high-contrast .okp-about-check-button,
+        window.okp-settings-window.is-high-contrast .okp-info-footer-button,
+        window.okp-settings-window.is-high-contrast .okp-mpv-conf-scroller,
+        window.okp-settings-window.is-high-contrast .okp-empty-state,
+        window.okp-settings-window.is-high-contrast button.okp-settings-track-row,
+        window.okp-settings-window.is-high-contrast .okp-info-track-row,
+        window.okp-settings-window.is-high-contrast .okp-settings-button:disabled,
+        window.okp-settings-window.is-high-contrast .okp-settings-stepper-button:disabled {
+            background: #000000;
+            border-color: #ffffff;
+            box-shadow: none;
+            color: #ffffff;
+        }
+
+        window.okp-settings-window.is-high-contrast .okp-info-track-row label,
+        window.okp-settings-window.is-high-contrast .okp-empty-state label,
+        window.okp-settings-window.is-high-contrast .okp-empty-state-icon,
+        window.okp-settings-window.is-high-contrast button.okp-settings-segment-button {
+            color: #ffffff;
+        }
+
+        window.okp-settings-window.is-high-contrast button.okp-settings-track-row.is-selected,
+        window.okp-settings-window.is-high-contrast .okp-info-track-row.is-selected,
+        window.okp-settings-window.is-high-contrast .okp-info-track-row.is-selected label {
+            background: #ffffff;
+            color: #000000;
+        }
+
         window.okp-settings-window.is-high-contrast .okp-settings-titlebar-label,
         window.okp-settings-window.is-high-contrast .okp-settings-nav-row,
         window.okp-settings-window.is-high-contrast .okp-settings-window-control,
@@ -5211,8 +5299,10 @@ mod tests {
         // be reset there too.
         for selector in [
             ".is-high-contrast .okp-history-state-card,\n        .is-high-contrast .okp-history-state-icon-wrap",
+            ".is-high-contrast button.okp-recent-card,\n        .is-high-contrast button.okp-recents-history-button,\n        .is-high-contrast button.okp-idle-secondary-button,\n        .is-high-contrast button.okp-first-run-drop-target,\n        .is-high-contrast button.okp-welcome-drop-target,\n        .is-high-contrast .okp-history-private-banner",
             "window.okp-settings-window.is-high-contrast .okp-about-identity",
             "window.okp-settings-window.is-high-contrast .okp-update-setup-commands",
+            "window.okp-media-info-window.is-high-contrast .okp-media-info-tab-strip",
         ] {
             let body = rule_body(selector);
             assert!(
