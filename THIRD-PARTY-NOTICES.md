@@ -70,34 +70,46 @@ distributed and licensed independently by Freedesktop/Flathub.
 - **CommunityToolkit.Mvvm** — © .NET Foundation and contributors, MIT License
   (<https://github.com/CommunityToolkit/dotnet>).
 
-## Chrome icon set (Adwaita, plus one first-party icon)
+## Chrome icon set (Lucide, plus one first-party icon)
 
 - **Component:** the symbolic icons the Linux shell resolves for its own chrome
   (`rust/crates/okp-linux-gtk/icons/okp-*-symbolic.svg`), compiled into the
   binary as a `GResource`. The set has two origins under two licences.
-- **Adwaita symbolic artwork** — every icon in the set except the one named
-  below. The files are renamed into an `okp-` namespace so a user's own icon
-  theme cannot shadow them (see issue #731); the artwork itself is upstream's.
-  - **Upstream:** <https://gitlab.gnome.org/GNOME/adwaita-icon-theme>
-  - **Copyright:** © the GNOME Project and contributors.
-  - **License:** Adwaita is dual licensed **"either the GNU LGPL v3 or
-    CC-BY-SA 3.0"**, with newer icons under CC-BY-SA 4.0. This project takes
-    the **LGPL-3 option**, which is compatible with its own GPL-3.0-or-later
-    terms. LGPLv3 §4(b) requires the combined work to be accompanied by both
-    licence documents, so every package ships the full text as
-    [`LICENSE.LGPL-3.0`](LICENSE.LGPL-3.0) next to [`LICENSE`](LICENSE) —
-    see [`scripts/stage-license-documents.sh`](scripts/stage-license-documents.sh)
-    for where each lane installs them.
-- **`okp-process-working-symbolic.svg` (first-party)** — Adwaita has no
-  counterpart for it, so it remains original work drawn for OK Player by
+- **Lucide artwork** — every icon in the set except the one named below. The
+  files are renamed into an `okp-` namespace so a user's own icon theme cannot
+  shadow them (see issue #731), and each 2px stroke is rendered as a filled
+  outline so GTK's symbolic recolour reaches it; the shapes are upstream's.
+  - **Upstream:** <https://lucide.dev> — <https://github.com/lucide-icons/lucide>
+  - **Copyright:** © 2022 Lucide Contributors. Portions © 2013–2022 Cole Bemis,
+    from Feather.
+  - **License:** ISC (the Feather-derived portions under MIT, which Lucide's
+    own licence file records). The ISC text:
+
+    > Permission to use, copy, modify, and/or distribute this software for any purpose
+    > with or without fee is hereby granted, provided that the above copyright notice
+    > and this permission notice appear in all copies.
+    > 
+    > THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+    > REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+    > FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+    > INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+    > OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+    > TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+    > THIS SOFTWARE.
+
+- **`okp-process-working-symbolic.svg` (first-party)** — the spinner predates
+  the Lucide set and was left as it was: original work drawn for OK Player by
   [`scripts/generate-chrome-icons.py`](scripts/generate-chrome-icons.py).
   - **License:** GPL-3.0-or-later, the same terms as the rest of OK Player
     (see [`LICENSE`](LICENSE)).
-- **Supersedes:** an earlier revision of this section declared the whole set
-  first-party and explicitly not derived from Adwaita. That described the
-  script-drawn set these files replaced, and does not describe what ships now.
+- **Supersedes:** earlier revisions of this section described an Adwaita set
+  taken under the LGPL-3 option, and before that a wholly first-party
+  script-drawn set. Neither describes what ships now.
+  [`LICENSE.LGPL-3.0`](LICENSE.LGPL-3.0) continues to accompany every package:
+  no component in the current set is under it, but every packaging lane and
+  its gate is wired to stage it, so it stays until the lanes change together.
 - **Not affected:** the application icon and desktop integration
-  (`rust/packaging/linux/`), which are first-party and unchanged.
+  (`rust/packaging/linux/`), which are first-party.
 
 ## Obtaining the source
 

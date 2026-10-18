@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Adwaita icon theme (GNOME), used under the GNU LGPL v3 option of its dual
-     licence; see THIRD-PARTY-NOTICES.md. Renamed into the okp- namespace so a
-     users own icon theme cannot shadow it. -->
 <svg height="16px" viewBox="0 0 16 16" width="16px" xmlns="http://www.w3.org/2000/svg">
-    <path d="m 7 1 v 6 h -6 v 2 h 6 v 6 h 2 v -6 h 6 v -2 h -6 v -6 z m 0 0" fill="#2e3436"/>
+    <!-- Lucide icon "plus" (ISC licence, see THIRD-PARTY-NOTICES.md), rendered
+         as outlines so GTK's symbolic recolour reaches every pixel, and renamed
+         into the okp- namespace so a user's own icon theme cannot shadow it. -->
+    <path d="M8.667 3.333L8.667 7.333L12.667 7.333Q12.799 7.333 12.922 7.384Q13.044 7.435 13.138 7.529Q13.232 7.622 13.283 7.745Q13.333 7.867 13.333 8Q13.333 8.133 13.283 8.255Q13.232 8.378 13.138 8.471Q13.044 8.565 12.922 8.616Q12.799 8.667 12.667 8.667L8.667 8.667L8.667 12.667Q8.667 12.799 8.616 12.922Q8.565 13.044 8.471 13.138Q8.378 13.232 8.255 13.283Q8.133 13.333 8 13.333Q7.867 13.333 7.745 13.283Q7.622 13.232 7.529 13.138Q7.435 13.044 7.384 12.922Q7.333 12.799 7.333 12.667L7.333 8.667L3.333 8.667Q3.201 8.667 3.078 8.616Q2.956 8.565 2.862 8.471Q2.768 8.378 2.717 8.255Q2.667 8.133 2.667 8Q2.667 7.867 2.717 7.745Q2.768 7.622 2.862 7.529Q2.956 7.435 3.078 7.384Q3.201 7.333 3.333 7.333L7.333 7.333L7.333 3.333Q7.333 3.201 7.384 3.078Q7.435 2.956 7.529 2.862Q7.622 2.768 7.745 2.717Q7.867 2.667 8 2.667Q8.133 2.667 8.255 2.717Q8.378 2.768 8.471 2.862Q8.565 2.956 8.616 3.078Q8.667 3.201 8.667 3.333Z" fill="#2e3436" fill-rule="evenodd"/>
 </svg>

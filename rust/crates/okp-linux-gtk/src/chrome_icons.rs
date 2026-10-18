@@ -80,7 +80,7 @@ pub(crate) const CHROME_ICONS: &[&str] = &[
 ];
 
 /// The shipped icons that `scripts/generate-chrome-icons.py` still draws, by
-/// stem. Everything else in the set is Adwaita artwork under LGPL-3 (see
+/// stem. Everything else in the set is Lucide artwork under ISC (see
 /// THIRD-PARTY-NOTICES.md), so the generator must not write it.
 ///
 /// Nothing at runtime resolves icons by provenance - this records the split for
@@ -403,6 +403,24 @@ mod tests {
         }
     }
 
+    /// gdk-pixbuf recognises an SVG by finding `<svg` within the first 256
+    /// bytes (the shared-mime-info magic it sniffs with looks that far and no
+    /// further). A provenance comment ahead of the root element pushed the tag
+    /// past that window once, and every chrome icon came up as GTK's
+    /// image-missing marker with "Unrecognized image file format" in the log.
+    #[test]
+    fn shipped_icons_open_their_svg_element_inside_the_sniff_window() {
+        for path in icon_files() {
+            let svg = std::fs::read(&path).expect("an icon must be readable");
+            let window = &svg[..svg.len().min(256)];
+            assert!(
+                window.windows(4).any(|bytes| bytes == b"<svg"),
+                "{} does not open <svg> within its first 256 bytes",
+                path.display()
+            );
+        }
+    }
+
     /// GTK's symbolic recolour rewrites `fill` and leaves `stroke` alone, so a
     /// stroked icon would keep its authored colour and stop following the
     /// foreground.
@@ -464,8 +482,8 @@ mod tests {
     }
 
     /// The generator used to own the whole chrome set. Now that the set is
-    /// Adwaita artwork apart from one icon, running it must no longer write the
-    /// rest: it would overwrite LGPL-3 files with GPL-3-headered script drawings
+    /// Lucide artwork apart from one icon, running it must no longer write the
+    /// rest: it would overwrite ISC files with GPL-3-headered script drawings
     /// and silently contradict THIRD-PARTY-NOTICES.md. The old assertion here
     /// required the opposite - that it draws every shipped name - so it is
     /// replaced rather than relaxed.

@@ -58,8 +58,9 @@ fn draw_launcher_brand_tile(cr: &cairo::Context, width: i32, height: i32, icon_s
     rounded_rect(cr, 0.0, 0.0, width, height, radius);
     cr.clip();
     let gradient = cairo::LinearGradient::new(width * 0.2113, 0.0, width * 0.7887, height);
-    gradient.add_color_stop_rgb(0.0, 21.0 / 255.0, 168.0 / 255.0, 157.0 / 255.0);
-    gradient.add_color_stop_rgb(1.0, 10.0 / 255.0, 101.0 / 255.0, 95.0 / 255.0);
+    gradient.add_color_stop_rgb(0.0, 22.0 / 255.0, 48.0 / 255.0, 101.0 / 255.0);
+    gradient.add_color_stop_rgb(0.55, 37.0 / 255.0, 99.0 / 255.0, 235.0 / 255.0);
+    gradient.add_color_stop_rgb(1.0, 57.0 / 255.0, 190.0 / 255.0, 249.0 / 255.0);
     let _ = cr.set_source(&gradient);
     let _ = cr.paint();
     let _ = cr.restore();

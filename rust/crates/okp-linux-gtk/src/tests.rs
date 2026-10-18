@@ -312,19 +312,19 @@ fn floating_volume_css_pins_capsule_geometry_motion_and_state_colors() {
     let css = include_str!("css.rs");
     for required in [
         "padding: 9px 13px;",
-        "border-radius: 13px;",
-        "background: rgba(28, 28, 32, 0.72);",
+        "border-radius: 16px;",
+        "background: rgba(12, 20, 36, 0.72);",
         "min-width: 122px;",
         "min-height: 14px;",
         "transition: opacity 150ms cubic-bezier(0.25, 0.1, 0.25, 1), transform 150ms cubic-bezier(0.25, 0.1, 0.25, 1);",
         "transition: opacity 120ms cubic-bezier(0.25, 0.1, 0.25, 1), transform 120ms cubic-bezier(0.25, 0.1, 0.25, 1);",
-        "#F0B840",
+        "@okp_warning_dark",
     ] {
         assert!(css.contains(required), "missing volume CSS: {required}");
     }
 
     let controls = include_str!("controls.rs");
-    assert!(controls.contains("(0.157, 0.702, 0.667)")); // #28B3AA
+    assert!(controls.contains("(0.224, 0.745, 0.976)")); // #39BEF9
     assert!(controls.contains("VolumeState::unity_fraction()"));
 }
 
@@ -424,7 +424,7 @@ fn linux_identity_preserves_launcher_tile_and_separate_about_illustration() {
     let icon = fs::read_to_string(packaging.join("com.befeast.okplayer.svg"))
         .expect("shared app icon should be readable");
     assert!(icon.contains("<rect"));
-    assert!(icon.contains("#15a89d"));
+    assert!(icon.contains("#163065"));
     assert!(icon.contains("cx=\"46\" cy=\"48\" r=\"33\""));
     assert!(icon.contains("x=\"92\" y=\"12\" width=\"15\" height=\"72\" rx=\"4\""));
     assert!(icon.contains("M111 14 L111 82 L161 48 Z"));
@@ -3031,7 +3031,7 @@ fn compact_mode_keeps_the_render_surface_and_restores_standard_chrome() {
         "border-radius: 14px;",
         "min-width: 28px;",
         "min-height: 28px;",
-        "background: rgba(22, 22, 25, 0.56);",
+        "background: rgba(12, 20, 36, 0.56);",
         "background: @okp_accent;",
         "min-width: 80px;",
         "min-height: 20px;",
@@ -8087,4 +8087,22 @@ fn the_idle_footer_gives_up_its_status_text_before_its_buttons() {
         assert!(status.is_visible(), "the status text stays on the bar");
         assert_eq!(status.ellipsize(), pango::EllipsizeMode::End);
     });
+}
+
+#[test]
+fn an_arch_package_is_a_pacman_owned_system_install() {
+    // The PKGBUILD stamps `OKP_PACKAGE_KIND=arch`; the QA override and the
+    // stamp both have to land on the pacman kind, and that kind has to read
+    // the system-package candidate lane with no repository of its own.
+    assert_eq!(parse_install_kind("arch"), Some(InstallKind::Pacman));
+    assert_eq!(parse_install_kind("pacman"), Some(InstallKind::Pacman));
+    assert_eq!(
+        candidate_install_lane(InstallKind::Pacman),
+        CandidateInstallLane::SystemPackage
+    );
+    assert_eq!(system_repository_hint(InstallKind::Pacman), None);
+    assert_eq!(
+        InstallKind::Pacman.capability(),
+        UpdateCapability::SystemManaged
+    );
 }

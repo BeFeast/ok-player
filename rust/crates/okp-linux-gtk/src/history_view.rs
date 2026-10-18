@@ -768,8 +768,9 @@ fn render_history_rows(
         caption.add_css_class("okp-history-result-caption");
         caption.set_xalign(0.0);
         host.append(&caption);
+        let card = history_bucket_card();
         for item in filtered {
-            host.append(&history_row(
+            card.append(&history_row(
                 item,
                 surface.clone(),
                 Rc::clone(&state),
@@ -777,6 +778,7 @@ fn render_history_rows(
                 Rc::clone(&status_toast),
             ));
         }
+        host.append(&card);
         return;
     }
 
@@ -802,8 +804,9 @@ fn render_history_rows(
         header.add_css_class("okp-history-bucket");
         header.set_xalign(0.0);
         host.append(&header);
+        let card = history_bucket_card();
         for item in bucket_items {
-            host.append(&history_row(
+            card.append(&history_row(
                 item,
                 surface.clone(),
                 Rc::clone(&state),
@@ -811,10 +814,21 @@ fn render_history_rows(
                 Rc::clone(&status_toast),
             ));
         }
+        host.append(&card);
     }
     let end = gtk::Label::new(Some(&history_format::retention_end_cap(retention)));
     end.add_css_class("okp-history-end-cap");
     host.append(&end);
+}
+
+/// The rows of one bucket share a card, separated by hairlines, instead of
+/// each floating as its own tile. The card clips its children so a hovered
+/// row keeps the card's rounded corners.
+fn history_bucket_card() -> gtk::Box {
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    card.add_css_class("okp-history-bucket-card");
+    card.set_overflow(gtk::Overflow::Hidden);
+    card
 }
 
 fn history_row(

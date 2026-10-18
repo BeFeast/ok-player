@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Generate the icons Adwaita has no counterpart for.
+"""Generate the one chrome icon that is still first-party.
 
-The shipped chrome set is Adwaita artwork renamed into the okp- namespace
-(see THIRD-PARTY-NOTICES.md). Script-drawn icons were tried first to avoid
-establishing provenance, and they looked script-drawn: generating SVG paths
-is not design. Only okp-process-working-symbolic still comes from here.
+The shipped chrome set is Lucide artwork rendered as filled outlines and
+renamed into the okp- namespace (see THIRD-PARTY-NOTICES.md). Script-drawn
+icons were tried first to avoid establishing provenance, and they looked
+script-drawn: generating SVG paths is not design. Only
+okp-process-working-symbolic still comes from here.
 
 Original notes follow.
 
@@ -381,10 +382,10 @@ HEADER = ('<?xml version="1.0" encoding="UTF-8"?>\n'
           ' viewBox="0 0 16 16">\n  <g fill="%s">\n    ' % FILL)
 FOOTER = "\n  </g>\n</svg>\n"
 
-# ICONS above is kept whole as the record of the script-drawn set that Adwaita
+# ICONS above is kept whole as the record of the script-drawn set that was
 # replaced, but only these are still written. Emitting the rest would overwrite
-# the shipped Adwaita artwork with the very artwork it was replaced for looking
-# script-drawn, and the header would relabel LGPL-3 files as first-party.
+# the shipped Lucide artwork with the very artwork it was replaced for looking
+# script-drawn, and the header would relabel ISC files as first-party.
 GENERATED = ("process-working",)
 
 for name in sorted(GENERATED):

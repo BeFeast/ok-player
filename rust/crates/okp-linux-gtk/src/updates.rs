@@ -896,6 +896,7 @@ pub(crate) fn parse_install_kind(value: &str) -> Option<InstallKind> {
     match value.trim().to_ascii_lowercase().as_str() {
         "deb" => Some(InstallKind::Deb),
         "rpm" => Some(InstallKind::Rpm),
+        "pacman" | "arch" => Some(InstallKind::Pacman),
         "appimage" => Some(InstallKind::AppImage),
         "flatpak" => Some(InstallKind::Flatpak),
         "dev-build" | "development" => Some(InstallKind::DevBuild),
@@ -912,7 +913,7 @@ fn query_package_ownership(path: Option<&str>) -> PackageOwnership {
         return PackageOwnership::Unknown;
     };
     let mut asked = false;
-    for (tool, args) in [("dpkg", ["-S"]), ("rpm", ["-qf"])] {
+    for (tool, args) in [("dpkg", ["-S"]), ("rpm", ["-qf"]), ("pacman", ["-Qo"])] {
         let Some(executable) = find_executable(tool) else {
             continue;
         };
@@ -928,10 +929,10 @@ fn query_package_ownership(path: Option<&str>) -> PackageOwnership {
         };
         asked = true;
         if output.status.success() {
-            return if tool == "dpkg" {
-                PackageOwnership::Dpkg
-            } else {
-                PackageOwnership::Rpm
+            return match tool {
+                "dpkg" => PackageOwnership::Dpkg,
+                "rpm" => PackageOwnership::Rpm,
+                _ => PackageOwnership::Pacman,
             };
         }
     }
@@ -2224,7 +2225,9 @@ pub(crate) fn check_for_linux_update(
 pub(crate) fn candidate_install_lane(install_kind: InstallKind) -> CandidateInstallLane {
     match install_kind {
         InstallKind::AppImage => CandidateInstallLane::AppImage,
-        InstallKind::Rpm | InstallKind::Flatpak => CandidateInstallLane::SystemPackage,
+        InstallKind::Rpm | InstallKind::Pacman | InstallKind::Flatpak => {
+            CandidateInstallLane::SystemPackage
+        }
         InstallKind::Deb | InstallKind::DevBuild | InstallKind::WindowsVelopack => {
             CandidateInstallLane::Debian
         }
@@ -2506,7 +2509,7 @@ pub(crate) fn apply_staged_linux_update(
 pub(crate) fn system_repository_hint(install_kind: InstallKind) -> Option<&'static str> {
     match install_kind {
         InstallKind::Deb => Some(APT_REPOSITORY_URL),
-        InstallKind::Rpm | InstallKind::Flatpak => None,
+        InstallKind::Rpm | InstallKind::Pacman | InstallKind::Flatpak => None,
         InstallKind::AppImage | InstallKind::DevBuild | InstallKind::WindowsVelopack => None,
     }
 }

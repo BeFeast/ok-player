@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Fail when a packaging lane stops shipping the licence documents.
 
-OK Player is GPL-3.0-or-later and its shipped chrome icons are Adwaita artwork
-taken under the LGPL-3 option, so every artifact handed to a user must be
-accompanied by both licence documents (GPLv3 §4, LGPLv3 §4(b)) plus the notices
-for what it bundles. That obligation is spread over five recipes in four
+OK Player is GPL-3.0-or-later, so every artifact handed to a user must be
+accompanied by the licence document (GPLv3 §4) plus the notices for what it
+bundles; the LGPL-3 text is staged alongside in every lane, as it has been since
+the chrome icons were Adwaita artwork. That obligation is spread over six recipes in four
 languages, none of which is exercised by the three checks that gate a pull
 request - so dropping a document from a lane is invisible until a user asks for
 the licence and it is not there.
@@ -18,6 +18,8 @@ are installed at the path that ecosystem looks for them at:
             Velopack maps the pack directory onto the AppDir's usr/bin
   rpm       %license / %doc under %{_licensedir}/%{_docdir}
   flatpak   /app/share/licenses/com.befeast.okplayer/
+  arch      /usr/share/licenses/ok-player/ and /usr/share/doc/ok-player/
+            (the PKGBUILD's package() function)
   windows   next to the app in the Velopack publish directory
 
 The two archive lanes route through `scripts/stage-license-documents.sh`, so
@@ -286,6 +288,33 @@ def check_flatpak(root: Path) -> LaneResult:
     return result
 
 
+def check_arch(root: Path) -> LaneResult:
+    recipe = "rust/packaging/arch/PKGBUILD"
+    result = LaneResult("arch", recipe)
+    text = (root / recipe).read_text(encoding="utf-8")
+    package_fn = text[text.index("package() {") :] if "package() {" in text else ""
+    result.require(bool(package_fn), f"{recipe} has no package() function")
+    for name in ("LICENSE", "LICENSE.LGPL-3.0"):
+        result.require(
+            re.search(
+                rf'install -Dm0644 {re.escape(name)} "\$pkgdir/usr/share/licenses/\$pkgname/{re.escape(name)}"',
+                package_fn,
+            )
+            is not None,
+            f"{recipe} package() no longer installs {name} under /usr/share/licenses",
+        )
+    result.require(
+        re.search(
+            r'install -Dm0644 THIRD-PARTY-NOTICES\.md "\$pkgdir/usr/share/doc/\$pkgname/THIRD-PARTY-NOTICES\.md"',
+            package_fn,
+        )
+        is not None,
+        f"{recipe} package() no longer installs THIRD-PARTY-NOTICES.md under /usr/share/doc",
+    )
+    result.shipped = list(SHARED_DOCUMENTS)
+    return result
+
+
 def check_windows(root: Path) -> LaneResult:
     recipe = "installer/build-velopack.ps1"
     result = LaneResult("windows", recipe)
@@ -327,6 +356,7 @@ def main() -> int:
         check_appimage,
         check_rpm,
         check_flatpak,
+        check_arch,
         check_windows,
     )
     results = []

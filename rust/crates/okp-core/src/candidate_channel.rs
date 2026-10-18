@@ -386,7 +386,7 @@ impl CandidateInstallLane {
         match package_kind {
             "appimage" => Some(Self::AppImage),
             "deb" | "development" => Some(Self::Debian),
-            "rpm" => Some(Self::SystemPackage),
+            "rpm" | "arch" => Some(Self::SystemPackage),
             _ => None,
         }
     }
@@ -792,6 +792,10 @@ mod tests {
         );
         assert_eq!(
             CandidateInstallLane::from_package_kind("rpm"),
+            Some(CandidateInstallLane::SystemPackage)
+        );
+        assert_eq!(
+            CandidateInstallLane::from_package_kind("arch"),
             Some(CandidateInstallLane::SystemPackage)
         );
         assert_eq!(CandidateInstallLane::from_package_kind("unknown"), None);

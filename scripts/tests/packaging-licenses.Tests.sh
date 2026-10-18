@@ -25,6 +25,7 @@ TRACKED=(
   rust/packaging/linux/copyright
   rust/packaging/fedora/ok-player.spec
   rust/packaging/flatpak/com.befeast.okplayer.json
+  rust/packaging/arch/PKGBUILD
   installer/build-velopack.ps1
   scripts/stage-license-documents.sh
   scripts/package-linux-deb.sh
@@ -184,7 +185,18 @@ drop_line "$tree" scripts/smoke-linux-flatpak.sh '/app/share/licenses/'
 expect_red "a Flatpak smoke that stops resolving the documents is caught" \
   "$tree" flatpak "no longer resolves the installed documents"
 
-# --- 6: windows --------------------------------------------------------------
+# --- 6: arch -----------------------------------------------------------------
+tree="$(make_tree arch-no-lgpl)"
+drop_line "$tree" rust/packaging/arch/PKGBUILD 'install -Dm0644 LICENSE.LGPL-3.0'
+expect_red "a PKGBUILD that stops installing the LGPL text is caught" \
+  "$tree" arch "no longer installs LICENSE.LGPL-3.0"
+
+tree="$(make_tree arch-no-notices)"
+drop_line "$tree" rust/packaging/arch/PKGBUILD 'THIRD-PARTY-NOTICES.md "$pkgdir'
+expect_red "a PKGBUILD that stops installing the notices is caught" \
+  "$tree" arch "no longer installs THIRD-PARTY-NOTICES.md"
+
+# --- 7: windows --------------------------------------------------------------
 tree="$(make_tree windows-no-lgpl)"
 drop_line "$tree" installer/build-velopack.ps1 'LICENSE.LGPL-3.0'
 expect_red "a Windows installer that stops staging the LGPL text is caught" \

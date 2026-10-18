@@ -1,0 +1,94 @@
+# Maintainer: BeFeast <noreply@github.com>
+#
+# OK Player for Arch Linux and Omarchy. Builds the native GTK4 shell against the
+# distro's libmpv, the way the Fedora lane does, and installs the shared Linux
+# desktop integration from rust/packaging/linux. The binary is stamped
+# OKP_PACKAGE_KIND=arch, so the app's own updater stands down and About reports
+# the install as pacman-owned: updates come from pacman, never from the app.
+#
+# Build a release:   makepkg -si                      (from this directory)
+# Build a checkout:  _okp_source=/path/to/checkout makepkg -si
+#                    (the working tree is cloned as-is; commit what you want built)
+#
+# See docs/linux-omarchy.md for the dependency list and the plain cargo recipe.
+
+pkgname=ok-player
+_upstream=0.11.0-beta.1
+# pacman forbids '-' in pkgver. Dropping it gives 0.11.0beta.1, which vercmp
+# orders below the 0.11.0 release it leads to, and candidates order among
+# themselves on the trailing number - the same intent as the '~' the Debian and
+# RPM lanes use (scripts/linux-package-version.sh).
+pkgver=${_upstream//-/}
+pkgrel=1
+pkgdesc="Elegant mpv-based media player — native GTK4 shell"
+arch=(x86_64)
+url="https://github.com/BeFeast/ok-player"
+license=(GPL-3.0-or-later)
+depends=(gtk4 mpv libx11 wayland libglvnd xdg-utils)
+makedepends=(cargo rust pkgconf glib2-devel wayland-protocols git)
+checkdepends=(dbus python jq procps-ng desktop-file-utils appstream)
+optdepends=(
+  'yt-dlp: open YouTube and other site URLs'
+  'ffmpeg: clip export and screenshot tooling'
+  'noto-fonts: the interface typeface the design targets'
+  'ttf-jetbrains-mono: the data and timing typeface the design targets'
+)
+options=(!lto)
+
+# A local checkout overrides the tagged release; see the header.
+if [[ -n ${_okp_source:-} ]]; then
+  source=("$pkgname::git+file://${_okp_source}")
+else
+  source=("$pkgname::git+${url}.git#tag=linux-v${_upstream}")
+fi
+sha256sums=('SKIP')
+
+_build_env() {
+  export CARGO_HOME="$srcdir/cargo-home"
+  export OKP_BUILD_VERSION="$_upstream"
+  export OKP_BUILD_SHA="$(git -C "$srcdir/$pkgname" rev-parse HEAD)"
+  export OKP_PACKAGE_KIND=arch
+  export OKP_REQUIRE_SYSTEM_MPV=1
+  export CARGO_TARGET_DIR="$srcdir/target"
+}
+
+prepare() {
+  cd "$pkgname/rust"
+  _build_env
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname/rust"
+  _build_env
+  cargo build --frozen --release -p okp-linux-gtk --bin okp-linux-gtk
+}
+
+check() {
+  cd "$pkgname/rust"
+  _build_env
+  cargo test --frozen --workspace --all-targets
+  desktop-file-validate packaging/linux/com.befeast.okplayer.desktop
+  appstreamcli validate --no-net --pedantic packaging/linux/com.befeast.okplayer.metainfo.xml
+}
+
+package() {
+  cd "$pkgname"
+  install -Dm0755 "$srcdir/target/release/okp-linux-gtk" "$pkgdir/usr/bin/ok-player"
+  install -Dm0644 rust/packaging/linux/com.befeast.okplayer.desktop \
+    "$pkgdir/usr/share/applications/com.befeast.okplayer.desktop"
+  install -Dm0644 rust/packaging/linux/com.befeast.okplayer.metainfo.xml \
+    "$pkgdir/usr/share/metainfo/com.befeast.okplayer.metainfo.xml"
+  install -Dm0644 rust/packaging/linux/com.befeast.okplayer.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/com.befeast.okplayer.svg"
+  local size
+  for size in 16 24 32 48 64; do
+    install -Dm0644 "rust/packaging/linux/icons/hicolor/${size}x${size}/apps/com.befeast.okplayer.svg" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/com.befeast.okplayer.svg"
+  done
+  # GPLv3 §4: the licence text travels with every artifact, as do the notices
+  # for what is bundled. Every lane also stages the LGPL-3 text.
+  install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm0644 LICENSE.LGPL-3.0 "$pkgdir/usr/share/licenses/$pkgname/LICENSE.LGPL-3.0"
+  install -Dm0644 THIRD-PARTY-NOTICES.md "$pkgdir/usr/share/doc/$pkgname/THIRD-PARTY-NOTICES.md"
+}

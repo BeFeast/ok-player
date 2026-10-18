@@ -199,7 +199,7 @@ pub(crate) fn draw_about_illustration(
     cr.line_to(108.0, 54.0);
     cr.line_to(64.0, 80.0);
     cr.close_path();
-    cr.set_source_rgba(0.039, 0.396, 0.373, 0.09);
+    cr.set_source_rgba(0.086, 0.188, 0.396, 0.09);
     cr.set_line_width(12.0);
     let _ = cr.stroke();
 
@@ -208,9 +208,9 @@ pub(crate) fn draw_about_illustration(
     cr.line_to(64.0, 74.0);
     cr.close_path();
     let gradient = cairo::LinearGradient::new(64.0, 22.0, 108.0, 74.0);
-    gradient.add_color_stop_rgb(0.0, 0.110, 0.686, 0.635);
-    gradient.add_color_stop_rgb(0.55, 0.067, 0.541, 0.502);
-    gradient.add_color_stop_rgb(1.0, 0.039, 0.396, 0.373);
+    gradient.add_color_stop_rgb(0.0, 0.086, 0.188, 0.396);
+    gradient.add_color_stop_rgb(0.55, 0.145, 0.388, 0.922);
+    gradient.add_color_stop_rgb(1.0, 0.224, 0.745, 0.976);
     let _ = cr.set_source(&gradient);
     cr.set_line_width(6.0);
     let _ = cr.fill_preserve();

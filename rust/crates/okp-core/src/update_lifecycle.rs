@@ -62,6 +62,8 @@ pub enum InstallKind {
     Deb,
     /// `.rpm` install owned by rpm/dnf.
     Rpm,
+    /// Arch package owned by pacman — the Arch / Omarchy lane.
+    Pacman,
     /// Flatpak install, updated by the Flatpak runtime.
     Flatpak,
     /// A build that no packaging owns: `cargo run`, a build tree, an unpacked
@@ -79,7 +81,7 @@ impl InstallKind {
     pub const fn capability(self) -> UpdateCapability {
         match self {
             Self::WindowsVelopack | Self::AppImage => UpdateCapability::SelfApply,
-            Self::Deb | Self::Rpm | Self::Flatpak => UpdateCapability::SystemManaged,
+            Self::Deb | Self::Rpm | Self::Pacman | Self::Flatpak => UpdateCapability::SystemManaged,
             Self::DevBuild => UpdateCapability::Unmanaged,
         }
     }
@@ -103,6 +105,7 @@ impl InstallKind {
         match self {
             Self::Deb => "apt",
             Self::Rpm => "dnf",
+            Self::Pacman => "pacman",
             Self::Flatpak => "Flatpak",
             Self::WindowsVelopack | Self::AppImage | Self::DevBuild => "your system update tool",
         }
@@ -125,9 +128,12 @@ impl InstallKind {
     pub const fn refresh_command(self) -> Option<&'static str> {
         match self {
             Self::Deb => Some("sudo apt update"),
-            Self::Rpm | Self::Flatpak | Self::WindowsVelopack | Self::AppImage | Self::DevBuild => {
-                None
-            }
+            Self::Rpm
+            | Self::Pacman
+            | Self::Flatpak
+            | Self::WindowsVelopack
+            | Self::AppImage
+            | Self::DevBuild => None,
         }
     }
 
@@ -161,9 +167,12 @@ impl InstallKind {
             // Not "there is no such command" but "this app has no state in which to offer
             // one": the rpm and flatpak lanes never discover a version, so they never reach a
             // state that announces one. What they say is who updates them, unchanged.
-            Self::Rpm | Self::Flatpak | Self::WindowsVelopack | Self::AppImage | Self::DevBuild => {
-                None
-            }
+            Self::Rpm
+            | Self::Pacman
+            | Self::Flatpak
+            | Self::WindowsVelopack
+            | Self::AppImage
+            | Self::DevBuild => None,
         }
     }
 
@@ -172,7 +181,7 @@ impl InstallKind {
     /// every other kind, the system-managed `.deb` lane included, polls a feed
     /// of its own.
     pub const fn discovers_versions(self) -> bool {
-        !matches!(self, Self::Rpm | Self::Flatpak)
+        !matches!(self, Self::Rpm | Self::Pacman | Self::Flatpak)
     }
 
     /// Whether taking a discovered offer downloads *and* applies it in one
@@ -191,6 +200,7 @@ impl InstallKind {
             Self::AppImage => "appimage",
             Self::Deb => "deb",
             Self::Rpm => "rpm",
+            Self::Pacman => "pacman",
             Self::Flatpak => "flatpak",
             Self::DevBuild => "dev-build",
         }
@@ -212,6 +222,7 @@ impl InstallKind {
             }
             (Self::Deb, None) => "Update OK Player with your package manager (apt).".to_owned(),
             (Self::Rpm, _) => "Update OK Player with your package manager (dnf).".to_owned(),
+            (Self::Pacman, _) => "Update OK Player with your package manager (pacman).".to_owned(),
             (Self::Flatpak, _) => "Update OK Player with Flatpak (flatpak update).".to_owned(),
             (Self::WindowsVelopack | Self::AppImage | Self::DevBuild, _) => {
                 "Update OK Player with your system update tool.".to_owned()
@@ -438,6 +449,8 @@ pub enum PackageOwnership {
     Dpkg,
     /// rpm claims the executable path.
     Rpm,
+    /// pacman claims the executable path.
+    Pacman,
 }
 
 /// Facts about the running process that the shell collects for
@@ -519,6 +532,7 @@ impl InstallEvidence {
         match self.package_ownership {
             PackageOwnership::Dpkg => Some(InstallKind::Deb),
             PackageOwnership::Rpm => Some(InstallKind::Rpm),
+            PackageOwnership::Pacman => Some(InstallKind::Pacman),
             PackageOwnership::Unowned | PackageOwnership::Unknown => None,
         }
     }
@@ -2631,8 +2645,12 @@ mod tests {
 
     const SELF_APPLY_KINDS: [InstallKind; 2] =
         [InstallKind::WindowsVelopack, InstallKind::AppImage];
-    const SYSTEM_MANAGED_KINDS: [InstallKind; 3] =
-        [InstallKind::Deb, InstallKind::Rpm, InstallKind::Flatpak];
+    const SYSTEM_MANAGED_KINDS: [InstallKind; 4] = [
+        InstallKind::Deb,
+        InstallKind::Rpm,
+        InstallKind::Pacman,
+        InstallKind::Flatpak,
+    ];
 
     fn evidence() -> InstallEvidence {
         InstallEvidence::default()
@@ -4449,6 +4467,7 @@ mod tests {
         for (kind, expected) in [
             (InstallKind::Deb, "apt"),
             (InstallKind::Rpm, "dnf"),
+            (InstallKind::Pacman, "pacman"),
             (InstallKind::Flatpak, "flatpak"),
         ] {
             let mut lifecycle = system_managed_lifecycle(kind, "1.0.0");
@@ -4634,7 +4653,11 @@ mod tests {
     /// it and offers nothing — not even the check an `Idle` surface offers.
     #[test]
     fn a_system_owned_install_reports_its_manager_instead_of_offering_a_check() {
-        for (kind, tool) in [(InstallKind::Rpm, "dnf"), (InstallKind::Flatpak, "flatpak")] {
+        for (kind, tool) in [
+            (InstallKind::Rpm, "dnf"),
+            (InstallKind::Pacman, "pacman"),
+            (InstallKind::Flatpak, "flatpak"),
+        ] {
             let mut lifecycle = UpdateLifecycle::managed_externally(kind, "1.0.0")
                 .expect("a system-managed install can be owned outright");
 
@@ -5229,6 +5252,7 @@ mod tests {
         for (kind, tool) in [
             (InstallKind::Deb, "apt"),
             (InstallKind::Rpm, "dnf"),
+            (InstallKind::Pacman, "pacman"),
             (InstallKind::Flatpak, "flatpak"),
         ] {
             let mut lifecycle = system_managed_lifecycle(kind, "1.0.0");

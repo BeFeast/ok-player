@@ -1,8 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
   <defs>
     <linearGradient id="tile" x1="21.13%" y1="0%" x2="78.87%" y2="100%">
-      <stop offset="0" stop-color="#15a89d"/>
-      <stop offset="1" stop-color="#0a655f"/>
+      <stop offset="0" stop-color="#163065"/>
+      <stop offset="0.55" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#39bef9"/>
     </linearGradient>
   </defs>
   <rect width="48" height="48" rx="11" fill="url(#tile)"/>

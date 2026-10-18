@@ -7,27 +7,53 @@ use super::*;
 pub(crate) const SHELL_CORNER_RADIUS_PX: i32 = 14;
 
 pub(crate) const OKP_STYLESHEET: &str = "
-        /* Design tokens: one coherent OK Player palette. Every accent and state
-           colour below derives from these bases via alpha()/mix(), so the whole
-           shell retints from a single edit. Dark chrome and the light settings
-           surface share one teal brand accent; there is no stray adwaita blue. */
-        @define-color okp_bg #050507;
-        @define-color okp_accent #28b3aa;
-        @define-color okp_accent_bright #37cfc5;
-        @define-color okp_accent_deep #229a92;
-        @define-color okp_light_bg #eef4f9;
-        @define-color okp_light_rail #eaf0f5;
-        @define-color okp_settings_light #f7f7f5;
-        @define-color okp_settings_dark #1f1f1f;
-        @define-color okp_ink #161616;
-        @define-color okp_teal #10938a;
-        @define-color okp_teal_deep #0a655f;
-        @define-color okp_danger #c42b1c;
-        @define-color okp_danger_deep #9a1f15;
-        @define-color okp_danger_dark #db3b3b;
-        @define-color okp_danger_bright #ff6868;
-        @define-color okp_warning #b07600;
-        @define-color okp_warning_deep #6f4b00;
+        /* Design tokens: the BeFeast palette, one coherent OK Player shell.
+           Light surfaces lead with the identity navy as the interactive
+           colour; everything that sits over the video plane, and the dark
+           scheme, leads with the mark's cyan, because navy vanishes on navy. Every state colour below derives from these bases
+           via alpha()/mix(), so the whole shell retints from a single edit.
+           Green is reserved for the semantic ok state; there is no stray adwaita
+           blue and no decorative teal. */
+        @define-color okp_bg #05080f;
+        @define-color okp_accent #39bef9;
+        @define-color okp_accent_bright #7dd8ff;
+        @define-color okp_accent_deep #1aa9ec;
+        @define-color okp_accent_ink #061428;
+        @define-color okp_navy #163065;
+        @define-color okp_navy_hover #1d3f82;
+        @define-color okp_navy_deep #0f2349;
+        @define-color okp_blue #2563eb;
+        @define-color okp_link #0284c7;
+        @define-color okp_light_bg #f5f7fb;
+        @define-color okp_light_card #ffffff;
+        @define-color okp_light_rail #eef2f8;
+        @define-color okp_light_inset #e3e9f2;
+        @define-color okp_light_hairline #dfe5ee;
+        @define-color okp_light_hairline_hi #c7d1de;
+        @define-color okp_settings_light #f5f7fb;
+        @define-color okp_settings_dark #070f22;
+        @define-color okp_dark_card #0c1a38;
+        @define-color okp_dark_rail #122549;
+        @define-color okp_dark_inset #183160;
+        @define-color okp_dark_hairline rgba(96, 144, 212, 0.20);
+        @define-color okp_dark_hairline_hi rgba(96, 144, 212, 0.40);
+        @define-color okp_ink #0c1424;
+        @define-color okp_ink_dim #2a3547;
+        @define-color okp_ink_mute #4b586c;
+        @define-color okp_ink_faint #7f8a9c;
+        @define-color okp_snow #e9f0fc;
+        @define-color okp_snow_dim #c7d5ee;
+        @define-color okp_snow_mute #98aecf;
+        @define-color okp_snow_faint #5d7799;
+        @define-color okp_ok #059669;
+        @define-color okp_ok_dark #4ade80;
+        @define-color okp_danger #b91c1c;
+        @define-color okp_danger_deep #991b1b;
+        @define-color okp_danger_dark #dc2626;
+        @define-color okp_danger_bright #fb7185;
+        @define-color okp_warning #c2410c;
+        @define-color okp_warning_deep #9a3412;
+        @define-color okp_warning_dark #fbbf24;
 
         .okp-root {
             background: @okp_bg;
@@ -82,7 +108,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-window-title-scrim {
             min-height: 42px;
-            background: linear-gradient(to bottom, rgba(0, 0, 0, 0.50), rgba(0, 0, 0, 0));
+            background: linear-gradient(to bottom, rgba(7, 15, 34, 0.55), rgba(7, 15, 34, 0));
         }
 
         .okp-window-drag-zone {
@@ -157,14 +183,14 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         button.okp-player-window-pin.is-selected {
-            background: alpha(@okp_accent, 0.24);
+            background: alpha(@okp_accent, 0.22);
             color: @okp_accent_bright;
         }
 
         .okp-player-window-controls button:focus-visible,
         button.okp-player-window-control:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.65);
+            box-shadow: inset 0 0 0 2px alpha(@okp_accent, 0.60);
         }
 
         button.okp-player-window-close:hover {
@@ -206,11 +232,11 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-empty-surface.is-preview-substrate {
-            background: #050507;
+            background: @okp_bg;
         }
 
         .okp-empty-surface.is-preview-substrate.is-preview-bright {
-            background: #f4f7fa;
+            background: @okp_light_bg;
         }
         .okp-empty-surface.has-media {
             background: transparent;
@@ -223,13 +249,15 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-paused-cue {
-            padding: 7px 12px;
-            border-radius: 8px;
-            background: rgba(22, 22, 25, 0.50);
-            border: 1px solid rgba(255, 255, 255, 0.10);
-            color: rgba(255, 255, 255, 0.72);
-            font-size: 10.5px;
-            font-weight: 700;
+            padding: 6px 14px;
+            border-radius: 999px;
+            background: rgba(12, 20, 36, 0.56);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: rgba(255, 255, 255, 0.88);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
         }
 
         .okp-loading-state {
@@ -239,7 +267,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-loading-ring {
             min-width: 34px;
             min-height: 34px;
-            color: @okp_accent_bright;
+            color: @okp_accent;
         }
 
         .okp-loading-label {
@@ -251,10 +279,10 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-error-card {
             min-width: 340px;
             padding: 22px 24px;
-            border-radius: 12px;
-            background: rgba(22, 22, 25, 0.88);
+            border-radius: 16px;
+            background: rgba(12, 20, 36, 0.90);
             border: 1px solid rgba(255, 255, 255, 0.12);
-            box-shadow: 0 18px 46px rgba(0, 0, 0, 0.42);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18), 0 24px 60px rgba(0, 0, 0, 0.28);
         }
 
         .okp-error-icon {
@@ -264,8 +292,9 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-error-title {
             color: rgba(255, 255, 255, 0.96);
-            font-size: 16px;
-            font-weight: 700;
+            font-size: 17px;
+            font-weight: 600;
+            letter-spacing: -0.01em;
         }
 
         .okp-error-body {
@@ -275,18 +304,18 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-error-primary,
         button.okp-error-secondary {
-            min-height: 32px;
-            padding: 6px 12px;
-            border-radius: 7px;
+            min-height: 34px;
+            padding: 0 18px;
+            border-radius: 999px;
             box-shadow: none;
-            font-size: 12px;
-            font-weight: 650;
+            font-size: 13px;
+            font-weight: 600;
         }
 
         button.okp-error-primary {
-            background: @okp_accent;
-            border: 1px solid @okp_accent;
-            color: #041110;
+            background: linear-gradient(135deg, @okp_blue, @okp_accent 60%, @okp_accent_bright);
+            border: 1px solid transparent;
+            color: @okp_accent_ink;
         }
 
         button.okp-error-secondary {
@@ -304,7 +333,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-media-state-text {
             padding: 10px 22px;
             border-radius: 999px;
-            background: rgba(13, 14, 18, 0.72);
+            background: rgba(12, 20, 36, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.12);
             color: rgba(255, 255, 255, 0.92);
             font-size: 14px;
             font-weight: 600;
@@ -317,21 +347,22 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-empty-primary-button,
         .okp-empty-secondary-button {
             min-height: 42px;
-            padding: 8px 18px;
-            border-radius: 8px;
+            padding: 0 24px;
+            border-radius: 999px;
             border: 1px solid transparent;
             box-shadow: none;
-            font-size: 13.5px;
-            font-weight: 650;
+            font-size: 14px;
+            font-weight: 600;
         }
 
         .okp-empty-primary-button {
-            background: @okp_accent_bright;
-            color: #041110;
+            background: linear-gradient(135deg, @okp_blue, @okp_accent 60%, @okp_accent_bright);
+            color: @okp_accent_ink;
+            box-shadow: 0 1px 2px alpha(@okp_navy, 0.30);
         }
 
         .okp-empty-primary-button:hover {
-            background: @okp_accent_bright;
+            background: linear-gradient(135deg, @okp_blue, @okp_accent_bright 60%, @okp_accent_bright);
         }
 
         .okp-empty-primary-button:active {
@@ -341,7 +372,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-empty-primary-button:focus-visible,
         .okp-empty-secondary-button:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.55);
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         .okp-empty-secondary-button {
@@ -393,14 +424,15 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-welcome-recents-title {
             color: rgba(255, 255, 255, 0.97);
-            font-size: 30px;
-            font-weight: 760;
+            font-size: 22px;
+            font-weight: 600;
+            letter-spacing: -0.015em;
         }
 
         .okp-welcome-recents-subtitle {
-            margin-top: 6px;
+            margin-top: 4px;
             color: rgba(255, 255, 255, 0.70);
-            font-size: 13.5px;
+            font-size: 13px;
         }
 
         .okp-recents-shelf {
@@ -417,7 +449,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-width: 194px;
             padding: 0;
             border: none;
-            border-radius: 8px;
+            border-radius: 12px;
             background: transparent;
             box-shadow: none;
             color: rgba(255, 255, 255, 0.94);
@@ -429,7 +461,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-recent-card:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.58);
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         .okp-history-thumbnail {
@@ -439,7 +471,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-history-thumbnail-placeholder {
             border-radius: 8px;
-            background: linear-gradient(135deg, rgba(51, 57, 65, 0.96), rgba(25, 29, 35, 0.98));
+            background: linear-gradient(135deg, @okp_dark_inset, @okp_dark_card);
             border: 1px solid rgba(255, 255, 255, 0.07);
         }
 
@@ -472,12 +504,14 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-recent-time-left {
-            padding: 3px 7px;
-            border-radius: 5px;
-            background: rgba(0, 0, 0, 0.72);
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: rgba(12, 20, 36, 0.72);
             color: #ffffff;
-            font-size: 10px;
-            font-weight: 700;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
+            font-size: 11px;
+            font-weight: 600;
+            font-feature-settings: 'tnum';
         }
 
         .okp-recent-title {
@@ -508,9 +542,9 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-welcome-footer-button {
             min-height: 30px;
-            padding: 4px 7px;
+            padding: 4px 10px;
             border: none;
-            border-radius: 7px;
+            border-radius: 999px;
             background: transparent;
             box-shadow: none;
             color: rgba(255, 255, 255, 0.62);
@@ -528,13 +562,14 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-welcome-private-icon {
             margin-bottom: 12px;
-            color: alpha(@okp_accent_bright, 0.88);
+            color: @okp_accent;
         }
 
         .okp-welcome-private-title {
             color: rgba(255, 255, 255, 0.96);
             font-size: 22px;
-            font-weight: 740;
+            font-weight: 600;
+            letter-spacing: -0.015em;
         }
 
         .okp-welcome-private-body {
@@ -555,13 +590,14 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-history-title {
             color: rgba(255, 255, 255, 0.97);
-            font-size: 30px;
-            font-weight: 760;
+            font-size: 22px;
+            font-weight: 600;
+            letter-spacing: -0.015em;
         }
 
         entry.okp-history-search {
             min-width: 220px;
-            min-height: 38px;
+            min-height: 36px;
             border-radius: 8px;
             border: 1px solid rgba(255, 255, 255, 0.10);
             background: rgba(255, 255, 255, 0.06);
@@ -570,8 +606,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         entry.okp-history-search:focus-within {
-            border-color: alpha(@okp_accent, 0.75);
-            box-shadow: 0 0 0 1px alpha(@okp_accent, 0.32);
+            border-color: @okp_accent;
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         .okp-history-subtitle {
@@ -610,7 +646,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         button.okp-history-row {
             padding: 9px 10px;
             border: none;
-            border-radius: 7px;
+            border-radius: 8px;
             background: transparent;
             box-shadow: none;
             color: rgba(255, 255, 255, 0.92);
@@ -622,7 +658,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-history-row:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.62);
+            box-shadow: inset 0 0 0 2px alpha(@okp_accent, 0.60);
         }
 
         .okp-history-row-title {
@@ -643,8 +679,9 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-history-row-progress-label {
-            color: alpha(@okp_accent_bright, 0.86);
-            font-weight: 650;
+            color: @okp_accent;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
+            font-weight: 600;
         }
 
         progressbar.okp-history-row-progress {
@@ -685,25 +722,25 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-idle-canvas {
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
         }
 
         .okp-idle-canvas.is-light {
-            background: linear-gradient(135deg, #f7f9fa, #edf3f6);
-            color: #161616;
+            background: linear-gradient(to bottom, #ffffff, @okp_light_bg 240px);
+            color: @okp_ink;
         }
 
         .okp-idle-canvas.is-dark {
-            background: linear-gradient(135deg, #232629, #1b1e21);
-            color: rgba(255, 255, 255, 0.94);
+            background: linear-gradient(to bottom, #0a1630, @okp_settings_dark 240px);
+            color: @okp_snow;
         }
 
         .okp-idle-canvas.is-preview-substrate {
-            background: #050507;
+            background: @okp_bg;
         }
 
         .okp-idle-canvas.is-preview-substrate.is-preview-bright {
-            background: #f4f7fa;
+            background: @okp_light_bg;
         }
 
         .okp-idle-titlebar {
@@ -711,16 +748,17 @@ pub(crate) const OKP_STYLESHEET: &str = "
             padding-left: 15px;
         }
 
-        .is-light .okp-idle-titlebar-mark { color: @okp_teal; }
+        .is-light .okp-idle-titlebar-mark { color: @okp_navy; }
         .is-dark .okp-idle-titlebar-mark { color: @okp_accent; }
 
         .okp-idle-titlebar-text {
             font-size: 12.5px;
             font-weight: 600;
+            letter-spacing: -0.01em;
         }
 
-        .is-light .okp-idle-titlebar-text { color: rgba(0, 0, 0, 0.72); }
-        .is-dark .okp-idle-titlebar-text { color: rgba(255, 255, 255, 0.76); }
+        .is-light .okp-idle-titlebar-text { color: @okp_ink; }
+        .is-dark .okp-idle-titlebar-text { color: @okp_snow; }
 
         .okp-idle-stack,
         .okp-idle-scroller,
@@ -734,7 +772,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             padding: 0;
             border-radius: 11px;
             background: transparent;
-            box-shadow: 0 8px 22px alpha(@okp_teal_deep, 0.24);
+            box-shadow: 0 8px 22px alpha(@okp_navy, 0.24);
         }
 
         .okp-welcome-first-run {
@@ -744,26 +782,27 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-welcome-brand-tile { margin-bottom: 13px; }
 
         .okp-first-run-title {
-            font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
-            font-size: 17px;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 22px;
             font-weight: 600;
+            letter-spacing: -0.015em;
         }
 
-        .is-light .okp-first-run-title { color: #161616; }
-        .is-dark .okp-first-run-title { color: rgba(255, 255, 255, 0.94); }
+        .is-light .okp-first-run-title { color: @okp_ink; }
+        .is-dark .okp-first-run-title { color: @okp_snow; }
 
         .okp-first-run-copy {
-            margin-top: 5px;
-            font-size: 12.5px;
+            margin-top: 6px;
+            font-size: 13px;
         }
 
-        .is-light .okp-first-run-copy { color: rgba(0, 0, 0, 0.52); }
-        .is-dark .okp-first-run-copy { color: rgba(255, 255, 255, 0.58); }
+        .is-light .okp-first-run-copy { color: @okp_ink_mute; }
+        .is-dark .okp-first-run-copy { color: @okp_snow_mute; }
 
         button.okp-first-run-drop-target,
         button.okp-welcome-drop-target {
-            border: 1.5px dashed rgba(128, 128, 128, 0.48);
-            box-shadow: none;
+            border: 1px dashed @okp_light_hairline_hi;
+            box-shadow: 0 1px 0 rgba(12, 20, 36, 0.04), 0 8px 24px rgba(12, 20, 36, 0.05);
         }
 
         button.okp-first-run-drop-target {
@@ -771,7 +810,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 70px;
             margin-top: 13px;
             padding: 12px 16px;
-            border-radius: 10px;
+            border-radius: 16px;
         }
 
         /* The welcome drop target is allocated explicitly by the action row, so its width
@@ -784,19 +823,21 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-width: 148px;
             min-height: 82px;
             padding: 0 16px;
-            border-radius: 9px;
+            border-radius: 12px;
         }
 
         .is-light button.okp-first-run-drop-target,
         .is-light button.okp-welcome-drop-target {
-            background: rgba(255, 255, 255, 0.52);
-            color: rgba(0, 0, 0, 0.56);
+            background: @okp_light_card;
+            color: @okp_ink_mute;
         }
 
         .is-dark button.okp-first-run-drop-target,
         .is-dark button.okp-welcome-drop-target {
-            background: rgba(255, 255, 255, 0.035);
-            color: rgba(255, 255, 255, 0.58);
+            background: @okp_dark_card;
+            border-color: @okp_dark_hairline_hi;
+            box-shadow: none;
+            color: @okp_snow_mute;
         }
 
         .okp-empty-surface.is-drop-target button.okp-first-run-drop-target,
@@ -806,15 +847,15 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-drop-primary {
-            font-size: 12.5px;
+            font-size: 13px;
             font-weight: 600;
         }
 
-        .is-light .okp-first-run-drop-target .okp-drop-primary { color: @okp_teal_deep; }
-        .is-dark .okp-first-run-drop-target .okp-drop-primary { color: @okp_accent_bright; }
+        .is-light .okp-first-run-drop-target .okp-drop-primary { color: @okp_navy; }
+        .is-dark .okp-first-run-drop-target .okp-drop-primary { color: @okp_accent; }
 
         .okp-drop-secondary {
-            font-size: 11px;
+            font-size: 12px;
         }
 
         .okp-welcome-recents {
@@ -822,22 +863,22 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-welcome-recents-title {
-            font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
-            font-size: 30px;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 22px;
             font-weight: 600;
-            letter-spacing: 0;
+            letter-spacing: -0.015em;
         }
 
-        .is-light .okp-welcome-recents-title { color: #161616; }
-        .is-dark .okp-welcome-recents-title { color: rgba(255, 255, 255, 0.94); }
+        .is-light .okp-welcome-recents-title { color: @okp_ink; }
+        .is-dark .okp-welcome-recents-title { color: @okp_snow; }
 
         .okp-welcome-recents-subtitle {
-            margin-top: 6px;
-            font-size: 13.5px;
+            margin-top: 4px;
+            font-size: 13px;
         }
 
-        .is-light .okp-welcome-recents-subtitle { color: rgba(0, 0, 0, 0.52); }
-        .is-dark .okp-welcome-recents-subtitle { color: rgba(255, 255, 255, 0.58); }
+        .is-light .okp-welcome-recents-subtitle { color: @okp_ink_mute; }
+        .is-dark .okp-welcome-recents-subtitle { color: @okp_snow_mute; }
 
         .okp-recents-shelf {
             margin-top: 20px;
@@ -849,53 +890,75 @@ pub(crate) const OKP_STYLESHEET: &str = "
             background: transparent;
         }
 
+        /* The card keeps the 194px poster width the shelf is laid out by, so the
+           three cards and the round History button still share one row: the
+           poster bleeds to the card's edges, the hairline is a spread shadow
+           rather than a border, and only the caption is inset. */
         button.okp-recent-card {
             min-width: 194px;
-            padding: 0;
+            padding: 0 0 12px;
             border: none;
-            border-radius: 8px;
-            background: transparent;
-            box-shadow: none;
+            border-radius: 12px;
+            background: @okp_light_card;
+            box-shadow: 0 0 0 1px @okp_light_hairline, 0 1px 2px rgba(12, 20, 36, 0.04), 0 12px 32px rgba(12, 20, 36, 0.06);
+        }
+
+        button.okp-recent-card .okp-history-thumbnail,
+        button.okp-recent-card .okp-history-thumbnail-placeholder,
+        button.okp-recent-card .okp-history-thumbnail-picture {
+            border-radius: 12px 12px 0 0;
+        }
+
+        button.okp-recent-card progressbar.okp-recent-progress trough {
+            border-radius: 0;
+        }
+
+        button.okp-recent-card .okp-recent-title,
+        button.okp-recent-card .okp-recent-location {
+            margin-left: 10px;
+            margin-right: 10px;
         }
 
         button.okp-recents-history-button {
             min-width: 36px;
             min-height: 36px;
             padding: 0;
-            border: none;
+            border: 1px solid @okp_light_hairline;
             border-radius: 18px;
-            box-shadow: none;
+            box-shadow: 0 1px 0 rgba(12, 20, 36, 0.04), 0 8px 24px rgba(12, 20, 36, 0.05);
         }
 
         .is-light button.okp-recents-history-button {
-            background: rgba(0, 0, 0, 0.045);
-            color: rgba(0, 0, 0, 0.52);
+            background: @okp_light_card;
+            color: @okp_ink_mute;
         }
 
         .is-dark button.okp-recents-history-button {
-            background: rgba(255, 255, 255, 0.055);
-            color: rgba(255, 255, 255, 0.58);
+            background: @okp_dark_card;
+            border-color: @okp_dark_hairline;
+            box-shadow: none;
+            color: @okp_snow_mute;
         }
 
-        .is-light button.okp-recents-history-button:hover { background: rgba(0, 0, 0, 0.08); }
-        .is-dark button.okp-recents-history-button:hover { background: rgba(255, 255, 255, 0.10); }
+        .is-light button.okp-recents-history-button:hover { background: @okp_light_rail; color: @okp_ink; }
+        .is-dark button.okp-recents-history-button:hover { background: @okp_dark_rail; color: @okp_snow; }
 
-        .is-light button.okp-recent-card { color: #161616; }
-        .is-dark button.okp-recent-card { color: rgba(255, 255, 255, 0.94); }
+        .is-light button.okp-recent-card { color: @okp_ink; }
+        .is-dark button.okp-recent-card { color: @okp_snow; background: @okp_dark_card; box-shadow: 0 0 0 1px @okp_dark_hairline; }
 
-        .is-light button.okp-recent-card:hover { background: rgba(0, 0, 0, 0.045); }
-        .is-dark button.okp-recent-card:hover { background: rgba(255, 255, 255, 0.055); }
+        .is-light button.okp-recent-card:hover { box-shadow: 0 0 0 1px @okp_light_hairline_hi, 0 1px 2px rgba(12, 20, 36, 0.04), 0 12px 32px rgba(12, 20, 36, 0.06); }
+        .is-dark button.okp-recent-card:hover { box-shadow: 0 0 0 1px @okp_dark_hairline_hi; }
 
         .okp-history-thumbnail { border-radius: 8px; }
 
         .is-light .okp-history-thumbnail-placeholder {
-            background: linear-gradient(135deg, #d9e3e8, #bdcbd2);
-            border: 1px solid rgba(0, 0, 0, 0.06);
+            background: @okp_light_inset;
+            border: 1px solid @okp_light_hairline;
         }
 
         .is-dark .okp-history-thumbnail-placeholder {
-            background: linear-gradient(135deg, #343a40, #202429);
-            border: 1px solid rgba(255, 255, 255, 0.07);
+            background: @okp_dark_inset;
+            border: 1px solid @okp_dark_hairline;
         }
 
         .okp-history-thumbnail.is-finished { opacity: 0.55; }
@@ -915,7 +978,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 4px;
             border: none;
             border-radius: 0 0 8px 8px;
-            background: rgba(255, 255, 255, 0.30);
+            background: rgba(255, 255, 255, 0.50);
         }
 
         progressbar.okp-recent-progress progress,
@@ -923,34 +986,36 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-width: 0;
             min-height: 4px;
             border: none;
-            background: @okp_accent;
+            background: linear-gradient(to right, @okp_navy, @okp_blue 55%, @okp_accent);
         }
 
         .okp-recent-time-left {
-            padding: 2px 6px;
-            border-radius: 5px;
-            background: rgba(0, 0, 0, 0.58);
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: rgba(12, 20, 36, 0.72);
             color: #ffffff;
-            font-size: 10px;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
+            font-size: 11px;
             font-weight: 600;
+            font-feature-settings: 'tnum';
         }
 
         .okp-recent-title {
-            margin-top: 9px;
+            margin-top: 10px;
             font-size: 13px;
-            font-weight: 500;
+            font-weight: 600;
         }
 
-        .is-light .okp-recent-title { color: #202020; }
-        .is-dark .okp-recent-title { color: rgba(255, 255, 255, 0.92); }
+        .is-light .okp-recent-title { color: @okp_ink; }
+        .is-dark .okp-recent-title { color: @okp_snow; }
 
         .okp-recent-location {
             margin-top: 2px;
-            font-size: 11.5px;
+            font-size: 12px;
         }
 
-        .is-light .okp-recent-location { color: rgba(0, 0, 0, 0.46); }
-        .is-dark .okp-recent-location { color: rgba(255, 255, 255, 0.48); }
+        .is-light .okp-recent-location { color: @okp_ink_faint; }
+        .is-dark .okp-recent-location { color: @okp_snow_faint; }
 
         .okp-welcome-action-row {
             margin-top: 24px;
@@ -964,86 +1029,102 @@ pub(crate) const OKP_STYLESHEET: &str = "
         button.okp-idle-primary-button,
         button.okp-idle-secondary-button {
             min-height: 36px;
-            padding: 0 12px;
-            border-radius: 7px;
+            padding: 0 16px;
+            border-radius: 999px;
             box-shadow: none;
-            font-size: 12.5px;
+            font-size: 13px;
             font-weight: 600;
         }
 
         button.okp-idle-primary-button {
-            background: @okp_teal;
-            border: 1px solid @okp_teal;
+            background: linear-gradient(135deg, @okp_navy, @okp_blue 55%, @okp_accent);
+            border: 1px solid transparent;
             color: #ffffff;
+            box-shadow: 0 1px 2px alpha(@okp_navy, 0.30);
         }
 
-        button.okp-idle-primary-button:hover { background: @okp_teal_deep; }
+        button.okp-idle-primary-button:hover { background: linear-gradient(135deg, @okp_navy_hover, @okp_blue 55%, @okp_accent_bright); }
+        .is-dark button.okp-idle-primary-button { background: linear-gradient(135deg, @okp_blue, @okp_accent 60%, @okp_accent_bright); color: @okp_accent_ink; }
+        .is-dark button.okp-idle-primary-button:hover { background: linear-gradient(135deg, @okp_blue, @okp_accent_bright 60%, @okp_accent_bright); }
 
         .is-light button.okp-idle-secondary-button {
-            background: rgba(0, 0, 0, 0.045);
-            border: 1px solid rgba(0, 0, 0, 0.08);
-            color: #202020;
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline_hi;
+            color: @okp_ink;
         }
 
         .is-dark button.okp-idle-secondary-button {
-            background: rgba(255, 255, 255, 0.055);
-            border: 1px solid rgba(255, 255, 255, 0.09);
-            color: rgba(255, 255, 255, 0.90);
+            background: @okp_dark_card;
+            border: 1px solid @okp_dark_hairline_hi;
+            color: @okp_snow;
+        }
+
+        .is-light button.okp-idle-secondary-button:hover { background: @okp_light_rail; }
+        .is-dark button.okp-idle-secondary-button:hover { background: @okp_dark_rail; }
+        button.okp-idle-primary-button:focus-visible,
+        button.okp-idle-secondary-button:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         .okp-welcome-private {
             padding: 36px 24px;
         }
 
-        .okp-private-hero-icon { color: @okp_accent; }
+        .is-light .okp-private-hero-icon { color: @okp_navy; }
+        .is-dark .okp-private-hero-icon { color: @okp_accent; }
 
         .okp-private-hero-title {
             margin-top: 12px;
-            font-size: 17px;
+            font-size: 22px;
             font-weight: 600;
+            letter-spacing: -0.015em;
         }
 
         .okp-private-hero-copy {
             margin-top: 7px;
-            font-size: 12.5px;
-            line-height: 1.45;
+            font-size: 13px;
+            line-height: 1.5;
         }
 
-        .is-light .okp-private-hero-copy { color: rgba(0, 0, 0, 0.52); }
-        .is-dark .okp-private-hero-copy { color: rgba(255, 255, 255, 0.56); }
+        .is-light .okp-private-hero-copy { color: @okp_ink_mute; }
+        .is-dark .okp-private-hero-copy { color: @okp_snow_mute; }
 
         .okp-private-actions { margin-top: 20px; }
 
         .okp-idle-footer {
             min-height: 42px;
             padding: 0 24px;
-            border-top: 1px solid rgba(128, 128, 128, 0.18);
+            border-top: 1px solid @okp_light_hairline;
         }
+
+        .is-dark .okp-idle-footer { border-top-color: @okp_dark_hairline; }
 
         button.okp-idle-footer-button {
             min-height: 30px;
-            padding: 4px 7px;
+            padding: 4px 10px;
             border: none;
-            border-radius: 7px;
+            border-radius: 999px;
             background: transparent;
             box-shadow: none;
         }
 
-        .is-light button.okp-idle-footer-button { color: rgba(0, 0, 0, 0.52); }
-        .is-dark button.okp-idle-footer-button { color: rgba(255, 255, 255, 0.56); }
-        .is-light button.okp-idle-footer-button:hover { background: rgba(0, 0, 0, 0.05); }
-        .is-dark button.okp-idle-footer-button:hover { background: rgba(255, 255, 255, 0.06); }
+        .is-light button.okp-idle-footer-button { color: @okp_ink_mute; }
+        .is-dark button.okp-idle-footer-button { color: @okp_snow_mute; }
+        .is-light button.okp-idle-footer-button:hover { background: alpha(@okp_navy, 0.06); color: @okp_ink; }
+        .is-dark button.okp-idle-footer-button:hover { background: alpha(@okp_accent, 0.08); color: @okp_snow; }
 
         .okp-idle-footer-status {
             font-size: 11px;
         }
 
-        .is-light .okp-idle-footer-status { color: rgba(0, 0, 0, 0.40); }
-        .is-dark .okp-idle-footer-status { color: rgba(255, 255, 255, 0.42); }
-        .okp-idle-footer-status:not(.is-private) { color: @okp_teal; }
+        .is-light .okp-idle-footer-status { color: @okp_ink_faint; }
+        .is-dark .okp-idle-footer-status { color: @okp_snow_faint; }
+        .is-light .okp-idle-footer-status:not(.is-private) { color: @okp_navy; }
+        .is-dark .okp-idle-footer-status:not(.is-private) { color: @okp_accent; }
 
         .okp-history-page {
-            padding: 30px 26px 40px;
+            padding: 30px 28px 40px;
         }
 
         .okp-history-header { min-height: 44px; }
@@ -1052,93 +1133,129 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-width: 32px;
             min-height: 32px;
             padding: 0;
-            border: none;
-            border-radius: 8px;
+            border: 1px solid @okp_light_hairline;
+            border-radius: 999px;
             box-shadow: none;
         }
 
-        .is-light button.okp-history-back-button { background: rgba(0, 0, 0, 0.045); color: #202020; }
-        .is-dark button.okp-history-back-button { background: rgba(255, 255, 255, 0.055); color: #ffffff; }
+        .is-light button.okp-history-back-button { background: @okp_light_card; color: @okp_ink; }
+        .is-dark button.okp-history-back-button { background: @okp_dark_card; border-color: @okp_dark_hairline; color: @okp_snow; }
 
         .okp-history-title {
-            font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
-            font-size: 30px;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 22px;
             font-weight: 600;
-            letter-spacing: 0;
+            letter-spacing: -0.015em;
         }
 
-        .is-light .okp-history-title { color: #161616; }
-        .is-dark .okp-history-title { color: rgba(255, 255, 255, 0.94); }
+        .is-light .okp-history-title { color: @okp_ink; }
+        .is-dark .okp-history-title { color: @okp_snow; }
 
         entry.okp-history-search {
-            min-width: 220px;
-            min-height: 36px;
+            min-width: 260px;
+            min-height: 34px;
             border-radius: 8px;
             box-shadow: none;
         }
 
         .is-light entry.okp-history-search {
-            background: rgba(0, 0, 0, 0.035);
-            border: 1px solid rgba(0, 0, 0, 0.08);
-            color: #161616;
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline_hi;
+            color: @okp_ink;
         }
 
         .is-dark entry.okp-history-search {
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.09);
-            color: rgba(255, 255, 255, 0.92);
+            background: @okp_dark_card;
+            border: 1px solid @okp_dark_hairline_hi;
+            color: @okp_snow;
+        }
+
+        .is-light entry.okp-history-search:focus-within,
+        .is-dark entry.okp-history-search:focus-within {
+            border-color: @okp_accent;
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         .okp-history-subtitle {
-            margin-top: 8px;
-            font-size: 13.5px;
+            margin-top: 4px;
+            font-size: 13px;
         }
 
-        .is-light .okp-history-subtitle { color: rgba(0, 0, 0, 0.50); }
-        .is-dark .okp-history-subtitle { color: rgba(255, 255, 255, 0.54); }
+        .is-light .okp-history-subtitle { color: @okp_ink_mute; }
+        .is-dark .okp-history-subtitle { color: @okp_snow_mute; }
 
         .okp-history-divider { margin-top: 16px; }
 
         .okp-history-private-banner {
             margin-top: 16px;
-            padding: 9px 13px;
-            border-radius: 8px;
+            padding: 10px 14px;
+            border-radius: 12px;
             font-size: 12px;
             font-weight: 500;
         }
 
         .is-light .okp-history-private-banner {
-            background: rgba(0, 0, 0, 0.035);
-            border: 1px solid rgba(0, 0, 0, 0.07);
-            color: rgba(0, 0, 0, 0.52);
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline;
+            color: @okp_ink_mute;
         }
 
         .is-dark .okp-history-private-banner {
-            background: rgba(255, 255, 255, 0.045);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            color: rgba(255, 255, 255, 0.56);
+            background: @okp_dark_card;
+            border: 1px solid @okp_dark_hairline;
+            color: @okp_snow_mute;
         }
 
         .okp-history-result-caption,
         .okp-history-bucket {
             margin-top: 20px;
-            padding: 0 12px 8px;
+            padding: 0 4px 8px;
             font-size: 11px;
             font-weight: 600;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
         }
 
-        .okp-history-bucket { letter-spacing: 1px; }
-
         .is-light .okp-history-result-caption,
-        .is-light .okp-history-bucket { color: rgba(0, 0, 0, 0.48); }
+        .is-light .okp-history-bucket { color: @okp_ink_faint; }
         .is-dark .okp-history-result-caption,
-        .is-dark .okp-history-bucket { color: rgba(255, 255, 255, 0.48); }
+        .is-dark .okp-history-bucket { color: @okp_snow_faint; }
+
+        /* One card per bucket; the rows inside it share hairlines instead of
+           each floating as its own tile. The card clips (set in history_view.rs)
+           so a hovered row keeps the card's corners. */
+        .okp-history-bucket-card {
+            border-radius: 12px;
+        }
+
+        .is-light .okp-history-bucket-card {
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline;
+            box-shadow: 0 1px 2px rgba(12, 20, 36, 0.04), 0 12px 32px rgba(12, 20, 36, 0.06);
+        }
+
+        .is-dark .okp-history-bucket-card {
+            background: @okp_dark_card;
+            border: 1px solid @okp_dark_hairline;
+        }
+
+        .okp-history-bucket-card > overlay {
+            border-top: 1px solid alpha(@okp_ink, 0.05);
+        }
+
+        .is-dark .okp-history-bucket-card > overlay {
+            border-top-color: rgba(120, 160, 220, 0.05);
+        }
+
+        .okp-history-bucket-card > overlay:first-child {
+            border-top: none;
+        }
 
         button.okp-history-row {
-            margin-bottom: 4px;
-            padding: 12px;
+            margin-bottom: 0;
+            padding: 10px 16px;
             border: none;
-            border-radius: 7px;
+            border-radius: 0;
             background: transparent;
             box-shadow: none;
         }
@@ -1147,7 +1264,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-width: 32px;
             min-height: 32px;
             padding: 0;
-            border-radius: 7px;
+            border-radius: 999px;
         }
 
         .okp-history-actions-popover {
@@ -1159,57 +1276,59 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 34px;
             padding: 6px 10px;
             border: none;
-            border-radius: 6px;
+            border-radius: 8px;
             box-shadow: none;
         }
 
-        .is-light button.okp-history-row { color: #161616; }
-        .is-dark button.okp-history-row { color: rgba(255, 255, 255, 0.92); }
-        .is-light button.okp-history-row:hover { background: rgba(0, 0, 0, 0.04); }
-        .is-dark button.okp-history-row:hover { background: rgba(255, 255, 255, 0.05); }
+        .is-light button.okp-history-row { color: @okp_ink; }
+        .is-dark button.okp-history-row { color: @okp_snow; }
+        .is-light button.okp-history-row:hover { background: alpha(@okp_navy, 0.04); }
+        .is-dark button.okp-history-row:hover { background: alpha(@okp_accent, 0.06); }
 
         .okp-history-row-title { font-size: 13px; font-weight: 500; }
-        .is-light .okp-history-row-title { color: #202020; }
-        .is-dark .okp-history-row-title { color: rgba(255, 255, 255, 0.92); }
-        .okp-history-row-location,
-        .okp-history-row-when,
-        .okp-history-progress-label,
-        .okp-history-barely-label { font-size: 11.5px; }
+        .is-light .okp-history-row-title { color: @okp_ink; }
+        .is-dark .okp-history-row-title { color: @okp_snow; }
+        .okp-history-row-location { font-size: 12px; }
 
         .okp-history-row-when,
         .okp-history-progress-label,
         .okp-history-barely-label {
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
+            font-size: 11px;
             font-feature-settings: 'tnum';
         }
 
         .is-light .okp-history-row-location,
         .is-light .okp-history-row-when,
-        .is-light .okp-history-barely-label { color: rgba(0, 0, 0, 0.42); }
+        .is-light .okp-history-barely-label { color: @okp_ink_faint; }
         .is-dark .okp-history-row-location,
         .is-dark .okp-history-row-when,
-        .is-dark .okp-history-barely-label { color: rgba(255, 255, 255, 0.42); }
+        .is-dark .okp-history-barely-label { color: @okp_snow_faint; }
 
-        .okp-history-progress-label { color: @okp_teal; font-weight: 600; }
+        .okp-history-progress-label { font-size: 12px; font-weight: 600; }
+        .is-light .okp-history-progress-label { color: @okp_navy; }
+        .is-dark .okp-history-progress-label { color: @okp_accent; }
 
         .okp-history-finished-chip {
-            padding: 3px 7px;
-            border-radius: 6px;
-            font-size: 10.5px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            border: 1px solid transparent;
+            font-size: 11px;
             font-weight: 600;
         }
 
-        .is-light .okp-history-finished-chip { background: rgba(0, 0, 0, 0.045); color: rgba(0, 0, 0, 0.52); }
-        .is-dark .okp-history-finished-chip { background: rgba(255, 255, 255, 0.055); color: rgba(255, 255, 255, 0.56); }
+        .is-light .okp-history-finished-chip { background: alpha(@okp_ok, 0.10); border-color: alpha(@okp_ok, 0.42); color: @okp_ok; }
+        .is-dark .okp-history-finished-chip { background: alpha(@okp_ok_dark, 0.12); border-color: alpha(@okp_ok_dark, 0.42); color: @okp_ok_dark; }
 
         .okp-history-end-cap {
             margin-top: 26px;
             padding-top: 18px;
-            border-top: 1px solid rgba(128, 128, 128, 0.18);
+            border-top: 1px solid @okp_light_hairline;
             font-size: 11px;
         }
 
-        .is-light .okp-history-end-cap { color: rgba(0, 0, 0, 0.36); }
-        .is-dark .okp-history-end-cap { color: rgba(255, 255, 255, 0.36); }
+        .is-light .okp-history-end-cap { color: @okp_ink_faint; }
+        .is-dark .okp-history-end-cap { color: @okp_snow_faint; border-top-color: @okp_dark_hairline; }
 
         .okp-idle-canvas.is-high-contrast {
             background: #000000;
@@ -1291,36 +1410,45 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-width: 360px;
             margin-top: 30px;
             padding: 34px 28px;
-            border-radius: 12px;
+            border-radius: 16px;
         }
 
-        .is-light .okp-history-state-card { background: rgba(255, 255, 255, 0.52); border: 1px solid rgba(0, 0, 0, 0.07); }
-        .is-dark .okp-history-state-card { background: rgba(255, 255, 255, 0.035); border: 1px solid rgba(255, 255, 255, 0.08); }
+        .is-light .okp-history-state-card { background: @okp_light_card; border: 1px solid @okp_light_hairline; box-shadow: 0 1px 2px rgba(12, 20, 36, 0.04), 0 12px 32px rgba(12, 20, 36, 0.06); }
+        .is-dark .okp-history-state-card { background: @okp_dark_card; border: 1px solid @okp_dark_hairline; }
 
         .okp-history-state-icon-wrap {
             min-width: 54px;
             min-height: 54px;
-            border-radius: 14px;
-            background: alpha(@okp_accent, 0.12);
-            color: @okp_teal;
+            border-radius: 16px;
+            background: alpha(@okp_navy, 0.09);
+            color: @okp_navy;
         }
 
-        .okp-history-state-title { font-size: 16px; font-weight: 600; }
+        .is-dark .okp-history-state-icon-wrap {
+            background: alpha(@okp_accent, 0.16);
+            color: @okp_accent;
+        }
 
-        .okp-history-state-body { font-size: 12.5px; line-height: 1.55; }
-        .is-light .okp-history-state-body { color: rgba(0, 0, 0, 0.50); }
-        .is-dark .okp-history-state-body { color: rgba(255, 255, 255, 0.54); }
+        .okp-history-state-title { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+
+        .okp-history-state-body { font-size: 13px; line-height: 1.5; }
+        .is-light .okp-history-state-body { color: @okp_ink_mute; }
+        .is-dark .okp-history-state-body { color: @okp_snow_mute; }
 
         button.okp-history-state-button {
             min-height: 34px;
-            padding: 7px 18px;
-            border-radius: 7px;
-            background: @okp_teal;
+            padding: 0 18px;
+            border-radius: 999px;
+            background: linear-gradient(135deg, @okp_navy, @okp_blue 55%, @okp_accent);
             border: none;
             color: #ffffff;
-            font-size: 12px;
+            font-size: 13px;
             font-weight: 600;
+            box-shadow: 0 1px 2px alpha(@okp_navy, 0.30);
         }
+
+        button.okp-history-state-button:hover { background: linear-gradient(135deg, @okp_navy_hover, @okp_blue 55%, @okp_accent_bright); }
+        .is-dark button.okp-history-state-button { background: linear-gradient(135deg, @okp_blue, @okp_accent 60%, @okp_accent_bright); color: @okp_accent_ink; }
 
         .okp-history-loading { margin-top: 18px; }
         .okp-history-skeleton-row { padding: 9px 12px; }
@@ -1331,11 +1459,11 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .is-light .okp-history-skeleton-caption,
         .is-light .okp-history-skeleton-thumb,
         .is-light .okp-history-skeleton-line-1,
-        .is-light .okp-history-skeleton-line-2 { background: rgba(0, 0, 0, 0.08); }
+        .is-light .okp-history-skeleton-line-2 { background: @okp_light_inset; }
         .is-dark .okp-history-skeleton-caption,
         .is-dark .okp-history-skeleton-thumb,
         .is-dark .okp-history-skeleton-line-1,
-        .is-dark .okp-history-skeleton-line-2 { background: rgba(255, 255, 255, 0.08); }
+        .is-dark .okp-history-skeleton-line-2 { background: @okp_dark_inset; }
 
         /* Audio lyrics overlay — an Apple-Music-style sheet over the (black) audio plane. The scrim
            is translucent so any embedded cover art shows dimly behind, the lines dim away from the
@@ -1351,10 +1479,11 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-lyrics-header {
             margin-bottom: 6px;
-            color: alpha(@okp_accent_bright, 0.90);
+            color: @okp_accent;
             font-size: 11px;
-            font-weight: 760;
-            letter-spacing: 2px;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
         }
 
         .okp-lyrics-scroller {
@@ -1368,7 +1497,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         button.okp-lyrics-line {
             padding: 8px 14px;
             border: none;
-            border-radius: 10px;
+            border-radius: 12px;
             background: transparent;
             box-shadow: none;
             color: rgba(255, 255, 255, 0.42);
@@ -1389,7 +1518,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             background: transparent;
             color: #ffffff;
             font-size: 21px;
-            font-weight: 780;
+            font-weight: 700;
         }
 
         button.okp-lyrics-line.is-active:hover {
@@ -1398,7 +1527,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-lyrics-line:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.55);
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         .okp-lyrics-line-plain {
@@ -1409,7 +1538,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-lyrics-empty-icon {
-            color: alpha(@okp_accent_bright, 0.80);
+            color: @okp_accent;
         }
 
         .okp-lyrics-empty-text {
@@ -1445,18 +1574,10 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-compact-bottom-bar {
             min-height: 28px;
             padding: 6px 8px;
-            border-radius: 14px;
-            background: rgba(22, 22, 25, 0.56);
-            border: 1px solid rgba(255, 255, 255, 0.14);
-            box-shadow: 0 14px 40px rgba(0, 0, 0, 0.32);
-        }
-
-        .okp-compact-top-bar {
-            background-image: radial-gradient(ellipse at top, rgba(0, 0, 0, 0.50), rgba(22, 22, 25, 0.56) 72%);
-        }
-
-        .okp-compact-bottom-bar {
-            background-image: radial-gradient(ellipse at bottom, rgba(0, 0, 0, 0.50), rgba(22, 22, 25, 0.56) 72%);
+            border-radius: 999px;
+            background: rgba(12, 20, 36, 0.56);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow: 0 14px 40px rgba(0, 0, 0, 0.30);
         }
 
         button.okp-compact-button {
@@ -1464,7 +1585,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 28px;
             padding: 0;
             border: 1px solid transparent;
-            border-radius: 8px;
+            border-radius: 999px;
             background: transparent;
             box-shadow: none;
             color: rgba(255, 255, 255, 0.95);
@@ -1481,7 +1602,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-compact-button:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.60);
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         button.okp-compact-close:hover {
@@ -1491,8 +1612,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         button.okp-compact-play {
             min-width: 42px;
             min-height: 42px;
-            border-radius: 21px;
-            background: rgba(22, 22, 25, 0.56);
+            border-radius: 999px;
+            background: rgba(12, 20, 36, 0.56);
             border: 1px solid rgba(255, 255, 255, 0.14);
             box-shadow: 0 6px 20px rgba(0, 0, 0, 0.40);
             -gtk-icon-size: 21px;
@@ -1500,13 +1621,14 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-compact-title {
             color: rgba(255, 255, 255, 0.95);
-            font-size: 11px;
+            font-size: 12px;
             font-weight: 600;
         }
 
         .okp-compact-time {
-            color: rgba(255, 255, 255, 0.82);
-            font-size: 10px;
+            color: rgba(255, 255, 255, 0.85);
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
+            font-size: 11px;
             font-weight: 500;
             font-feature-settings: 'tnum';
         }
@@ -1521,8 +1643,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         scale.okp-compact-seek trough {
             min-height: 3px;
             border: none;
-            border-radius: 2px;
-            background: rgba(255, 255, 255, 0.30);
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.22);
             box-shadow: none;
         }
 
@@ -1530,7 +1652,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-width: 2px;
             min-height: 3px;
             border: none;
-            border-radius: 2px;
+            border-radius: 999px;
             background: @okp_accent;
         }
 
@@ -1539,17 +1661,16 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 10px;
             margin: 0;
             border: none;
-            border-radius: 6px;
+            border-radius: 999px;
             background: #ffffff;
-            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30), 0 1px 4px rgba(0, 0, 0, 0.45);
         }
 
         window.okp-player-window.is-high-contrast .okp-compact-top-bar,
         window.okp-player-window.is-high-contrast .okp-compact-bottom-bar,
         window.okp-player-window.is-reduced-transparency .okp-compact-top-bar,
         window.okp-player-window.is-reduced-transparency .okp-compact-bottom-bar {
-            background: #161619;
-            background-image: none;
+            background: @okp_dark_card;
             border-color: #ffffff;
             box-shadow: none;
         }
@@ -1559,7 +1680,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-bottom-scrim {
-            background: linear-gradient(to top, rgba(0, 0, 0, 0.48), rgba(0, 0, 0, 0));
+            background: linear-gradient(to top, rgba(7, 15, 34, 0.50), rgba(7, 15, 34, 0));
         }
 
         .okp-controls {
@@ -1568,13 +1689,13 @@ pub(crate) const OKP_STYLESHEET: &str = "
              * allocation (issue #328), so the CSS padding is zeroed to avoid
              * double-insetting the controls. */
             padding: 0;
-            border-radius: 14px;
-            /* GTK 4 has no portable backdrop-filter. This 50% tint plus the
-             * localized scrim is the deterministic fallback for the locked
-             * 24-26px blur/saturation material used on platforms that support it. */
-            background: rgba(22, 22, 25, 0.50);
+            border-radius: 16px;
+            /* GTK 4 has no portable backdrop-filter. This navy-tinted 56% glass
+             * plus the localized scrim is the deterministic fallback for the
+             * blur/saturation material used on platforms that support it. */
+            background: rgba(12, 20, 36, 0.56);
             border: 1px solid rgba(255, 255, 255, 0.12);
-            box-shadow: 0 12px 34px rgba(0, 0, 0, 0.34);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18), 0 24px 60px rgba(0, 0, 0, 0.28);
         }
 
         button.okp-control-button,
@@ -1582,28 +1703,28 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-width: 32px;
             min-height: 32px;
             padding: 0;
-            border-radius: 8px;
+            border-radius: 999px;
             border: 1px solid transparent;
             background: transparent;
             box-shadow: none;
-            color: rgba(255, 255, 255, 0.86);
+            color: rgba(255, 255, 255, 0.88);
             font-size: 12.5px;
             font-weight: 600;
         }
 
         button.okp-control-button:hover,
         menubutton.okp-control-button > button:hover {
-            background: rgba(255, 255, 255, 0.11);
-            color: rgba(255, 255, 255, 0.96);
+            background: rgba(255, 255, 255, 0.12);
+            color: rgba(255, 255, 255, 0.98);
         }
 
         button.okp-control-button:active,
         menubutton.okp-control-button > button:active,
         button.okp-control-button:checked,
         menubutton.okp-control-button > button:checked {
-            background: alpha(@okp_accent, 0.24);
-            border-color: alpha(@okp_accent, 0.42);
-            color: rgba(255, 255, 255, 0.98);
+            background: alpha(@okp_accent, 0.22);
+            border-color: alpha(@okp_accent, 0.45);
+            color: @okp_accent_bright;
         }
 
         button.okp-control-button:disabled,
@@ -1616,19 +1737,19 @@ pub(crate) const OKP_STYLESHEET: &str = "
         button.okp-control-button:focus-visible,
         menubutton.okp-control-button > button:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.55);
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         button.okp-play-button {
             min-width: 32px;
-            border-radius: 8px;
-            background: transparent;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.14);
             color: #ffffff;
-            -gtk-icon-size: 22px;
+            -gtk-icon-size: 20px;
         }
 
         button.okp-play-button:hover {
-            background: rgba(255, 255, 255, 0.12);
+            background: rgba(255, 255, 255, 0.24);
         }
 
         button.okp-play-button:disabled {
@@ -1654,9 +1775,13 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         menubutton.okp-speed-chip > button {
             min-width: 50px;
-            padding: 0 8px;
-            background: rgba(255, 255, 255, 0.14);
+            padding: 0 10px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.12);
             color: rgba(255, 255, 255, 0.92);
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
+            font-size: 12px;
+            font-weight: 600;
             font-feature-settings: 'tnum';
         }
 
@@ -1665,8 +1790,9 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-time-label {
-            color: rgba(255, 255, 255, 0.85);
-            font-size: 12.5px;
+            color: rgba(255, 255, 255, 0.88);
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
+            font-size: 12px;
             font-weight: 500;
             font-feature-settings: 'tnum';
         }
@@ -1681,10 +1807,10 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-status-toast {
             padding: 9px 14px;
-            border-radius: 10px;
-            background: rgba(22, 22, 25, 0.60);
+            border-radius: 12px;
+            background: rgba(12, 20, 36, 0.62);
             border: 1px solid rgba(255, 255, 255, 0.10);
-            box-shadow: 0 14px 34px rgba(0, 0, 0, 0.42);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18), 0 24px 60px rgba(0, 0, 0, 0.28);
             color: rgba(255, 255, 255, 0.92);
             font-size: 13px;
             font-weight: 600;
@@ -1693,8 +1819,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-status-toast-thumbnail {
             min-width: 64px;
             min-height: 36px;
-            border-radius: 5px;
-            background: #050608;
+            border-radius: 6px;
+            background: @okp_bg;
         }
 
         button.okp-status-toast-path {
@@ -1717,7 +1843,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-status-toast-path:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.62);
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         button.okp-status-toast-path:disabled {
@@ -1727,21 +1853,21 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-update-action-surface {
             padding: 12px 14px;
-            border-radius: 8px;
-            background: #f8fafb;
-            border: 1px solid rgba(0, 0, 0, 0.06);
+            border-radius: 12px;
+            background: @okp_light_rail;
+            border: 1px solid transparent;
         }
 
         .okp-update-action-title {
             color: @okp_ink;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 13px;
             font-weight: 600;
         }
 
         .okp-update-action-detail {
-            color: rgba(0, 0, 0, 0.50);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            color: @okp_ink_mute;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 12px;
         }
 
@@ -1749,35 +1875,36 @@ pub(crate) const OKP_STYLESHEET: &str = "
            commands to be read and pasted, not prose, and boxed so it is
            obvious where the block a user has to copy begins and ends. */
         .okp-update-setup-commands {
-            color: rgba(0, 0, 0, 0.72);
-            font-family: 'Cascadia Mono', 'Consolas', monospace;
+            color: @okp_ink_dim;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
             font-size: 11px;
             padding: 8px 10px;
             margin-top: 4px;
-            border-radius: 6px;
-            background: rgba(0, 0, 0, 0.04);
+            border-radius: 8px;
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline;
         }
 
         button.okp-update-primary-button {
             min-height: 30px;
-            padding: 5px 14px;
-            border-radius: 7px;
+            padding: 0 16px;
+            border-radius: 999px;
             border: none;
-            background: @okp_teal;
+            background: linear-gradient(135deg, @okp_navy, @okp_blue 55%, @okp_accent);
             color: #ffffff;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 12px;
             font-weight: 600;
-            box-shadow: none;
+            box-shadow: 0 1px 2px alpha(@okp_navy, 0.30);
         }
 
         button.okp-update-primary-button:hover {
-            background: @okp_teal_deep;
+            background: linear-gradient(135deg, @okp_navy_hover, @okp_blue 55%, @okp_accent_bright);
         }
 
         button.okp-update-primary-button:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_teal, 0.35);
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         button.okp-update-primary-button:disabled {
@@ -1786,10 +1913,10 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-persistent-update {
             padding: 12px 14px;
-            border-radius: 10px;
-            background: rgba(22, 22, 25, 0.88);
+            border-radius: 16px;
+            background: rgba(12, 20, 36, 0.90);
             border: 1px solid rgba(255, 255, 255, 0.12);
-            box-shadow: 0 14px 34px rgba(0, 0, 0, 0.42);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18), 0 24px 60px rgba(0, 0, 0, 0.28);
         }
 
         .okp-persistent-update .okp-update-action-title {
@@ -1850,22 +1977,23 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-seek-preview {
             padding: 8px 10px;
-            border-radius: 9px;
-            background: rgba(14, 15, 18, 0.94);
+            border-radius: 12px;
+            background: rgba(12, 20, 36, 0.94);
             border: 1px solid rgba(255, 255, 255, 0.10);
-            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.40);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18), 0 24px 60px rgba(0, 0, 0, 0.28);
         }
 
         .okp-seek-preview-thumb {
             margin-bottom: 6px;
-            border-radius: 5px;
+            border-radius: 6px;
             background: rgba(255, 255, 255, 0.08);
         }
 
         .okp-seek-preview-time {
             color: rgba(255, 255, 255, 0.92);
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
             font-size: 12px;
-            font-weight: 700;
+            font-weight: 600;
             font-feature-settings: 'tnum';
         }
 
@@ -1885,7 +2013,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             padding: 0;
             margin: 0;
             border: none;
-            border-radius: 6px;
+            border-radius: 999px;
             background: transparent;
             box-shadow: none;
         }
@@ -1908,7 +2036,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-volume-control.is-boosted .okp-volume-icon,
         .okp-volume-control.is-muted .okp-volume-icon {
-            color: #F0B840;
+            color: @okp_warning_dark;
         }
 
         popover.okp-volume-popover,
@@ -1929,10 +2057,10 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-volume-capsule {
             padding: 9px 13px;
-            border-radius: 13px;
-            background: rgba(28, 28, 32, 0.72);
+            border-radius: 16px;
+            background: rgba(12, 20, 36, 0.72);
             border: 1px solid rgba(255, 255, 255, 0.13);
-            box-shadow: 0 14px 34px rgba(0, 0, 0, 0.42);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18), 0 24px 60px rgba(0, 0, 0, 0.28);
             opacity: 0;
             transform: translate(0, 6px) scale(0.96);
             transition: opacity 150ms cubic-bezier(0.25, 0.1, 0.25, 1), transform 150ms cubic-bezier(0.25, 0.1, 0.25, 1);
@@ -1979,13 +2107,13 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 14px;
             margin: 0;
             border: none;
-            border-radius: 7px;
+            border-radius: 999px;
             background: rgba(255, 255, 255, 0.98);
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.46);
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30), 0 1px 4px rgba(0, 0, 0, 0.40);
         }
 
         .okp-volume-capsule.is-boosted scale.okp-volume-slider slider {
-            background: #F0B840;
+            background: @okp_warning_dark;
         }
 
         .okp-volume-capsule.is-muted scale.okp-volume-slider slider {
@@ -2000,13 +2128,15 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         button.okp-volume-readout {
-            padding: 0 2px;
+            padding: 0 4px;
             border: none;
+            border-radius: 999px;
             background: transparent;
             box-shadow: none;
             color: rgba(255, 255, 255, 0.94);
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
             font-size: 12px;
-            font-weight: 700;
+            font-weight: 600;
             font-feature-settings: 'tnum';
         }
 
@@ -2017,26 +2147,27 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-volume-capsule.is-boosted button.okp-volume-readout,
         .okp-volume-capsule.is-muted button.okp-volume-readout {
-            color: #F0B840;
+            color: @okp_warning_dark;
         }
 
         entry.okp-volume-readout-input {
-            padding: 2px 5px;
-            border-radius: 5px;
+            padding: 2px 6px;
+            border-radius: 8px;
             background: rgba(255, 255, 255, 0.10);
             border: 1px solid @okp_accent;
             color: rgba(255, 255, 255, 0.96);
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
             font-size: 12px;
             font-feature-settings: 'tnum';
         }
 
         .okp-up-next-panel {
-            border-radius: 12px 0 0 12px;
-            background: rgba(244, 244, 244, 0.96);
+            border-radius: 16px 0 0 16px;
+            background: @okp_light_card;
             border-style: solid;
-            border-color: rgba(0, 0, 0, 0.12);
+            border-color: @okp_light_hairline;
             border-width: 1px 0 1px 1px;
-            box-shadow: -18px 18px 48px rgba(0, 0, 0, 0.30);
+            box-shadow: 0 4px 12px rgba(12, 20, 36, 0.08), 0 24px 60px rgba(12, 20, 36, 0.18);
         }
 
         .okp-side-panel-header {
@@ -2045,36 +2176,37 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-side-panel-tabs {
             padding: 3px;
-            border-radius: 8px;
-            background: rgba(0, 0, 0, 0.08);
+            border-radius: 999px;
+            background: @okp_light_rail;
+            border: 1px solid @okp_light_hairline;
         }
 
         button.okp-side-panel-tab {
             min-height: 28px;
-            padding: 0 16px;
-            border-radius: 6px;
+            padding: 0 14px;
+            border-radius: 999px;
             border: none;
             background: transparent;
             box-shadow: none;
-            color: rgba(0, 0, 0, 0.50);
-            font-size: 12.5px;
-            font-weight: 650;
+            color: @okp_ink_mute;
+            font-size: 12px;
+            font-weight: 600;
         }
 
         button.okp-side-panel-tab:hover {
-            background: rgba(255, 255, 255, 0.55);
-            color: rgba(0, 0, 0, 0.74);
+            background: transparent;
+            color: @okp_ink;
         }
 
         button.okp-side-panel-tab.is-selected {
-            background: rgba(255, 255, 255, 0.96);
-            color: @okp_teal_deep;
-            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16);
+            background: @okp_light_card;
+            color: @okp_ink;
+            box-shadow: 0 1px 0 rgba(12, 20, 36, 0.04), 0 8px 24px rgba(12, 20, 36, 0.05);
         }
 
         button.okp-side-panel-tab:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.6);
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         button.okp-side-panel-close {
@@ -2082,20 +2214,20 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 30px;
             padding: 0;
             border: none;
-            border-radius: 6px;
+            border-radius: 999px;
             background: transparent;
-            color: rgba(0, 0, 0, 0.46);
+            color: @okp_ink_mute;
             box-shadow: none;
         }
 
         button.okp-side-panel-close:hover {
-            background: rgba(0, 0, 0, 0.07);
-            color: rgba(0, 0, 0, 0.74);
+            background: alpha(@okp_navy, 0.06);
+            color: @okp_ink;
         }
 
         button.okp-side-panel-close:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.6);
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         .okp-up-next-list {
@@ -2112,22 +2244,24 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-panel-heading {
-            color: rgba(0, 0, 0, 0.42);
+            color: @okp_ink_faint;
             font-size: 11px;
-            font-weight: 720;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
         }
 
         .okp-up-next-list row.okp-panel-empty-row {
             min-height: 88px;
             margin: 4px 6px 8px 6px;
             padding: 20px 18px;
-            border-radius: 8px;
-            background: rgba(255, 255, 255, 0.44);
-            border: 1px dashed rgba(0, 0, 0, 0.18);
+            border-radius: 12px;
+            background: @okp_light_rail;
+            border: 1px dashed @okp_light_hairline_hi;
         }
 
         .okp-panel-empty {
-            color: rgba(0, 0, 0, 0.58);
+            color: @okp_ink_mute;
             font-size: 12.5px;
         }
 
@@ -2136,7 +2270,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-panel-caption {
-            color: rgba(0, 0, 0, 0.48);
+            color: @okp_ink_faint;
             font-size: 11.5px;
         }
 
@@ -2144,10 +2278,10 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 40px;
             margin: 1px 0;
             padding: 7px 8px;
-            border-radius: 6px;
+            border-radius: 8px;
             border: 1px solid transparent;
             background: transparent;
-            color: rgba(0, 0, 0, 0.78);
+            color: @okp_ink_dim;
         }
 
         .okp-chapter-row {
@@ -2156,10 +2290,10 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-chapter-current-rail {
-            min-width: 3px;
+            min-width: 4px;
             min-height: 34px;
-            border-radius: 2px;
-            background: @okp_teal;
+            border-radius: 0 2px 2px 0;
+            background: linear-gradient(to bottom, @okp_navy, @okp_blue 55%, @okp_accent);
             opacity: 0;
         }
 
@@ -2170,96 +2304,99 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-chapter-thumb {
             min-width: 56px;
             min-height: 32px;
-            border-radius: 4px;
-            background: rgba(0, 0, 0, 0.08);
-            border: 1px solid rgba(0, 0, 0, 0.06);
+            border-radius: 6px;
+            background: @okp_light_inset;
+            border: 1px solid @okp_light_hairline;
         }
 
         .okp-chapter-thumb.is-pending {
-            background: rgba(0, 0, 0, 0.045);
+            background: @okp_light_rail;
             border-style: dashed;
-            border-color: rgba(0, 0, 0, 0.12);
+            border-color: @okp_light_hairline_hi;
         }
 
         .okp-chapter-thumb-placeholder {
-            color: rgba(0, 0, 0, 0.30);
+            color: @okp_ink_faint;
         }
 
         .okp-bookmark-row .okp-bookmark-icon {
-            color: alpha(@okp_accent, 0.92);
+            color: @okp_blue;
         }
 
         .okp-up-next-list row.okp-interval-row {
-            background: alpha(@okp_teal, 0.045);
+            background: alpha(@okp_navy, 0.05);
             border-style: dashed;
-            border-color: rgba(0, 0, 0, 0.13);
+            border-color: @okp_light_hairline_hi;
         }
 
         .okp-interval-row .okp-interval-icon {
-            color: rgba(0, 0, 0, 0.42);
+            color: @okp_ink_mute;
         }
 
         .okp-interval-row .okp-up-next-marker {
-            color: rgba(0, 0, 0, 0.52);
+            color: @okp_ink_mute;
         }
 
         .okp-up-next-list row.okp-detect-row {
             min-height: 52px;
             margin: 2px 6px 8px 6px;
-            background: alpha(@okp_teal, 0.11);
-            border-color: alpha(@okp_teal, 0.40);
-            color: @okp_teal_deep;
+            border-radius: 12px;
+            background: alpha(@okp_navy, 0.09);
+            border-color: alpha(@okp_navy, 0.30);
+            color: @okp_navy;
         }
 
         .okp-up-next-list row.okp-detect-row:hover {
-            background: alpha(@okp_teal, 0.17);
-            border-color: alpha(@okp_teal, 0.62);
-            color: @okp_teal_deep;
+            background: alpha(@okp_navy, 0.14);
+            border-color: alpha(@okp_navy, 0.50);
+            color: @okp_navy;
         }
 
         .okp-detect-row .okp-detect-icon {
-            color: @okp_teal;
+            color: @okp_navy;
         }
 
         .okp-detect-subtitle {
-            color: rgba(0, 0, 0, 0.52);
+            color: @okp_ink_mute;
             font-size: 11px;
         }
 
         .okp-detect-status-row {
             margin: 2px 6px 8px 6px;
             padding: 9px 10px;
-            border-radius: 6px;
-            background: rgba(255, 255, 255, 0.44);
-            border: 1px dashed rgba(0, 0, 0, 0.16);
+            border-radius: 12px;
+            background: @okp_light_rail;
+            border: 1px dashed @okp_light_hairline_hi;
         }
 
         .okp-detect-status-icon {
-            color: rgba(0, 0, 0, 0.40);
+            color: @okp_ink_faint;
         }
 
         .okp-detect-status {
-            color: rgba(0, 0, 0, 0.58);
+            color: @okp_ink_mute;
             font-size: 12px;
         }
 
         .okp-up-next-list row.okp-interval-row:focus-visible,
         .okp-up-next-list row.okp-detect-row:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 2px alpha(@okp_teal, 0.58);
+            box-shadow: inset 0 0 0 2px alpha(@okp_accent, 0.60);
         }
 
         .okp-up-next-list row.okp-add-bookmark-row {
             margin-top: 6px;
-            background: @okp_teal;
-            border-color: @okp_teal;
+            border-radius: 999px;
+            background: linear-gradient(135deg, @okp_navy, @okp_blue 55%, @okp_accent);
+            border-color: transparent;
             color: #ffffff;
-            font-weight: 650;
+            font-weight: 600;
+            box-shadow: 0 1px 2px alpha(@okp_navy, 0.30);
         }
 
         .okp-up-next-list row.okp-add-bookmark-row:hover {
-            background: @okp_teal_deep;
-            border-color: @okp_teal_deep;
+            background: linear-gradient(135deg, @okp_navy_hover, @okp_blue 55%, @okp_accent_bright);
+            border-color: transparent;
             color: #ffffff;
         }
 
@@ -2270,21 +2407,22 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-up-next-list row.okp-add-files-row {
             min-height: 70px;
             margin: 6px;
-            background: rgba(255, 255, 255, 0.44);
+            border-radius: 12px;
+            background: @okp_light_card;
             border-style: dashed;
-            border-color: alpha(@okp_teal, 0.42);
-            color: @okp_teal_deep;
-            font-weight: 650;
+            border-color: @okp_light_hairline_hi;
+            color: @okp_navy;
+            font-weight: 600;
         }
 
         .okp-up-next-list row.okp-add-files-row:hover {
-            background: alpha(@okp_teal, 0.12);
-            border-color: alpha(@okp_teal, 0.64);
-            color: @okp_teal_deep;
+            background: alpha(@okp_navy, 0.06);
+            border-color: @okp_navy;
+            color: @okp_navy;
         }
 
         .okp-add-files-row .okp-add-files-icon {
-            color: alpha(@okp_accent, 0.92);
+            color: @okp_navy;
         }
 
         /* The lone now-playing card at the top of a short queue has no reorder /
@@ -2294,53 +2432,53 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 50px;
             margin: 6px 6px 10px 6px;
             padding: 8px;
-            border-radius: 8px;
-            background: alpha(@okp_teal, 0.12);
-            color: @okp_teal_deep;
+            border-radius: 12px;
+            background: alpha(@okp_navy, 0.09);
+            color: @okp_navy;
         }
 
         .okp-now-playing-thumb {
             min-width: 54px;
             min-height: 34px;
             border-radius: 5px;
-            background: linear-gradient(135deg, #16352b, @okp_teal);
+            background: linear-gradient(135deg, @okp_navy_deep, @okp_blue);
             color: rgba(255, 255, 255, 0.56);
         }
 
         .okp-now-playing-title {
-            color: @okp_teal_deep;
+            color: @okp_navy;
             font-size: 12.5px;
-            font-weight: 650;
+            font-weight: 600;
         }
 
         .okp-now-playing-state {
-            color: @okp_teal;
+            color: @okp_link;
             font-size: 10.5px;
-            font-weight: 650;
+            font-weight: 600;
         }
 
         .okp-up-next-row.is-current .okp-chapter-thumb {
-            border-color: alpha(@okp_accent, 0.55);
+            border-color: alpha(@okp_navy, 0.35);
         }
 
         .okp-up-next-row:hover {
-            background: rgba(0, 0, 0, 0.055);
+            background: alpha(@okp_navy, 0.06);
         }
 
         .okp-up-next-row.is-current {
-            background: alpha(@okp_accent, 0.10);
-            border-color: alpha(@okp_teal, 0.18);
-            color: @okp_teal_deep;
+            background: alpha(@okp_navy, 0.09);
+            border-color: transparent;
+            color: @okp_navy;
         }
 
         .okp-up-next-row.is-behind {
             background: transparent;
-            color: rgba(0, 0, 0, 0.42);
+            color: @okp_ink_faint;
         }
 
         .okp-up-next-row.is-behind:hover {
-            background: rgba(0, 0, 0, 0.04);
-            color: rgba(0, 0, 0, 0.62);
+            background: alpha(@okp_navy, 0.04);
+            color: @okp_ink_mute;
         }
 
         .okp-up-next-row.is-behind .okp-up-next-source-icon {
@@ -2348,13 +2486,13 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-up-next-row.is-drop-target {
-            background: alpha(@okp_accent, 0.22);
-            border-color: alpha(@okp_accent, 0.62);
+            background: alpha(@okp_accent, 0.16);
+            border-color: alpha(@okp_accent, 0.60);
         }
 
         .okp-up-next-drag-handle {
             min-width: 18px;
-            color: rgba(0, 0, 0, 0.24);
+            color: alpha(@okp_ink, 0.28);
         }
 
         .okp-up-next-drag-handle-icon {
@@ -2363,7 +2501,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-up-next-row:hover .okp-up-next-drag-handle,
         .okp-up-next-row.is-drop-target .okp-up-next-drag-handle {
-            color: rgba(0, 0, 0, 0.64);
+            color: @okp_ink_mute;
         }
 
         .okp-up-next-lane {
@@ -2372,29 +2510,30 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-up-next-index {
             min-width: 22px;
-            color: rgba(0, 0, 0, 0.40);
+            color: @okp_ink_faint;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
             font-size: 11px;
-            font-weight: 620;
+            font-weight: 600;
             font-feature-settings: 'tnum';
         }
 
         .okp-up-next-watched-icon {
-            color: @okp_teal;
+            color: @okp_ok;
         }
 
         .okp-up-next-source-icon {
-            color: rgba(0, 0, 0, 0.46);
+            color: @okp_ink_mute;
         }
 
         .okp-up-next-row.is-current .okp-up-next-source-icon {
-            color: @okp_teal_deep;
+            color: @okp_navy;
         }
 
         .okp-now-badge {
             padding: 1px 7px;
             border-radius: 999px;
             background: @okp_accent;
-            color: #041110;
+            color: @okp_accent_ink;
             font-size: 9.5px;
             font-weight: 800;
             letter-spacing: 0;
@@ -2403,22 +2542,23 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-next-badge {
             padding: 1px 7px;
             border-radius: 999px;
-            background: alpha(@okp_accent, 0.18);
-            color: alpha(@okp_accent, 0.98);
+            background: alpha(@okp_navy, 0.09);
+            color: @okp_navy;
             font-size: 9.5px;
-            font-weight: 760;
+            font-weight: 700;
             letter-spacing: 0;
         }
 
         .okp-up-next-marker {
-            color: rgba(0, 0, 0, 0.45);
+            color: @okp_ink_mute;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
             font-size: 11px;
-            font-weight: 560;
+            font-weight: 500;
             font-feature-settings: 'tnum';
         }
 
         .okp-up-next-row.is-current .okp-up-next-marker {
-            color: @okp_teal_deep;
+            color: @okp_navy;
         }
 
         .okp-up-next-file {
@@ -2431,35 +2571,35 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 26px;
             padding: 0;
             border: none;
-            border-radius: 5px;
+            border-radius: 999px;
             background: transparent;
-            color: rgba(0, 0, 0, 0.42);
+            color: @okp_ink_mute;
             box-shadow: none;
         }
 
         menubutton.okp-up-next-actions-menu > button:hover {
-            background: rgba(0, 0, 0, 0.07);
-            color: rgba(0, 0, 0, 0.72);
+            background: alpha(@okp_navy, 0.06);
+            color: @okp_ink;
         }
 
         .okp-up-next-actions-popover {
             min-width: 142px;
             padding: 6px;
-            background: #f4f4f4;
+            background: @okp_light_card;
         }
 
         button.okp-up-next-menu-action {
             min-height: 30px;
-            padding: 5px 8px;
+            padding: 5px 10px;
             border: none;
-            border-radius: 5px;
+            border-radius: 8px;
             background: transparent;
-            color: rgba(0, 0, 0, 0.78);
+            color: @okp_ink_dim;
             box-shadow: none;
         }
 
         button.okp-up-next-menu-action:hover {
-            background: rgba(0, 0, 0, 0.07);
+            background: alpha(@okp_navy, 0.06);
         }
 
         button.okp-up-next-action-button {
@@ -2467,19 +2607,19 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 24px;
             padding: 0;
             border: none;
-            border-radius: 5px;
+            border-radius: 999px;
             background: transparent;
             box-shadow: none;
-            color: rgba(0, 0, 0, 0.46);
+            color: @okp_ink_mute;
         }
 
         button.okp-up-next-action-button:hover {
-            background: rgba(0, 0, 0, 0.07);
-            color: rgba(0, 0, 0, 0.78);
+            background: alpha(@okp_navy, 0.06);
+            color: @okp_ink;
         }
 
         button.okp-up-next-action-button:disabled {
-            color: rgba(0, 0, 0, 0.18);
+            color: alpha(@okp_ink, 0.18);
         }
 
         .okp-up-next-panel scrolledwindow {
@@ -2495,13 +2635,13 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-up-next-panel scrollbar slider {
             min-width: 4px;
             border-radius: 999px;
-            background: rgba(0, 0, 0, 0.22);
+            background: alpha(@okp_ink, 0.22);
         }
 
         .okp-track-popover-content {
             padding: 8px;
-            background: #f7f7f5;
-            color: #17191c;
+            background: @okp_light_card;
+            color: @okp_ink;
         }
 
         .okp-track-popover-content.okp-speed-popover {
@@ -2518,10 +2658,10 @@ pub(crate) const OKP_STYLESHEET: &str = "
         popover.okp-track-popover > contents,
         popover.okp-track-popover contents {
             padding: 0;
-            border-radius: 8px;
-            background: #f7f7f5;
-            border: 1px solid rgba(0, 0, 0, 0.16);
-            box-shadow: 0 12px 34px rgba(0, 0, 0, 0.26);
+            border-radius: 12px;
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline;
+            box-shadow: 0 16px 50px rgba(12, 20, 36, 0.18);
         }
 
         popover.okp-track-popover arrow {
@@ -2534,49 +2674,49 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-command-surface {
             padding: 6px;
-            background: #f7f7f5;
+            background: @okp_light_card;
         }
 
         entry.okp-command-search {
             min-height: 24px;
             margin: 0 0 6px 0;
             padding: 4px 10px 4px 0;
-            border-radius: 6px;
-            border: 1px solid rgba(0, 0, 0, 0.10);
-            background: rgba(0, 0, 0, 0.035);
-            color: rgba(23, 25, 28, 0.92);
+            border-radius: 8px;
+            border: 1px solid @okp_light_hairline_hi;
+            background: @okp_light_card;
+            color: @okp_ink;
             box-shadow: none;
             font-size: 12px;
         }
 
         entry.okp-command-search > image {
             margin: 0 6px 0 8px;
-            color: rgba(23, 25, 28, 0.48);
+            color: @okp_ink_faint;
         }
 
         entry.okp-command-search > text > placeholder {
-            color: rgba(23, 25, 28, 0.48);
+            color: @okp_ink_faint;
         }
 
         entry.okp-command-search:hover {
-            background: rgba(0, 0, 0, 0.055);
-            border-color: rgba(0, 0, 0, 0.14);
+            background: @okp_light_bg;
+            border-color: @okp_light_hairline_hi;
         }
 
         entry.okp-command-search:focus-within {
-            border-color: alpha(@okp_teal, 0.62);
-            box-shadow: inset 0 0 0 1px alpha(@okp_teal, 0.20);
-            background: rgba(0, 0, 0, 0.045);
+            border-color: @okp_accent;
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
+            background: @okp_light_card;
         }
 
         entry.okp-command-search:disabled {
-            background: rgba(0, 0, 0, 0.02);
-            border-color: rgba(0, 0, 0, 0.06);
-            color: rgba(23, 25, 28, 0.42);
+            background: @okp_light_rail;
+            border-color: @okp_light_hairline;
+            color: alpha(@okp_ink, 0.42);
         }
 
         entry.okp-command-search:disabled > image {
-            color: rgba(23, 25, 28, 0.30);
+            color: alpha(@okp_ink, 0.30);
         }
 
         .okp-command-scroll,
@@ -2586,53 +2726,55 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-command-group-title {
             margin: 10px 8px 4px 8px;
-            color: rgba(23, 25, 28, 0.50);
-            font-size: 10px;
-            font-weight: 720;
-            letter-spacing: 0.04em;
+            color: @okp_ink_faint;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
         }
 
         separator.okp-command-separator {
             min-height: 1px;
             margin: 4px 8px;
-            background: rgba(23, 25, 28, 0.12);
+            background: @okp_light_hairline;
         }
 
         button.okp-command-row {
-            min-height: 26px;
-            padding: 3px 8px;
-            border-radius: 6px;
+            min-height: 28px;
+            padding: 3px 10px;
+            border-radius: 8px;
             border: 1px solid transparent;
             background: transparent;
             box-shadow: none;
-            color: rgba(23, 25, 28, 0.88);
-            font-size: 12px;
+            color: @okp_ink_dim;
+            font-size: 13px;
         }
 
         button.okp-command-row:hover {
-            background: rgba(0, 0, 0, 0.055);
-            color: #111316;
+            background: alpha(@okp_navy, 0.06);
+            color: @okp_ink;
         }
 
         button.okp-command-row:active {
-            background: rgba(0, 0, 0, 0.09);
+            background: alpha(@okp_navy, 0.10);
         }
 
         button.okp-command-row.is-selected {
-            background: alpha(@okp_teal, 0.11);
-            border-color: alpha(@okp_teal, 0.20);
-            color: #0a5f59;
+            background: alpha(@okp_navy, 0.09);
+            border-color: transparent;
+            color: @okp_navy;
+            font-weight: 600;
         }
 
         button.okp-command-row:disabled {
             background: transparent;
             border-color: transparent;
-            color: rgba(23, 25, 28, 0.34);
+            color: alpha(@okp_ink, 0.34);
         }
 
         button.okp-command-row:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px alpha(@okp_teal, 0.72);
+            box-shadow: inset 0 0 0 2px alpha(@okp_accent, 0.60);
         }
 
         button.okp-command-back-row {
@@ -2641,7 +2783,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-command-submenu-arrow {
-            color: rgba(23, 25, 28, 0.46);
+            color: @okp_ink_faint;
         }
 
         .okp-command-row-label {
@@ -2649,8 +2791,9 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-command-shortcut {
-            color: rgba(23, 25, 28, 0.46);
-            font-size: 10.5px;
+            color: @okp_ink_faint;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
+            font-size: 11px;
             font-feature-settings: 'tnum';
         }
 
@@ -2660,56 +2803,56 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-command-no-results-title {
-            color: rgba(23, 25, 28, 0.84);
+            color: @okp_ink;
             font-size: 13px;
-            font-weight: 650;
+            font-weight: 600;
         }
 
         .okp-command-no-results-hint {
-            color: rgba(23, 25, 28, 0.48);
+            color: @okp_ink_faint;
             font-size: 11.5px;
         }
 
         popover.okp-command-popover.is-dark > contents,
         popover.okp-command-popover.is-dark contents,
         popover.okp-command-popover.is-dark .okp-command-surface {
-            background: #252528;
-            border-color: rgba(255, 255, 255, 0.11);
+            background: @okp_dark_card;
+            border-color: @okp_dark_hairline_hi;
         }
 
         popover.okp-command-popover.is-dark entry.okp-command-search {
-            background: rgba(255, 255, 255, 0.055);
-            border-color: rgba(255, 255, 255, 0.12);
-            color: rgba(255, 255, 255, 0.92);
+            background: @okp_settings_dark;
+            border-color: @okp_dark_hairline_hi;
+            color: @okp_snow;
         }
 
         popover.okp-command-popover.is-dark entry.okp-command-search > image {
-            color: rgba(255, 255, 255, 0.48);
+            color: @okp_snow_faint;
         }
 
         popover.okp-command-popover.is-dark entry.okp-command-search > text > placeholder {
-            color: rgba(255, 255, 255, 0.48);
+            color: @okp_snow_faint;
         }
 
         popover.okp-command-popover.is-dark entry.okp-command-search:hover {
-            background: rgba(255, 255, 255, 0.075);
-            border-color: rgba(255, 255, 255, 0.16);
+            background: @okp_dark_rail;
+            border-color: @okp_dark_hairline_hi;
         }
 
         popover.okp-command-popover.is-dark entry.okp-command-search:focus-within {
-            border-color: alpha(@okp_accent, 0.62);
-            box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.22);
-            background: rgba(255, 255, 255, 0.065);
+            border-color: @okp_accent;
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
+            background: @okp_settings_dark;
         }
 
         popover.okp-command-popover.is-dark entry.okp-command-search:disabled {
-            background: rgba(255, 255, 255, 0.03);
-            border-color: rgba(255, 255, 255, 0.08);
-            color: rgba(255, 255, 255, 0.42);
+            background: @okp_dark_card;
+            border-color: @okp_dark_hairline;
+            color: @okp_snow_faint;
         }
 
         popover.okp-command-popover.is-dark entry.okp-command-search:disabled > image {
-            color: rgba(255, 255, 255, 0.30);
+            color: alpha(@okp_snow_faint, 0.60);
         }
 
         popover.okp-command-popover.is-high-contrast entry.okp-command-search {
@@ -2762,7 +2905,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         popover.okp-command-popover.is-dark.is-high-contrast entry.okp-command-search:hover,
         popover.okp-command-popover.is-high-contrast.is-dark entry.okp-command-search:hover {
-            background: #1a1a1a;
+            background: @okp_ink;
         }
 
         popover.okp-command-popover.is-dark.is-high-contrast entry.okp-command-search:focus-within,
@@ -2775,98 +2918,100 @@ pub(crate) const OKP_STYLESHEET: &str = "
         popover.okp-command-popover.is-dark .okp-command-group-title,
         popover.okp-command-popover.is-dark .okp-command-shortcut,
         popover.okp-command-popover.is-dark .okp-command-no-results-hint {
-            color: rgba(255, 255, 255, 0.48);
+            color: @okp_snow_faint;
         }
 
         popover.okp-command-popover.is-dark button.okp-command-row {
-            color: rgba(255, 255, 255, 0.88);
+            color: @okp_snow_dim;
         }
 
         popover.okp-command-popover.is-dark button.okp-command-row:hover {
-            background: rgba(255, 255, 255, 0.075);
-            color: #ffffff;
+            background: alpha(@okp_accent, 0.08);
+            color: @okp_snow;
         }
 
         popover.okp-command-popover.is-dark button.okp-command-row:active {
-            background: rgba(255, 255, 255, 0.12);
+            background: alpha(@okp_accent, 0.14);
         }
 
         popover.okp-command-popover.is-dark button.okp-command-row.is-selected {
             background: alpha(@okp_accent, 0.16);
-            border-color: alpha(@okp_accent, 0.25);
-            color: @okp_accent_bright;
+            border-color: transparent;
+            color: @okp_accent;
         }
 
         popover.okp-command-popover.is-dark button.okp-command-row:disabled {
-            color: rgba(255, 255, 255, 0.30);
+            color: alpha(@okp_snow, 0.30);
         }
 
         popover.okp-command-popover.is-dark separator.okp-command-separator {
-            background: rgba(255, 255, 255, 0.12);
+            background: @okp_dark_hairline;
         }
 
         popover.okp-command-popover.is-dark .okp-command-submenu-arrow {
-            color: rgba(255, 255, 255, 0.48);
+            color: @okp_snow_faint;
         }
 
         popover.okp-command-popover.is-dark .okp-command-no-results-title {
-            color: rgba(255, 255, 255, 0.86);
+            color: @okp_snow;
         }
 
         .okp-track-popover-scroll {
-            background: #f7f7f5;
+            background: @okp_light_card;
         }
 
         .okp-track-popover-title {
-            min-height: 24px;
-            margin: 0 6px 4px 6px;
-            color: #17191c;
-            font-size: 12.5px;
-            font-weight: 700;
+            min-height: 28px;
+            margin: 0 8px 4px 8px;
+            color: @okp_ink;
+            font-size: 14px;
+            font-weight: 600;
         }
 
         .okp-track-group-title {
-            margin: 10px 4px 4px 4px;
-            color: rgba(23, 25, 28, 0.58);
-            font-size: 10.5px;
-            font-weight: 720;
+            margin: 10px 8px 4px 8px;
+            color: @okp_ink_faint;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
         }
 
         .okp-track-subgroup-title {
-            margin: 6px 4px 2px 4px;
-            color: rgba(23, 25, 28, 0.52);
-            font-size: 10px;
-            font-weight: 640;
+            margin: 6px 8px 2px 8px;
+            color: @okp_ink_faint;
+            font-size: 10.5px;
+            font-weight: 600;
         }
 
         button.okp-track-row {
             min-height: 32px;
-            padding: 5px 7px;
-            border-radius: 4px;
+            padding: 5px 10px;
+            border-radius: 8px;
             background: transparent;
             border: 1px solid transparent;
             box-shadow: none;
-            color: rgba(23, 25, 28, 0.88);
-            font-size: 12px;
+            color: @okp_ink_dim;
+            font-size: 13px;
         }
 
         button.okp-track-row:hover {
-            background: rgba(0, 0, 0, 0.055);
-            color: #111316;
+            background: alpha(@okp_navy, 0.06);
+            color: @okp_ink;
         }
 
         button.okp-track-row:active {
-            background: rgba(0, 0, 0, 0.09);
+            background: alpha(@okp_navy, 0.10);
         }
 
         button.okp-track-row.is-selected {
-            background: alpha(@okp_teal, 0.12);
-            border-color: alpha(@okp_teal, 0.22);
-            color: #0a5f59;
+            background: alpha(@okp_navy, 0.09);
+            border-color: transparent;
+            color: @okp_navy;
         }
 
         button.okp-track-row.is-selected .okp-track-row-label {
-            font-weight: 640;
+            font-weight: 600;
         }
 
         button.okp-audio-track-row {
@@ -2879,23 +3024,23 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-audio-track-detail {
-            color: rgba(23, 25, 28, 0.54);
+            color: @okp_ink_faint;
             font-size: 10.5px;
         }
 
         button.okp-audio-track-row.is-selected .okp-audio-track-name {
-            font-weight: 640;
+            font-weight: 600;
         }
 
         button.okp-track-row:disabled {
             background: transparent;
             border-color: transparent;
-            color: rgba(23, 25, 28, 0.38);
+            color: alpha(@okp_ink, 0.38);
         }
 
         button.okp-track-row:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px alpha(@okp_teal, 0.72);
+            box-shadow: inset 0 0 0 2px alpha(@okp_accent, 0.60);
         }
 
         .okp-track-check {
@@ -2910,17 +3055,17 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         button.okp-scribe-row {
-            color: #0a655f;
+            color: @okp_link;
         }
 
         button.okp-scribe-row:disabled {
-            color: rgba(10, 101, 95, 0.54);
+            color: alpha(@okp_link, 0.54);
         }
 
         .okp-scribe-spinner {
             min-width: 16px;
             min-height: 16px;
-            color: rgba(10, 101, 95, 0.72);
+            color: alpha(@okp_link, 0.72);
         }
 
         .okp-subtitle-action-icon {
@@ -2930,37 +3075,37 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-subtitle-action-badge {
             min-height: 16px;
-            padding: 0 5px;
-            border-radius: 4px;
-            background: rgba(0, 0, 0, 0.065);
-            color: rgba(23, 25, 28, 0.52);
-            font-size: 8.5px;
-            font-weight: 720;
+            padding: 0 6px;
+            border-radius: 999px;
+            background: @okp_light_rail;
+            color: @okp_ink_mute;
+            font-size: 9px;
+            font-weight: 700;
         }
 
         button.okp-scribe-row .okp-subtitle-action-badge {
-            background: alpha(@okp_teal, 0.12);
-            color: rgba(10, 101, 95, 0.64);
+            background: alpha(@okp_link, 0.12);
+            color: @okp_link;
         }
 
         button.okp-online-subtitle-row:disabled {
-            color: rgba(23, 25, 28, 0.38);
+            color: alpha(@okp_ink, 0.38);
         }
 
         .okp-track-empty {
             min-height: 32px;
             margin: 0;
-            padding: 5px 8px 5px 29px;
-            border-radius: 4px;
+            padding: 5px 8px 5px 32px;
+            border-radius: 8px;
             border: 1px solid transparent;
             background: transparent;
-            color: rgba(23, 25, 28, 0.48);
-            font-size: 12px;
+            color: @okp_ink_faint;
+            font-size: 13px;
         }
 
         .okp-track-divider {
-            margin: 5px 4px;
-            background: rgba(0, 0, 0, 0.11);
+            margin: 6px 8px;
+            background: @okp_light_hairline;
         }
 
         .okp-quick-delay-row {
@@ -2970,14 +3115,15 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-quick-delay-label {
-            color: rgba(23, 25, 28, 0.72);
-            font-size: 12px;
+            color: @okp_ink_mute;
+            font-size: 13px;
         }
 
         .okp-quick-delay-value {
-            color: #0a655f;
-            font-size: 11.5px;
-            font-weight: 650;
+            color: @okp_navy;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
+            font-size: 12px;
+            font-weight: 600;
             font-feature-settings: 'tnum';
         }
 
@@ -2985,19 +3131,19 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-width: 26px;
             min-height: 26px;
             padding: 0;
-            border-radius: 4px;
+            border-radius: 999px;
             border: 1px solid transparent;
-            background: transparent;
+            background: @okp_light_rail;
             box-shadow: none;
         }
 
         button.okp-quick-delay-button:hover {
-            background: rgba(0, 0, 0, 0.06);
+            background: alpha(@okp_navy, 0.10);
         }
 
         button.okp-quick-delay-button:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px alpha(@okp_teal, 0.72);
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         .okp-quick-style-row {
@@ -3006,90 +3152,91 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-subtitle-preset-status {
-            margin: 2px 7px 0;
-            color: rgba(23, 25, 28, 0.56);
+            margin: 2px 8px 0;
+            color: @okp_ink_faint;
             font-size: 10.5px;
             line-height: 1.25;
         }
 
         button.okp-quick-style-button {
             min-height: 26px;
-            padding: 2px 8px;
-            border-radius: 5px;
+            padding: 2px 10px;
+            border-radius: 999px;
             border: 1px solid transparent;
-            background: rgba(0, 0, 0, 0.055);
+            background: @okp_light_rail;
             box-shadow: none;
-            color: rgba(23, 25, 28, 0.86);
+            color: @okp_ink_dim;
             font-size: 11.5px;
             font-weight: 600;
         }
 
         button.okp-quick-style-button:hover {
-            background: rgba(0, 0, 0, 0.09);
+            background: alpha(@okp_navy, 0.10);
         }
 
         button.okp-quick-style-button:disabled {
-            background: rgba(0, 0, 0, 0.035);
-            color: rgba(23, 25, 28, 0.48);
+            background: @okp_light_rail;
+            color: @okp_ink_faint;
         }
 
         .okp-quick-preference-footer {
             margin: 4px -8px -8px;
             padding: 8px 14px;
-            border-top: 1px solid rgba(0, 0, 0, 0.08);
-            color: rgba(23, 25, 28, 0.48);
+            border-top: 1px solid @okp_light_hairline;
+            color: @okp_ink_faint;
             font-size: 10.5px;
         }
 
         .okp-settings-audio-delay-row {
             margin: 0;
             padding: 10px 0;
-            border-top: 1px solid rgba(0, 0, 0, 0.08);
+            border-top: 1px solid @okp_light_hairline;
         }
 
         .okp-settings-audio-delay-row .okp-sub-adjust-label {
-            color: rgba(23, 25, 28, 0.72);
-            font-size: 12px;
+            color: @okp_ink_mute;
+            font-size: 13px;
         }
 
         .okp-settings-audio-delay-row entry.okp-sub-adjust-entry {
             min-width: 74px;
             min-height: 28px;
-            padding: 4px 7px;
-            border-radius: 6px;
-            border: 1px solid rgba(0, 0, 0, 0.16);
-            background: #ffffff;
-            color: #17191c;
+            padding: 4px 8px;
+            border-radius: 8px;
+            border: 1px solid @okp_light_hairline_hi;
+            background: @okp_light_card;
+            color: @okp_ink;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
             font-feature-settings: 'tnum';
         }
 
         .okp-settings-audio-delay-row entry.okp-sub-adjust-entry:focus {
-            border-color: alpha(@okp_teal, 0.72);
-            box-shadow: 0 0 0 2px alpha(@okp_teal, 0.14);
+            border-color: @okp_accent;
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         .okp-settings-audio-delay-row entry.okp-sub-adjust-entry.is-error {
-            border-color: rgba(196, 43, 28, 0.88);
-            box-shadow: 0 0 0 2px rgba(196, 43, 28, 0.14);
+            border-color: alpha(@okp_danger, 0.88);
+            box-shadow: 0 0 0 2px alpha(@okp_danger, 0.14);
         }
 
         .okp-settings-audio-delay-row .okp-sub-adjust-unit {
-            color: rgba(23, 25, 28, 0.58);
+            color: @okp_ink_mute;
             font-size: 12px;
         }
 
         .okp-settings-audio-delay-row .okp-sub-adjust-button {
             min-width: 44px;
             min-height: 28px;
-            padding: 4px 7px;
-            border-radius: 6px;
-            border: 1px solid rgba(0, 0, 0, 0.10);
-            background: rgba(0, 0, 0, 0.035);
-            color: rgba(23, 25, 28, 0.86);
+            padding: 4px 8px;
+            border-radius: 999px;
+            border: 1px solid @okp_light_hairline_hi;
+            background: @okp_light_card;
+            color: @okp_ink;
         }
 
         .okp-settings-audio-delay-row .okp-sub-adjust-button:hover {
-            background: rgba(0, 0, 0, 0.07);
+            background: @okp_light_rail;
         }
 
         window.okp-companion-window,
@@ -3104,38 +3251,39 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-media-info-card {
-            background: #f7f7f5;
+            background: @okp_settings_light;
             color: @okp_ink;
-            border: 1px solid rgba(0, 0, 0, 0.08);
-            border-radius: 11px;
-            box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
+            border: 1px solid @okp_light_hairline;
+            border-radius: 16px;
+            box-shadow: 0 16px 50px rgba(12, 20, 36, 0.18);
         }
 
         .okp-media-info-header {
             padding: 17px 20px 15px;
-            border-bottom: 1px solid rgba(0, 0, 0, 0.07);
+            border-bottom: 1px solid @okp_light_hairline;
         }
 
         .okp-media-info-identity {
             min-width: 38px;
             min-height: 38px;
-            border-radius: 9px;
-            background: linear-gradient(150deg, @okp_teal, @okp_teal_deep);
-            box-shadow: 0 4px 12px rgba(14, 133, 132, 0.30);
+            border-radius: 10px;
+            background: linear-gradient(135deg, @okp_navy, @okp_blue 55%, @okp_accent);
+            box-shadow: 0 1px 2px alpha(@okp_navy, 0.30);
             color: #ffffff;
         }
 
         .okp-media-info-title {
-            color: #161616;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            color: @okp_ink;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 17px;
             font-weight: 600;
+            letter-spacing: -0.01em;
         }
 
         .okp-media-info-subtitle,
         .okp-media-info-path {
-            color: rgba(0, 0, 0, 0.50);
-            font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
+            color: @okp_ink_faint;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
             font-size: 12px;
             font-weight: 400;
         }
@@ -3145,15 +3293,15 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 30px;
             padding: 0;
             border: none;
-            border-radius: 7px;
-            background: rgba(0, 0, 0, 0.04);
+            border-radius: 999px;
+            background: transparent;
             box-shadow: none;
-            color: rgba(0, 0, 0, 0.55);
+            color: @okp_ink_mute;
         }
 
         button.okp-media-info-close:hover {
-            background: rgba(0, 0, 0, 0.08);
-            color: rgba(0, 0, 0, 0.75);
+            background: alpha(@okp_navy, 0.06);
+            color: @okp_ink;
         }
 
         .okp-media-info-tabs {
@@ -3162,40 +3310,40 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-media-info-tab-strip {
             padding: 3px;
-            border-radius: 8px;
-            background: rgba(0, 0, 0, 0.05);
+            border-radius: 999px;
+            background: @okp_light_rail;
+            border: 1px solid @okp_light_hairline;
         }
 
         button.okp-media-info-tab {
             min-width: 137px;
-            min-height: 30px;
-            padding: 0 8px;
+            min-height: 28px;
+            padding: 0 10px;
             border: none;
-            border-radius: 6px;
+            border-radius: 999px;
             background: transparent;
             box-shadow: none;
-            color: rgba(0, 0, 0, 0.50);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12.5px;
-            font-weight: 500;
-        }
-
-        button.okp-media-info-tab.is-active {
-            background: #ffffff;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.10);
-            color: @okp_teal_deep;
+            color: @okp_ink_mute;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 12px;
             font-weight: 600;
         }
 
+        button.okp-media-info-tab.is-active {
+            background: @okp_light_card;
+            box-shadow: 0 1px 0 rgba(12, 20, 36, 0.04), 0 8px 24px rgba(12, 20, 36, 0.05);
+            color: @okp_ink;
+        }
+
         button.okp-media-info-tab:hover:not(.is-active) {
-            background: rgba(255, 255, 255, 0.45);
-            color: rgba(0, 0, 0, 0.68);
+            background: transparent;
+            color: @okp_ink;
         }
 
         .okp-media-info-stack,
         .okp-media-info-scroller,
         .okp-media-info-scroller > viewport {
-            background: #f7f7f5;
+            background: @okp_settings_light;
         }
 
         .okp-media-info-content {
@@ -3219,21 +3367,24 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-media-info-scroller scrollbar slider {
             min-width: 4px;
             border-radius: 999px;
-            background: rgba(0, 0, 0, 0.22);
+            background: alpha(@okp_ink, 0.22);
         }
 
         .okp-media-info-card .okp-info-section {
-            padding: 13px 16px;
-            border-radius: 8px;
-            background: #ffffff;
-            border: 1px solid rgba(0, 0, 0, 0.06);
+            padding: 16px 20px;
+            border-radius: 12px;
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline;
+            box-shadow: 0 1px 2px rgba(12, 20, 36, 0.04), 0 12px 32px rgba(12, 20, 36, 0.06);
         }
 
         .okp-media-info-card .okp-info-section-title {
-            margin-bottom: 11px;
-            color: #0c7c75;
+            margin-bottom: 12px;
+            color: @okp_ink_faint;
             font-size: 11px;
             font-weight: 600;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
         }
 
         .okp-media-info-card .okp-info-row {
@@ -3241,100 +3392,100 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-media-info-card .okp-info-label {
-            color: rgba(0, 0, 0, 0.50);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12.5px;
+            color: @okp_ink_mute;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 13px;
             font-weight: 400;
         }
 
         .okp-media-info-card .okp-info-value {
-            color: #1a1a1a;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12.5px;
+            color: @okp_ink;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
+            font-size: 12px;
             font-weight: 500;
             font-feature-settings: 'tnum';
         }
 
         .okp-media-info-card .okp-info-row.is-highlight .okp-info-value {
-            color: @okp_teal_deep;
+            color: @okp_navy;
             font-weight: 600;
         }
 
         .okp-media-info-card .okp-info-track-row {
             min-height: 42px;
             padding: 9px 11px;
-            border-radius: 7px;
+            border-radius: 8px;
             background: transparent;
             border: 1px solid transparent;
         }
 
         .okp-media-info-card .okp-info-track-row.is-selected {
-            background: alpha(@okp_teal, 0.07);
-            border-color: alpha(@okp_teal, 0.16);
+            background: alpha(@okp_navy, 0.09);
+            border-color: transparent;
         }
 
         .okp-media-info-card .okp-info-track-kind {
             min-width: 34px;
-            color: rgba(0, 0, 0, 0.40);
-            font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
+            color: @okp_ink_faint;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
             font-size: 10px;
             font-weight: 500;
         }
 
         .okp-media-info-card .okp-info-track-current {
-            background: alpha(@okp_teal, 0.14);
-            color: #0c7c75;
+            background: alpha(@okp_navy, 0.09);
+            color: @okp_navy;
             font-size: 9px;
         }
 
         .okp-media-info-empty {
-            color: rgba(0, 0, 0, 0.50);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12.5px;
+            color: @okp_ink_mute;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 13px;
         }
 
         .okp-media-info-footer {
             padding: 12px 20px;
-            border-top: 1px solid rgba(0, 0, 0, 0.07);
+            border-top: 1px solid @okp_light_hairline;
         }
 
         .okp-media-info-path {
-            color: rgba(0, 0, 0, 0.40);
+            color: @okp_ink_faint;
             font-size: 11px;
         }
 
         button.okp-media-info-copy,
         button.okp-media-info-done {
-            min-height: 32px;
-            padding: 0 14px;
-            border-radius: 7px;
+            min-height: 34px;
+            padding: 0 18px;
+            border-radius: 999px;
             box-shadow: none;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12px;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 13px;
             font-weight: 600;
         }
 
         button.okp-media-info-copy {
-            border: 1px solid rgba(0, 0, 0, 0.08);
-            background: rgba(0, 0, 0, 0.05);
-            color: #1a1a1a;
+            border: 1px solid @okp_light_hairline_hi;
+            background: @okp_light_card;
+            color: @okp_ink;
         }
 
         button.okp-media-info-copy:hover {
-            background: rgba(0, 0, 0, 0.08);
+            background: @okp_light_rail;
         }
 
         button.okp-media-info-done {
             min-width: 70px;
-            padding: 0 18px;
+            padding: 0 20px;
             border: none;
-            background: @okp_teal;
+            background: linear-gradient(135deg, @okp_navy, @okp_blue 55%, @okp_accent);
             color: #ffffff;
-            box-shadow: 0 3px 10px alpha(@okp_teal, 0.28);
+            box-shadow: 0 1px 2px alpha(@okp_navy, 0.30);
         }
 
         button.okp-media-info-done:hover {
-            background: #0c7c75;
+            background: linear-gradient(135deg, @okp_navy_hover, @okp_blue 55%, @okp_accent_bright);
         }
 
         button.okp-media-info-close:focus-visible,
@@ -3342,30 +3493,30 @@ pub(crate) const OKP_STYLESHEET: &str = "
         button.okp-media-info-copy:focus-visible,
         button.okp-media-info-done:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_teal, 0.42);
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         window.okp-media-info-window.is-dark .okp-media-info-card,
         window.okp-media-info-window.is-dark .okp-media-info-stack,
         window.okp-media-info-window.is-dark .okp-media-info-scroller,
         window.okp-media-info-window.is-dark .okp-media-info-scroller > viewport {
-            background: #17191d;
-            color: rgba(255, 255, 255, 0.94);
+            background: @okp_dark_card;
+            color: @okp_snow;
         }
 
         window.okp-media-info-window.is-dark .okp-media-info-card {
-            border-color: rgba(255, 255, 255, 0.10);
+            border-color: @okp_dark_hairline_hi;
         }
 
         window.okp-media-info-window.is-dark .okp-media-info-header,
         window.okp-media-info-window.is-dark .okp-media-info-footer {
-            border-color: rgba(255, 255, 255, 0.08);
+            border-color: @okp_dark_hairline;
         }
 
         window.okp-media-info-window.is-dark .okp-media-info-title,
         window.okp-media-info-window.is-dark .okp-info-value,
         window.okp-media-info-window.is-dark button.okp-media-info-copy {
-            color: rgba(255, 255, 255, 0.94);
+            color: @okp_snow;
         }
 
         window.okp-media-info-window.is-dark .okp-media-info-subtitle,
@@ -3373,25 +3524,26 @@ pub(crate) const OKP_STYLESHEET: &str = "
         window.okp-media-info-window.is-dark .okp-info-label,
         window.okp-media-info-window.is-dark .okp-info-track-kind,
         window.okp-media-info-window.is-dark .okp-media-info-empty {
-            color: rgba(255, 255, 255, 0.56);
+            color: @okp_snow_mute;
         }
 
         window.okp-media-info-window.is-dark .okp-media-info-tab-strip,
         window.okp-media-info-window.is-dark button.okp-media-info-close,
         window.okp-media-info-window.is-dark button.okp-media-info-copy {
-            background: rgba(255, 255, 255, 0.07);
-            border-color: rgba(255, 255, 255, 0.08);
+            background: @okp_dark_rail;
+            border-color: @okp_dark_hairline;
         }
 
         window.okp-media-info-window.is-dark button.okp-media-info-tab {
-            color: rgba(255, 255, 255, 0.58);
+            color: @okp_snow_mute;
         }
 
         window.okp-media-info-window.is-dark button.okp-media-info-tab.is-active,
         window.okp-media-info-window.is-dark .okp-info-section {
-            background: rgba(255, 255, 255, 0.07);
-            border-color: rgba(255, 255, 255, 0.08);
-            color: rgba(255, 255, 255, 0.94);
+            background: @okp_dark_rail;
+            border-color: @okp_dark_hairline;
+            box-shadow: none;
+            color: @okp_snow;
         }
 
         window.okp-media-info-window.is-dark button.okp-media-info-tab.is-active,
@@ -3402,7 +3554,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         window.okp-media-info-window.is-dark .okp-media-info-scroller scrollbar slider {
-            background: rgba(255, 255, 255, 0.24);
+            background: alpha(@okp_snow, 0.24);
         }
 
         window.okp-media-info-window.is-high-contrast .okp-media-info-card,
@@ -3430,54 +3582,55 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         window.okp-command-dialog {
-            background: #101115;
-            color: rgba(255, 255, 255, 0.9);
-            border-radius: 8px;
+            background: @okp_dark_card;
+            color: @okp_snow;
+            border-radius: 12px;
         }
 
         window.okp-command-dialog > contents {
-            background: #101115;
+            background: @okp_dark_card;
         }
 
         .okp-command-dialog-title {
-            color: rgba(255, 255, 255, 0.96);
-            font-size: 16px;
-            font-weight: 700;
+            color: @okp_snow;
+            font-size: 17px;
+            font-weight: 600;
+            letter-spacing: -0.01em;
         }
 
         window.okp-command-dialog entry {
             min-height: 34px;
-            border-radius: 7px;
-            border: 1px solid alpha(@okp_accent, 0.42);
-            background: rgba(255, 255, 255, 0.055);
-            color: rgba(255, 255, 255, 0.92);
+            border-radius: 8px;
+            border: 1px solid @okp_dark_hairline_hi;
+            background: @okp_settings_dark;
+            color: @okp_snow;
             box-shadow: none;
         }
 
         window.okp-command-dialog button {
             min-width: 72px;
             min-height: 34px;
-            padding: 0 14px;
-            border-radius: 7px;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            background: rgba(255, 255, 255, 0.08);
-            color: rgba(255, 255, 255, 0.9);
+            padding: 0 16px;
+            border-radius: 999px;
+            border: 1px solid @okp_dark_hairline_hi;
+            background: @okp_dark_rail;
+            color: @okp_snow;
             box-shadow: none;
         }
 
         window.okp-command-dialog button:hover {
-            background: rgba(255, 255, 255, 0.13);
-            color: rgba(255, 255, 255, 0.98);
+            background: @okp_dark_inset;
+            color: @okp_snow;
         }
 
         window.okp-command-dialog button:active {
-            background: alpha(@okp_accent, 0.28);
-            border-color: alpha(@okp_accent, 0.48);
+            background: alpha(@okp_accent, 0.22);
+            border-color: alpha(@okp_accent, 0.45);
         }
 
         window.okp-command-dialog .okp-info-label {
-            color: rgba(255, 255, 255, 0.62);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            color: @okp_snow_mute;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 12px;
             font-weight: 500;
         }
@@ -3485,7 +3638,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         /* Missing-tooling hint (e.g. the YouTube resolver is not installed): a warm,
            attention-drawing tint that stays calm — the state is informational, not an error. */
         window.okp-command-dialog .okp-info-label.okp-info-label-muted {
-            color: @okp_warning;
+            color: @okp_warning_dark;
         }
 
         .okp-settings-window {
@@ -3523,12 +3676,12 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 41px;
             padding: 0 144px 0 16px;
             background: @okp_settings_light;
-            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+            border-bottom: 1px solid @okp_light_hairline;
         }
 
         .okp-settings-titlebar-label {
-            color: rgba(0, 0, 0, 0.70);
-            font-family: 'Segoe UI Variable Text', 'Noto Sans', sans-serif;
+            color: @okp_ink_mute;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 12.5px;
             font-weight: 600;
         }
@@ -3538,32 +3691,32 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-settings-rail-frame {
-            background: rgba(0, 0, 0, 0.015);
+            background: @okp_light_rail;
         }
 
         .okp-settings-rail {
             padding: 12px 10px 0;
-            background: rgba(0, 0, 0, 0.015);
-            border-right: 1px solid rgba(0, 0, 0, 0.05);
+            background: @okp_light_rail;
+            border-right: 1px solid @okp_light_hairline;
         }
 
         entry.okp-settings-search {
             min-height: 16px;
             margin-bottom: 6px;
             padding: 7px 10px;
-            border-radius: 7px;
-            background: #ffffff;
-            border: 1px solid rgba(0, 0, 0, 0.09);
+            border-radius: 8px;
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline_hi;
             box-shadow: none;
-            color: rgba(0, 0, 0, 0.40);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            color: @okp_ink_faint;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 12px;
             font-weight: 400;
         }
 
         entry.okp-settings-search:focus {
-            border-color: alpha(@okp_teal, 0.68);
-            box-shadow: 0 0 0 1px alpha(@okp_teal, 0.18);
+            border-color: @okp_accent;
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         /* The Windows rail states the distance from the magnifier to the query outright:
@@ -3584,26 +3737,26 @@ pub(crate) const OKP_STYLESHEET: &str = "
             margin: -2px 0 5px;
             padding: 6px 10px;
             border: none;
-            border-radius: 7px;
-            background: alpha(@okp_teal, 0.08);
-            box-shadow: inset 2px 0 0 alpha(@okp_teal, 0.65);
+            border-radius: 8px;
+            background: alpha(@okp_navy, 0.09);
+            box-shadow: none;
             color: @okp_ink;
         }
 
         button.okp-settings-search-result:hover {
-            background: alpha(@okp_teal, 0.13);
+            background: alpha(@okp_navy, 0.13);
         }
 
         .okp-settings-search-result-label {
             color: inherit;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 11.5px;
             font-weight: 600;
         }
 
         .okp-settings-search-result-page {
-            color: rgba(0, 0, 0, 0.45);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            color: @okp_ink_faint;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 10.5px;
             font-weight: 400;
         }
@@ -3612,41 +3765,42 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 30px;
             margin-bottom: 2px;
             padding: 6px 10px;
-            border-radius: 7px;
-            background: #f9fbfc;
-            border: 1px solid #d5dce2;
+            border-radius: 8px;
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline_hi;
             box-shadow: none;
             color: @okp_ink;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 12px;
         }
 
         entry.okp-shortcuts-search:focus {
-            border-color: alpha(@okp_teal, 0.68);
-            box-shadow: 0 0 0 1px alpha(@okp_teal, 0.18);
+            border-color: @okp_accent;
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         .okp-settings-nav-row {
             min-height: 18px;
             padding: 8px 10px;
             border: none;
-            border-radius: 7px;
+            border-radius: 8px;
             background: transparent;
             box-shadow: none;
-            color: rgba(0, 0, 0, 0.72);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12.5px;
-            font-weight: 400;
+            color: @okp_ink_mute;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 13px;
+            font-weight: 500;
         }
 
         .okp-settings-nav-row:hover {
-            background: rgba(0, 0, 0, 0.035);
+            background: alpha(@okp_navy, 0.06);
+            color: @okp_ink;
         }
 
         .okp-settings-nav-row.is-selected {
-            background: alpha(@okp_teal, 0.12);
-            box-shadow: inset 3px 0 0 @okp_teal;
-            color: @okp_teal_deep;
+            background: @okp_light_card;
+            box-shadow: 0 1px 0 rgba(12, 20, 36, 0.04), 0 8px 24px rgba(12, 20, 36, 0.05);
+            color: @okp_ink;
             font-weight: 600;
         }
 
@@ -3657,7 +3811,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-settings-footer-rule {
-            background: rgba(0, 0, 0, 0.07);
+            background: @okp_light_hairline;
         }
 
         .okp-captionless-window-drag-layer {
@@ -3677,17 +3831,17 @@ pub(crate) const OKP_STYLESHEET: &str = "
             border-radius: 0;
             background: transparent;
             box-shadow: none;
-            color: @okp_ink;
+            color: @okp_ink_mute;
         }
 
         .okp-settings-window-control:hover {
-            background: rgba(0, 0, 0, 0.06);
+            background: alpha(@okp_navy, 0.06);
         }
 
         .okp-settings-window-control-glyph {
             min-width: 10px;
             min-height: 10px;
-            color: @okp_ink;
+            color: @okp_ink_mute;
         }
 
         button.okp-settings-window-control:hover .okp-settings-window-control-glyph {
@@ -3711,7 +3865,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-settings-page {
-            padding: 28px 44px 28px 24px;
+            padding: 28px 44px 28px 28px;
         }
 
         .okp-settings-content {
@@ -3719,12 +3873,18 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-about-pane {
-            padding: 28px 44px 0 24px;
+            padding: 28px 44px 0 28px;
             background: @okp_settings_light;
         }
 
         .okp-about-identity {
             min-height: 94px;
+            padding: 24px;
+            border-radius: 16px;
+            background-color: @okp_light_card;
+            background-image: linear-gradient(135deg, alpha(@okp_navy, 0.07), alpha(@okp_blue, 0.05) 55%, alpha(@okp_accent, 0.06));
+            border: 1px solid @okp_light_hairline;
+            box-shadow: 0 1px 2px rgba(12, 20, 36, 0.04), 0 12px 32px rgba(12, 20, 36, 0.06);
         }
 
         .okp-about-illustration {
@@ -3733,14 +3893,14 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-about-illustration-art {
-            color: @okp_teal;
+            color: @okp_navy;
         }
 
         .okp-about-wordmark {
             color: @okp_ink;
-            font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
-            font-size: 30px;
-            letter-spacing: 0;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 28px;
+            letter-spacing: -0.02em;
         }
 
         .okp-about-wordmark-ok {
@@ -3748,7 +3908,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-about-wordmark-player {
-            font-weight: 300;
+            font-weight: 400;
         }
 
         .okp-about-chip-row {
@@ -3756,63 +3916,66 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-about-version-chip {
-            padding: 3px 9px;
-            border-radius: 6px;
-            background: #e2e8ec;
-            color: @okp_ink;
-            font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
+            padding: 3px 10px;
+            border-radius: 999px;
+            background: @okp_light_rail;
+            border: 1px solid @okp_light_hairline;
+            color: @okp_ink_mute;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
             font-size: 11.5px;
             font-weight: 600;
             font-feature-settings: 'tnum';
         }
 
         .okp-about-channel-chip {
-            padding: 4px 9px;
-            border-radius: 6px;
-            background: alpha(@okp_teal, 0.12);
-            color: @okp_teal_deep;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 10px;
+            padding: 3px 10px;
+            border-radius: 999px;
+            background: alpha(@okp_accent, 0.14);
+            border: 1px solid alpha(@okp_link, 0.42);
+            color: @okp_link;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 11px;
             font-weight: 600;
             letter-spacing: 0;
-            text-transform: uppercase;
         }
 
         .okp-about-tagline {
             margin-top: 11px;
-            color: rgba(0, 0, 0, 0.50);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            color: @okp_ink_dim;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 13px;
             font-weight: 400;
         }
 
         .okp-about-byline {
             margin-top: 3px;
-            color: rgba(0, 0, 0, 0.40);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 11.5px;
+            color: @okp_ink_faint;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 12px;
             font-weight: 400;
         }
 
         .okp-about-identity-divider {
-            margin: 22px 0;
-            background: rgba(0, 0, 0, 0.07);
+            margin: 20px 0;
+            background: transparent;
         }
 
         .okp-about-card {
-            padding: 14px 16px;
-            border-radius: 8px;
-            background: #ffffff;
-            border: 1px solid rgba(0, 0, 0, 0.06);
+            padding: 20px;
+            border-radius: 12px;
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline;
+            box-shadow: 0 1px 2px rgba(12, 20, 36, 0.04), 0 12px 32px rgba(12, 20, 36, 0.06);
         }
 
         .okp-about-card-title {
-            margin-bottom: 13px;
-            color: rgba(0, 0, 0, 0.40);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            margin-bottom: 12px;
+            color: @okp_ink_faint;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 11px;
             font-weight: 600;
-            letter-spacing: 0;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
         }
 
         .okp-about-row {
@@ -3820,16 +3983,16 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-about-row-label {
-            color: rgba(0, 0, 0, 0.50);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12.5px;
+            color: @okp_ink_mute;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 13px;
             font-weight: 400;
         }
 
         .okp-about-row-detail {
-            color: rgba(0, 0, 0, 0.40);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 11.5px;
+            color: @okp_ink_faint;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 12px;
             font-weight: 400;
         }
 
@@ -3841,11 +4004,11 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-about-row-value {
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
         }
 
         .okp-about-row-value-mono {
-            font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
             font-size: 12px;
             font-feature-settings: 'tnum';
         }
@@ -3855,54 +4018,56 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-about-tag {
-            padding: 2px 6px;
-            border-radius: 5px;
-            background: rgba(0, 0, 0, 0.05);
-            color: rgba(0, 0, 0, 0.40);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 8.5px;
+            padding: 2px 7px;
+            border-radius: 999px;
+            background: @okp_light_rail;
+            border: 1px solid @okp_light_hairline;
+            color: @okp_ink_faint;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 10px;
             font-weight: 600;
             letter-spacing: 0;
         }
 
         .okp-about-tag.is-accent {
-            background: alpha(@okp_teal, 0.12);
-            color: @okp_teal_deep;
+            background: alpha(@okp_navy, 0.09);
+            border-color: alpha(@okp_navy, 0.20);
+            color: @okp_navy;
         }
 
         .okp-about-copy-button {
             min-height: 34px;
-            padding: 0 14px;
-            border-radius: 7px;
-            background: #e2e8ec;
-            border: 1px solid rgba(0, 0, 0, 0.06);
+            padding: 0 18px;
+            border-radius: 999px;
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline_hi;
             box-shadow: none;
             color: @okp_ink;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12px;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 13px;
             font-weight: 600;
         }
 
         .okp-about-copy-button:hover {
-            background: #d9e1e7;
+            background: @okp_light_rail;
         }
 
         .okp-about-check-button {
             min-width: 132px;
             min-height: 34px;
-            padding: 0 14px;
-            border-radius: 7px;
-            background: #ffffff;
-            border: 1px solid rgba(0, 0, 0, 0.06);
+            padding: 0 18px;
+            border-radius: 999px;
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline_hi;
             box-shadow: none;
             color: @okp_ink;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12px;
-            font-weight: 400;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 13px;
+            font-weight: 600;
         }
 
         .okp-about-check-button:hover {
-            background: #f8fafb;
+            background: @okp_light_rail;
         }
 
         button.okp-settings-switch {
@@ -3911,17 +4076,17 @@ pub(crate) const OKP_STYLESHEET: &str = "
             padding: 3px;
             border: none;
             border-radius: 999px;
-            background: #ccd5dc;
+            background: @okp_light_inset;
             box-shadow: none;
         }
 
         button.okp-settings-switch.is-active {
-            background: @okp_teal;
+            background: linear-gradient(to right, @okp_navy, @okp_blue 55%, @okp_accent);
         }
 
         button.okp-settings-switch:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_teal, 0.35);
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         .okp-settings-switch-knob {
@@ -3929,6 +4094,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 16px;
             border-radius: 999px;
             background: #ffffff;
+            box-shadow: 0 1px 3px rgba(12, 20, 36, 0.25);
         }
 
         .okp-about-link-button {
@@ -3937,15 +4103,15 @@ pub(crate) const OKP_STYLESHEET: &str = "
             border: none;
             background: transparent;
             box-shadow: none;
-            color: @okp_teal_deep;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            color: @okp_link;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 12px;
             font-weight: 600;
         }
 
         .okp-about-link-arrow {
-            color: @okp_teal_deep;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            color: @okp_link;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 12px;
             font-weight: 600;
         }
@@ -3953,39 +4119,39 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-about-link-dot {
             min-width: 3px;
             min-height: 24px;
-            color: rgba(0, 0, 0, 0.40);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            color: @okp_ink_faint;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 8px;
             font-weight: 600;
         }
 
         .okp-update-status {
-            color: rgba(0, 0, 0, 0.50);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            color: @okp_ink_mute;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 12px;
         }
 
         .okp-mpv-conf-scroller {
             min-height: 132px;
             border-radius: 8px;
-            background: #ffffff;
-            border: 1px solid rgba(0, 0, 0, 0.06);
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline_hi;
         }
 
         textview.okp-mpv-conf-editor,
         textview.okp-mpv-conf-editor text {
             padding: 10px;
-            background: #ffffff;
+            background: @okp_light_card;
             color: @okp_ink;
-            font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
             font-size: 12px;
             font-weight: 500;
-            caret-color: @okp_teal;
+            caret-color: @okp_navy;
         }
 
         textview.okp-mpv-conf-editor selection,
         textview.okp-mpv-conf-editor text selection {
-            background: alpha(@okp_teal, 0.24);
+            background: alpha(@okp_navy, 0.18);
             color: @okp_ink;
         }
 
@@ -3995,61 +4161,68 @@ pub(crate) const OKP_STYLESHEET: &str = "
            card-inside-card clutter. */
         .okp-settings-switch-row {
             min-height: 42px;
-            padding: 10px;
+            padding: 10px 12px;
             border-radius: 8px;
-            background: #f8fafb;
-            border: 1px solid rgba(0, 0, 0, 0.05);
+            background: @okp_light_rail;
+            border: 1px solid transparent;
         }
 
         .okp-settings-state-pill {
             min-width: 34px;
-            padding: 3px 8px;
+            padding: 3px 10px;
             border-radius: 999px;
-            background: alpha(@okp_teal, 0.12);
-            color: @okp_teal_deep;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            background: alpha(@okp_navy, 0.09);
+            border: 1px solid alpha(@okp_navy, 0.20);
+            color: @okp_navy;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 11px;
             font-weight: 600;
         }
 
         .okp-integration-state-pill {
             min-width: 74px;
-            padding: 4px 8px;
+            padding: 3px 10px;
             border-radius: 999px;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            border: 1px solid transparent;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 11px;
             font-weight: 600;
         }
 
         .okp-integration-state-pill.is-good {
-            background: alpha(@okp_teal, 0.12);
-            color: @okp_teal_deep;
+            background: alpha(@okp_ok, 0.10);
+            border-color: alpha(@okp_ok, 0.42);
+            color: @okp_ok;
         }
 
         .okp-integration-state-pill.is-warning {
-            background: alpha(@okp_warning, 0.14);
-            color: @okp_warning_deep;
+            background: alpha(@okp_warning, 0.10);
+            border-color: alpha(@okp_warning, 0.42);
+            color: @okp_warning;
         }
 
         .okp-integration-state-pill.is-bad {
-            background: alpha(@okp_danger, 0.12);
-            color: @okp_danger_deep;
+            background: alpha(@okp_danger, 0.08);
+            border-color: alpha(@okp_danger, 0.42);
+            color: @okp_danger;
         }
 
         .okp-info-section {
-            padding: 14px 16px;
-            border-radius: 8px;
-            background: #ffffff;
-            border: 1px solid rgba(0, 0, 0, 0.06);
+            padding: 16px 20px;
+            border-radius: 12px;
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline;
+            box-shadow: 0 1px 2px rgba(12, 20, 36, 0.04), 0 12px 32px rgba(12, 20, 36, 0.06);
         }
 
         .okp-info-section-title {
-            margin-bottom: 10px;
-            color: rgba(0, 0, 0, 0.40);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            margin-bottom: 12px;
+            color: @okp_ink_faint;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 11px;
             font-weight: 600;
-            letter-spacing: 0;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
         }
 
         .okp-info-row {
@@ -4057,23 +4230,23 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-info-label {
-            color: rgba(0, 0, 0, 0.50);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12.5px;
+            color: @okp_ink_mute;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 13px;
             font-weight: 400;
         }
 
         .okp-info-value {
             color: @okp_ink;
-            font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
             font-size: 12px;
             font-weight: 500;
             font-feature-settings: 'tnum';
         }
 
         .okp-info-row.is-highlight .okp-info-value {
-            color: @okp_teal_deep;
-            font-weight: 700;
+            color: @okp_navy;
+            font-weight: 600;
         }
 
         .okp-settings-row {
@@ -4086,9 +4259,9 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-settings-hint {
             margin-top: 6px;
-            color: rgba(0, 0, 0, 0.46);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 11.5px;
+            color: @okp_ink_faint;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 12px;
             font-weight: 400;
         }
 
@@ -4099,7 +4272,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-shortcut-row {
             min-height: 44px;
             padding: 7px 0;
-            border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+            border-bottom: 1px solid @okp_light_hairline;
         }
 
         .okp-shortcut-row:last-child {
@@ -4107,46 +4280,46 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-shortcut-row.is-conflict {
-            color: @okp_danger_deep;
+            color: @okp_danger;
         }
 
         .okp-shortcut-action-title {
             color: @okp_ink;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12.5px;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 13px;
             font-weight: 500;
         }
 
         .okp-shortcut-action-id {
-            color: rgba(0, 0, 0, 0.40);
-            font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
-            font-size: 10.5px;
+            color: @okp_ink_faint;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
+            font-size: 11px;
             font-feature-settings: 'tnum';
         }
 
         .okp-shortcut-badge {
-            padding: 2px 6px;
-            border-radius: 5px;
-            background: alpha(@okp_teal, 0.12);
-            color: @okp_teal_deep;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 8.5px;
+            padding: 2px 7px;
+            border-radius: 999px;
+            background: alpha(@okp_navy, 0.09);
+            color: @okp_navy;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 10px;
             font-weight: 600;
         }
 
         button.okp-shortcut-chip {
             min-width: 82px;
             min-height: 30px;
-            padding: 0 10px;
-            border-radius: 7px;
-            background: #f8fafb;
-            border: 1px solid rgba(0, 0, 0, 0.07);
+            padding: 0 12px;
+            border-radius: 999px;
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline_hi;
             box-shadow: none;
             color: @okp_ink;
         }
 
         button.okp-shortcut-chip:hover {
-            background: #f1f5f8;
+            background: @okp_light_rail;
         }
 
         button.okp-shortcut-chip.is-secondary {
@@ -4155,26 +4328,26 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-shortcut-chip.is-empty {
             background: transparent;
-            border-color: alpha(@okp_teal, 0.18);
-            color: @okp_teal_deep;
+            border-color: alpha(@okp_navy, 0.30);
+            color: @okp_navy;
         }
 
         button.okp-shortcut-chip.is-empty:hover {
-            background: alpha(@okp_teal, 0.08);
+            background: alpha(@okp_navy, 0.06);
         }
 
         button.okp-shortcut-chip.is-capturing {
-            background: alpha(@okp_teal, 0.12);
-            border-color: alpha(@okp_teal, 0.52);
+            background: alpha(@okp_accent, 0.14);
+            border-color: @okp_accent;
         }
 
         button.okp-shortcut-chip.is-conflict {
-            background: alpha(@okp_danger, 0.10);
+            background: alpha(@okp_danger, 0.08);
             border-color: alpha(@okp_danger, 0.42);
         }
 
         .okp-shortcut-chip-label {
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-family: 'JetBrains Mono', 'Cascadia Mono', monospace;
             font-size: 11.5px;
             font-weight: 600;
             font-feature-settings: 'tnum';
@@ -4183,35 +4356,35 @@ pub(crate) const OKP_STYLESHEET: &str = "
         button.okp-shortcut-reset {
             min-width: 52px;
             min-height: 30px;
-            padding: 0 10px;
-            border-radius: 7px;
+            padding: 0 12px;
+            border-radius: 999px;
             background: transparent;
             border: 1px solid transparent;
             box-shadow: none;
-            color: @okp_teal_deep;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            color: @okp_link;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 12px;
             font-weight: 600;
         }
 
         button.okp-shortcut-reset:hover {
-            background: alpha(@okp_teal, 0.08);
+            background: alpha(@okp_navy, 0.06);
         }
 
         button.okp-shortcut-reset:disabled {
-            color: rgba(0, 0, 0, 0.24);
+            color: alpha(@okp_ink, 0.24);
         }
 
         .okp-settings-scale trough {
             min-height: 6px;
             border-radius: 999px;
-            background: rgba(0, 0, 0, 0.13);
+            background: @okp_light_inset;
         }
 
         .okp-settings-scale highlight {
             min-height: 6px;
             border-radius: 999px;
-            background: @okp_teal;
+            background: linear-gradient(to right, @okp_navy, @okp_blue 55%, @okp_accent);
         }
 
         .okp-settings-scale slider {
@@ -4219,40 +4392,44 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 18px;
             border-radius: 999px;
             background: #ffffff;
-            border: 1px solid rgba(0, 0, 0, 0.13);
+            border: 1px solid @okp_light_hairline_hi;
+            box-shadow: 0 1px 3px rgba(12, 20, 36, 0.18);
         }
 
         .okp-settings-button {
             min-width: 82px;
             min-height: 32px;
-            border-radius: 7px;
-            background: #ffffff;
-            border: 1px solid rgba(0, 0, 0, 0.06);
+            padding: 0 16px;
+            border-radius: 999px;
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline_hi;
             box-shadow: none;
             color: @okp_ink;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12px;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 12.5px;
+            font-weight: 600;
         }
 
         .okp-settings-button:hover {
-            background: #f8fafb;
+            background: @okp_light_rail;
         }
 
         dropdown.okp-history-retention button {
             min-width: 132px;
             min-height: 32px;
-            padding: 0 10px;
-            border-radius: 7px;
-            background: #ffffff;
-            border: 1px solid rgba(0, 0, 0, 0.06);
+            padding: 0 14px;
+            border-radius: 999px;
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline_hi;
             box-shadow: none;
             color: @okp_ink;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12px;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 12.5px;
+            font-weight: 500;
         }
 
         dropdown.okp-history-retention button:hover {
-            background: #f8fafb;
+            background: @okp_light_rail;
         }
 
         button.okp-screenshot-format-button {
@@ -4260,17 +4437,17 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         button.okp-screenshot-format-button.is-selected {
-            background: alpha(@okp_teal, 0.12);
-            border-color: alpha(@okp_teal, 0.38);
-            color: @okp_teal_deep;
-            font-weight: 650;
+            background: alpha(@okp_navy, 0.09);
+            border-color: alpha(@okp_navy, 0.30);
+            color: @okp_navy;
+            font-weight: 600;
         }
 
         .okp-settings-button:disabled,
         .okp-settings-stepper-button:disabled {
-            background: #f2f5f8;
-            border-color: rgba(0, 0, 0, 0.04);
-            color: rgba(0, 0, 0, 0.32);
+            background: @okp_light_rail;
+            border-color: @okp_light_hairline;
+            color: alpha(@okp_ink, 0.32);
         }
 
         button.okp-settings-stepper-button {
@@ -4283,63 +4460,63 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 40px;
             margin: 2px 0;
             padding: 14px;
-            border-radius: 8px;
-            background: #f4f8fb;
-            border: 1px dashed rgba(0, 0, 0, 0.13);
+            border-radius: 12px;
+            background: @okp_light_rail;
+            border: 1px dashed @okp_light_hairline_hi;
         }
 
         .okp-empty-state-icon {
-            color: rgba(0, 0, 0, 0.34);
+            color: @okp_ink_faint;
             -gtk-icon-size: 14px;
         }
 
         .okp-empty-state-text {
-            color: rgba(0, 0, 0, 0.46);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12.5px;
+            color: @okp_ink_mute;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 13px;
             font-weight: 400;
         }
 
         button.okp-settings-track-row {
             min-height: 34px;
-            padding: 7px 10px;
-            border-radius: 7px;
-            background: #f8fafb;
-            border: 1px solid rgba(0, 0, 0, 0.04);
+            padding: 7px 12px;
+            border-radius: 8px;
+            background: @okp_light_rail;
+            border: 1px solid transparent;
             box-shadow: none;
             color: @okp_ink;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12px;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 13px;
             font-weight: 400;
         }
 
         button.okp-settings-track-row:hover {
-            background: #f1f5f8;
+            background: alpha(@okp_navy, 0.06);
         }
 
         button.okp-settings-track-row.is-selected {
-            background: alpha(@okp_teal, 0.12);
-            border-color: alpha(@okp_teal, 0.24);
-            color: @okp_teal_deep;
+            background: alpha(@okp_navy, 0.09);
+            border-color: transparent;
+            color: @okp_navy;
             font-weight: 600;
         }
 
         .okp-info-track-row {
             min-height: 44px;
-            padding: 8px 9px;
-            border-radius: 7px;
-            background: #f8fafb;
-            border: 1px solid rgba(0, 0, 0, 0.04);
+            padding: 8px 10px;
+            border-radius: 8px;
+            background: @okp_light_rail;
+            border: 1px solid transparent;
         }
 
         .okp-info-track-row.is-selected {
-            background: alpha(@okp_teal, 0.10);
-            border-color: alpha(@okp_teal, 0.18);
+            background: alpha(@okp_navy, 0.09);
+            border-color: transparent;
         }
 
         .okp-info-track-kind {
-            color: @okp_teal_deep;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            color: @okp_navy;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 11px;
             font-weight: 600;
             letter-spacing: 0;
@@ -4347,79 +4524,81 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-info-track-title {
             color: @okp_ink;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 12.5px;
             font-weight: 600;
         }
 
         .okp-info-track-current {
-            padding: 2px 6px;
-            border-radius: 5px;
-            background: alpha(@okp_teal, 0.12);
-            color: @okp_teal_deep;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 8.5px;
+            padding: 2px 7px;
+            border-radius: 999px;
+            background: alpha(@okp_navy, 0.09);
+            color: @okp_navy;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 9px;
             font-weight: 600;
             letter-spacing: 0;
         }
 
         .okp-info-track-detail {
-            color: rgba(0, 0, 0, 0.48);
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 11.5px;
+            color: @okp_ink_mute;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 12px;
         }
 
         .okp-info-footer-button {
             min-width: 82px;
             min-height: 34px;
-            padding: 0 14px;
-            border-radius: 7px;
-            background: #e2e8ec;
-            border: 1px solid rgba(0, 0, 0, 0.06);
+            padding: 0 16px;
+            border-radius: 999px;
+            background: @okp_light_card;
+            border: 1px solid @okp_light_hairline_hi;
             box-shadow: none;
             color: @okp_ink;
-            font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-            font-size: 12px;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
+            font-size: 12.5px;
             font-weight: 600;
         }
 
         .okp-info-footer-button:hover {
-            background: #d9e1e7;
+            background: @okp_light_rail;
         }
 
         .okp-settings-segmented {
             padding: 3px;
-            border-radius: 8px;
-            background: rgba(0, 0, 0, 0.055);
+            border-radius: 999px;
+            background: @okp_light_rail;
+            border: 1px solid @okp_light_hairline;
         }
 
         button.okp-settings-segment-button {
             min-width: 72px;
-            min-height: 30px;
-            padding: 0 10px;
+            min-height: 28px;
+            padding: 0 14px;
             border: none;
-            border-radius: 6px;
+            border-radius: 999px;
             background: transparent;
             box-shadow: none;
-            color: rgba(0, 0, 0, 0.54);
-            font-family: 'Segoe UI Variable Text', 'Noto Sans', sans-serif;
+            color: @okp_ink_mute;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
             font-size: 12px;
             font-weight: 600;
         }
 
         button.okp-settings-segment-button:hover {
-            background: rgba(255, 255, 255, 0.52);
+            background: transparent;
+            color: @okp_ink;
         }
 
         button.okp-settings-segment-button.is-selected {
-            background: #ffffff;
+            background: @okp_light_card;
             color: @okp_ink;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+            box-shadow: 0 1px 0 rgba(12, 20, 36, 0.04), 0 8px 24px rgba(12, 20, 36, 0.05);
         }
 
         button.okp-settings-segment-button.okp-subtitle-style-choice {
             min-width: 52px;
-            padding: 0 6px;
+            padding: 0 10px;
             font-size: 11.5px;
         }
 
@@ -4432,72 +4611,73 @@ pub(crate) const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-dark .okp-settings-page,
         window.okp-settings-window.is-dark .okp-about-pane {
             background: @okp_settings_dark;
-            color: rgba(255, 255, 255, 0.94);
+            color: @okp_snow;
         }
 
         window.okp-settings-window.is-dark .okp-settings-titlebar {
-            border-bottom-color: rgba(255, 255, 255, 0.06);
+            border-bottom-color: @okp_dark_hairline;
         }
 
         window.okp-settings-window.is-dark .okp-settings-titlebar-label {
-            color: rgba(255, 255, 255, 0.74);
+            color: @okp_snow_mute;
         }
 
         window.okp-settings-window.is-dark .okp-settings-rail-frame,
         window.okp-settings-window.is-dark .okp-settings-rail {
-            background: rgba(255, 255, 255, 0.02);
+            background: @okp_dark_rail;
         }
 
         window.okp-settings-window.is-dark .okp-settings-rail {
-            border-right-color: rgba(255, 255, 255, 0.06);
+            border-right-color: @okp_dark_hairline;
         }
 
         window.okp-settings-window.is-dark entry.okp-settings-search,
         window.okp-settings-window.is-dark entry.okp-shortcuts-search {
-            background: rgba(255, 255, 255, 0.05);
-            border-color: rgba(255, 255, 255, 0.09);
-            color: rgba(255, 255, 255, 0.74);
+            background: @okp_dark_card;
+            border-color: @okp_dark_hairline_hi;
+            color: @okp_snow;
         }
 
         window.okp-settings-window.is-dark button.okp-settings-search-result {
-            background: alpha(@okp_accent, 0.10);
-            box-shadow: inset 2px 0 0 alpha(@okp_accent, 0.70);
-            color: rgba(255, 255, 255, 0.90);
+            background: alpha(@okp_accent, 0.16);
+            box-shadow: none;
+            color: @okp_snow;
         }
 
         window.okp-settings-window.is-dark button.okp-settings-search-result:hover {
-            background: alpha(@okp_accent, 0.16);
+            background: alpha(@okp_accent, 0.22);
         }
 
         window.okp-settings-window.is-dark .okp-settings-search-result-page {
-            color: rgba(255, 255, 255, 0.48);
+            color: @okp_snow_faint;
         }
 
         window.okp-settings-window.is-dark .okp-settings-nav-row {
-            color: rgba(255, 255, 255, 0.74);
+            color: @okp_snow_mute;
         }
 
         window.okp-settings-window.is-dark .okp-settings-nav-row:hover {
-            background: rgba(255, 255, 255, 0.05);
+            background: alpha(@okp_accent, 0.08);
+            color: @okp_snow;
         }
 
         window.okp-settings-window.is-dark .okp-settings-nav-row.is-selected {
-            background: alpha(@okp_accent, 0.16);
-            box-shadow: inset 3px 0 0 @okp_accent;
-            color: @okp_accent;
+            background: @okp_dark_card;
+            box-shadow: 0 0 0 1px @okp_dark_hairline;
+            color: @okp_snow;
         }
 
         window.okp-settings-window.is-dark .okp-settings-footer-rule {
-            background: rgba(255, 255, 255, 0.06);
+            background: @okp_dark_hairline;
         }
 
         window.okp-settings-window.is-dark .okp-settings-window-control,
         window.okp-settings-window.is-dark .okp-settings-window-control-glyph {
-            color: rgba(255, 255, 255, 0.60);
+            color: @okp_snow_mute;
         }
 
         window.okp-settings-window.is-dark .okp-settings-window-control:hover {
-            background: rgba(255, 255, 255, 0.08);
+            background: alpha(@okp_accent, 0.08);
         }
 
         window.okp-settings-window.is-dark button.okp-settings-window-close:hover {
@@ -4505,7 +4685,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         window.okp-settings-window.is-dark button.okp-settings-window-control:hover .okp-settings-window-control-glyph {
-            color: rgba(255, 255, 255, 0.96);
+            color: @okp_snow;
         }
 
         window.okp-settings-window.is-dark .okp-about-illustration-art {
@@ -4518,7 +4698,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-dark .okp-info-value,
         window.okp-settings-window.is-dark .okp-update-action-title,
         window.okp-settings-window.is-dark .okp-shortcut-action-title {
-            color: rgba(255, 255, 255, 0.94);
+            color: @okp_snow;
         }
 
         window.okp-settings-window.is-dark .okp-about-tagline,
@@ -4528,11 +4708,11 @@ pub(crate) const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-dark .okp-update-setup-commands,
         window.okp-settings-window.is-dark .okp-update-action-detail,
         window.okp-settings-window.is-dark .okp-info-track-detail {
-            color: rgba(255, 255, 255, 0.56);
+            color: @okp_snow_mute;
         }
 
         window.okp-settings-window.is-dark .okp-settings-hint {
-            color: rgba(255, 255, 255, 0.50);
+            color: @okp_snow_faint;
         }
 
         window.okp-settings-window.is-dark .okp-about-byline,
@@ -4540,30 +4720,43 @@ pub(crate) const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-dark .okp-about-row-detail,
         window.okp-settings-window.is-dark .okp-shortcut-action-id,
         window.okp-settings-window.is-dark .okp-info-section-title {
-            color: rgba(255, 255, 255, 0.42);
+            color: @okp_snow_faint;
         }
 
         window.okp-settings-window.is-dark .okp-about-identity-divider {
-            background: rgba(255, 255, 255, 0.08);
+            background: transparent;
+        }
+
+        window.okp-settings-window.is-dark .okp-about-identity {
+            background-color: @okp_dark_card;
+            background-image: linear-gradient(135deg, alpha(@okp_blue, 0.10), alpha(@okp_accent, 0.06));
+            border-color: @okp_dark_hairline;
+            box-shadow: none;
+        }
+
+        window.okp-settings-window.is-dark .okp-update-setup-commands {
+            background: @okp_settings_dark;
+            border-color: @okp_dark_hairline;
         }
 
         window.okp-settings-window.is-dark .okp-shortcut-row {
-            border-color: rgba(255, 255, 255, 0.08);
+            border-color: @okp_dark_hairline;
         }
 
         window.okp-settings-window.is-dark .okp-about-card,
         window.okp-settings-window.is-dark .okp-info-section,
         window.okp-settings-window.is-dark .okp-update-action-surface {
-            background: rgba(255, 255, 255, 0.035);
-            border-color: rgba(255, 255, 255, 0.07);
+            background: @okp_dark_card;
+            border-color: @okp_dark_hairline;
+            box-shadow: none;
         }
 
         window.okp-settings-window.is-dark .okp-about-version-chip,
         window.okp-settings-window.is-dark .okp-about-tag,
         window.okp-settings-window.is-dark .okp-about-copy-button {
-            background: rgba(255, 255, 255, 0.07);
-            border-color: rgba(255, 255, 255, 0.07);
-            color: rgba(255, 255, 255, 0.94);
+            background: @okp_dark_rail;
+            border-color: @okp_dark_hairline;
+            color: @okp_snow;
         }
 
         window.okp-settings-window.is-dark .okp-about-channel-chip,
@@ -4572,6 +4765,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-dark .okp-shortcut-badge,
         window.okp-settings-window.is-dark .okp-info-track-current {
             background: alpha(@okp_accent, 0.16);
+            border-color: alpha(@okp_accent, 0.35);
             color: @okp_accent;
         }
 
@@ -4579,11 +4773,11 @@ pub(crate) const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-dark .okp-about-link-arrow,
         window.okp-settings-window.is-dark button.okp-shortcut-reset,
         window.okp-settings-window.is-dark .okp-info-row.is-highlight .okp-info-value {
-            color: @okp_accent;
+            color: @okp_accent_bright;
         }
 
         window.okp-settings-window.is-dark .okp-about-link-dot {
-            color: rgba(255, 255, 255, 0.42);
+            color: @okp_snow_faint;
         }
 
         window.okp-settings-window.is-dark .okp-settings-switch-row,
@@ -4596,9 +4790,9 @@ pub(crate) const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-dark textview.okp-mpv-conf-editor text,
         window.okp-settings-window.is-dark .okp-settings-button,
         window.okp-settings-window.is-dark dropdown.okp-history-retention button {
-            background: rgba(255, 255, 255, 0.05);
-            border-color: rgba(255, 255, 255, 0.07);
-            color: rgba(255, 255, 255, 0.90);
+            background: @okp_dark_rail;
+            border-color: @okp_dark_hairline;
+            color: @okp_snow;
         }
 
         window.okp-settings-window.is-dark .okp-settings-button:hover,
@@ -4606,42 +4800,40 @@ pub(crate) const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-dark button.okp-settings-track-row:hover,
         window.okp-settings-window.is-dark button.okp-shortcut-chip:hover,
         window.okp-settings-window.is-dark .okp-about-copy-button:hover {
-            background: rgba(255, 255, 255, 0.09);
-        }
-
-        scale.okp-settings-scale highlight {
-            background: @okp_teal;
+            background: @okp_dark_inset;
         }
 
         window.okp-settings-window.is-dark scale.okp-settings-scale highlight,
         window.okp-settings-window.is-dark button.okp-settings-switch.is-active {
-            background: @okp_accent;
+            background: linear-gradient(to right, @okp_blue, @okp_accent 60%, @okp_accent_bright);
         }
 
         window.okp-settings-window.is-dark button.okp-settings-switch {
-            background: rgba(255, 255, 255, 0.20);
+            background: @okp_dark_inset;
         }
 
         window.okp-settings-window.is-dark button.okp-settings-switch:focus-visible {
-            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.45);
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         window.okp-settings-window.is-dark .okp-settings-segmented {
-            background: rgba(255, 255, 255, 0.06);
+            background: @okp_dark_rail;
+            border-color: @okp_dark_hairline;
         }
 
         window.okp-settings-window.is-dark button.okp-settings-segment-button {
-            color: rgba(255, 255, 255, 0.58);
+            color: @okp_snow_mute;
         }
 
         window.okp-settings-window.is-dark button.okp-settings-segment-button:hover {
-            background: rgba(255, 255, 255, 0.06);
+            background: transparent;
+            color: @okp_snow;
         }
 
         window.okp-settings-window.is-dark button.okp-settings-segment-button.is-selected {
-            background: rgba(255, 255, 255, 0.12);
-            color: rgba(255, 255, 255, 0.94);
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+            background: @okp_dark_card;
+            color: @okp_snow;
+            box-shadow: 0 0 0 1px @okp_dark_hairline;
         }
 
         window.okp-settings-window.is-dark scrollbar,
@@ -4651,7 +4843,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         window.okp-settings-window.is-dark scrollbar slider {
-            background: rgba(255, 255, 255, 0.24);
+            background: alpha(@okp_snow, 0.24);
         }
 
         window.okp-settings-window.is-high-contrast,
@@ -4849,25 +5041,42 @@ mod tests {
 
     #[test]
     fn palette_is_unified_on_the_brand_accent() {
-        // The generic adwaita blue must not reappear on any surface: the light
-        // settings chrome shares the dark player's single teal brand accent.
-        for stray in ["#0067c0", "0, 103, 192"] {
+        // Neither the generic adwaita blue nor the retired teal may reappear on
+        // any surface: light chrome leads with the BeFeast navy, everything over
+        // the video and the dark scheme with the brand cyan.
+        for stray in [
+            "#0067c0",
+            "0, 103, 192",
+            "#28b3aa",
+            "#37cfc5",
+            "#229a92",
+            "#10938a",
+            "#0a655f",
+            "#15a89d",
+        ] {
             assert!(
                 !OKP_STYLESHEET.contains(stray),
-                "stray adwaita-blue literal `{stray}` found; use @okp_teal"
+                "stray literal `{stray}` found; use @okp_navy or @okp_accent"
             );
         }
 
-        // Brand accent colours live only in their `@define-color`; every other
-        // use goes through a token so the palette retints from one edit.
-        for once in ["#28b3aa", "#37cfc5", "#10938a"] {
+        // Brand colours live only in their `@define-color`; every other use goes
+        // through a token so the palette retints from one edit.
+        for once in [
+            "#39bef9", "#163065", "#7dd8ff", "#1aa9ec", "#2563eb", "#0284c7",
+        ] {
             let count = OKP_STYLESHEET.matches(once).count();
-            assert!(
-                count <= 1,
-                "accent colour `{once}` should only appear in its @define-color, found {count}"
+            assert_eq!(
+                count, 1,
+                "brand colour `{once}` should only appear in its @define-color, found {count}"
             );
         }
-        for gone in ["40, 179, 170", "16, 147, 138"] {
+        for gone in [
+            "40, 179, 170",
+            "16, 147, 138",
+            "57, 190, 249",
+            "22, 48, 101",
+        ] {
             assert!(
                 !OKP_STYLESHEET.contains(gone),
                 "raw accent literal `{gone}` should be replaced by a token"
@@ -4902,8 +5111,8 @@ mod tests {
             "min-width: 36px;",
             "min-height: 82px;",
             "min-height: 84px;",
-            "font-size: 30px;",
-            "font-size: 13.5px;",
+            "font-size: 22px;",
+            "font-size: 13px;",
             "min-width: 64px;",
             "min-height: 36px;",
             "min-height: 4px;",
@@ -4926,8 +5135,11 @@ mod tests {
         assert!(OKP_STYLESHEET.contains("border-radius: 18px;"));
         assert!(OKP_STYLESHEET.contains(".okp-welcome-action-column"));
         assert!(OKP_STYLESHEET.contains("min-width: 132px;"));
-        assert!(OKP_STYLESHEET.contains("padding: 0 12px;"));
         assert!(OKP_STYLESHEET.contains("padding: 0 16px;"));
+        // BeFeast shapes: 12px cards, pill controls, one card per History bucket.
+        assert!(OKP_STYLESHEET.contains("border-radius: 12px;"));
+        assert!(OKP_STYLESHEET.contains("border-radius: 999px;"));
+        assert!(OKP_STYLESHEET.contains(".okp-history-bucket-card"));
     }
 
     #[test]
@@ -4945,8 +5157,8 @@ mod tests {
             "min-height: 42px;",
             "min-width: 46px;",
             "border-radius: 14px;",
-            "background: rgba(22, 22, 25, 0.50);",
-            "background: rgba(22, 22, 25, 0.60);",
+            "background: rgba(12, 20, 36, 0.56);",
+            "background: rgba(12, 20, 36, 0.62);",
             "transform: translate(0, -10px);",
             "transform: translate(0, 16px);",
             "transition: opacity 180ms ease, transform 200ms ease;",

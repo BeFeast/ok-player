@@ -203,7 +203,7 @@ fn draw_timeline_rail(
     fill_timeline_layer(
         cr,
         geometry.played,
-        (40.0 / 255.0, 179.0 / 255.0, 170.0 / 255.0, 1.0),
+        (57.0 / 255.0, 190.0 / 255.0, 249.0 / 255.0, 1.0),
     );
 
     for mark in snapshot.marks {
@@ -215,10 +215,10 @@ fn draw_timeline_rail(
         let (mark_width, mark_height, color, label) = match mark.kind {
             TimelineMarkKind::Chapter => (2.0, 7.0, (1.0, 1.0, 1.0, 0.42), None),
             TimelineMarkKind::Interval => (1.5, 5.0, (1.0, 1.0, 1.0, 0.25), None),
-            TimelineMarkKind::Bookmark => (3.0, 9.0, (0.91, 0.69, 0.29, 0.96), None),
-            TimelineMarkKind::AbStart => (3.0, 9.0, (0.91, 0.69, 0.29, 0.96), Some("A")),
-            TimelineMarkKind::AbEnd => (3.0, 9.0, (0.91, 0.69, 0.29, 0.96), Some("B")),
-            TimelineMarkKind::AbLoop => (3.0, 9.0, (0.91, 0.69, 0.29, 0.96), Some("A-B")),
+            TimelineMarkKind::Bookmark => (3.0, 9.0, (0.984, 0.749, 0.141, 0.96), None),
+            TimelineMarkKind::AbStart => (3.0, 9.0, (0.984, 0.749, 0.141, 0.96), Some("A")),
+            TimelineMarkKind::AbEnd => (3.0, 9.0, (0.984, 0.749, 0.141, 0.96), Some("B")),
+            TimelineMarkKind::AbLoop => (3.0, 9.0, (0.984, 0.749, 0.141, 0.96), Some("A-B")),
         };
         let marker = TimelineLayerGeometry {
             x: x - mark_width / 2.0,
@@ -228,7 +228,7 @@ fn draw_timeline_rail(
         };
         fill_timeline_layer(cr, marker, color);
         if let Some(label) = label {
-            cr.set_source_rgba(0.91, 0.69, 0.29, 0.98);
+            cr.set_source_rgba(0.984, 0.749, 0.141, 0.98);
             cr.select_font_face("sans", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
             cr.set_font_size(8.0);
             cr.move_to(x + 3.0, f64::from(height) - 1.0);
@@ -241,6 +241,16 @@ fn draw_timeline_rail(
         geometry.thumb_center_x,
         rail_center_y + 1.0,
         TIMELINE_THUMB_DIAMETER / 2.0 + 1.0,
+        0.0,
+        std::f64::consts::TAU,
+    );
+    let _ = cr.fill();
+    // The BeFeast focus ring, 3px of translucent cyan around the white thumb.
+    cr.set_source_rgba(57.0 / 255.0, 190.0 / 255.0, 249.0 / 255.0, 0.30);
+    cr.arc(
+        geometry.thumb_center_x,
+        rail_center_y,
+        TIMELINE_THUMB_DIAMETER / 2.0 + 3.0,
         0.0,
         std::f64::consts::TAU,
     );
@@ -870,9 +880,9 @@ fn draw_volume_wick(cr: &cairo::Context, width: i32, height: i32, state: volume:
     if !state.is_muted() {
         let fill = (f64::from(width) - 3.0) * state.level_fraction();
         let color = if state.is_boosted() {
-            (0.941, 0.722, 0.251)
+            (0.984, 0.749, 0.141)
         } else {
-            (0.157, 0.702, 0.667)
+            (0.224, 0.745, 0.976)
         };
         cr.set_source_rgb(color.0, color.1, color.2);
         cr.move_to(1.5, y);
@@ -895,9 +905,9 @@ fn draw_volume_track(cr: &cairo::Context, width: i32, height: i32, state: volume
     let teal_end = 3.0 + track_span * state.teal_fraction();
     if teal_end > 3.0 {
         cr.set_source_rgba(
-            0.157,
-            0.702,
-            0.667,
+            0.224,
+            0.745,
+            0.976,
             if state.is_muted() { 0.38 } else { 1.0 },
         );
         cr.move_to(3.0, y);
@@ -907,7 +917,7 @@ fn draw_volume_track(cr: &cairo::Context, width: i32, height: i32, state: volume
     if state.is_boosted() && !state.is_muted() {
         let boost_start = 3.0 + track_span * volume::VolumeState::unity_fraction();
         let boost_end = boost_start + track_span * state.boost_fraction();
-        cr.set_source_rgb(0.941, 0.722, 0.251);
+        cr.set_source_rgb(0.984, 0.749, 0.141);
         cr.move_to(boost_start, y);
         cr.line_to(boost_end, y);
         let _ = cr.stroke();

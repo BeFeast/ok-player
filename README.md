@@ -137,6 +137,13 @@ Flatpak-managed updates and the Freedesktop `codecs-extra` extension. See
 codec-mask matrix, and live-desktop acceptance instructions.
 OK Player is not available on Flathub until an external submission is accepted.
 
+**Arch Linux / Omarchy (build from source)**
+
+There is no binary lane for Arch yet. Build from a checkout with cargo, or package it with the
+PKGBUILD in `rust/packaging/arch/` — both link the distro `mpv`, and a packaged install reports
+itself as pacman-owned so the app never tries to update itself. See
+[Arch Linux and Omarchy](docs/linux-omarchy.md).
+
 **Runtime requirements.** A GTK4 desktop; Debian and AppImage builds carry the pinned libmpv required by the embedded Wayland DMA-BUF path, while Fedora packages use the distro mpv libraries. Hardware video decode uses VA-API where present. OK Player runs under X11 and Wayland; some behaviors (drag/drop, portals, compositor fullscreen) are validated only on GNOME/Wayland — see [Supported environments](#supported-environments).
 
 **Update.** Packages installed from the APT repository update through `apt upgrade` — within the
@@ -171,6 +178,7 @@ The `.deb` targets current Debian/Ubuntu; the AppImage targets any glibc desktop
 - 📋 **[Product Requirements](docs/OK-Player-PRD.md)** — the full spec: pillars, information architecture, every screen and state, roadmap, open questions. (Authored as the Windows product spec; the Linux shell tracks the same behavior natively.)
 - 📦 **[Linux release acceptance](docs/linux-release-acceptance.md)** — how Linux release evidence is graded and what each level may claim.
 - 📦 **[Linux Flatpak beta lane](docs/linux-flatpak.md)** — source policy, permissions, codecs, local beta repository, and operator acceptance.
+- 📦 **[Arch Linux and Omarchy](docs/linux-omarchy.md)** — dependencies, the cargo recipe, and the PKGBUILD for a pacman-owned install.
 - ✅ **[QA acceptance records](docs/qa-records/README.md)** — the required reviewable record for QA-only and acceptance-only pull requests.
 - 🔄 **[Update feeds](docs/update-feed.md)** — how installed Windows and Linux builds discover updates.
 - 📝 **[Release notes template — `0.11.0-beta.1`](docs/release-notes/0.11.0-beta.1.md)** — the presentation template for the first Linux public beta.
