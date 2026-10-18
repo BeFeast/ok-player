@@ -1419,6 +1419,29 @@ pub(crate) const OKP_STYLESHEET: &str = "
             border-top-color: #ffffff;
         }
 
+        /* The empty / no-results / error card is an opaque white card in the
+           light scheme; under high contrast the canvas paints inherited text
+           white, so the card, its tile and its copy are reset explicitly. */
+        .is-high-contrast .okp-history-state-card,
+        .is-high-contrast .okp-history-state-icon-wrap {
+            background: #000000;
+            border: 1px solid #ffffff;
+            box-shadow: none;
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-history-state-title,
+        .is-high-contrast .okp-history-state-body {
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-history-state-button {
+            background: #ffffff;
+            border: 1px solid #ffffff;
+            box-shadow: none;
+            color: #000000;
+        }
+
         .okp-history-state-card {
             min-width: 360px;
             margin-top: 30px;
@@ -5183,15 +5206,17 @@ mod tests {
             rule_body(".is-high-contrast .okp-history-bucket-card")
                 .contains("border: 1px solid #ffffff;")
         );
-        // Settings keeps its light base under high contrast, so the surfaces
-        // this restyle turned white must be reset there too.
+        // The light base stays beneath high contrast on both the idle canvas and
+        // the Settings window, so every surface this restyle turned white must
+        // be reset there too.
         for selector in [
+            ".is-high-contrast .okp-history-state-card,\n        .is-high-contrast .okp-history-state-icon-wrap",
             "window.okp-settings-window.is-high-contrast .okp-about-identity",
             "window.okp-settings-window.is-high-contrast .okp-update-setup-commands",
         ] {
             let body = rule_body(selector);
             assert!(
-                body.contains("#000000") && body.contains("border-color: #ffffff;"),
+                body.contains("#000000") && body.contains("#ffffff"),
                 "{selector} must paint black on a white border, got {body}"
             );
         }
