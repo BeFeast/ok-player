@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg height="16px" viewBox="0 0 16 16" width="16px" xmlns="http://www.w3.org/2000/svg">
-    <!-- Lucide icon "folder-open" (ISC licence, see THIRD-PARTY-NOTICES.md), rendered
-         as outlines so GTK's symbolic recolour reaches every pixel, and renamed
+    <!-- Lucide 0.544.0 icon "folder-open" (ISC, or MIT where Lucide carries it from
+         Feather; see THIRD-PARTY-NOTICES.md), its outlines rendered as fills so GTK's symbolic recolour reaches every pixel, and renamed
          into the okp- namespace so a user's own icon theme cannot shadow it. -->
     <path d="M4.408 7.094L3.408 9.027Q3.347 9.145 3.336 9.277Q3.325 9.409 3.365 9.535Q3.405 9.662 3.49 9.763Q3.576 9.865 3.694 9.925Q3.752 9.956 3.815 9.974Q3.878 9.992 3.944 9.998Q4.009 10.003 4.074 9.996Q4.14 9.989 4.202 9.969Q4.265 9.949 4.322 9.917Q4.38 9.885 4.43 9.843Q4.48 9.801 4.521 9.749Q4.562 9.698 4.592 9.64L5.592 7.706Q5.774 7.345 6.169 7.333L13.333 7.333L13.335 7.333Q13.662 7.333 13.862 7.591Q14.063 7.85 13.981 8.167L12.954 12.168Q12.825 12.67 12.304 12.667L2.667 12.667Q2 12.667 2 12L2 3.333Q2 2.667 2.667 2.667L5.267 2.667Q5.637 2.663 5.837 2.967L6.381 3.773Q6.969 4.666 8.047 4.667L12 4.667Q12.667 4.667 12.667 5.333L12.667 6L6.16 6Q6.158 6 6.156 6Q6.154 6 6.152 6Q6.15 6 6.148 6Q6.146 6 6.145 6Q4.944 6.028 4.408 7.094ZM14 6.103L14 5.333Q14 3.333 12 3.333L8.047 3.333Q7.688 3.333 7.486 3.027L6.95 2.233Q6.35 1.323 5.267 1.333L2.667 1.333Q0.667 1.333 0.667 3.333L0.667 12Q0.667 14 2.667 14L12.296 14Q13.856 14.011 14.246 12.499L15.272 8.5Q15.518 7.549 14.916 6.774Q14.534 6.282 14 6.103Z" fill="#2e3436" fill-rule="evenodd"/>
 </svg>

@@ -324,6 +324,9 @@ fn continue_watching_welcome(
 pub(crate) fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-recent-card");
+    // The poster is a GtkPicture, and a picture's paintable ignores the card's
+    // border-radius unless the card clips its children to its rounded box.
+    button.set_overflow(gtk::Overflow::Hidden);
     button.set_has_frame(false);
     button.set_tooltip_text(Some(&item.path));
     // A card is exactly this wide however wide its cell turns out to be, so the row stays
@@ -955,7 +958,7 @@ fn history_row(
 
     let commands = okp_core::history::history_row_commands(&item.source());
     if commands.contains(&okp_core::history::HistoryRowCommand::SaveVideo) {
-        let save = history_action_button("okp-go-down-symbolic", "Save video…");
+        let save = history_action_button("okp-document-save-symbolic", "Save video…");
         let save_parent = parent.clone();
         let save_state = Rc::clone(&state);
         let save_toast = Rc::clone(&status_toast);
@@ -997,7 +1000,7 @@ fn history_row(
         action_list.append(&remove);
     }
     if commands.contains(&okp_core::history::HistoryRowCommand::MoveToTrash) {
-        let trash = history_action_button("okp-edit-clear-symbolic", "Move to Trash…");
+        let trash = history_action_button("okp-user-trash-symbolic", "Move to Trash…");
         let trash_surface = surface;
         let trash_parent = parent.clone();
         let trash_state = Rc::clone(&state);

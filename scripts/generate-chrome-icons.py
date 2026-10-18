@@ -385,7 +385,7 @@ FOOTER = "\n  </g>\n</svg>\n"
 # ICONS above is kept whole as the record of the script-drawn set that was
 # replaced, but only these are still written. Emitting the rest would overwrite
 # the shipped Lucide artwork with the very artwork it was replaced for looking
-# script-drawn, and the header would relabel ISC files as first-party.
+# script-drawn, and the header would relabel Lucide files as first-party.
 GENERATED = ("process-working",)
 
 for name in sorted(GENERATED):

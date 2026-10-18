@@ -66,8 +66,9 @@ if (Test-Path $publishDir) { Remove-Item $publishDir -Recurse -Force }
 dotnet publish $appProj -c Release -r win-x64 -o $publishDir -p:Version=$Version
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
 
-# GPLv3 §4 and LGPLv3 §4(b). Both texts get a .txt extension because a bare
-# extensionless file opens in nothing on Windows.
+# GPLv3 §4 (the LGPL-3 text travels by lane policy; nothing shipped is under it
+# any more). Both texts get a .txt extension because a bare extensionless file
+# opens in nothing on Windows.
 Copy-Item (Join-Path $repo 'LICENSE') (Join-Path $publishDir 'LICENSE.txt') -Force
 Copy-Item (Join-Path $repo 'LICENSE.LGPL-3.0') (Join-Path $publishDir 'LICENSE.LGPL-3.0.txt') -Force
 Copy-Item (Join-Path $repo 'THIRD-PARTY-NOTICES.md') $publishDir -Force

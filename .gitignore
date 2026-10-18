@@ -86,3 +86,11 @@ __pycache__/
 # Python bytecode cache from the repository scripts
 __pycache__/
 *.pyc
+
+# --- makepkg output next to the Arch recipe (SRCDEST/BUILDDIR default to the PKGBUILD directory) ---
+/rust/packaging/arch/src/
+/rust/packaging/arch/pkg/
+/rust/packaging/arch/ok-player/
+/rust/packaging/arch/ok-player-checkout/
+/rust/packaging/arch/*.pkg.tar.*
+/rust/packaging/arch/*.log

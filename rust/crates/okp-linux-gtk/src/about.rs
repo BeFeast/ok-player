@@ -199,7 +199,18 @@ pub(crate) fn draw_about_illustration(
     cr.line_to(108.0, 54.0);
     cr.line_to(64.0, 80.0);
     cr.close_path();
-    cr.set_source_rgba(0.086, 0.188, 0.396, 0.09);
+    // The halo and the mark follow the window's scheme the way the CSS does:
+    // navy-led on the light card, cyan-led on the dark one. Only the ticks
+    // read the CSS colour, so this is decided here.
+    let dark = area
+        .root()
+        .map(|root| root.has_css_class("is-dark"))
+        .unwrap_or(false);
+    if dark {
+        cr.set_source_rgba(0.224, 0.745, 0.976, 0.14);
+    } else {
+        cr.set_source_rgba(0.086, 0.188, 0.396, 0.09);
+    }
     cr.set_line_width(12.0);
     let _ = cr.stroke();
 
@@ -208,9 +219,15 @@ pub(crate) fn draw_about_illustration(
     cr.line_to(64.0, 74.0);
     cr.close_path();
     let gradient = cairo::LinearGradient::new(64.0, 22.0, 108.0, 74.0);
-    gradient.add_color_stop_rgb(0.0, 0.086, 0.188, 0.396);
-    gradient.add_color_stop_rgb(0.55, 0.145, 0.388, 0.922);
-    gradient.add_color_stop_rgb(1.0, 0.224, 0.745, 0.976);
+    if dark {
+        gradient.add_color_stop_rgb(0.0, 0.145, 0.388, 0.922);
+        gradient.add_color_stop_rgb(0.60, 0.224, 0.745, 0.976);
+        gradient.add_color_stop_rgb(1.0, 0.490, 0.847, 1.0);
+    } else {
+        gradient.add_color_stop_rgb(0.0, 0.086, 0.188, 0.396);
+        gradient.add_color_stop_rgb(0.55, 0.145, 0.388, 0.922);
+        gradient.add_color_stop_rgb(1.0, 0.224, 0.745, 0.976);
+    }
     let _ = cr.set_source(&gradient);
     cr.set_line_width(6.0);
     let _ = cr.fill_preserve();
@@ -260,7 +277,7 @@ pub(crate) fn about_app_card(
         .about_update_labels
         .push(update_label.downgrade());
     rows.append(&update_row);
-    rows.append(&about_spec_row("Channel", &snapshot.channel, false, None));
+    rows.append(&about_spec_row("Channel", &snapshot.channel, true, None));
     rows.append(&about_spec_row("Build", &snapshot.build, true, None));
     rows.append(&about_spec_row("License", &snapshot.license, true, None));
     about_card("APP", &rows)
@@ -294,7 +311,7 @@ pub(crate) fn about_engine_card(
     rows.append(&about_spec_row(
         "Hardware decode",
         &snapshot.hwdec,
-        false,
+        true,
         Some(hwdec_tag),
     ));
     about_card("ENGINE", &rows)
@@ -391,7 +408,7 @@ pub(crate) fn about_spec_row_with_label(
         let tag = gtk::Label::new(Some(text));
         tag.add_css_class("okp-about-tag");
         if accent {
-            tag.add_css_class("is-accent");
+            tag.add_css_class("is-ok");
         }
         value_wrap.append(&tag);
     }

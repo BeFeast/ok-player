@@ -126,8 +126,9 @@ try {
 
     # Issue #743. The installer can be built, signed and run with no licence
     # document in it, and nothing about the running app says so. GPLv3 section 4
-    # and LGPLv3 section 4(b) both require these to accompany the package, so
-    # the assertion has to name them the same way it names the natives.
+    # requires the licence text to accompany the package (the LGPL-3 text travels
+    # by lane policy), so the assertion has to name them the same way it names
+    # the natives.
     Assert-Rejects -Label 'a tree without the GPL text is rejected' `
         -Root (New-InstallRoot -Name 'no-gpl' -Omit @('LICENSE.txt')) `
         -Expected @('LICENSE.txt', 'missing')

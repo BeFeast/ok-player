@@ -308,6 +308,30 @@ fn timeline_layers_share_one_vertical_center_at_normal_and_live_widths() {
 }
 
 #[test]
+fn the_thumb_ring_stays_inside_the_rail_at_both_ends() {
+    // GTK clips a DrawingArea to its allocation, so a ring that overhangs the
+    // rail's ends is cut flat exactly where the thumb rests at 0:00 and at the end.
+    let footprint = TIMELINE_THUMB_DIAMETER / 2.0 + TIMELINE_THUMB_RING;
+    for width in [300, 900] {
+        let start = timeline_geometry(width, TIMELINE_HEIGHT, 0.0, 0.0);
+        let end = timeline_geometry(width, TIMELINE_HEIGHT, 1.0, 1.0);
+        assert!(
+            start.thumb_center_x - footprint >= 0.0,
+            "ring overhangs the left end"
+        );
+        assert!(
+            end.thumb_center_x + footprint <= f64::from(width),
+            "ring overhangs the right end"
+        );
+        assert_eq!(start.trough.x, footprint);
+        assert_eq!(
+            start.trough.x + start.trough.width + footprint,
+            f64::from(width)
+        );
+    }
+}
+
+#[test]
 fn floating_volume_css_pins_capsule_geometry_motion_and_state_colors() {
     let css = include_str!("css.rs");
     for required in [
@@ -318,7 +342,7 @@ fn floating_volume_css_pins_capsule_geometry_motion_and_state_colors() {
         "min-height: 14px;",
         "transition: opacity 150ms cubic-bezier(0.25, 0.1, 0.25, 1), transform 150ms cubic-bezier(0.25, 0.1, 0.25, 1);",
         "transition: opacity 120ms cubic-bezier(0.25, 0.1, 0.25, 1), transform 120ms cubic-bezier(0.25, 0.1, 0.25, 1);",
-        "@okp_warning_dark",
+        ".okp-volume-control.is-muted .okp-volume-icon {\n            color: @okp_warning_dark;",
     ] {
         assert!(css.contains(required), "missing volume CSS: {required}");
     }
@@ -479,9 +503,31 @@ fn linux_identity_preserves_launcher_tile_and_separate_about_illustration() {
             "forbidden geometry in {size}px icon"
         );
         assert!(!icon.contains("<text"), "{size}px icon uses a font glyph");
+        if size == 16 {
+            assert!(
+                icon.contains("fill=\"#163065\""),
+                "the flat 16px tile is the identity navy"
+            );
+        } else {
+            for stop in ["#163065", "#2563eb", "#39bef9"] {
+                assert!(icon.contains(stop), "{size}px tile lost the {stop} stop");
+            }
+            assert!(
+                icon.contains("x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\""),
+                "{size}px tile gradient is not on the brand's 135-degree axis"
+            );
+        }
     }
+    assert!(icon_master_gradient_axis_is_135_degrees());
     assert_eq!(ABOUT_FRAME_TICKS.len(), 5);
     assert_eq!(ABOUT_FRAME_TICK_OPACITY, [0.10, 0.18, 0.30, 0.44, 0.62]);
+}
+
+fn icon_master_gradient_axis_is_135_degrees() -> bool {
+    let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packaging/linux");
+    fs::read_to_string(packaging.join("com.befeast.okplayer.svg"))
+        .expect("shared app icon should be readable")
+        .contains("x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"")
 }
 
 #[test]
@@ -8091,9 +8137,11 @@ fn the_idle_footer_gives_up_its_status_text_before_its_buttons() {
 
 #[test]
 fn an_arch_package_is_a_pacman_owned_system_install() {
-    // The PKGBUILD stamps `OKP_PACKAGE_KIND=arch`; the QA override and the
-    // stamp both have to land on the pacman kind, and that kind has to read
-    // the system-package candidate lane with no repository of its own.
+    // `arch` and `pacman` both name the kind for the QA override
+    // (OKP_UPDATE_INSTALL_KIND), and that kind has to read the system-package
+    // candidate lane with no repository of its own. The build stamp
+    // (OKP_PACKAGE_KIND=arch) is recorded, not consulted: an installed package
+    // is recognised by the runtime evidence asserted at the end.
     assert_eq!(parse_install_kind("arch"), Some(InstallKind::Pacman));
     assert_eq!(parse_install_kind("pacman"), Some(InstallKind::Pacman));
     assert_eq!(
@@ -8135,9 +8183,21 @@ fn the_ownership_probe_asks_pacman_for_the_owner_and_reads_its_answer() {
     .unwrap();
     fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
     let only_pacman = |tool: &str| (tool == "pacman").then(|| stub.clone());
+    let arch_host = |database: &str| database == "/var/lib/pacman";
+
+    // Without pacman's database the tool on PATH is not a package manager
+    // (Debian ships an arcade game under that name), so it is never run.
+    assert_eq!(
+        query_package_ownership_with(Some("/usr/bin/ok-player"), only_pacman, |_| false),
+        PackageOwnership::Unknown
+    );
+    assert!(
+        !asked.exists(),
+        "a pacman without /var/lib/pacman is not asked"
+    );
 
     assert_eq!(
-        query_package_ownership_with(Some("/usr/bin/ok-player"), only_pacman),
+        query_package_ownership_with(Some("/usr/bin/ok-player"), only_pacman, arch_host),
         PackageOwnership::Pacman
     );
     assert_eq!(
@@ -8149,12 +8209,12 @@ fn the_ownership_probe_asks_pacman_for_the_owner_and_reads_its_answer() {
     // pacman present but disowning the path: a manager was asked, so unowned.
     fs::write(&stub, "#!/bin/sh\nexit 1\n").unwrap();
     assert_eq!(
-        query_package_ownership_with(Some("/usr/bin/ok-player"), only_pacman),
+        query_package_ownership_with(Some("/usr/bin/ok-player"), only_pacman, arch_host),
         PackageOwnership::Unowned
     );
     // No manager at all is not an answer.
     assert_eq!(
-        query_package_ownership_with(Some("/usr/bin/ok-player"), |_| None),
+        query_package_ownership_with(Some("/usr/bin/ok-player"), |_| None, |_| true),
         PackageOwnership::Unknown
     );
 }

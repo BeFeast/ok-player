@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg height="16px" viewBox="0 0 16 16" width="16px" xmlns="http://www.w3.org/2000/svg">
-    <!-- Lucide icon "copy" (ISC licence, see THIRD-PARTY-NOTICES.md), rendered
-         as outlines so GTK's symbolic recolour reaches every pixel, and renamed
+    <!-- Lucide 0.544.0 icon "copy" (ISC, or MIT where Lucide carries it from
+         Feather; see THIRD-PARTY-NOTICES.md), its outlines rendered as fills so GTK's symbolic recolour reaches every pixel, and renamed
          into the okp- namespace so a user's own icon theme cannot shadow it. -->
     <path d="M2.667 11.333Q0.667 11.333 0.667 9.333L0.667 2.667Q0.667 0.667 2.667 0.667L9.333 0.667Q11.333 0.667 11.333 2.667Q11.333 2.799 11.283 2.922Q11.232 3.044 11.138 3.138Q11.044 3.232 10.922 3.283Q10.799 3.333 10.667 3.333Q10.534 3.333 10.412 3.283Q10.289 3.232 10.195 3.138Q10.101 3.044 10.051 2.922Q10 2.799 10 2.667Q10 2 9.333 2L2.667 2Q2 2 2 2.667L2 9.333Q2 10 2.667 10Q2.799 10 2.922 10.051Q3.044 10.101 3.138 10.195Q3.232 10.289 3.283 10.412Q3.333 10.534 3.333 10.667Q3.333 10.799 3.283 10.922Q3.232 11.044 3.138 11.138Q3.044 11.232 2.922 11.283Q2.799 11.333 2.667 11.333ZM4.667 6.667Q4.667 4.667 6.667 4.667L13.333 4.667Q15.333 4.667 15.333 6.667L15.333 13.333Q15.333 15.333 13.333 15.333L6.667 15.333Q4.667 15.333 4.667 13.333L4.667 6.667ZM6 13.333Q6 14 6.667 14L13.333 14Q14 14 14 13.333L14 6.667Q14 6 13.333 6L6.667 6Q6 6 6 6.667L6 13.333Z" fill="#2e3436" fill-rule="evenodd"/>
 </svg>

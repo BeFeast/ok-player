@@ -19,14 +19,16 @@ are installed at the path that ecosystem looks for them at:
   rpm       %license / %doc under %{_licensedir}/%{_docdir}
   flatpak   /app/share/licenses/com.befeast.okplayer/
   arch      /usr/share/licenses/ok-player/ and /usr/share/doc/ok-player/
-            (the PKGBUILD's package() function)
+            (the PKGBUILD's package() function, run into a scratch tree)
   windows   next to the app in the Velopack publish directory
 
 The two archive lanes route through `scripts/stage-license-documents.sh`, so
 for those the check *runs* the staging code into a scratch directory and looks
-at what actually landed, rather than trusting the script's text. The other
-three lanes are declarative recipes - an rpm spec, a Flatpak manifest and a
-PowerShell staging script - so there the declaration is the thing to read.
+at what actually landed, rather than trusting the script's text. The Arch lane
+is a shell function, so its `package()` is run the same way, against a staged
+source tree and a scratch `$pkgdir`. The other three lanes are declarative
+recipes - an rpm spec, a Flatpak manifest and a PowerShell staging script - so
+there the declaration is the thing to read.
 
 The runtime smokes that assert the installed paths are checked too: a lane can
 also fall out of compliance by keeping the install and gutting the gate.
@@ -38,7 +40,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -289,28 +293,70 @@ def check_flatpak(root: Path) -> LaneResult:
 
 
 def check_arch(root: Path) -> LaneResult:
+    """Run the PKGBUILD's package() into a scratch $pkgdir and read what landed.
+
+    makepkg is not available off Arch, but package() is plain bash over
+    `install`, so it can be run here against a staged source tree: the real
+    licence documents and desktop integration from this checkout, and a
+    placeholder binary standing in for the release build. The gate judges the
+    documents that land, not the recipe's text, so an install line that became
+    conditional, unreachable or undone by a later command fails here too.
+    """
     recipe = "rust/packaging/arch/PKGBUILD"
     result = LaneResult("arch", recipe)
-    text = (root / recipe).read_text(encoding="utf-8")
-    package_fn = text[text.index("package() {") :] if "package() {" in text else ""
-    result.require(bool(package_fn), f"{recipe} has no package() function")
-    for name in ("LICENSE", "LICENSE.LGPL-3.0"):
+    pkgbuild = root / recipe
+    if not pkgbuild.is_file():
+        raise FileNotFoundError(str(pkgbuild))
+    with tempfile.TemporaryDirectory(prefix="okp-arch-lane-") as scratch:
+        srcdir = Path(scratch) / "src"
+        pkgdir = Path(scratch) / "pkg"
+        checkout = srcdir / "ok-player"
+        for name in SHARED_DOCUMENTS:
+            source = root / name
+            if source.is_file():
+                (checkout / name).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, checkout / name)
+        # Desktop integration and the binary are inputs package() needs to run,
+        # not what this gate judges: stage the real files where the tree has
+        # them, placeholders otherwise.
+        integration = "rust/packaging/linux"
+        for relative in (
+            f"{integration}/com.befeast.okplayer.desktop",
+            f"{integration}/com.befeast.okplayer.metainfo.xml",
+            f"{integration}/com.befeast.okplayer.svg",
+            *(f"{integration}/icons/hicolor/{size}x{size}/apps/com.befeast.okplayer.svg" for size in (16, 24, 32, 48, 64)),
+            "target/release/okp-linux-gtk",
+        ):
+            staged = (checkout if relative.startswith(integration) else srcdir) / relative
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            source = root / relative
+            if source.is_file():
+                shutil.copyfile(source, staged)
+            else:
+                staged.write_text("placeholder\n", encoding="utf-8")
+        run = subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", 'source "$1" && package', "_", str(pkgbuild)],
+            cwd=srcdir,
+            env={**os.environ, "srcdir": str(srcdir), "pkgdir": str(pkgdir)},
+            capture_output=True,
+            text=True,
+        )
         result.require(
-            re.search(
-                rf'install -Dm0644 {re.escape(name)} "\$pkgdir/usr/share/licenses/\$pkgname/{re.escape(name)}"',
-                package_fn,
+            run.returncode == 0,
+            f"{recipe} package() failed: {(run.stderr or run.stdout).strip()[-400:]}",
+        )
+        for name in ("LICENSE", "LICENSE.LGPL-3.0"):
+            landed = pkgdir / "usr/share/licenses/ok-player" / name
+            result.require(
+                landed.is_file() and landed.read_bytes() == (root / name).read_bytes(),
+                f"{recipe} package() no longer installs {name} under /usr/share/licenses/ok-player",
             )
-            is not None,
-            f"{recipe} package() no longer installs {name} under /usr/share/licenses",
+        notices = pkgdir / "usr/share/doc/ok-player/THIRD-PARTY-NOTICES.md"
+        result.require(
+            notices.is_file()
+            and notices.read_bytes() == (root / "THIRD-PARTY-NOTICES.md").read_bytes(),
+            f"{recipe} package() no longer installs THIRD-PARTY-NOTICES.md under /usr/share/doc/ok-player",
         )
-    result.require(
-        re.search(
-            r'install -Dm0644 THIRD-PARTY-NOTICES\.md "\$pkgdir/usr/share/doc/\$pkgname/THIRD-PARTY-NOTICES\.md"',
-            package_fn,
-        )
-        is not None,
-        f"{recipe} package() no longer installs THIRD-PARTY-NOTICES.md under /usr/share/doc",
-    )
     result.shipped = list(SHARED_DOCUMENTS)
     return result
 
@@ -380,7 +426,8 @@ def main() -> int:
         return 0
     print(
         "\nA packaging lane stopped shipping a licence document. "
-        "GPLv3 §4 and LGPLv3 §4(b) both require them to travel with the package.",
+        "GPLv3 §4 requires the licence text to travel with the package, and every "
+        "lane ships the same three documents so none can drift.",
         file=sys.stderr,
     )
     return 1

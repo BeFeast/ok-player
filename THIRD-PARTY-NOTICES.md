@@ -78,12 +78,20 @@ distributed and licensed independently by Freedesktop/Flathub.
 - **Lucide artwork** — every icon in the set except the one named below. The
   files are renamed into an `okp-` namespace so a user's own icon theme cannot
   shadow them (see issue #731), and each 2px stroke is rendered as a filled
-  outline so GTK's symbolic recolour reaches it; the shapes are upstream's.
+  outline so GTK's symbolic recolour reaches it. The transport glyphs (play,
+  pause, fast-forward, skip back, skip forward), the drag handle and the
+  overflow dots are rendered as solid silhouettes of the same outlines, which
+  is how they read at control sizes. The shapes are upstream's.
   - **Upstream:** <https://lucide.dev> — <https://github.com/lucide-icons/lucide>
+  - **Version:** Lucide 0.544.0 (`lucide-static@0.544.0`), taken from the
+    design hand-off's Lucide sprite and from upstream's SVGs for the icons that
+    sprite does not carry.
   - **Copyright:** © 2022 Lucide Contributors. Portions © 2013–2022 Cole Bemis,
-    from Feather.
-  - **License:** ISC for Lucide's own work and MIT for the icons that originate
-    in Feather, exactly as Lucide's own licence file carries both. The ISC text:
+    from Feather — the attribution Lucide's own licence file makes.
+  - **License:** ISC. Lucide's licence file is the ISC licence with a copyright
+    line that reserves the portions taken from Feather to Cole Bemis under
+    MIT; upstream does not mark per file which icons those are, so both texts
+    are reproduced here and every icon file names both. The ISC text:
 
     > Permission to use, copy, modify, and/or distribute this software for any purpose
     > with or without fee is hereby granted, provided that the above copyright notice

@@ -140,8 +140,8 @@ OK Player is not available on Flathub until an external submission is accepted.
 **Arch Linux / Omarchy (build from source)**
 
 There is no binary lane for Arch yet. Build from a checkout with cargo, or package it with the
-PKGBUILD in `rust/packaging/arch/` — both link the distro `mpv`, and a packaged install reports
-itself as pacman-owned so the app never tries to update itself. See
+PKGBUILD in `rust/packaging/arch/` — both link the distro `mpv`, and an installed package is
+recognised as pacman-owned (`pacman -Qo`) so the app never tries to update itself. See
 [Arch Linux and Omarchy](docs/linux-omarchy.md).
 
 **Runtime requirements.** A GTK4 desktop; Debian and AppImage builds carry the pinned libmpv required by the embedded Wayland DMA-BUF path, while Fedora packages use the distro mpv libraries. Hardware video decode uses VA-API where present. OK Player runs under X11 and Wayland; some behaviors (drag/drop, portals, compositor fullscreen) are validated only on GNOME/Wayland — see [Supported environments](#supported-environments).

@@ -16,20 +16,23 @@ yet validated on Hyprland: file a report if one misbehaves.
 ## Dependencies
 
 ```bash
-sudo pacman -S --needed gtk4 mpv libx11 wayland wayland-protocols libglvnd \
-  glib2-devel pkgconf rust cargo git xdg-utils
+sudo pacman -S --needed base-devel gtk4 mpv libx11 wayland wayland-protocols \
+  libglvnd glib2-devel pkgconf rust cargo git xdg-utils
 ```
 
 - `gtk4`, `mpv`, `libx11`, `wayland`, `libglvnd` are the runtime libraries the
-  binary links; `wayland-protocols`, `glib2-devel` (for
-  `glib-compile-resources`, which builds the chrome icon set into the binary),
-  `pkgconf`, `rust`, `cargo` are build-time only.
+  binary links; `base-devel` (the build script compiles the native Wayland
+  video plane and the generated protocol glue with the system C compiler),
+  `wayland-protocols`, `glib2-devel` (GLib's build-time tools; the build runs
+  `glib-compile-resources` to compile the chrome icon set into the binary),
+  `pkgconf`, `rust`, `cargo` are build-time only. `makepkg` assumes
+  `base-devel` as well, which is why the PKGBUILD does not list a compiler.
 - Optional: `yt-dlp` (site URLs), `ffmpeg` (clip export and screenshots).
 - Fonts: the interface asks for **Noto Sans** and **JetBrains Mono** and falls
-  back to the system sans-serif and monospace when they are absent. On Omarchy
-  that fallback is the Cascadia/Caskaydia family, which reads fine; install
-  `noto-fonts` and `ttf-jetbrains-mono` to see the typography the design
-  specifies.
+  back to the system sans-serif and monospace when they are absent. `fc-match
+  'Noto Sans'` and `fc-match 'JetBrains Mono'` tell you what your install
+  resolves them to; `noto-fonts` and `ttf-jetbrains-mono` provide the faces the
+  design specifies if they are not already there.
 
 ## Build and run from a checkout
 
@@ -67,18 +70,26 @@ To package the branch you have checked out rather than the tag:
 _okp_source="$(git rev-parse --show-toplevel)" makepkg -si
 ```
 
-The working tree is cloned, so commit what you want built. The PKGBUILD mirrors
-the Fedora spec: `/usr/bin/ok-player`, the desktop entry, MIME declarations,
-AppStream MetaInfo and icon set from the shared Linux packaging directory, and
-the licence documents under `/usr/share/licenses/ok-player/`. `check()` runs
-the workspace tests plus `desktop-file-validate` and `appstreamcli validate`;
-`makepkg --nocheck` skips them.
+The working tree is cloned, so commit what you want built, on a branch: a
+detached HEAD has nothing for the clone to check out. `makepkg` writes its
+mirror, `src/`, `pkg/` and the finished `.pkg.tar.zst` next to the PKGBUILD
+unless `SRCDEST`/`BUILDDIR`/`PKGDEST` say otherwise (they are ignored by git).
+The PKGBUILD mirrors the Fedora spec: `/usr/bin/ok-player`, the desktop entry,
+MIME declarations, AppStream MetaInfo and icon set from the shared Linux
+packaging directory, and the licence documents under
+`/usr/share/licenses/ok-player/`. `check()` runs the workspace tests plus
+`desktop-file-validate` and `appstreamcli validate`; `makepkg --nocheck` skips
+them.
 
-The package stamps the binary with `OKP_PACKAGE_KIND=arch`. Inside the app that
-is the **pacman** install kind: About reports `Install: pacman`, the updater
-offers nothing it cannot deliver, and when a newer release exists Settings →
-Updates says to update with pacman. The app never downloads or installs a
-package of its own on Arch.
+An installed package is recognised at runtime: the app asks `pacman -Qo` who
+owns its executable, the same probe the Debian and Fedora packages rely on with
+`dpkg` and `rpm`, and pacman owning `/usr/bin/ok-player` is the **pacman**
+install kind. About reports `Install: pacman`, Settings → Updates says to
+update with pacman, and the app neither checks for releases nor downloads or
+installs a package of its own on Arch. (`OKP_PACKAGE_KIND=arch` stamps the
+build with the lane it came from; it is recorded in the update log, not
+consulted. Run the binary from an extracted package rather than an installed
+one and pacman does not own it, so it is not that kind.)
 
 ## What is not done here
 

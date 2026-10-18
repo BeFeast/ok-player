@@ -80,8 +80,9 @@ for size in 16 24 32 48 64; do
     "$BUILD_ROOT/usr/share/icons/hicolor/${size}x${size}/apps/com.befeast.okplayer.svg"
 done
 
-# GPLv3 §4 and LGPLv3 §4(b): the licence documents have to travel with the
-# package. Debian policy §12.5 puts them in /usr/share/doc/<package>.
+# GPLv3 §4: the licence documents have to travel with the package (the LGPL-3
+# text travels by lane policy; nothing shipped is under it any more). Debian
+# policy §12.5 puts them in /usr/share/doc/<package>.
 "$ROOT/scripts/stage-license-documents.sh" deb "$BUILD_ROOT/usr/share/doc/ok-player"
 # --- The repository material the package carries (issue #726) --------------------------
 # Both files travel inside the package, so provisioning needs no network at install time — a

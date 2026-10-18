@@ -22,6 +22,9 @@ pub(crate) const TIMELINE_HEIGHT: i32 = 20;
 pub(crate) const TIMELINE_MIN_WIDTH: i32 = 48;
 pub(crate) const TIMELINE_RAIL_HEIGHT: f64 = 4.0;
 pub(crate) const TIMELINE_THUMB_DIAMETER: f64 = 12.0;
+/// The translucent cyan ring around the thumb. It is part of the thumb's
+/// footprint: the rail is inset by it, so the ring is whole at both ends.
+pub(crate) const TIMELINE_THUMB_RING: f64 = 3.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TimelineLayerGeometry {
@@ -52,8 +55,8 @@ pub(crate) fn timeline_geometry(
     played_fraction: f64,
     buffered_fraction: f64,
 ) -> TimelineGeometry {
-    let inset = TIMELINE_THUMB_DIAMETER / 2.0;
-    let rail_width = (f64::from(width) - TIMELINE_THUMB_DIAMETER).max(0.0);
+    let inset = TIMELINE_THUMB_DIAMETER / 2.0 + TIMELINE_THUMB_RING;
+    let rail_width = (f64::from(width) - 2.0 * inset).max(0.0);
     let center_y = f64::from(height) / 2.0;
     let rail_y = center_y - TIMELINE_RAIL_HEIGHT / 2.0;
     let played_fraction = played_fraction.clamp(0.0, 1.0);
@@ -250,7 +253,7 @@ fn draw_timeline_rail(
     cr.arc(
         geometry.thumb_center_x,
         rail_center_y,
-        TIMELINE_THUMB_DIAMETER / 2.0 + 3.0,
+        TIMELINE_THUMB_DIAMETER / 2.0 + TIMELINE_THUMB_RING,
         0.0,
         std::f64::consts::TAU,
     );
@@ -1197,6 +1200,11 @@ pub(crate) fn build_controls(
 
     let up_next_panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
     up_next_panel.add_css_class("okp-up-next-panel");
+    // The panel is a themed card like the idle shell, not over-video glass:
+    // it takes the scheme the idle theme resolves, as the command popover does.
+    if idle_theme_is_dark() {
+        up_next_panel.add_css_class("is-dark");
+    }
     up_next_panel.set_width_request(SIDE_PANEL_WIDTH);
     up_next_panel.append(&up_next_header);
     up_next_panel.append(&up_next_scroller);
@@ -1585,6 +1593,9 @@ pub(crate) fn connect_popover_chrome_pin(popover: &gtk::Popover, chrome: Rc<Chro
 
 pub(crate) fn prepare_track_popover(popover: &gtk::Popover, kind: PlayerPopoverKind) {
     popover.add_css_class("okp-track-popover");
+    if idle_theme_is_dark() {
+        popover.add_css_class("is-dark");
+    }
     popover.add_css_class(kind.css_class());
     popover.set_has_arrow(false);
     popover.set_position(gtk::PositionType::Top);

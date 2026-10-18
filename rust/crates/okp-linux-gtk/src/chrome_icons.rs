@@ -43,6 +43,7 @@ pub(crate) const CHROME_ICONS: &[&str] = &[
     "okp-dialog-warning-symbolic",
     "okp-document-open-recent-symbolic",
     "okp-document-open-symbolic",
+    "okp-document-save-symbolic",
     "okp-document-send-symbolic",
     "okp-edit-clear-all-symbolic",
     "okp-edit-clear-symbolic",
@@ -70,6 +71,7 @@ pub(crate) const CHROME_ICONS: &[&str] = &[
     "okp-process-working-symbolic",
     "okp-system-search-symbolic",
     "okp-user-bookmarks-symbolic",
+    "okp-user-trash-symbolic",
     "okp-video-x-generic-symbolic",
     "okp-view-fullscreen-symbolic",
     "okp-view-list-symbolic",
@@ -80,7 +82,7 @@ pub(crate) const CHROME_ICONS: &[&str] = &[
 ];
 
 /// The shipped icons that `scripts/generate-chrome-icons.py` still draws, by
-/// stem. Everything else in the set is Lucide artwork under ISC (see
+/// stem. Everything else in the set is Lucide artwork under ISC and MIT (see
 /// THIRD-PARTY-NOTICES.md), so the generator must not write it.
 ///
 /// Nothing at runtime resolves icons by provenance - this records the split for
@@ -483,7 +485,7 @@ mod tests {
 
     /// The generator used to own the whole chrome set. Now that the set is
     /// Lucide artwork apart from one icon, running it must no longer write the
-    /// rest: it would overwrite ISC files with GPL-3-headered script drawings
+    /// rest: it would overwrite Lucide files with GPL-3-headered script drawings
     /// and silently contradict THIRD-PARTY-NOTICES.md. The old assertion here
     /// required the opposite - that it draws every shipped name - so it is
     /// replaced rather than relaxed.

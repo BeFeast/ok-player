@@ -905,11 +905,14 @@ pub(crate) fn parse_install_kind(value: &str) -> Option<InstallKind> {
 }
 
 /// The package managers the ownership probe asks, in order: the tool, the
-/// query that names the owner of a path, and the ownership a success proves.
-pub(crate) const PACKAGE_OWNERSHIP_PROBES: [(&str, &str, PackageOwnership); 3] = [
-    ("dpkg", "-S", PackageOwnership::Dpkg),
-    ("rpm", "-qf", PackageOwnership::Rpm),
-    ("pacman", "-Qo", PackageOwnership::Pacman),
+/// query that names the owner of a path, the database directory that proves
+/// the tool is that system's package manager, and the ownership a success
+/// proves. The database check matters: Debian ships an arcade game as
+/// `pacman`, on the default PATH, and spawning it would not be a query.
+pub(crate) const PACKAGE_OWNERSHIP_PROBES: [(&str, &str, &str, PackageOwnership); 3] = [
+    ("dpkg", "-S", "/var/lib/dpkg", PackageOwnership::Dpkg),
+    ("rpm", "-qf", "/var/lib/rpm", PackageOwnership::Rpm),
+    ("pacman", "-Qo", "/var/lib/pacman", PackageOwnership::Pacman),
 ];
 
 /// Asks the package managers this system has whether they own `path`. An
@@ -917,22 +920,29 @@ pub(crate) const PACKAGE_OWNERSHIP_PROBES: [(&str, &str, PackageOwnership); 3] =
 /// manager was actually asked — core treats a failed query as "not packaged"
 /// rather than guessing.
 fn query_package_ownership(path: Option<&str>) -> PackageOwnership {
-    query_package_ownership_with(path, find_executable)
+    query_package_ownership_with(path, find_executable, |database| {
+        Path::new(database).is_dir()
+    })
 }
 
-/// [`query_package_ownership`] with the tool lookup injected: production
-/// passes [`find_executable`], tests a resolver that points a tool name at a
-/// stand-in program, so the command boundary is exercised without a package
-/// manager on the host.
+/// [`query_package_ownership`] with the host lookups injected: production
+/// passes [`find_executable`] and a directory check, tests a resolver that
+/// points a tool name at a stand-in program and whatever database answer the
+/// case needs, so the command boundary is exercised without a package manager
+/// on the host.
 pub(crate) fn query_package_ownership_with(
     path: Option<&str>,
     resolve: impl Fn(&str) -> Option<PathBuf>,
+    has_database: impl Fn(&str) -> bool,
 ) -> PackageOwnership {
     let Some(path) = path else {
         return PackageOwnership::Unknown;
     };
     let mut asked = false;
-    for (tool, query, owner) in PACKAGE_OWNERSHIP_PROBES {
+    for (tool, query, database, owner) in PACKAGE_OWNERSHIP_PROBES {
+        if !has_database(database) {
+            continue;
+        }
         let Some(executable) = resolve(tool) else {
             continue;
         };

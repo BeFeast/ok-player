@@ -48,11 +48,10 @@ pub(crate) const OKP_STYLESHEET: &str = "
         @define-color okp_ok #059669;
         @define-color okp_ok_dark #4ade80;
         @define-color okp_danger #b91c1c;
-        @define-color okp_danger_deep #991b1b;
+        /* A fill, not a text colour: the destructive hover behind white glyphs. */
         @define-color okp_danger_dark #dc2626;
         @define-color okp_danger_bright #fb7185;
         @define-color okp_warning #c2410c;
-        @define-color okp_warning_deep #9a3412;
         @define-color okp_warning_dark #fbbf24;
 
         .okp-root {
@@ -67,6 +66,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         window.okp-player-window {
             background: @okp_bg;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
         }
 
         /* OK Player rounds its own windowed shell. The toplevel is undecorated,
@@ -190,7 +190,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-player-window-controls button:focus-visible,
         button.okp-player-window-control:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 2px alpha(@okp_accent, 0.60);
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         button.okp-player-window-close:hover {
@@ -455,10 +455,6 @@ pub(crate) const OKP_STYLESHEET: &str = "
             color: rgba(255, 255, 255, 0.94);
         }
 
-        button.okp-recent-card:hover {
-            background: rgba(255, 255, 255, 0.055);
-        }
-
         button.okp-recent-card:focus-visible {
             outline: none;
             box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
@@ -499,7 +495,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-width: 0;
             min-height: 4px;
             border: none;
-            border-radius: 0 0 0 8px;
+            border-radius: 0;
             background: @okp_accent_bright;
         }
 
@@ -658,7 +654,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-history-row:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 2px alpha(@okp_accent, 0.60);
+            box-shadow: inset 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         .okp-history-row-title {
@@ -989,6 +985,11 @@ pub(crate) const OKP_STYLESHEET: &str = "
             background: linear-gradient(to right, @okp_navy, @okp_blue 55%, @okp_accent);
         }
 
+        .is-dark progressbar.okp-recent-progress progress,
+        .is-dark progressbar.okp-history-thumb-progress progress {
+            background: linear-gradient(to right, @okp_blue, @okp_accent 60%, @okp_accent_bright);
+        }
+
         .okp-recent-time-left {
             padding: 2px 8px;
             border-radius: 999px;
@@ -1282,8 +1283,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .is-light button.okp-history-row { color: @okp_ink; }
         .is-dark button.okp-history-row { color: @okp_snow; }
-        .is-light button.okp-history-row:hover { background: alpha(@okp_navy, 0.04); }
-        .is-dark button.okp-history-row:hover { background: alpha(@okp_accent, 0.06); }
+        .is-light button.okp-history-row:hover { background: alpha(@okp_navy, 0.06); }
+        .is-dark button.okp-history-row:hover { background: alpha(@okp_accent, 0.08); }
 
         .okp-history-row-title { font-size: 13px; font-weight: 500; }
         .is-light .okp-history-row-title { color: @okp_ink; }
@@ -1427,29 +1428,6 @@ pub(crate) const OKP_STYLESHEET: &str = "
             border-top-color: #ffffff;
         }
 
-        /* The empty / no-results / error card is an opaque white card in the
-           light scheme; under high contrast the canvas paints inherited text
-           white, so the card, its tile and its copy are reset explicitly. */
-        .is-high-contrast .okp-history-state-card,
-        .is-high-contrast .okp-history-state-icon-wrap {
-            background: #000000;
-            border: 1px solid #ffffff;
-            box-shadow: none;
-            color: #ffffff;
-        }
-
-        .is-high-contrast .okp-history-state-title,
-        .is-high-contrast .okp-history-state-body {
-            color: #ffffff;
-        }
-
-        .is-high-contrast button.okp-history-state-button {
-            background: #ffffff;
-            border: 1px solid #ffffff;
-            box-shadow: none;
-            color: #000000;
-        }
-
         /* Every other surface the light scheme paints as a white card on this
            canvas, with the labels inside it, since the canvas paints inherited
            text white under high contrast. */
@@ -1527,6 +1505,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-history-state-button:hover { background: linear-gradient(135deg, @okp_navy_hover, @okp_blue 55%, @okp_accent_bright); }
         .is-dark button.okp-history-state-button { background: linear-gradient(135deg, @okp_blue, @okp_accent 60%, @okp_accent_bright); color: @okp_accent_ink; }
+        .is-dark button.okp-history-state-button:hover { background: linear-gradient(135deg, @okp_blue, @okp_accent_bright 60%, @okp_accent_bright); }
 
         .okp-history-loading { margin-top: 18px; }
         .okp-history-skeleton-row { padding: 9px 12px; }
@@ -1542,6 +1521,32 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .is-dark .okp-history-skeleton-thumb,
         .is-dark .okp-history-skeleton-line-1,
         .is-dark .okp-history-skeleton-line-2 { background: @okp_dark_inset; }
+
+        /* The empty / no-results / error card is an opaque white card in the
+           light scheme; under high contrast the canvas paints inherited text
+           white, so the card, its tile and its copy are reset explicitly. This
+           block has to follow the themed state-card rules above: the root keeps
+           .is-light / .is-dark beside .is-high-contrast, and at equal
+           specificity the later rule wins. */
+        .is-high-contrast .okp-history-state-card,
+        .is-high-contrast .okp-history-state-icon-wrap {
+            background: #000000;
+            border: 1px solid #ffffff;
+            box-shadow: none;
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-history-state-title,
+        .is-high-contrast .okp-history-state-body {
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-history-state-button {
+            background: #ffffff;
+            border: 1px solid #ffffff;
+            box-shadow: none;
+            color: #000000;
+        }
 
         /* Audio lyrics overlay — an Apple-Music-style sheet over the (black) audio plane. The scrim
            is translucent so any embedded cover art shows dimly behind, the lines dim away from the
@@ -2459,7 +2464,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-up-next-list row.okp-interval-row:focus-visible,
         .okp-up-next-list row.okp-detect-row:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 2px alpha(@okp_accent, 0.60);
+            box-shadow: inset 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         .okp-up-next-list row.okp-add-bookmark-row {
@@ -2555,7 +2560,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-up-next-row.is-behind:hover {
-            background: alpha(@okp_navy, 0.04);
+            background: alpha(@okp_navy, 0.06);
             color: @okp_ink_mute;
         }
 
@@ -2750,6 +2755,301 @@ pub(crate) const OKP_STYLESHEET: &str = "
             box-shadow: none;
         }
 
+        /* Dark scheme for the chapters / up-next panel and the track popover
+           shell. The design themes these surfaces with the same surface tokens
+           as the idle shell; the panel and each track popover carry .is-dark
+           from the idle theme, and every light rule above with a scheme-bound
+           value has its dark counterpart here. */
+        .okp-up-next-panel.is-dark {
+            background: @okp_dark_card;
+            border-color: @okp_dark_hairline;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.20), 0 24px 60px rgba(0, 0, 0, 0.45);
+        }
+
+        .is-dark .okp-side-panel-tabs {
+            background: @okp_dark_rail;
+            border: 1px solid @okp_dark_hairline;
+        }
+
+        .is-dark button.okp-side-panel-tab {
+            color: @okp_snow_mute;
+        }
+
+        .is-dark button.okp-side-panel-tab:hover {
+            background: transparent;
+            color: @okp_snow;
+        }
+
+        .is-dark button.okp-side-panel-tab.is-selected {
+            background: @okp_dark_card;
+            color: @okp_snow;
+            box-shadow: 0 1px 0 rgba(0, 0, 0, 0.10), 0 8px 24px rgba(0, 0, 0, 0.12);
+        }
+
+        .is-dark button.okp-side-panel-tab:focus-visible {
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
+        }
+
+        .is-dark button.okp-side-panel-close {
+            color: @okp_snow_mute;
+        }
+
+        .is-dark button.okp-side-panel-close:hover {
+            background: alpha(@okp_accent, 0.08);
+            color: @okp_snow;
+        }
+
+        .is-dark button.okp-side-panel-close:focus-visible {
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
+        }
+
+        .is-dark .okp-panel-heading {
+            color: @okp_snow_faint;
+        }
+
+        .is-dark .okp-up-next-list row.okp-panel-empty-row {
+            background: @okp_dark_rail;
+            border: 1px dashed @okp_dark_hairline_hi;
+        }
+
+        .is-dark .okp-panel-empty {
+            color: @okp_snow_mute;
+        }
+
+        .is-dark .okp-panel-caption {
+            color: @okp_snow_faint;
+        }
+
+        .is-dark .okp-up-next-row {
+            color: @okp_snow_dim;
+        }
+
+        .is-dark .okp-chapter-current-rail {
+            background: linear-gradient(to bottom, @okp_blue, @okp_accent 60%, @okp_accent_bright);
+        }
+
+        .is-dark .okp-chapter-thumb {
+            background: @okp_dark_inset;
+            border: 1px solid @okp_dark_hairline;
+        }
+
+        .is-dark .okp-chapter-thumb.is-pending {
+            background: @okp_dark_rail;
+            border-color: @okp_dark_hairline_hi;
+        }
+
+        .is-dark .okp-chapter-thumb-placeholder {
+            color: @okp_snow_faint;
+        }
+
+        .is-dark .okp-up-next-list row.okp-interval-row {
+            background: alpha(@okp_accent, 0.07);
+            border-color: @okp_dark_hairline_hi;
+        }
+
+        .is-dark .okp-interval-row .okp-interval-icon {
+            color: @okp_snow_mute;
+        }
+
+        .is-dark .okp-interval-row .okp-up-next-marker {
+            color: @okp_snow_mute;
+        }
+
+        .is-dark .okp-up-next-list row.okp-detect-row {
+            background: alpha(@okp_accent, 0.11);
+            border-color: alpha(@okp_accent, 0.32);
+            color: @okp_accent_bright;
+        }
+
+        .is-dark .okp-up-next-list row.okp-detect-row:hover {
+            background: alpha(@okp_accent, 0.16);
+            border-color: alpha(@okp_accent, 0.52);
+            color: @okp_accent_bright;
+        }
+
+        .is-dark .okp-detect-row .okp-detect-icon {
+            color: @okp_accent_bright;
+        }
+
+        .is-dark .okp-detect-subtitle {
+            color: @okp_snow_mute;
+        }
+
+        .is-dark .okp-detect-status-row {
+            background: @okp_dark_rail;
+            border: 1px dashed @okp_dark_hairline_hi;
+        }
+
+        .is-dark .okp-detect-status-icon {
+            color: @okp_snow_faint;
+        }
+
+        .is-dark .okp-detect-status {
+            color: @okp_snow_mute;
+        }
+
+        .is-dark .okp-up-next-list row.okp-interval-row:focus-visible,
+        .is-dark .okp-up-next-list row.okp-detect-row:focus-visible {
+            box-shadow: inset 0 0 0 3px alpha(@okp_accent, 0.30);
+        }
+
+        .is-dark .okp-up-next-list row.okp-add-bookmark-row {
+            background: linear-gradient(135deg, @okp_blue, @okp_accent 60%, @okp_accent_bright);
+            box-shadow: 0 1px 2px alpha(@okp_accent, 0.32);
+        }
+
+        .is-dark .okp-up-next-list row.okp-add-bookmark-row:hover {
+            background: linear-gradient(135deg, @okp_blue, @okp_accent_bright 60%, @okp_accent_bright);
+            border-color: transparent;
+            color: @okp_accent_ink;
+        }
+
+        .is-dark .okp-up-next-list row.okp-add-files-row {
+            background: @okp_dark_card;
+            border-color: @okp_dark_hairline_hi;
+            color: @okp_accent_bright;
+        }
+
+        .is-dark .okp-up-next-list row.okp-add-files-row:hover {
+            background: alpha(@okp_accent, 0.08);
+            border-color: @okp_accent_bright;
+            color: @okp_accent_bright;
+        }
+
+        .is-dark .okp-add-files-row .okp-add-files-icon {
+            color: @okp_accent_bright;
+        }
+
+        .is-dark .okp-up-next-list row.okp-now-playing-pinned-row {
+            background: alpha(@okp_accent, 0.11);
+            color: @okp_accent_bright;
+        }
+
+        .is-dark .okp-now-playing-thumb {
+            background: linear-gradient(135deg, @okp_accent, @okp_blue);
+        }
+
+        .is-dark .okp-now-playing-title {
+            color: @okp_accent_bright;
+        }
+
+        .is-dark .okp-now-playing-state {
+            color: @okp_accent_bright;
+        }
+
+        .is-dark .okp-up-next-row.is-current .okp-chapter-thumb {
+            border-color: alpha(@okp_accent, 0.37);
+        }
+
+        .is-dark .okp-up-next-row:hover {
+            background: alpha(@okp_accent, 0.08);
+        }
+
+        .is-dark .okp-up-next-row.is-current {
+            background: alpha(@okp_accent, 0.11);
+            border-color: transparent;
+            color: @okp_accent_bright;
+        }
+
+        .is-dark .okp-up-next-row.is-behind {
+            background: transparent;
+            color: @okp_snow_faint;
+        }
+
+        .is-dark .okp-up-next-row.is-behind:hover {
+            background: alpha(@okp_accent, 0.08);
+            color: @okp_snow_mute;
+        }
+
+        .is-dark .okp-up-next-row.is-drop-target {
+            background: alpha(@okp_accent, 0.16);
+            border-color: alpha(@okp_accent, 0.60);
+        }
+
+        .is-dark .okp-up-next-drag-handle {
+            color: alpha(@okp_snow, 0.28);
+        }
+
+        .is-dark .okp-up-next-row:hover .okp-up-next-drag-handle,
+        .is-dark .okp-up-next-row.is-drop-target .okp-up-next-drag-handle {
+            color: @okp_snow_mute;
+        }
+
+        .is-dark .okp-up-next-index {
+            color: @okp_snow_faint;
+        }
+
+        .is-dark .okp-up-next-source-icon {
+            color: @okp_snow_mute;
+        }
+
+        .is-dark .okp-up-next-row.is-current .okp-up-next-source-icon {
+            color: @okp_accent_bright;
+        }
+
+        .is-dark .okp-next-badge {
+            background: alpha(@okp_accent, 0.11);
+            color: @okp_accent_bright;
+        }
+
+        .is-dark .okp-up-next-marker {
+            color: @okp_snow_mute;
+        }
+
+        .is-dark .okp-up-next-row.is-current .okp-up-next-marker {
+            color: @okp_accent_bright;
+        }
+
+        .is-dark menubutton.okp-up-next-actions-menu > button {
+            color: @okp_snow_mute;
+        }
+
+        .is-dark menubutton.okp-up-next-actions-menu > button:hover {
+            background: alpha(@okp_accent, 0.08);
+            color: @okp_snow;
+        }
+
+        .is-dark .okp-up-next-actions-popover {
+            background: @okp_dark_card;
+        }
+
+        .is-dark button.okp-up-next-menu-action {
+            color: @okp_snow_dim;
+        }
+
+        .is-dark button.okp-up-next-menu-action:hover {
+            background: alpha(@okp_accent, 0.08);
+        }
+
+        .is-dark button.okp-up-next-action-button {
+            color: @okp_snow_mute;
+        }
+
+        .is-dark button.okp-up-next-action-button:hover {
+            background: alpha(@okp_accent, 0.08);
+            color: @okp_snow;
+        }
+
+        .is-dark button.okp-up-next-action-button:disabled {
+            color: alpha(@okp_snow, 0.18);
+        }
+
+        .okp-up-next-panel.is-dark scrollbar slider {
+            background: alpha(@okp_snow, 0.22);
+        }
+
+        .is-dark .okp-track-popover-content {
+            background: @okp_dark_card;
+            color: @okp_snow;
+        }
+
+        popover.okp-track-popover.is-dark > contents,
+        popover.okp-track-popover.is-dark contents {
+            background: @okp_dark_card;
+            border: 1px solid @okp_dark_hairline;
+            box-shadow: 0 16px 50px rgba(0, 0, 0, 0.45);
+        }
+
         .okp-command-surface {
             padding: 6px;
             background: @okp_light_card;
@@ -2852,7 +3152,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-command-row:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 2px alpha(@okp_accent, 0.60);
+            box-shadow: inset 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         button.okp-command-back-row {
@@ -3118,7 +3418,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-track-row:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 2px alpha(@okp_accent, 0.60);
+            box-shadow: inset 0 0 0 3px alpha(@okp_accent, 0.30);
         }
 
         .okp-track-check {
@@ -3264,6 +3564,134 @@ pub(crate) const OKP_STYLESHEET: &str = "
             color: @okp_ink_faint;
             font-size: 10.5px;
         }
+        /* Dark scheme for the track popover contents, generated from the light
+           rules above the same way as the panel's. */
+        .is-dark .okp-track-popover-scroll {
+            background: @okp_dark_card;
+        }
+
+        .is-dark .okp-track-popover-title {
+            color: @okp_snow;
+        }
+
+        .is-dark .okp-track-group-title {
+            color: @okp_snow_faint;
+        }
+
+        .is-dark .okp-track-subgroup-title {
+            color: @okp_snow_faint;
+        }
+
+        .is-dark button.okp-track-row {
+            color: @okp_snow_dim;
+        }
+
+        .is-dark button.okp-track-row:hover {
+            background: alpha(@okp_accent, 0.08);
+            color: @okp_snow;
+        }
+
+        .is-dark button.okp-track-row:active {
+            background: alpha(@okp_accent, 0.12);
+        }
+
+        .is-dark button.okp-track-row.is-selected {
+            background: alpha(@okp_accent, 0.11);
+            border-color: transparent;
+            color: @okp_accent_bright;
+        }
+
+        .is-dark .okp-audio-track-detail {
+            color: @okp_snow_faint;
+        }
+
+        .is-dark button.okp-track-row:disabled {
+            background: transparent;
+            border-color: transparent;
+            color: alpha(@okp_snow, 0.38);
+        }
+
+        .is-dark button.okp-track-row:focus-visible {
+            box-shadow: inset 0 0 0 3px alpha(@okp_accent, 0.30);
+        }
+
+        .is-dark button.okp-scribe-row {
+            color: @okp_accent_bright;
+        }
+
+        .is-dark button.okp-scribe-row:disabled {
+            color: alpha(@okp_accent_bright, 0.54);
+        }
+
+        .is-dark .okp-scribe-spinner {
+            color: alpha(@okp_accent_bright, 0.72);
+        }
+
+        .is-dark .okp-subtitle-action-badge {
+            background: @okp_dark_rail;
+            color: @okp_snow_mute;
+        }
+
+        .is-dark button.okp-scribe-row .okp-subtitle-action-badge {
+            background: alpha(@okp_accent_bright, 0.12);
+            color: @okp_accent_bright;
+        }
+
+        .is-dark button.okp-online-subtitle-row:disabled {
+            color: alpha(@okp_snow, 0.38);
+        }
+
+        .is-dark .okp-track-empty {
+            color: @okp_snow_faint;
+        }
+
+        .is-dark .okp-track-divider {
+            background: @okp_dark_hairline;
+        }
+
+        .is-dark .okp-quick-delay-label {
+            color: @okp_snow_mute;
+        }
+
+        .is-dark .okp-quick-delay-value {
+            color: @okp_accent_bright;
+        }
+
+        .is-dark button.okp-quick-delay-button {
+            background: @okp_dark_rail;
+        }
+
+        .is-dark button.okp-quick-delay-button:hover {
+            background: alpha(@okp_accent, 0.12);
+        }
+
+        .is-dark button.okp-quick-delay-button:focus-visible {
+            box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
+        }
+
+        .is-dark .okp-subtitle-preset-status {
+            color: @okp_snow_faint;
+        }
+
+        .is-dark button.okp-quick-style-button {
+            background: @okp_dark_rail;
+            color: @okp_snow_dim;
+        }
+
+        .is-dark button.okp-quick-style-button:hover {
+            background: alpha(@okp_accent, 0.12);
+        }
+
+        .is-dark button.okp-quick-style-button:disabled {
+            background: @okp_dark_rail;
+            color: @okp_snow_faint;
+        }
+
+        .is-dark .okp-quick-preference-footer {
+            border-top: 1px solid @okp_dark_hairline;
+            color: @okp_snow_faint;
+        }
+
 
         .okp-settings-audio-delay-row {
             margin: 0;
@@ -3759,6 +4187,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         window.okp-settings-window {
             background: @okp_settings_light;
+            font-family: 'Noto Sans', 'Inter', 'Cantarell', sans-serif;
         }
 
         .okp-settings-titlebar {
@@ -4118,10 +4547,10 @@ pub(crate) const OKP_STYLESHEET: &str = "
             letter-spacing: 0;
         }
 
-        .okp-about-tag.is-accent {
-            background: alpha(@okp_navy, 0.09);
-            border-color: alpha(@okp_navy, 0.20);
-            color: @okp_navy;
+        .okp-about-tag.is-ok {
+            background: alpha(@okp_ok, 0.10);
+            border-color: alpha(@okp_ok, 0.42);
+            color: @okp_ok;
         }
 
         .okp-about-copy-button {
@@ -4849,8 +5278,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         window.okp-settings-window.is-dark .okp-about-channel-chip,
-        window.okp-settings-window.is-dark .okp-about-tag.is-accent,
-        window.okp-settings-window.is-dark .okp-settings-state-pill,
+                window.okp-settings-window.is-dark .okp-settings-state-pill,
         window.okp-settings-window.is-dark .okp-shortcut-badge,
         window.okp-settings-window.is-dark .okp-info-track-current {
             background: alpha(@okp_accent, 0.16);
@@ -4899,6 +5327,69 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         window.okp-settings-window.is-dark button.okp-settings-switch {
             background: @okp_dark_inset;
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-scale trough {
+            background: @okp_dark_inset;
+        }
+
+        window.okp-settings-window.is-dark textview.okp-mpv-conf-editor {
+            caret-color: @okp_accent;
+        }
+
+        window.okp-settings-window.is-dark textview.okp-mpv-conf-editor selection,
+        window.okp-settings-window.is-dark textview.okp-mpv-conf-editor text selection {
+            background: alpha(@okp_accent, 0.28);
+            color: @okp_snow;
+        }
+
+        window.okp-settings-window.is-dark button.okp-update-primary-button {
+            background: linear-gradient(135deg, @okp_blue, @okp_accent 60%, @okp_accent_bright);
+            color: @okp_accent_ink;
+            box-shadow: none;
+        }
+
+        window.okp-settings-window.is-dark button.okp-update-primary-button:hover {
+            background: linear-gradient(135deg, @okp_blue, @okp_accent_bright 60%, @okp_accent_bright);
+        }
+
+        /* The grouped dark rule above outranks the light state rules at
+           (0,2,1), so every selected / conflict / semantic state the dark
+           window shows needs its own dark rule. */
+        window.okp-settings-window.is-dark button.okp-settings-track-row.is-selected,
+        window.okp-settings-window.is-dark button.okp-screenshot-format-button.is-selected {
+            background: alpha(@okp_accent, 0.16);
+            border-color: alpha(@okp_accent, 0.40);
+            color: @okp_accent_bright;
+        }
+
+        window.okp-settings-window.is-dark .okp-integration-state-pill.is-good,
+        window.okp-settings-window.is-dark .okp-about-tag.is-ok {
+            background: alpha(@okp_ok_dark, 0.12);
+            border-color: alpha(@okp_ok_dark, 0.42);
+            color: @okp_ok_dark;
+        }
+
+        window.okp-settings-window.is-dark .okp-integration-state-pill.is-warning {
+            background: alpha(@okp_warning_dark, 0.12);
+            border-color: alpha(@okp_warning_dark, 0.42);
+            color: @okp_warning_dark;
+        }
+
+        window.okp-settings-window.is-dark .okp-integration-state-pill.is-bad,
+        window.okp-settings-window.is-dark button.okp-shortcut-chip.is-conflict {
+            background: alpha(@okp_danger_bright, 0.10);
+            border-color: alpha(@okp_danger_bright, 0.42);
+            color: @okp_danger_bright;
+        }
+
+        window.okp-settings-window.is-dark .okp-shortcut-row.is-conflict {
+            color: @okp_danger_bright;
+        }
+
+        window.okp-settings-window.is-dark .okp-settings-audio-delay-row entry.okp-sub-adjust-entry.is-error {
+            border-color: alpha(@okp_danger_bright, 0.88);
+            box-shadow: 0 0 0 2px alpha(@okp_danger_bright, 0.18);
         }
 
         window.okp-settings-window.is-dark button.okp-settings-switch:focus-visible {
@@ -5290,6 +5781,15 @@ mod tests {
         assert!(
             rule_body(".is-dark .okp-history-bucket-card").contains("background: @okp_dark_card;")
         );
+        // The side panel and the track popovers follow the scheme too.
+        assert!(rule_body(".okp-up-next-panel.is-dark").contains("background: @okp_dark_card;"));
+        assert!(
+            rule_body(
+                "popover.okp-track-popover.is-dark > contents,\n        popover.okp-track-popover.is-dark contents"
+            )
+            .contains("background: @okp_dark_card;")
+        );
+        assert!(rule_body(".is-dark button.okp-track-row.is-selected").contains("@okp_accent"));
         assert!(
             rule_body(".is-high-contrast .okp-history-bucket-card")
                 .contains("border: 1px solid #ffffff;")
@@ -5308,6 +5808,24 @@ mod tests {
             assert!(
                 body.contains("#000000") && body.contains("#ffffff"),
                 "{selector} must paint black on a white border, got {body}"
+            );
+        }
+        // The idle root keeps .is-light / .is-dark beside .is-high-contrast,
+        // and the themed state-card rules have the same specificity as the
+        // reset, so the reset only wins by coming later in the sheet.
+        let reset = OKP_STYLESHEET
+            .find(".is-high-contrast .okp-history-state-card,")
+            .expect("state-card high-contrast reset");
+        for themed in [
+            ".is-light .okp-history-state-card {",
+            ".is-dark .okp-history-state-card {",
+            ".is-light .okp-history-state-body {",
+            ".is-dark button.okp-history-state-button {",
+        ] {
+            let at = OKP_STYLESHEET.find(themed).expect(themed);
+            assert!(
+                at < reset,
+                "{themed} comes after the high-contrast reset and would win"
             );
         }
     }

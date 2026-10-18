@@ -19,10 +19,15 @@ Copyright: 2022 Lucide Contributors
 License: ISC and MIT
 Comment:
  The symbolic icons the Linux shell resolves for its own chrome are Lucide
- artwork, compiled into the binary as a GResource and therefore present in
- every installed binary. The files are renamed into an `okp-` namespace so a
- user's icon theme cannot shadow them, and each stroke is rendered as a filled
- outline so GTK's symbolic recolour reaches it; the shapes are upstream's.
+ artwork (Lucide 0.544.0), compiled into the binary as a GResource and
+ therefore present in every installed binary. The files are renamed into an
+ `okp-` namespace so a user's icon theme cannot shadow them, and each stroke
+ is rendered as a filled outline so GTK's symbolic recolour reaches it (the
+ transport glyphs, the drag handle and the overflow dots as solid silhouettes
+ of the same outlines); the shapes are upstream's. Lucide's licence file is
+ the ISC licence with a copyright line reserving the portions taken from
+ Feather to Cole Bemis under MIT; upstream does not mark per file which icons
+ those are, so both licences are declared for the whole set.
  Source: https://github.com/lucide-icons/lucide
 
 Files: rust/crates/okp-linux-gtk/icons/okp-process-working-symbolic.svg
@@ -63,7 +68,7 @@ License: ISC
  with or without fee is hereby granted, provided that the above copyright notice
  and this permission notice appear in all copies.
  .
-  THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
  REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
  FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
  INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS

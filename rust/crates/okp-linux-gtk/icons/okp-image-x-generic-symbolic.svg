@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg height="16px" viewBox="0 0 16 16" width="16px" xmlns="http://www.w3.org/2000/svg">
-    <!-- Lucide icon "image" (ISC licence, see THIRD-PARTY-NOTICES.md), rendered
-         as outlines so GTK's symbolic recolour reaches every pixel, and renamed
+    <!-- Lucide 0.544.0 icon "image" (ISC, or MIT where Lucide carries it from
+         Feather; see THIRD-PARTY-NOTICES.md), its outlines rendered as fills so GTK's symbolic recolour reaches every pixel, and renamed
          into the okp- namespace so a user's own icon theme cannot shadow it. -->
     <path d="M1.333 3.333L1.333 12.667Q1.333 14.667 3.333 14.667L12.667 14.667Q14.667 14.667 14.667 12.667L14.667 3.333Q14.667 1.333 12.667 1.333L3.333 1.333Q1.333 1.333 1.333 3.333ZM12.414 7.471L13.333 8.391L13.333 3.333Q13.333 2.667 12.667 2.667L3.333 2.667Q2.667 2.667 2.667 3.333L2.667 12.667Q2.667 13.333 3.333 13.333L3.724 13.333L9.586 7.471Q11 6.058 12.414 7.471ZM6 8Q8 8 8 6Q8 4 6 4Q4 4 4 6Q4 8 6 8ZM6 5.333Q6.667 5.333 6.667 6Q6.667 6.667 6 6.667Q5.333 6.667 5.333 6Q5.333 5.333 6 5.333ZM12.667 13.333L5.609 13.333L10.529 8.414Q11 7.943 11.471 8.414L13.333 10.276L13.333 12.667Q13.333 13.333 12.667 13.333Z" fill="#2e3436" fill-rule="evenodd"/>
 </svg>
