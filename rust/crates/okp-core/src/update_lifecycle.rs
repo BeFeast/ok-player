@@ -2924,6 +2924,15 @@ mod tests {
                 InstallKind::Rpm,
             ),
             (
+                "pacman running from /usr",
+                InstallEvidence {
+                    executable_path: Some("/usr/bin/ok-player".to_owned()),
+                    package_ownership: PackageOwnership::Pacman,
+                    ..evidence()
+                },
+                InstallKind::Pacman,
+            ),
+            (
                 "velopack layout on windows",
                 InstallEvidence {
                     executable_path: Some(

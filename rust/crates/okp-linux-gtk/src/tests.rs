@@ -8105,4 +8105,91 @@ fn an_arch_package_is_a_pacman_owned_system_install() {
         InstallKind::Pacman.capability(),
         UpdateCapability::SystemManaged
     );
+    // And the evidence an installed package produces at runtime - pacman
+    // claiming the executable - has to detect as that same kind.
+    assert_eq!(
+        detect_install_kind(&InstallEvidence {
+            executable_path: Some("/usr/bin/ok-player".to_owned()),
+            package_ownership: PackageOwnership::Pacman,
+            ..InstallEvidence::default()
+        }),
+        InstallKind::Pacman
+    );
+}
+
+#[test]
+fn the_ownership_probe_asks_pacman_for_the_owner_and_reads_its_answer() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // A stand-in pacman that records how it was asked and claims the path.
+    let dir = unique_temp_dir("okp-pacman-probe");
+    let stub = dir.path().join("pacman");
+    let asked = dir.path().join("asked");
+    fs::write(
+        &stub,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexit 0\n",
+            asked.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+    let only_pacman = |tool: &str| (tool == "pacman").then(|| stub.clone());
+
+    assert_eq!(
+        query_package_ownership_with(Some("/usr/bin/ok-player"), only_pacman),
+        PackageOwnership::Pacman
+    );
+    assert_eq!(
+        fs::read_to_string(&asked).unwrap(),
+        "-Qo\n/usr/bin/ok-player\n",
+        "pacman is asked `-Qo <path>`, the query that names a file's owner"
+    );
+
+    // pacman present but disowning the path: a manager was asked, so unowned.
+    fs::write(&stub, "#!/bin/sh\nexit 1\n").unwrap();
+    assert_eq!(
+        query_package_ownership_with(Some("/usr/bin/ok-player"), only_pacman),
+        PackageOwnership::Unowned
+    );
+    // No manager at all is not an answer.
+    assert_eq!(
+        query_package_ownership_with(Some("/usr/bin/ok-player"), |_| None),
+        PackageOwnership::Unknown
+    );
+}
+
+#[test]
+#[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
+fn history_bucket_rows_share_one_clipped_card_under_their_heading() {
+    fn children(widget: &impl IsA<gtk::Widget>) -> Vec<gtk::Widget> {
+        let mut out = Vec::new();
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            out.push(current);
+        }
+        out
+    }
+    on_gtk_thread(|| {
+        let host = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let heading = gtk::Label::new(Some("Today"));
+        let rows: Vec<gtk::Overlay> = (0..3).map(|_| gtk::Overlay::new()).collect();
+
+        let card = append_history_bucket(&host, heading.clone(), rows.clone());
+
+        // The host holds the heading and one card - no row floats on its own.
+        let host_children = children(&host);
+        assert_eq!(host_children.len(), 2, "heading + card, nothing else");
+        assert_eq!(host_children[0], heading.clone().upcast::<gtk::Widget>());
+        assert_eq!(host_children[1], card.clone().upcast::<gtk::Widget>());
+        assert!(card.has_css_class("okp-history-bucket-card"));
+        assert_eq!(card.overflow(), gtk::Overflow::Hidden);
+        // Every row is inside the card, in order.
+        let inside = children(&card);
+        assert_eq!(inside.len(), rows.len());
+        for (row, child) in rows.iter().zip(&inside) {
+            assert_eq!(child, &row.clone().upcast::<gtk::Widget>());
+        }
+    });
 }

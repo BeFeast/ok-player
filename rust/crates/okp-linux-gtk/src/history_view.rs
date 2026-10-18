@@ -767,18 +767,19 @@ fn render_history_rows(
         )));
         caption.add_css_class("okp-history-result-caption");
         caption.set_xalign(0.0);
-        host.append(&caption);
-        let card = history_bucket_card();
-        for item in filtered {
-            card.append(&history_row(
-                item,
-                surface.clone(),
-                Rc::clone(&state),
-                parent,
-                Rc::clone(&status_toast),
-            ));
-        }
-        host.append(&card);
+        append_history_bucket(
+            host,
+            caption,
+            filtered.into_iter().map(|item| {
+                history_row(
+                    item,
+                    surface.clone(),
+                    Rc::clone(&state),
+                    parent,
+                    Rc::clone(&status_toast),
+                )
+            }),
+        );
         return;
     }
 
@@ -803,31 +804,42 @@ fn render_history_rows(
         let header = gtk::Label::new(Some(history_format::bucket_header(bucket)));
         header.add_css_class("okp-history-bucket");
         header.set_xalign(0.0);
-        host.append(&header);
-        let card = history_bucket_card();
-        for item in bucket_items {
-            card.append(&history_row(
-                item,
-                surface.clone(),
-                Rc::clone(&state),
-                parent,
-                Rc::clone(&status_toast),
-            ));
-        }
-        host.append(&card);
+        append_history_bucket(
+            host,
+            header,
+            bucket_items.into_iter().map(|item| {
+                history_row(
+                    item,
+                    surface.clone(),
+                    Rc::clone(&state),
+                    parent,
+                    Rc::clone(&status_toast),
+                )
+            }),
+        );
     }
     let end = gtk::Label::new(Some(&history_format::retention_end_cap(retention)));
     end.add_css_class("okp-history-end-cap");
     host.append(&end);
 }
 
-/// The rows of one bucket share a card, separated by hairlines, instead of
-/// each floating as its own tile. The card clips its children so a hovered
-/// row keeps the card's rounded corners.
-fn history_bucket_card() -> gtk::Box {
+/// Appends one History bucket to `host`: its heading, then every row inside
+/// one card. The rows of a bucket share the card, separated by hairlines,
+/// instead of each floating as its own tile; the card clips its children so a
+/// hovered row keeps the card's rounded corners. Returns the card.
+pub(crate) fn append_history_bucket(
+    host: &gtk::Box,
+    heading: gtk::Label,
+    rows: impl IntoIterator<Item = gtk::Overlay>,
+) -> gtk::Box {
+    host.append(&heading);
     let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
     card.add_css_class("okp-history-bucket-card");
     card.set_overflow(gtk::Overflow::Hidden);
+    for row in rows {
+        card.append(&row);
+    }
+    host.append(&card);
     card
 }
 

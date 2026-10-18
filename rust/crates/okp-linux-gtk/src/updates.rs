@@ -904,21 +904,40 @@ pub(crate) fn parse_install_kind(value: &str) -> Option<InstallKind> {
     }
 }
 
+/// The package managers the ownership probe asks, in order: the tool, the
+/// query that names the owner of a path, and the ownership a success proves.
+pub(crate) const PACKAGE_OWNERSHIP_PROBES: [(&str, &str, PackageOwnership); 3] = [
+    ("dpkg", "-S", PackageOwnership::Dpkg),
+    ("rpm", "-qf", PackageOwnership::Rpm),
+    ("pacman", "-Qo", PackageOwnership::Pacman),
+];
+
 /// Asks the package managers this system has whether they own `path`. An
 /// absent tool is not an answer, so the result stays `Unknown` unless a
 /// manager was actually asked — core treats a failed query as "not packaged"
 /// rather than guessing.
 fn query_package_ownership(path: Option<&str>) -> PackageOwnership {
+    query_package_ownership_with(path, find_executable)
+}
+
+/// [`query_package_ownership`] with the tool lookup injected: production
+/// passes [`find_executable`], tests a resolver that points a tool name at a
+/// stand-in program, so the command boundary is exercised without a package
+/// manager on the host.
+pub(crate) fn query_package_ownership_with(
+    path: Option<&str>,
+    resolve: impl Fn(&str) -> Option<PathBuf>,
+) -> PackageOwnership {
     let Some(path) = path else {
         return PackageOwnership::Unknown;
     };
     let mut asked = false;
-    for (tool, args) in [("dpkg", ["-S"]), ("rpm", ["-qf"]), ("pacman", ["-Qo"])] {
-        let Some(executable) = find_executable(tool) else {
+    for (tool, query, owner) in PACKAGE_OWNERSHIP_PROBES {
+        let Some(executable) = resolve(tool) else {
             continue;
         };
         let Ok(output) = Command::new(executable)
-            .args(args)
+            .arg(query)
             .arg(path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -929,11 +948,7 @@ fn query_package_ownership(path: Option<&str>) -> PackageOwnership {
         };
         asked = true;
         if output.status.success() {
-            return match tool {
-                "dpkg" => PackageOwnership::Dpkg,
-                "rpm" => PackageOwnership::Rpm,
-                _ => PackageOwnership::Pacman,
-            };
+            return owner;
         }
     }
     if asked {

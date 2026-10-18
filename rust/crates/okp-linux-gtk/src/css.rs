@@ -1406,6 +1406,19 @@ pub(crate) const OKP_STYLESHEET: &str = "
             background: #ffffff;
         }
 
+        /* The root keeps .is-light / .is-dark beside .is-high-contrast, so the
+           bucket card has to be reset here or it keeps its themed fill under
+           the black-and-white rows. */
+        .is-high-contrast .okp-history-bucket-card {
+            background: #000000;
+            border: 1px solid #ffffff;
+            box-shadow: none;
+        }
+
+        .is-high-contrast .okp-history-bucket-card > overlay {
+            border-top-color: #ffffff;
+        }
+
         .okp-history-state-card {
             min-width: 360px;
             margin-top: 30px;
@@ -5136,10 +5149,35 @@ mod tests {
         assert!(OKP_STYLESHEET.contains(".okp-welcome-action-column"));
         assert!(OKP_STYLESHEET.contains("min-width: 132px;"));
         assert!(OKP_STYLESHEET.contains("padding: 0 16px;"));
-        // BeFeast shapes: 12px cards, pill controls, one card per History bucket.
-        assert!(OKP_STYLESHEET.contains("border-radius: 12px;"));
-        assert!(OKP_STYLESHEET.contains("border-radius: 999px;"));
-        assert!(OKP_STYLESHEET.contains(".okp-history-bucket-card"));
+        // BeFeast shapes, pinned on the rules that carry them: 12px cards, pill
+        // controls, and the History bucket card in every theme.
+        assert!(rule_body("button.okp-recent-card").contains("border-radius: 12px;"));
+        assert!(
+            rule_body("button.okp-idle-primary-button,\n        button.okp-idle-secondary-button")
+                .contains("border-radius: 999px;")
+        );
+        assert!(
+            rule_body(".is-light .okp-history-bucket-card")
+                .contains("background: @okp_light_card;")
+        );
+        assert!(
+            rule_body(".is-dark .okp-history-bucket-card").contains("background: @okp_dark_card;")
+        );
+        assert!(
+            rule_body(".is-high-contrast .okp-history-bucket-card")
+                .contains("border: 1px solid #ffffff;")
+        );
+    }
+
+    /// The declarations of the first rule that opens with exactly `selector`.
+    fn rule_body(selector: &str) -> &'static str {
+        let key = format!("\n        {selector} {{\n");
+        let start = OKP_STYLESHEET
+            .find(&key)
+            .unwrap_or_else(|| panic!("rule `{selector}` missing from the stylesheet"))
+            + key.len();
+        let end = OKP_STYLESHEET[start..].find('}').expect("rule terminator") + start;
+        &OKP_STYLESHEET[start..end]
     }
 
     #[test]
