@@ -73,10 +73,15 @@ published Linux release instead, `_okp_release=0.12.0 makepkg -si` fetches the
 (the first will be noted here), and the recipe refuses releases that predate
 it, because they lack the files it installs and the pacman detection the app
 relies on. The package is versioned
-by what it is - the nearest `linux-v*` tag and the commits since it, so
-`0.1.0linuxalpha.112.r7.gabc1234` to pacman and `0.1.0-linux-alpha.112+7.gabc1234`
-in About - and the updater compares that, not the pinned release; a checkout
-exactly at a release tag is that release. `makepkg` writes its
+by what it is, so `0.1.0linuxalpha.112.r7.gabc1234` to pacman and
+`0.1.0-linux-alpha.112+7.gabc1234` in About, and the updater compares that,
+not the pinned release. With a release tag in reach that is the nearest
+`linux-v*` tag and the commits since it, and a checkout exactly at a release
+tag is that release. Releases are tagged on their own commits, off `main`, so
+a checkout of `main` has none in reach: it is stamped with the newest
+`linux-v*` tag the clone knows plus its own commit count, which still orders
+after that release for pacman and ties with it for the updater, so a newer
+release is offered and the release itself is not. `makepkg` writes its
 mirror, `src/`, `pkg/` and the finished `.pkg.tar.zst` next to the PKGBUILD
 unless `SRCDEST`/`BUILDDIR`/`PKGDEST` say otherwise (they are ignored by git).
 The PKGBUILD mirrors the Fedora spec: `/usr/bin/ok-player`, the desktop entry,

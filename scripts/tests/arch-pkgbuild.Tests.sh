@@ -6,9 +6,10 @@
 # would report the wrong version and the updater would compare the wrong
 # installed version against the feeds. The recipe derives both the pacman
 # pkgver and the app's OKP_BUILD_VERSION from the checkout's nearest linux-v*
-# tag and the commits since it. This proves that, and that the tag mode is
-# untouched, by sourcing the PKGBUILD the way makepkg does and running its
-# functions against a scratch repository.
+# tag and the commits since it - or, since releases are tagged off the main
+# line, from the newest tag the clone knows and its own commit count. This
+# proves that, and that the tag mode is untouched, by sourcing the PKGBUILD the
+# way makepkg does and running its functions against scratch repositories.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -70,17 +71,69 @@ got="$(
 )"
 [[ "$got" == "0.1.0-linux-alpha.112" ]] && ok "a checkout at the tag is stamped as the release ($TAG_SHA)" || fail "OKP_BUILD_VERSION at the tag: got '$got', want '0.1.0-linux-alpha.112'"
 
-# --- checkout mode with no release tag in reach: refused, not misstamped -----
+# --- checkout mode with the release tags off the main line (the real repo) ----
+# Releases are tagged on their own commits, so main never has one in reach;
+# the clone still carries the tags, and the newest names the base.
+OFFLINE="$WORK/offline"
+git init -q -b main "$OFFLINE"
+git -C "$OFFLINE" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "main one"
+git -C "$OFFLINE" checkout -q --orphan release-line
+git -C "$OFFLINE" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "release 111"
+git -C "$OFFLINE" tag linux-v0.1.0-linux-alpha.111
+git -C "$OFFLINE" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "release 112"
+git -C "$OFFLINE" tag linux-v0.1.0-linux-alpha.112
+git -C "$OFFLINE" checkout -q main
+git -C "$OFFLINE" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "main two"
+git -C "$OFFLINE" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "main three"
+OFFLINE_SHA="$(git -C "$OFFLINE" rev-parse --short=7 HEAD)"
+srcdir3="$WORK/src3"
+mkdir -p "$srcdir3"
+git clone -q "$OFFLINE" "$srcdir3/ok-player-checkout"
+got="$(
+  cd "$srcdir3"
+  _okp_source="$OFFLINE" source "$PKGBUILD"
+  pkgver 2>/dev/null || echo "pkgver-failed"
+)"
+expected="0.1.0linuxalpha.112.r3.g$OFFLINE_SHA"
+[[ "$got" == "$expected" ]] && ok "a main checkout with the release tags off its line is pkgver $expected" || fail "pkgver with tags off the line: got '$got', want '$expected'"
+got="$(
+  cd "$srcdir3"
+  srcdir="$srcdir3"
+  _okp_source="$OFFLINE" source "$PKGBUILD"
+  _build_env >/dev/null 2>&1 || true
+  printf '%s' "${OKP_BUILD_VERSION:-unset}"
+)"
+expected="0.1.0-linux-alpha.112+3.g$OFFLINE_SHA"
+[[ "$got" == "$expected" ]] && ok "the app is stamped $expected from the newest tag the clone knows" || fail "OKP_BUILD_VERSION with tags off the line: got '$got', want '$expected'"
+
+# --- checkout mode with no release tag at all: the crate's version, or refused -
 UNTAGGED="$WORK/untagged"
 git init -q "$UNTAGGED"
-git -C "$UNTAGGED" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "orphan"
+mkdir -p "$UNTAGGED/rust/crates/okp-linux-gtk"
+printf '[package]\nname = "okp-linux-gtk"\nversion = "0.1.0"\n' > "$UNTAGGED/rust/crates/okp-linux-gtk/Cargo.toml"
+git -C "$UNTAGGED" add -A
+git -C "$UNTAGGED" -c user.name=t -c user.email=t@t commit -q -m "orphan"
+UNTAGGED_SHA="$(git -C "$UNTAGGED" rev-parse --short=7 HEAD)"
 srcdir2="$WORK/src2"
 mkdir -p "$srcdir2"
 git clone -q "$UNTAGGED" "$srcdir2/ok-player-checkout"
-if (cd "$srcdir2" && _okp_source="$UNTAGGED" source "$PKGBUILD" && pkgver >/dev/null 2>&1); then
-  fail "a checkout with no linux-v tag in reach must refuse to be versioned"
+got="$(
+  cd "$srcdir2"
+  _okp_source="$UNTAGGED" source "$PKGBUILD"
+  pkgver 2>/dev/null || echo "pkgver-failed"
+)"
+expected="0.1.0.r1.g$UNTAGGED_SHA"
+[[ "$got" == "$expected" ]] && ok "a clone with no linux-v tag is stamped from the crate version: $expected" || fail "pkgver with no tags: got '$got', want '$expected'"
+BARE="$WORK/bare"
+git init -q "$BARE"
+git -C "$BARE" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "nothing"
+srcdir4="$WORK/src4"
+mkdir -p "$srcdir4"
+git clone -q "$BARE" "$srcdir4/ok-player-checkout"
+if (cd "$srcdir4" && _okp_source="$BARE" source "$PKGBUILD" && pkgver >/dev/null 2>&1); then
+  fail "a clone with neither a linux-v tag nor a crate version must refuse to be versioned"
 else
-  ok "a checkout with no linux-v tag in reach is refused"
+  ok "a clone with neither a linux-v tag nor a crate version is refused"
 fi
 
 # --- the default is the checkout the PKGBUILD sits in --------------------------

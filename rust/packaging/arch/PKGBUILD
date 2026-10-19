@@ -77,11 +77,11 @@ else
   _okp_source=${_okp_source:-$(_okp_enclosing_checkout)}
   _srcname="$pkgname-checkout"
   source=("$_srcname::git+file://${_okp_source}")
-  # A checkout is stamped with what it is: the nearest linux-v* tag and the
-  # commits since it (0.1.0linuxalpha.112.r7.gabc1234 to pacman,
-  # 0.1.0-linux-alpha.112+7.gabc1234 in the app), so About reports and the
-  # updater compares the version actually built. A checkout exactly at a
-  # release tag is that release.
+  # A checkout is stamped with what it is (0.1.0linuxalpha.112.r7.gabc1234 to
+  # pacman, 0.1.0-linux-alpha.112+7.gabc1234 in the app), so About reports and
+  # the updater compares the version actually built; see _okp_build_version
+  # for how the tag and the count are chosen. A checkout exactly at a release
+  # tag is that release.
   pkgver() {
     cd "$_srcname"
     _okp_checkout_pkgver
@@ -100,24 +100,44 @@ _okp_require_arch_lane() {
   fi
 }
 
-# The build version of the checkout in the current directory:
-# <nearest linux-v tag>[+<commits since it>.g<commit>].
+# The build version of the checkout in the current directory.
+#
+# With a release tag in reach: <nearest linux-v tag>[+<commits since it>.g<commit>].
+# Releases are tagged on their own commits, off the main line, so a checkout of
+# main has none in reach; it is then stamped with the newest linux-v tag the
+# clone knows plus its own commit count: <newest tag>+<commits on HEAD>.g<commit>.
+# That still orders after the release for pacman (the .rN suffix) and ties with
+# it for the updater (build metadata carries no precedence), so a newer release
+# is offered and the release itself is not. A clone with no linux-v tag at all
+# is stamped the same way from the shell crate's own version.
 _okp_build_version() {
-  local described
-  if ! described=$(git describe --tags --long --match 'linux-v*' 2>/dev/null); then
-    printf 'ok-player: no linux-v* tag is reachable from this checkout; fetch the tags before packaging it\n' >&2
-    return 1
+  local described sha count base
+  if described=$(git describe --tags --long --match 'linux-v*' 2>/dev/null); then
+    sha=${described##*-g}
+    described=${described%-g*}
+    count=${described##*-}
+    base=${described%-*}
+    base=${base#linux-v}
+    if (( count == 0 )); then
+      printf '%s\n' "$base"
+    else
+      printf '%s+%s.g%s\n' "$base" "$count" "$sha"
+    fi
+    return 0
   fi
-  local sha=${described##*-g}
-  described=${described%-g*}
-  local count=${described##*-}
-  local base=${described%-*}
-  base=${base#linux-v}
-  if (( count == 0 )); then
-    printf '%s\n' "$base"
+  base=$(git tag -l 'linux-v*' --sort=-version:refname | head -n 1)
+  if [[ -n $base ]]; then
+    base=${base#linux-v}
   else
-    printf '%s+%s.g%s\n' "$base" "$count" "$sha"
+    base=$(sed -n 's/^version = "\([^"]*\)"/\1/p' rust/crates/okp-linux-gtk/Cargo.toml 2>/dev/null | head -n 1)
+    if [[ -z $base ]]; then
+      printf 'ok-player: nothing to stamp this checkout with: no linux-v* tag in the clone and no rust/crates/okp-linux-gtk/Cargo.toml version\n' >&2
+      return 1
+    fi
   fi
+  sha=$(git rev-parse --short=7 HEAD) || return 1
+  count=$(git rev-list --count HEAD) || return 1
+  printf '%s+%s.g%s\n' "$base" "$count" "$sha"
 }
 
 # The same version as pacman spells it: no '-', and '+N.gSHA' as '.rN.gSHA'.
