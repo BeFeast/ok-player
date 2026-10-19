@@ -200,13 +200,21 @@ pub(crate) fn draw_about_illustration(
     cr.line_to(64.0, 80.0);
     cr.close_path();
     // The halo and the mark follow the window's scheme the way the CSS does:
-    // navy-led on the light card, cyan-led on the dark one. Only the ticks
-    // read the CSS colour, so this is decided here.
-    let dark = area
+    // navy-led on the light card, cyan-led on the dark one, and white on the
+    // black hero a high-contrast theme paints. Only the ticks read the CSS
+    // colour, so this is decided here.
+    let (dark, high_contrast) = area
         .root()
-        .map(|root| root.has_css_class("is-dark"))
-        .unwrap_or(false);
-    if dark {
+        .map(|root| {
+            (
+                root.has_css_class("is-dark"),
+                root.has_css_class("is-high-contrast"),
+            )
+        })
+        .unwrap_or((false, false));
+    if high_contrast {
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.22);
+    } else if dark {
         cr.set_source_rgba(0.224, 0.745, 0.976, 0.14);
     } else {
         cr.set_source_rgba(0.086, 0.188, 0.396, 0.09);
@@ -219,7 +227,10 @@ pub(crate) fn draw_about_illustration(
     cr.line_to(64.0, 74.0);
     cr.close_path();
     let gradient = cairo::LinearGradient::new(64.0, 22.0, 108.0, 74.0);
-    if dark {
+    if high_contrast {
+        gradient.add_color_stop_rgb(0.0, 1.0, 1.0, 1.0);
+        gradient.add_color_stop_rgb(1.0, 1.0, 1.0, 1.0);
+    } else if dark {
         gradient.add_color_stop_rgb(0.0, 0.145, 0.388, 0.922);
         gradient.add_color_stop_rgb(0.60, 0.224, 0.745, 0.976);
         gradient.add_color_stop_rgb(1.0, 0.490, 0.847, 1.0);

@@ -1607,7 +1607,10 @@ pub(crate) fn start_update_check_for_ui(
     }
     refresh_linux_update_views(&state);
 
-    let channel = effective_update_channel(state.borrow().settings.update_channel());
+    let channel = effective_update_channel_for(
+        state.borrow().linux_update.install_kind(),
+        state.borrow().settings.update_channel(),
+    );
     let install_kind = state.borrow().linux_update.install_kind();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
@@ -2009,7 +2012,10 @@ fn skip_current_update(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusTo
             return;
         };
         (
-            effective_update_channel(state.settings.update_channel()),
+            effective_update_channel_for(
+                state.linux_update.install_kind(),
+                state.settings.update_channel(),
+            ),
             version,
         )
     };
@@ -2157,7 +2163,10 @@ pub(crate) fn check_updates_on_startup(
         return;
     }
     refresh_linux_update_views(&state);
-    let channel = effective_update_channel(state.borrow().settings.update_channel());
+    let channel = effective_update_channel_for(
+        state.borrow().linux_update.install_kind(),
+        state.borrow().settings.update_channel(),
+    );
     let install_kind = state.borrow().linux_update.install_kind();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {

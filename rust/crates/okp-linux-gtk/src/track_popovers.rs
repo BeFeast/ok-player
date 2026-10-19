@@ -1530,10 +1530,18 @@ pub(crate) fn quick_control_icon(kind: QuickControlIcon) -> gtk::DrawingArea {
     let icon = gtk::DrawingArea::new();
     icon.set_content_width(12);
     icon.set_content_height(12);
-    icon.set_draw_func(move |_, cr, width, height| {
+    icon.set_draw_func(move |area, cr, width, height| {
         let width = f64::from(width);
         let height = f64::from(height);
-        cr.set_source_rgba(0.10, 0.12, 0.14, 0.78);
+        // The CSS foreground of the surface the glyph sits on: ink on the
+        // light popover, snow on the dark one, white under high contrast.
+        let ink = area.color();
+        cr.set_source_rgba(
+            f64::from(ink.red()),
+            f64::from(ink.green()),
+            f64::from(ink.blue()),
+            0.78 * f64::from(ink.alpha()),
+        );
         cr.set_line_width(1.35);
         cr.set_line_cap(cairo::LineCap::Round);
         match kind {

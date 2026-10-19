@@ -57,7 +57,9 @@ fn draw_launcher_brand_tile(cr: &cairo::Context, width: i32, height: i32, icon_s
     let _ = cr.save();
     rounded_rect(cr, 0.0, 0.0, width, height, radius);
     cr.clip();
-    let gradient = cairo::LinearGradient::new(width * 0.2113, 0.0, width * 0.7887, height);
+    // Corner to corner, the brand's 135-degree axis - the same axis the
+    // packaged launcher icons use, so the in-app tile and the launcher match.
+    let gradient = cairo::LinearGradient::new(0.0, 0.0, width, height);
     gradient.add_color_stop_rgb(0.0, 22.0 / 255.0, 48.0 / 255.0, 101.0 / 255.0);
     gradient.add_color_stop_rgb(0.55, 37.0 / 255.0, 99.0 / 255.0, 235.0 / 255.0);
     gradient.add_color_stop_rgb(1.0, 57.0 / 255.0, 190.0 / 255.0, 249.0 / 255.0);
