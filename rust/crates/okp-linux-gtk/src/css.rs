@@ -48,8 +48,6 @@ pub(crate) const OKP_STYLESHEET: &str = "
         @define-color okp_ok #059669;
         @define-color okp_ok_dark #4ade80;
         @define-color okp_danger #b91c1c;
-        /* A fill, not a text colour: the destructive hover behind white glyphs. */
-        @define-color okp_danger_dark #dc2626;
         @define-color okp_danger_bright #fb7185;
         @define-color okp_warning #c2410c;
         @define-color okp_warning_dark #fbbf24;
@@ -194,7 +192,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         button.okp-player-window-close:hover {
-            background: alpha(@okp_danger_dark, 0.86);
+            background: alpha(@okp_danger, 0.86);
             color: #ffffff;
         }
 
@@ -1720,7 +1718,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         button.okp-compact-close:hover {
-            background: alpha(@okp_danger_dark, 0.86);
+            background: alpha(@okp_danger, 0.86);
         }
 
         button.okp-compact-play {
@@ -5234,7 +5232,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         window.okp-settings-window.is-dark button.okp-settings-window-close:hover {
-            background: @okp_danger_dark;
+            background: @okp_danger;
         }
 
         window.okp-settings-window.is-dark button.okp-settings-window-control:hover .okp-settings-window-control-glyph {
@@ -5420,6 +5418,18 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         window.okp-settings-window.is-dark .okp-shortcut-row.is-conflict {
             color: @okp_danger_bright;
+        }
+
+        window.okp-settings-window.is-dark button.okp-shortcut-chip.is-capturing {
+            background: alpha(@okp_accent, 0.16);
+            border-color: @okp_accent;
+            color: @okp_accent_bright;
+        }
+
+        window.okp-settings-window.is-dark button.okp-shortcut-chip.is-empty {
+            background: transparent;
+            border-color: alpha(@okp_accent, 0.35);
+            color: @okp_accent_bright;
         }
 
         window.okp-settings-window.is-dark .okp-settings-audio-delay-row entry.okp-sub-adjust-entry.is-error {

@@ -324,8 +324,10 @@ fn continue_watching_welcome(
 pub(crate) fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-recent-card");
-    // The poster is a GtkPicture, and a picture's paintable ignores the card's
-    // border-radius unless the card clips its children to its rounded box.
+    // GtkPicture clips to its own rounded box; the card clips too, so whatever
+    // is drawn edge-to-edge inside it (the poster's progress bar and chip
+    // overlays) follows the card's corners as well. The card's own outset
+    // shadows and focus ring are drawn before the clip and are not affected.
     button.set_overflow(gtk::Overflow::Hidden);
     button.set_has_frame(false);
     button.set_tooltip_text(Some(&item.path));
