@@ -1202,7 +1202,7 @@ pub(crate) fn build_controls(
     up_next_panel.add_css_class("okp-up-next-panel");
     // The panel is a themed card like the idle shell, not over-video glass:
     // it takes the scheme the idle theme resolves, as the command popover does.
-    follow_idle_scheme(&up_next_panel, idle_theme_is_dark);
+    follow_idle_scheme(&up_next_panel, current_idle_scheme);
     up_next_panel.set_width_request(SIDE_PANEL_WIDTH);
     up_next_panel.append(&up_next_header);
     up_next_panel.append(&up_next_scroller);
@@ -1591,10 +1591,26 @@ pub(crate) fn connect_popover_chrome_pin(popover: &gtk::Popover, chrome: Rc<Chro
 
 pub(crate) fn prepare_track_popover(popover: &gtk::Popover, kind: PlayerPopoverKind) {
     popover.add_css_class("okp-track-popover");
-    follow_idle_scheme(popover, idle_theme_is_dark);
+    follow_idle_scheme(popover, current_idle_scheme);
     popover.add_css_class(kind.css_class());
     popover.set_has_arrow(false);
     popover.set_position(gtk::PositionType::Top);
+}
+
+/// The two idle-theme facts a themed card surface paints by: the scheme and
+/// whether the desktop runs a high-contrast theme.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct IdleScheme {
+    pub(crate) dark: bool,
+    pub(crate) high_contrast: bool,
+}
+
+/// What the desktop reports right now, as the idle canvas reads it.
+pub(crate) fn current_idle_scheme() -> IdleScheme {
+    IdleScheme {
+        dark: idle_theme_is_dark(),
+        high_contrast: idle_theme_is_high_contrast(),
+    }
 }
 
 /// Keeps a themed card surface on the idle scheme for as long as it lives.
@@ -1603,22 +1619,27 @@ pub(crate) fn prepare_track_popover(popover: &gtk::Popover, kind: PlayerPopoverK
 /// mapped, so a panel or popover shown after the desktop preference changed
 /// takes the new scheme - the way the command popover does by re-reading it
 /// on every populate. Hidden revealer children and closed popovers are
-/// unmapped, so each reveal and each open is a fresh read. `scheme_is_dark`
-/// is injected so the behaviour is testable without a GtkSettings to flip.
+/// unmapped, so each reveal and each open is a fresh read. `scheme` is
+/// injected so the behaviour is testable without a GtkSettings to flip.
 pub(crate) fn follow_idle_scheme(
     widget: &impl IsA<gtk::Widget>,
-    scheme_is_dark: impl Fn() -> bool + 'static,
+    scheme: impl Fn() -> IdleScheme + 'static,
 ) {
-    fn apply(widget: &gtk::Widget, dark: bool) {
-        if dark {
-            widget.add_css_class("is-dark");
-        } else {
-            widget.remove_css_class("is-dark");
+    fn apply(widget: &gtk::Widget, scheme: IdleScheme) {
+        for (class, on) in [
+            ("is-dark", scheme.dark),
+            ("is-high-contrast", scheme.high_contrast),
+        ] {
+            if on {
+                widget.add_css_class(class);
+            } else {
+                widget.remove_css_class(class);
+            }
         }
     }
     let widget = widget.upcast_ref::<gtk::Widget>();
-    apply(widget, scheme_is_dark());
-    widget.connect_map(move |widget| apply(widget, scheme_is_dark()));
+    apply(widget, scheme());
+    widget.connect_map(move |widget| apply(widget, scheme()));
 }
 
 pub(crate) fn connect_popover_focus_return(popover: &gtk::Popover, source: &gtk::MenuButton) {

@@ -3083,6 +3083,410 @@ pub(crate) const OKP_STYLESHEET: &str = "
             box-shadow: 0 16px 50px rgba(0, 0, 0, 0.45);
         }
 
+        /* High contrast for the panel and the track popover shell: black
+           surfaces, white text and hairlines, selection inverted, hover a white
+           inset ring and focus a black-gap white ring. The panel and the
+           popovers carry .is-high-contrast beside .is-dark, as the idle canvas
+           does, so these follow the dark rules at equal specificity. */
+        .okp-up-next-panel.is-high-contrast {
+            background: #000000;
+            border-color: #ffffff;
+            box-shadow: none;
+        }
+
+        .is-high-contrast .okp-side-panel-tabs {
+            background: #000000;
+            border: 1px solid #ffffff;
+        }
+
+        .is-high-contrast button.okp-side-panel-tab {
+            border: none;
+            background: transparent;
+            box-shadow: none;
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-side-panel-tab:hover {
+            background: transparent;
+            color: #ffffff;
+            box-shadow: inset 0 0 0 1px #ffffff;
+        }
+
+        .is-high-contrast button.okp-side-panel-tab.is-selected {
+            background: #ffffff;
+            color: #000000;
+            box-shadow: none;
+        }
+
+        .is-high-contrast button.okp-side-panel-tab:focus-visible {
+            box-shadow: 0 0 0 2px #000000, 0 0 0 4px #ffffff;
+        }
+
+        .is-high-contrast button.okp-side-panel-close {
+            border: none;
+            background: transparent;
+            color: #ffffff;
+            box-shadow: none;
+        }
+
+        .is-high-contrast button.okp-side-panel-close:hover {
+            background: #000000;
+            color: #ffffff;
+            box-shadow: inset 0 0 0 1px #ffffff;
+        }
+
+        .is-high-contrast button.okp-side-panel-close:focus-visible {
+            box-shadow: 0 0 0 2px #000000, 0 0 0 4px #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-list {
+            background: transparent;
+        }
+
+        .is-high-contrast .okp-up-next-list row {
+            background: transparent;
+        }
+
+        .is-high-contrast .okp-panel-heading {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-list row.okp-panel-empty-row {
+            background: #000000;
+            border: 1px dashed #ffffff;
+        }
+
+        .is-high-contrast .okp-panel-empty {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-panel-caption {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-row {
+            border: 1px solid transparent;
+            background: transparent;
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-chapter-current-rail {
+            background: #ffffff;
+        }
+
+        .is-high-contrast .okp-chapter-thumb {
+            background: #000000;
+            border: 1px solid #ffffff;
+        }
+
+        .is-high-contrast .okp-chapter-thumb.is-pending {
+            background: #000000;
+            border-color: #ffffff;
+        }
+
+        .is-high-contrast .okp-chapter-thumb-placeholder {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-bookmark-row .okp-bookmark-icon {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-list row.okp-interval-row {
+            background: #000000;
+            border-color: #ffffff;
+        }
+
+        .is-high-contrast .okp-interval-row .okp-interval-icon {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-interval-row .okp-up-next-marker {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-list row.okp-detect-row {
+            background: #000000;
+            border-color: #ffffff;
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-list row.okp-detect-row:hover {
+            background: #000000;
+            border-color: #ffffff;
+            color: #ffffff;
+            box-shadow: inset 0 0 0 1px #ffffff;
+        }
+
+        .is-high-contrast .okp-detect-row .okp-detect-icon {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-detect-subtitle {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-detect-status-row {
+            background: #000000;
+            border: 1px dashed #ffffff;
+        }
+
+        .is-high-contrast .okp-detect-status-icon {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-detect-status {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-list row.okp-interval-row:focus-visible,
+        .is-high-contrast .okp-up-next-list row.okp-detect-row:focus-visible {
+            box-shadow: 0 0 0 2px #000000, 0 0 0 4px #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-list row.okp-add-bookmark-row {
+            background: #ffffff;
+            border-color: #ffffff;
+            color: #000000;
+            box-shadow: none;
+        }
+
+        .is-high-contrast .okp-up-next-list row.okp-add-bookmark-row:hover {
+            background: #ffffff;
+            border-color: #ffffff;
+            color: #000000;
+            box-shadow: inset 0 0 0 1px #ffffff;
+        }
+
+        .is-high-contrast .okp-add-bookmark-row .okp-add-bookmark-icon {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-list row.okp-add-files-row {
+            background: #000000;
+            border-color: #ffffff;
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-list row.okp-add-files-row:hover {
+            background: #000000;
+            border-color: #ffffff;
+            color: #ffffff;
+            box-shadow: inset 0 0 0 1px #ffffff;
+        }
+
+        .is-high-contrast .okp-add-files-row .okp-add-files-icon {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-list row.okp-now-playing-pinned-row {
+            background: #000000;
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-now-playing-thumb {
+            background: #ffffff;
+            color: #000000;
+        }
+
+        .is-high-contrast .okp-now-playing-title {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-now-playing-state {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-row.is-current .okp-chapter-thumb {
+            border-color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-row:hover {
+            background: #000000;
+            box-shadow: inset 0 0 0 1px #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-row.is-current {
+            background: #ffffff;
+            border-color: #ffffff;
+            color: #000000;
+        }
+
+        .is-high-contrast .okp-up-next-row.is-behind {
+            background: transparent;
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-row.is-behind:hover {
+            background: #000000;
+            color: #ffffff;
+            box-shadow: inset 0 0 0 1px #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-row.is-drop-target {
+            background: #000000;
+            border-color: #ffffff;
+            box-shadow: inset 0 0 0 1px #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-drag-handle {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-row:hover .okp-up-next-drag-handle,
+        .is-high-contrast .okp-up-next-row.is-drop-target .okp-up-next-drag-handle {
+            color: #ffffff;
+            box-shadow: inset 0 0 0 1px #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-index {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-watched-icon {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-source-icon {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-row.is-current .okp-up-next-source-icon {
+            color: #000000;
+        }
+
+        .is-high-contrast .okp-now-badge {
+            background: #000000;
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-next-badge {
+            background: #000000;
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-marker {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-row.is-current .okp-up-next-marker {
+            color: #000000;
+        }
+
+        .is-high-contrast .okp-up-next-file {
+            color: #ffffff;
+        }
+
+        .is-high-contrast menubutton.okp-up-next-actions-menu > button {
+            border: none;
+            background: transparent;
+            color: #ffffff;
+            box-shadow: none;
+        }
+
+        .is-high-contrast menubutton.okp-up-next-actions-menu > button:hover {
+            background: #000000;
+            color: #ffffff;
+            box-shadow: inset 0 0 0 1px #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-actions-popover {
+            background: #000000;
+        }
+
+        .is-high-contrast button.okp-up-next-menu-action {
+            border: none;
+            background: transparent;
+            color: #ffffff;
+            box-shadow: none;
+        }
+
+        .is-high-contrast button.okp-up-next-menu-action:hover {
+            background: #000000;
+            box-shadow: inset 0 0 0 1px #ffffff;
+        }
+
+        .is-high-contrast button.okp-up-next-action-button {
+            border: none;
+            background: transparent;
+            box-shadow: none;
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-up-next-action-button:hover {
+            background: #000000;
+            color: #ffffff;
+            box-shadow: inset 0 0 0 1px #ffffff;
+        }
+
+        .is-high-contrast button.okp-up-next-action-button:disabled {
+            color: #ffffff;
+        }
+
+        .okp-up-next-panel.is-high-contrast scrolledwindow {
+            background: transparent;
+        }
+
+        .okp-up-next-panel.is-high-contrast scrollbar,
+        .okp-up-next-panel.is-high-contrast scrollbar trough {
+            background: transparent;
+            border: none;
+        }
+
+        .okp-up-next-panel.is-high-contrast scrollbar slider {
+            background: #ffffff;
+        }
+
+        .is-high-contrast .okp-track-popover-content {
+            background: #000000;
+            color: #ffffff;
+        }
+
+        popover.okp-track-popover.is-high-contrast {
+            background: transparent;
+            border: none;
+            box-shadow: none;
+        }
+
+        popover.okp-track-popover.is-high-contrast > contents,
+        popover.okp-track-popover.is-high-contrast contents {
+            background: #000000;
+            border: 1px solid #ffffff;
+            box-shadow: none;
+        }
+
+        popover.okp-track-popover.is-high-contrast arrow {
+            background: transparent;
+            border: none;
+            box-shadow: none;
+        }
+
+        /* Inverted surfaces (the current row, the selected tab or track, the
+           add-bookmark pill, the now-playing thumb) paint white, so every label
+           and icon inside them goes black, whatever class-level rule would
+           otherwise keep it white. */
+        .is-high-contrast .okp-up-next-row.is-current label,
+        .is-high-contrast .okp-up-next-row.is-current image,
+        .is-high-contrast .okp-up-next-list row.okp-add-bookmark-row label,
+        .is-high-contrast .okp-up-next-list row.okp-add-bookmark-row image,
+        .is-high-contrast .okp-up-next-list row.okp-add-bookmark-row:hover label,
+        .is-high-contrast .okp-up-next-list row.okp-add-bookmark-row:hover image,
+        .is-high-contrast button.okp-side-panel-tab.is-selected label,
+        .is-high-contrast .okp-now-playing-thumb image {
+            color: #000000;
+        }
+
+        .is-high-contrast .okp-up-next-row.is-current .okp-chapter-thumb,
+        .is-high-contrast .okp-up-next-row.is-current .okp-chapter-current-rail {
+            background: #000000;
+            border-color: #000000;
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-up-next-row.is-current .okp-chapter-thumb image {
+            color: #ffffff;
+        }
+
         .okp-command-surface {
             padding: 6px;
             background: @okp_light_card;
@@ -3725,6 +4129,160 @@ pub(crate) const OKP_STYLESHEET: &str = "
             color: @okp_snow_faint;
         }
 
+
+        /* High contrast for the track popover contents, after the dark rules
+           for the same reason. */
+        .is-high-contrast .okp-track-popover-scroll {
+            background: #000000;
+        }
+
+        .is-high-contrast .okp-track-popover-title {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-track-group-title {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-track-subgroup-title {
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-track-row {
+            background: transparent;
+            border: 1px solid #ffffff;
+            box-shadow: none;
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-track-row:hover {
+            background: #000000;
+            color: #ffffff;
+            box-shadow: inset 0 0 0 1px #ffffff;
+        }
+
+        .is-high-contrast button.okp-track-row:active {
+            background: #000000;
+        }
+
+        .is-high-contrast button.okp-track-row.is-selected {
+            background: #ffffff;
+            border-color: #ffffff;
+            color: #000000;
+        }
+
+        .is-high-contrast .okp-audio-track-name {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-audio-track-detail {
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-track-row:disabled {
+            background: transparent;
+            border-color: #ffffff;
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-track-row:focus-visible {
+            box-shadow: 0 0 0 2px #000000, 0 0 0 4px #ffffff;
+        }
+
+        .is-high-contrast button.okp-scribe-row {
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-scribe-row:disabled {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-scribe-spinner {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-subtitle-action-badge {
+            background: #000000;
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-scribe-row .okp-subtitle-action-badge {
+            background: #000000;
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-online-subtitle-row:disabled {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-track-empty {
+            border: 1px solid #ffffff;
+            background: transparent;
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-track-divider {
+            background: #000000;
+        }
+
+        .is-high-contrast .okp-quick-delay-label {
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-quick-delay-value {
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-quick-delay-button {
+            border: 1px solid #ffffff;
+            background: #000000;
+            box-shadow: none;
+        }
+
+        .is-high-contrast button.okp-quick-delay-button:hover {
+            background: #000000;
+            box-shadow: inset 0 0 0 1px #ffffff;
+        }
+
+        .is-high-contrast button.okp-quick-delay-button:focus-visible {
+            box-shadow: 0 0 0 2px #000000, 0 0 0 4px #ffffff;
+        }
+
+        .is-high-contrast .okp-subtitle-preset-status {
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-quick-style-button {
+            border: 1px solid #ffffff;
+            background: #000000;
+            box-shadow: none;
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-quick-style-button:hover {
+            background: #000000;
+            box-shadow: inset 0 0 0 1px #ffffff;
+        }
+
+        .is-high-contrast button.okp-quick-style-button:disabled {
+            background: #000000;
+            color: #ffffff;
+        }
+
+        .is-high-contrast .okp-quick-preference-footer {
+            border-top: 1px solid #ffffff;
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-track-row.is-selected label,
+        .is-high-contrast button.okp-track-row.is-selected image,
+        .is-high-contrast button.okp-audio-track-row.is-selected label,
+        .is-high-contrast button.okp-track-row.is-selected .okp-track-check,
+        .is-high-contrast button.okp-track-row.is-selected .okp-track-row-label,
+        .is-high-contrast button.okp-audio-track-row.is-selected .okp-audio-track-name,
+        .is-high-contrast button.okp-audio-track-row.is-selected .okp-audio-track-detail {
+            color: #000000;
+        }
 
         .okp-settings-audio-delay-row {
             margin: 0;
@@ -5835,6 +6393,28 @@ mod tests {
             .contains("background: @okp_dark_card;")
         );
         assert!(rule_body(".is-dark button.okp-track-row.is-selected").contains("@okp_accent"));
+        for selector in [
+            ".okp-up-next-panel.is-high-contrast",
+            "popover.okp-track-popover.is-high-contrast > contents,\n        popover.okp-track-popover.is-high-contrast contents",
+            ".is-high-contrast .okp-track-popover-content",
+        ] {
+            let body = rule_body(selector);
+            assert!(
+                body.contains("background: #000000;") && body.contains("#ffffff"),
+                "{selector} must be black on white hairlines, got {body}"
+            );
+        }
+        assert!(
+            rule_body(".is-high-contrast .okp-up-next-row.is-current")
+                .contains("background: #ffffff;")
+        );
+        // An inverted row paints white, so what it contains has to go black.
+        assert!(
+            rule_body(
+                ".is-high-contrast .okp-up-next-row.is-current label,\n        .is-high-contrast .okp-up-next-row.is-current image,\n        .is-high-contrast .okp-up-next-list row.okp-add-bookmark-row label,\n        .is-high-contrast .okp-up-next-list row.okp-add-bookmark-row image,\n        .is-high-contrast .okp-up-next-list row.okp-add-bookmark-row:hover label,\n        .is-high-contrast .okp-up-next-list row.okp-add-bookmark-row:hover image,\n        .is-high-contrast button.okp-side-panel-tab.is-selected label,\n        .is-high-contrast .okp-now-playing-thumb image"
+            )
+            .contains("color: #000000;")
+        );
         assert!(
             rule_body(".is-high-contrast .okp-history-bucket-card")
                 .contains("border: 1px solid #ffffff;")

@@ -8234,37 +8234,52 @@ fn a_themed_surface_rereads_the_scheme_every_time_it_is_shown() {
         }
         panic!("{what} never happened");
     }
+    fn reshow(panel: &gtk::Box) {
+        panel.set_visible(false);
+        pump_until("the panel unmapped", || !panel.is_mapped());
+        panel.set_visible(true);
+        pump_until("the panel mapped again", || panel.is_mapped());
+    }
     on_gtk_thread(|| {
         // The scheme the desktop reports, flipped behind the panel's back.
-        let dark = Rc::new(Cell::new(true));
+        let reported = Rc::new(Cell::new(IdleScheme {
+            dark: true,
+            high_contrast: false,
+        }));
         let window = gtk::Window::new();
         let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
         window.set_child(Some(&panel));
-        let reported = Rc::clone(&dark);
-        follow_idle_scheme(&panel, move || reported.get());
+        let scheme = Rc::clone(&reported);
+        follow_idle_scheme(&panel, move || scheme.get());
         assert!(
             panel.has_css_class("is-dark"),
             "the scheme is applied when built"
         );
+        assert!(!panel.has_css_class("is-high-contrast"));
 
         window.present();
         pump_until("the panel mapped", || panel.is_mapped());
         // The preference changes while the panel is hidden; the next show takes it.
-        dark.set(false);
-        panel.set_visible(false);
-        pump_until("the panel unmapped", || !panel.is_mapped());
-        panel.set_visible(true);
-        pump_until("the panel mapped again", || panel.is_mapped());
+        reported.set(IdleScheme {
+            dark: false,
+            high_contrast: true,
+        });
+        reshow(&panel);
         assert!(
             !panel.has_css_class("is-dark"),
             "a re-shown surface re-reads the scheme instead of keeping the one it was built with"
         );
-        dark.set(true);
-        panel.set_visible(false);
-        pump_until("the panel unmapped", || !panel.is_mapped());
-        panel.set_visible(true);
-        pump_until("the panel mapped again", || panel.is_mapped());
+        assert!(
+            panel.has_css_class("is-high-contrast"),
+            "high contrast follows the same way"
+        );
+        reported.set(IdleScheme {
+            dark: true,
+            high_contrast: false,
+        });
+        reshow(&panel);
         assert!(panel.has_css_class("is-dark"));
+        assert!(!panel.has_css_class("is-high-contrast"));
         window.destroy();
     });
 }
