@@ -92,10 +92,55 @@ pub fn select_deb_update_from_feed(feed: DebFeed, current_version: &str) -> Opti
     })
 }
 
-/// Orders Linux package versions by their numeric runs (`…alpha.10` after
-/// `…alpha.9`), falling back to a lexicographic tiebreak for versions whose
-/// numbers all match.
+/// Orders package versions with semantic-versioning precedence.
+///
+/// The numeric core (`0.11.0`, or the four-part `0.11.0.15` a Windows
+/// assembly reports) compares run by run, so `…alpha.10` sorts after
+/// `…alpha.9`. A version with no prerelease tail outranks every prerelease of
+/// the same core — `1.0.0` is newer than `1.0.0-beta.2`, not older because of
+/// the extra number. Two prerelease tails compare identifier by identifier,
+/// stage before counter: `beta.1` after `beta.0.109`, and `beta.2` before the
+/// `beta.2.41` candidates cut from it. Build metadata after `+` carries no
+/// precedence, so a checkout stamped `0.1.0-linux-alpha.112+7.gabc1234` is
+/// neither newer nor older than the `0.1.0-linux-alpha.112` release. Versions
+/// that tie on every count fall back to a lexicographic tiebreak so the order
+/// stays total.
 pub fn compare_versions(left: &str, right: &str) -> Ordering {
+    let left = strip_build_metadata(left);
+    let right = strip_build_metadata(right);
+    let (left_core, left_pre) = split_prerelease(left);
+    let (right_core, right_pre) = split_prerelease(right);
+    compare_numeric_runs(left_core, right_core)
+        .then_with(|| match (left_pre, right_pre) {
+            (None, None) => Ordering::Equal,
+            // A release outranks any prerelease of the same core.
+            (None, Some(_)) => Ordering::Greater,
+            (Some(_), None) => Ordering::Less,
+            (Some(left_pre), Some(right_pre)) => compare_prerelease(left_pre, right_pre),
+        })
+        .then_with(|| left.cmp(right))
+}
+
+/// Splits `1.0.0-beta.1` into its numeric core and its prerelease tail. Build
+/// metadata must already be gone: it may itself contain a hyphen.
+pub(crate) fn split_prerelease(version: &str) -> (&str, Option<&str>) {
+    match version.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (version, None),
+    }
+}
+
+/// Drops the `+7.gabc1234` build metadata a checkout build carries; semantic
+/// versioning gives it no precedence.
+pub(crate) fn strip_build_metadata(version: &str) -> &str {
+    version
+        .split_once('+')
+        .map_or(version, |(before, _)| before)
+}
+
+/// Orders two version cores by their numeric runs, a missing run counting as
+/// zero.
+fn compare_numeric_runs(left: &str, right: &str) -> Ordering {
     let left_key = version_sort_key(left);
     let right_key = version_sort_key(right);
     let max_len = left_key.len().max(right_key.len());
@@ -107,7 +152,39 @@ pub fn compare_versions(left: &str, right: &str) -> Ordering {
             order => return order,
         }
     }
-    left.cmp(right)
+    Ordering::Equal
+}
+
+/// Orders two prerelease tails identifier by identifier, so the *stage* is
+/// compared before its counter: `alpha.109` precedes `beta.1`, which whole-tail
+/// numeric-run comparison gets backwards by looking at 109 against 1 first.
+///
+/// Within an identifier, two numbers compare numerically (`alpha.9` before
+/// `alpha.10`) and anything else compares lexically; a number sorts before a
+/// word, and a tail that is a prefix of another sorts before it (`beta.2`
+/// before the `beta.2.41` candidate builds cut from it).
+fn compare_prerelease(left: &str, right: &str) -> Ordering {
+    let mut left_parts = left.split('.');
+    let mut right_parts = right.split('.');
+    loop {
+        match (left_parts.next(), right_parts.next()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(left_part), Some(right_part)) => {
+                let order = match (left_part.parse::<u64>(), right_part.parse::<u64>()) {
+                    (Ok(left_number), Ok(right_number)) => left_number.cmp(&right_number),
+                    // A numeric identifier ranks below an alphanumeric one.
+                    (Ok(_), Err(_)) => Ordering::Less,
+                    (Err(_), Ok(_)) => Ordering::Greater,
+                    (Err(_), Err(_)) => left_part.cmp(right_part),
+                };
+                if order != Ordering::Equal {
+                    return order;
+                }
+            }
+        }
+    }
 }
 
 /// User-visible lifecycle for one discovered update. The shell retains the
@@ -292,6 +369,91 @@ mod tests {
         assert_eq!(
             compare_versions("0.1.0-linux-alpha.44", "0.1.0-linux-alpha.45"),
             Ordering::Less
+        );
+    }
+
+    #[test]
+    fn a_release_outranks_the_prereleases_that_led_to_it() {
+        assert_eq!(compare_versions("1.0.0-beta.2", "1.0.0"), Ordering::Less);
+        assert_eq!(compare_versions("1.0.0", "1.0.0-beta.2"), Ordering::Greater);
+        assert_eq!(
+            compare_versions("0.11.0-beta.0.208", "0.11.0"),
+            Ordering::Less
+        );
+        // A higher core still wins regardless of either side's tail.
+        assert_eq!(compare_versions("1.0.1-beta.1", "1.0.0"), Ordering::Greater);
+        assert_eq!(
+            compare_versions("1.0.0", "0.11.0-beta.2"),
+            Ordering::Greater
+        );
+
+        // The pacman path: a checkout on a prerelease sees the stable release
+        // the public feed advanced to, instead of reporting itself up to date.
+        let update = select_deb_update_from_feed(deb_feed("1.0.0", None), "1.0.0-beta.2")
+            .expect("the stable release is newer than the beta that led to it");
+        assert_eq!(update.version, "1.0.0");
+        assert!(
+            select_deb_update_from_feed(deb_feed("1.0.0-beta.2", None), "1.0.0").is_none(),
+            "a release never rolls back onto its own prerelease"
+        );
+    }
+
+    #[test]
+    fn prerelease_tails_compare_stage_before_counter() {
+        assert_eq!(
+            compare_versions("0.11.0-beta.1", "0.11.0-beta.0.109"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_versions("0.11.0-beta.1", "0.11.0-alpha.109"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_versions("0.11.0-beta.2.41", "0.11.0-beta.2"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_versions("1.0.0-alpha.1", "1.0.0-alpha.beta"),
+            Ordering::Less,
+            "a numeric identifier ranks below an alphanumeric one"
+        );
+        assert_eq!(
+            compare_versions("0.1.0-linux-alpha.112", "0.1.0-linux-alpha.9"),
+            Ordering::Greater,
+            "a hyphenated stage name is one identifier, its counter another"
+        );
+    }
+
+    #[test]
+    fn build_metadata_carries_no_precedence() {
+        assert_eq!(
+            compare_versions("0.1.0-linux-alpha.112+7.gabc1234", "0.1.0-linux-alpha.112"),
+            Ordering::Equal
+        );
+        assert_eq!(
+            compare_versions("0.1.0-linux-alpha.113", "0.1.0-linux-alpha.112+7.gabc1234"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_versions("1.0.0+7.gabc1234", "1.0.0-beta.2"),
+            Ordering::Greater,
+            "metadata on a release does not turn it into a prerelease"
+        );
+        // A checkout seven commits past the alpha.112 tag is not offered the
+        // alpha.112 package it already exceeds, and is offered alpha.113.
+        assert!(
+            select_deb_update_from_feed(
+                deb_feed("0.1.0-linux-alpha.112", None),
+                "0.1.0-linux-alpha.112+7.gabc1234"
+            )
+            .is_none()
+        );
+        assert!(
+            select_deb_update_from_feed(
+                deb_feed("0.1.0-linux-alpha.113", None),
+                "0.1.0-linux-alpha.112+7.gabc1234"
+            )
+            .is_some()
         );
     }
 

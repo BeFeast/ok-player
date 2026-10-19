@@ -183,8 +183,10 @@ jobs:
       # API as well as in the UI, so a reviewer (or a session without access to
       # the log store) sees which test failed, not just that cargo exited 101.
       - name: Name the failing tests in the check's annotations
-        if: failure() && hashFiles(format('{0}/cargo-test.log', runner.temp)) != ''
+        if: failure()
         run: |
+          # hashFiles() only sees the workspace, so the log's presence is checked here.
+          [ -f "$RUNNER_TEMP/cargo-test.log" ] || exit 0
           grep -E '^test .* FAILED$|^---- .* stdout ----$|panicked at ' "$RUNNER_TEMP/cargo-test.log" \
             | head -40 | sed 's/^/::error title=cargo test::/' || true
 

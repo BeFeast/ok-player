@@ -3502,6 +3502,11 @@ pub(crate) const OKP_STYLESHEET: &str = "
             box-shadow: inset 0 0 0 2px #000000;
         }
 
+        .is-high-contrast .okp-up-next-row.is-current.is-drop-target .okp-up-next-drag-handle,
+        .is-high-contrast .okp-up-next-row.is-current.is-drop-target .okp-up-next-drag-handle image {
+            color: #000000;
+        }
+
         .okp-command-surface {
             padding: 6px;
             background: @okp_light_card;
@@ -6465,6 +6470,13 @@ mod tests {
             rule_body(".is-high-contrast .okp-up-next-row.is-current.is-drop-target")
                 .contains("background: #ffffff;"),
             "a drag over the current row keeps it white under its black contents"
+        );
+        assert!(
+            rule_body(
+                ".is-high-contrast .okp-up-next-row.is-current.is-drop-target .okp-up-next-drag-handle,\n        .is-high-contrast .okp-up-next-row.is-current.is-drop-target .okp-up-next-drag-handle image"
+            )
+            .contains("color: #000000;"),
+            "and its grip goes black with the rest of its contents"
         );
         // An inverted row paints white, so what it contains has to go black.
         assert!(

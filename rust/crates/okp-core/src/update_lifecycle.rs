@@ -41,7 +41,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt;
 
-use crate::update_selection::compare_versions;
+use crate::update_selection::{compare_versions, split_prerelease, strip_build_metadata};
 
 /// What the Updates surface says while a check is in flight. A refresh over a
 /// standing offer appends it to that offer's own message instead of replacing
@@ -594,72 +594,6 @@ pub fn detect_install_kind(evidence: &InstallEvidence) -> InstallKind {
     InstallKind::DevBuild
 }
 
-/// Orders two build versions for the restart check, where a release must
-/// outrank the prereleases that led to it.
-///
-/// [`compare_versions`] compares numeric runs, which is right *within* a lane —
-/// `alpha.109` after `alpha.108` — but reads `1.0.0` as older than
-/// `1.0.0-beta.1`, because the missing fourth run defaults to zero. A
-/// prerelease-to-stable upgrade would then look like a failed restart. So the
-/// numeric core is compared first, a version with no prerelease tail wins a tie
-/// against one that has it, and two prereleases of the same core fall back to
-/// the natural comparison.
-fn compare_build_order(left: &str, right: &str) -> Ordering {
-    let (left_core, left_pre) = split_prerelease(left);
-    let (right_core, right_pre) = split_prerelease(right);
-    match compare_versions(left_core, right_core) {
-        Ordering::Equal => {}
-        order => return order,
-    }
-    match (left_pre, right_pre) {
-        (None, None) => Ordering::Equal,
-        // A release outranks any prerelease of the same core.
-        (None, Some(_)) => Ordering::Greater,
-        (Some(_), None) => Ordering::Less,
-        (Some(left_pre), Some(right_pre)) => compare_prerelease(left_pre, right_pre),
-    }
-}
-
-/// Orders two prerelease tails identifier by identifier, so the *stage* is
-/// compared before its counter: `alpha.109` precedes `beta.1`, which whole-tail
-/// numeric-run comparison gets backwards by looking at 109 against 1 first.
-///
-/// Within an identifier, two numbers compare numerically (`alpha.9` before
-/// `alpha.10`) and anything else compares lexically; a number sorts before a
-/// word, and a tail that is a prefix of another sorts before it (`beta.2`
-/// before the `beta.2.41` candidate builds cut from it).
-fn compare_prerelease(left: &str, right: &str) -> Ordering {
-    let mut left_parts = left.split('.');
-    let mut right_parts = right.split('.');
-    loop {
-        match (left_parts.next(), right_parts.next()) {
-            (None, None) => return Ordering::Equal,
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (Some(left_part), Some(right_part)) => {
-                let order = match (left_part.parse::<u64>(), right_part.parse::<u64>()) {
-                    (Ok(left_number), Ok(right_number)) => left_number.cmp(&right_number),
-                    // A numeric identifier ranks below an alphanumeric one.
-                    (Ok(_), Err(_)) => Ordering::Less,
-                    (Err(_), Ok(_)) => Ordering::Greater,
-                    (Err(_), Err(_)) => left_part.cmp(right_part),
-                };
-                if order != Ordering::Equal {
-                    return order;
-                }
-            }
-        }
-    }
-}
-
-/// Splits `1.0.0-beta.1` into its numeric core and its prerelease tail.
-fn split_prerelease(version: &str) -> (&str, Option<&str>) {
-    match version.split_once('-') {
-        Some((core, pre)) => (core, Some(pre)),
-        None => (version, None),
-    }
-}
-
 /// How completely a shell was able to state a version (#694).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum VersionFidelity {
@@ -763,16 +697,16 @@ impl fmt::Display for ReportedVersion {
 ///   release *newer* than the pending candidate, and the restart check turns a
 ///   perfectly good upgrade into a reported downgrade.
 ///
-/// Two complete versions are always decided, by [`compare_build_order`].
+/// Two complete versions are always decided, by [`compare_versions`].
 pub fn compare_reported_build_order(
     left: &ReportedVersion,
     right: &ReportedVersion,
 ) -> Option<Ordering> {
     if left.is_complete() && right.is_complete() {
-        return Some(compare_build_order(&left.text, &right.text));
+        return Some(compare_versions(&left.text, &right.text));
     }
-    let (left_core, _) = split_prerelease(&left.text);
-    let (right_core, _) = split_prerelease(&right.text);
+    let (left_core, _) = split_prerelease(strip_build_metadata(&left.text));
+    let (right_core, _) = split_prerelease(strip_build_metadata(&right.text));
     match compare_versions(left_core, right_core) {
         // The cores tie, so the answer lives entirely in a tail at least one
         // side does not have.
