@@ -71,7 +71,11 @@ _okp_source="$(git rev-parse --show-toplevel)" makepkg -si
 ```
 
 The working tree is cloned, so commit what you want built, on a branch: a
-detached HEAD has nothing for the clone to check out. `makepkg` writes its
+detached HEAD has nothing for the clone to check out. The package is versioned
+by what it is - the nearest `linux-v*` tag and the commits since it, so
+`0.1.0linuxalpha.112.r7.gabc1234` to pacman and `0.1.0-linux-alpha.112+7.gabc1234`
+in About - and the updater compares that, not the pinned release; a checkout
+exactly at a release tag is that release. `makepkg` writes its
 mirror, `src/`, `pkg/` and the finished `.pkg.tar.zst` next to the PKGBUILD
 unless `SRCDEST`/`BUILDDIR`/`PKGDEST` say otherwise (they are ignored by git).
 The PKGBUILD mirrors the Fedora spec: `/usr/bin/ok-player`, the desktop entry,

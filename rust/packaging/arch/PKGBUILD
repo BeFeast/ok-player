@@ -54,15 +54,64 @@ options=(!lto)
 if [[ -n ${_okp_source:-} ]]; then
   _srcname="$pkgname-checkout"
   source=("$_srcname::git+file://${_okp_source}")
+  # A checkout is stamped with what it is, not with the pinned release: the
+  # nearest linux-v* tag and the commits since it (0.1.0linuxalpha.112.r7.gabc1234
+  # to pacman, 0.1.0-linux-alpha.112+7.gabc1234 in the app), so About reports
+  # and the updater compares the version actually built. A checkout exactly at
+  # a release tag is that release.
+  pkgver() {
+    cd "$_srcname"
+    _okp_checkout_pkgver
+  }
 else
   _srcname="$pkgname"
   source=("$_srcname::git+${url}.git#tag=linux-v${_upstream}")
 fi
 sha256sums=('SKIP')
 
+# The build version of the checkout in the current directory:
+# <nearest linux-v tag>[+<commits since it>.g<commit>].
+_okp_build_version() {
+  local described
+  if ! described=$(git describe --tags --long --match 'linux-v*' 2>/dev/null); then
+    printf 'ok-player: no linux-v* tag is reachable from this checkout; fetch the tags before packaging it\n' >&2
+    return 1
+  fi
+  local sha=${described##*-g}
+  described=${described%-g*}
+  local count=${described##*-}
+  local base=${described%-*}
+  base=${base#linux-v}
+  if (( count == 0 )); then
+    printf '%s\n' "$base"
+  else
+    printf '%s+%s.g%s\n' "$base" "$count" "$sha"
+  fi
+}
+
+# The same version as pacman spells it: no '-', and '+N.gSHA' as '.rN.gSHA'.
+_okp_checkout_pkgver() {
+  local build
+  build=$(_okp_build_version) || return 1
+  local base=${build%%+*}
+  local rest=${build#"$base"}
+  base=${base//-/}
+  if [[ -n $rest ]]; then
+    rest=${rest#+}
+    printf '%s.r%s.g%s\n' "$base" "${rest%%.*}" "${rest#*.g}"
+  else
+    printf '%s\n' "$base"
+  fi
+}
+
 _build_env() {
   export CARGO_HOME="$srcdir/cargo-home"
-  export OKP_BUILD_VERSION="$_upstream"
+  if [[ -n ${_okp_source:-} ]]; then
+    OKP_BUILD_VERSION="$(cd "$srcdir/$_srcname" && _okp_build_version)" || return 1
+    export OKP_BUILD_VERSION
+  else
+    export OKP_BUILD_VERSION="$_upstream"
+  fi
   export OKP_BUILD_SHA="$(git -C "$srcdir/$_srcname" rev-parse HEAD)"
   export OKP_PACKAGE_KIND=arch
   export OKP_REQUIRE_SYSTEM_MPV=1

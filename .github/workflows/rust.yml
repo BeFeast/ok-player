@@ -127,6 +127,12 @@ jobs:
       - name: The licence-document gate goes red when a lane drops one
         run: ./scripts/tests/packaging-licenses.Tests.sh
 
+      # The Arch recipe's checkout mode is the one path that stamps a version
+      # it has to derive; this runs the recipe's functions against a scratch
+      # repository the way makepkg would, including the tag mode staying static.
+      - name: The Arch recipe stamps a checkout with what it builds
+        run: ./scripts/tests/arch-pkgbuild.Tests.sh
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
