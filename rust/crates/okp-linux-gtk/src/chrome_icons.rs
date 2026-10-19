@@ -203,6 +203,7 @@ pub(crate) fn chrome_search_entry() -> gtk::SearchEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gtk::{gdk_pixbuf, glib};
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
@@ -405,22 +406,94 @@ mod tests {
         }
     }
 
-    /// gdk-pixbuf recognises an SVG by finding `<svg` within the first 256
-    /// bytes (the shared-mime-info magic it sniffs with looks that far and no
-    /// further). A provenance comment ahead of the root element pushed the tag
-    /// past that window once, and every chrome icon came up as GTK's
-    /// image-missing marker with "Unrecognized image file format" in the log.
+    /// The bytes of one shipped icon, as the binary carries them.
+    fn shipped_bytes(name: &str) -> glib::Bytes {
+        gio::functions::resources_lookup_data(
+            &format!("/com/befeast/okplayer/icons/scalable/actions/{name}"),
+            gio::ResourceLookupFlags::NONE,
+        )
+        .unwrap_or_else(|err| panic!("{name} is not in the binary: {err}"))
+    }
+
+    /// Decodes icon bytes the way GTK's symbolic icon loader does - through
+    /// `gdk_pixbuf_new_from_stream`, with no format hint. That loader sniffs
+    /// the format from the first 256 bytes it is handed and no further (the
+    /// file loader looks 4096 bytes in, so `Pixbuf::from_file` would not catch
+    /// what GTK rejects).
+    fn decode_as_gtk_does(bytes: &glib::Bytes) -> Result<gdk_pixbuf::Pixbuf, glib::Error> {
+        let stream = gio::MemoryInputStream::from_bytes(bytes);
+        gdk_pixbuf::Pixbuf::from_stream(&stream, gio::Cancellable::NONE)
+    }
+
+    fn painted_pixels(pixbuf: &gdk_pixbuf::Pixbuf) -> usize {
+        let bytes = pixbuf.read_pixel_bytes();
+        let channels = pixbuf.n_channels() as usize;
+        let stride = pixbuf.rowstride() as usize;
+        let width = pixbuf.width() as usize;
+        (0..pixbuf.height() as usize)
+            .map(|y| {
+                bytes[y * stride..y * stride + width * channels]
+                    .chunks(channels)
+                    .filter(|pixel| channels < 4 || pixel[3] > 0)
+                    .count()
+            })
+            .sum()
+    }
+
+    /// Every icon the binary ships decodes along the path GTK loads it by, and
+    /// paints something. The first cut of this set put its provenance comment
+    /// ahead of the root element, which pushed `<svg` past the loader's sniff
+    /// window: every chrome icon came up as GTK's image-missing marker with
+    /// "Unrecognized image file format" in the log, and a byte search for
+    /// `<svg` is not what decides that - the loader is.
     #[test]
-    fn shipped_icons_open_their_svg_element_inside_the_sniff_window() {
-        for path in icon_files() {
-            let svg = std::fs::read(&path).expect("an icon must be readable");
-            let window = &svg[..svg.len().min(256)];
+    fn every_shipped_icon_decodes_through_gtks_loader_and_paints() {
+        for name in shipped_files() {
+            let pixbuf = decode_as_gtk_does(&shipped_bytes(&name))
+                .unwrap_or_else(|err| panic!("{name} does not decode the way GTK loads it: {err}"));
             assert!(
-                window.windows(4).any(|bytes| bytes == b"<svg"),
-                "{} does not open <svg> within its first 256 bytes",
-                path.display()
+                pixbuf.width() > 0 && pixbuf.height() > 0,
+                "{name} decodes to an empty image"
+            );
+            assert!(
+                painted_pixels(&pixbuf) > 0,
+                "{name} decodes but paints nothing"
             );
         }
+    }
+
+    /// Pins the failure the test above guards against, so the guard cannot go
+    /// vacuous: a shipped icon with a comment ahead of its root element - the
+    /// first cut's layout, with the comment made longer than any sniff buffer
+    /// gdk-pixbuf has (4 KiB for files, less for streams), so the pin does not
+    /// depend on the exact window - is refused by that same loader as an
+    /// unknown format, while the same comment inside the element is taken.
+    #[test]
+    fn a_root_element_past_the_sniff_window_is_refused_by_gtks_loader() {
+        let name = shipped_files()
+            .into_iter()
+            .next()
+            .expect("at least one chrome icon ships");
+        let original = shipped_bytes(&name);
+        let comment = format!("<!-- {} -->\n", "provenance ".repeat(400));
+        assert!(comment.len() > 4096);
+
+        let mut ahead = comment.clone().into_bytes();
+        ahead.extend_from_slice(&original);
+        let error = decode_as_gtk_does(&glib::Bytes::from_owned(ahead))
+            .expect_err("a root element past the sniff window must be refused");
+        assert_eq!(
+            error.kind::<gdk_pixbuf::PixbufError>(),
+            Some(gdk_pixbuf::PixbufError::UnknownType),
+            "unexpected refusal: {error}"
+        );
+
+        let text = String::from_utf8(original.to_vec()).expect("icons are UTF-8");
+        let root = text.find("<svg").expect("an icon has a root element");
+        let open_end = root + text[root..].find('>').expect("the root element opens") + 1;
+        let inside = format!("{}{comment}{}", &text[..open_end], &text[open_end..]);
+        decode_as_gtk_does(&glib::Bytes::from_owned(inside.into_bytes()))
+            .expect("the same comment inside the root element decodes");
     }
 
     /// GTK's symbolic recolour rewrites `fill` and leaves `stroke` alone, so a

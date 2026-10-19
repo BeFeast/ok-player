@@ -1,4 +1,5 @@
 use super::*;
+use gtk::gdk_pixbuf;
 use okp_core::history_format::HistoryStateKind;
 use okp_core::recents_shelf::HistoryItem;
 use okp_core::update_lifecycle::VersionClaim;
@@ -445,10 +446,9 @@ fn launcher_identity_resolves_without_replacing_the_about_illustration() {
 #[test]
 fn linux_identity_preserves_launcher_tile_and_separate_about_illustration() {
     let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packaging/linux");
-    let icon = fs::read_to_string(packaging.join("com.befeast.okplayer.svg"))
-        .expect("shared app icon should be readable");
+    let master = packaging.join("com.befeast.okplayer.svg");
+    let icon = fs::read_to_string(&master).expect("shared app icon should be readable");
     assert!(icon.contains("<rect"));
-    assert!(icon.contains("#163065"));
     assert!(icon.contains("cx=\"46\" cy=\"48\" r=\"33\""));
     assert!(icon.contains("x=\"92\" y=\"12\" width=\"15\" height=\"72\" rx=\"4\""));
     assert!(icon.contains("M111 14 L111 82 L161 48 Z"));
@@ -487,12 +487,10 @@ fn linux_identity_preserves_launcher_tile_and_separate_about_illustration() {
             "<circle",
         ),
     ] {
-        let icon = fs::read_to_string(
-            fixed_icons
-                .join(format!("{size}x{size}/apps"))
-                .join("com.befeast.okplayer.svg"),
-        )
-        .expect("fixed-size app icon should be readable");
+        let icon_path = fixed_icons
+            .join(format!("{size}x{size}/apps"))
+            .join("com.befeast.okplayer.svg");
+        let icon = fs::read_to_string(&icon_path).expect("fixed-size app icon should be readable");
         assert!(icon.contains(expected_path), "wrong {size}px icon variant");
         assert!(
             icon.contains(expected_transform),
@@ -504,30 +502,149 @@ fn linux_identity_preserves_launcher_tile_and_separate_about_illustration() {
         );
         assert!(!icon.contains("<text"), "{size}px icon uses a font glyph");
         if size == 16 {
-            assert!(
-                icon.contains("fill=\"#163065\""),
-                "the flat 16px tile is the identity navy"
-            );
+            assert_tile_is_flat_identity_navy(&icon_path, size);
         } else {
-            for stop in ["#163065", "#2563eb", "#39bef9"] {
-                assert!(icon.contains(stop), "{size}px tile lost the {stop} stop");
-            }
-            assert!(
-                icon.contains("x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\""),
-                "{size}px tile gradient is not on the brand's 135-degree axis"
-            );
+            assert_tile_paints_the_brand_gradient_on_the_135_degree_axis(&icon_path, size);
         }
     }
-    assert!(icon_master_gradient_axis_is_135_degrees());
+    assert_tile_paints_the_brand_gradient_on_the_135_degree_axis(&master, 128);
     assert_eq!(ABOUT_FRAME_TICKS.len(), 5);
     assert_eq!(ABOUT_FRAME_TICK_OPACITY, [0.10, 0.18, 0.30, 0.44, 0.62]);
 }
 
-fn icon_master_gradient_axis_is_135_degrees() -> bool {
-    let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packaging/linux");
-    fs::read_to_string(packaging.join("com.befeast.okplayer.svg"))
-        .expect("shared app icon should be readable")
-        .contains("x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"")
+/// The brand gradient as the design states it: the identity navy through the
+/// action blue (at 55%) to the mark's cyan, laid along the 135° axis from the
+/// tile's top-left corner to its bottom-right.
+const TILE_GRADIENT_STOPS: [(f64, [u8; 3]); 3] = [
+    (0.0, [0x16, 0x30, 0x65]),
+    (0.55, [0x25, 0x63, 0xeb]),
+    (1.0, [0x39, 0xbe, 0xf9]),
+];
+
+/// The colour the brand gradient puts at `position` along its axis.
+fn brand_gradient_colour(position: f64) -> [u8; 3] {
+    let position = position.clamp(0.0, 1.0);
+    let (from, to) = TILE_GRADIENT_STOPS
+        .windows(2)
+        .map(|pair| (pair[0], pair[1]))
+        .find(|(from, to)| (from.0..=to.0).contains(&position))
+        .expect("the stops span the whole axis");
+    let mix = (position - from.0) / (to.0 - from.0);
+    std::array::from_fn(|channel| {
+        let start = f64::from(from.1[channel]);
+        let end = f64::from(to.1[channel]);
+        (start + (end - start) * mix).round() as u8
+    })
+}
+
+/// Renders a launcher SVG at `size` through gdk-pixbuf, the way the desktop's
+/// icon theme rasterises it.
+fn render_launcher_svg(path: &Path, size: i32) -> gdk_pixbuf::Pixbuf {
+    gdk_pixbuf::Pixbuf::from_file_at_size(path, size, size)
+        .unwrap_or_else(|err| panic!("{} does not render: {err}", path.display()))
+}
+
+fn rendered_pixel(pixbuf: &gdk_pixbuf::Pixbuf, x: i32, y: i32) -> [u8; 4] {
+    let bytes = pixbuf.read_pixel_bytes();
+    let channels = pixbuf.n_channels() as usize;
+    let offset = y as usize * pixbuf.rowstride() as usize + x as usize * channels;
+    let pixel = &bytes[offset..offset + channels];
+    let alpha = if channels == 4 { pixel[3] } else { 255 };
+    [pixel[0], pixel[1], pixel[2], alpha]
+}
+
+fn channels_within(left: [u8; 3], right: [u8; 3], tolerance: u8) -> bool {
+    left.iter()
+        .zip(right)
+        .all(|(left, right)| left.abs_diff(right) <= tolerance)
+}
+
+fn pixels_where(pixbuf: &gdk_pixbuf::Pixbuf, keep: impl Fn([u8; 4]) -> bool) -> usize {
+    (0..pixbuf.height())
+        .flat_map(|y| (0..pixbuf.width()).map(move |x| (x, y)))
+        .filter(|&(x, y)| keep(rendered_pixel(pixbuf, x, y)))
+        .count()
+}
+
+/// The white mark sits on top of the tile: pixels brighter in red than any
+/// point of the gradient can be (its red never passes `0x39`) can only be the
+/// mark, there are enough of them for the tile's size (at 16px the mark is a
+/// handful of pixels), and the mark's own colour is white.
+fn assert_white_mark_over(tile: &gdk_pixbuf::Pixbuf, path: &Path, size: i32) {
+    let mark = pixels_where(tile, |[r, _, _, a]| a == 255 && r >= 160);
+    let white = pixels_where(tile, |[r, g, b, a]| {
+        a == 255 && r >= 230 && g >= 230 && b >= 230
+    });
+    assert!(
+        mark >= ((size * size) / 160).max(2) as usize && white >= 1,
+        "{} shows no white mark over its tile ({mark} mark pixels, {white} of them white)",
+        path.display()
+    );
+}
+
+/// The four sample points of a rendered tile: its corners, inset past the
+/// rounded corner radius, as `(x, y, position along the 135° axis)`.
+fn tile_corner_samples(size: i32) -> [(i32, i32, f64); 4] {
+    let inset = (f64::from(size) * 0.15).round() as i32;
+    let far = size - 1 - inset;
+    let along_axis = |x: i32, y: i32| {
+        ((f64::from(x) + 0.5) / f64::from(size) + (f64::from(y) + 0.5) / f64::from(size)) / 2.0
+    };
+    [(inset, inset), (far, far), (far, inset), (inset, far)].map(|(x, y)| (x, y, along_axis(x, y)))
+}
+
+/// Renders a launcher tile and reads the brand gradient off its pixels. Each
+/// corner must show the colour the gradient puts at its position along the
+/// 135° axis - the top-left is the navy end, the bottom-right the cyan end -
+/// and the two corners off that axis, top-right and bottom-left, both sit
+/// halfway along it and so must match each other: a gradient on any other axis
+/// paints them apart. The white mark must be on top of it.
+fn assert_tile_paints_the_brand_gradient_on_the_135_degree_axis(path: &Path, size: i32) {
+    let tile = render_launcher_svg(path, size);
+    assert_eq!(
+        (tile.width(), tile.height()),
+        (size, size),
+        "{} renders off its size",
+        path.display()
+    );
+    let corners = tile_corner_samples(size).map(|(x, y, along_axis)| {
+        let [r, g, b, a] = rendered_pixel(&tile, x, y);
+        assert_eq!(a, 255, "{} is see-through at ({x}, {y})", path.display());
+        let expected = brand_gradient_colour(along_axis);
+        assert!(
+            channels_within([r, g, b], expected, 8),
+            "{} paints #{r:02x}{g:02x}{b:02x} at ({x}, {y}); the brand gradient on its 135° axis \
+             puts #{:02x}{:02x}{:02x} there",
+            path.display(),
+            expected[0],
+            expected[1],
+            expected[2],
+        );
+        [r, g, b]
+    });
+    assert!(
+        channels_within(corners[2], corners[3], 3),
+        "{} paints its top-right and bottom-left corners apart, so its gradient is not on the \
+         135° axis",
+        path.display()
+    );
+    assert_white_mark_over(&tile, path, size);
+}
+
+/// The 16px tile is flat identity navy under its white mark: every corner the
+/// same navy, no gradient.
+fn assert_tile_is_flat_identity_navy(path: &Path, size: i32) {
+    let tile = render_launcher_svg(path, size);
+    for (x, y, _) in tile_corner_samples(size) {
+        let [r, g, b, a] = rendered_pixel(&tile, x, y);
+        assert_eq!(a, 255, "{} is see-through at ({x}, {y})", path.display());
+        assert!(
+            channels_within([r, g, b], TILE_GRADIENT_STOPS[0].1, 3),
+            "{} paints #{r:02x}{g:02x}{b:02x} at ({x}, {y}) instead of the identity navy",
+            path.display()
+        );
+    }
+    assert_white_mark_over(&tile, path, size);
 }
 
 #[test]
