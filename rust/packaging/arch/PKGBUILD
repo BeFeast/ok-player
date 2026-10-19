@@ -11,24 +11,28 @@
 # carries OK Player yet. OKP_PACKAGE_KIND=arch stamps the build with the lane it
 # came from; it is recorded in the update log, not consulted.
 #
-# Build a release:   makepkg -si                      (from this directory)
-# Build a checkout:  _okp_source=/path/to/checkout makepkg -si
-#                    (the working tree is cloned as-is; commit what you want
-#                    built, on a branch - a detached HEAD has nothing to clone)
+# What it builds is decided once, below:
+#   makepkg -si                                  the checkout this PKGBUILD sits in
+#   _okp_source=/path/to/checkout makepkg -si    that checkout instead
+#   _okp_release=0.12.0 makepkg -si              the published Linux release
+#                                                linux-v0.12.0 - once a release
+#                                                carries this lane; earlier ones
+#                                                are refused in prepare()
+# A checkout is cloned as-is: commit what you want built, on a branch (a
+# detached HEAD has nothing to clone).
 #
 # makepkg assumes base-devel, which provides the C compiler the build script
 # needs for the native Wayland video plane. See docs/linux-omarchy.md for the
 # dependency list and the plain cargo recipe.
 
 pkgname=ok-player
-# The Linux release this builds: the tag is linux-v${_upstream}, which is what
-# .github/workflows/release-linux.yml publishes. Bump it with each release.
-_upstream=0.1.0-linux-alpha.112
-# pacman forbids '-' in pkgver. Dropping it gives 0.1.0linuxalpha.112, which
-# vercmp orders below the 0.1.0 release it leads to, and candidates order among
-# themselves on the trailing number - the same intent as the '~' the Debian and
-# RPM lanes use (scripts/linux-package-version.sh).
-pkgver=${_upstream//-/}
+# pacman forbids '-' in pkgver. Dropping it from a release version gives
+# 0.12.0beta.1, which vercmp orders below the 0.12.0 release it leads to, and
+# candidates order among themselves on the trailing number - the same intent as
+# the '~' the Debian and RPM lanes use (scripts/linux-package-version.sh). The
+# mode block below sets the real value for a release; a checkout build starts
+# from this placeholder and pkgver() stamps it.
+pkgver=0
 pkgrel=1
 pkgdesc="Elegant mpv-based media player — native GTK4 shell"
 arch=(x86_64)
@@ -38,7 +42,9 @@ url="https://github.com/BeFeast/ok-player"
 # under the licence directory as well as the documentation directory).
 license=(GPL-3.0-or-later ISC MIT)
 depends=(gtk4 mpv libx11 wayland libglvnd xdg-utils)
-makedepends=(cargo rust pkgconf glib2-devel wayland-protocols git)
+# glib-compile-resources, which the build runs for the chrome icon set, ships
+# in glib2, a dependency of gtk4 - not in glib2-devel.
+makedepends=(cargo rust pkgconf wayland-protocols git)
 checkdepends=(dbus python jq procps-ng desktop-file-utils appstream)
 optdepends=(
   'yt-dlp: open YouTube and other site URLs'
@@ -48,30 +54,50 @@ optdepends=(
 )
 options=(!lto)
 
-# A local checkout overrides the tagged release; see the header. The two modes
+# The checkout this PKGBUILD sits in: rust/packaging/arch/ of a clone.
+_okp_startdir=${startdir:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}
+_okp_enclosing_checkout() {
+  git -C "$_okp_startdir" rev-parse --show-toplevel 2>/dev/null || (cd "$_okp_startdir/../../.." && pwd)
+}
+
+# The mode, decided once so every function below asks the same question (the
+# environment variables that select it are not re-read later). The two modes
 # use different source names on purpose: makepkg keeps one bare mirror per
-# name in SRCDEST, and a mirror of one URL refuses to serve the other.
-# Decided once, here, so every function below asks the same question: the
-# environment variable that selects the mode is not re-read later.
-_okp_from_checkout=0
-if [[ -n ${_okp_source:-} ]]; then
+# name in SRCDEST, and a mirror of one URL refuses to serve another.
+if [[ -n ${_okp_release:-} ]]; then
+  _okp_from_checkout=0
+  _upstream=$_okp_release
+  pkgver=${_upstream//-/}
+  _srcname="$pkgname"
+  source=("$_srcname::git+${url}.git#tag=linux-v${_upstream}")
+else
   _okp_from_checkout=1
+  _upstream=''
+  _okp_source=${_okp_source:-$(_okp_enclosing_checkout)}
   _srcname="$pkgname-checkout"
   source=("$_srcname::git+file://${_okp_source}")
-  # A checkout is stamped with what it is, not with the pinned release: the
-  # nearest linux-v* tag and the commits since it (0.1.0linuxalpha.112.r7.gabc1234
-  # to pacman, 0.1.0-linux-alpha.112+7.gabc1234 in the app), so About reports
-  # and the updater compares the version actually built. A checkout exactly at
-  # a release tag is that release.
+  # A checkout is stamped with what it is: the nearest linux-v* tag and the
+  # commits since it (0.1.0linuxalpha.112.r7.gabc1234 to pacman,
+  # 0.1.0-linux-alpha.112+7.gabc1234 in the app), so About reports and the
+  # updater compares the version actually built. A checkout exactly at a
+  # release tag is that release.
   pkgver() {
     cd "$_srcname"
     _okp_checkout_pkgver
   }
-else
-  _srcname="$pkgname"
-  source=("$_srcname::git+${url}.git#tag=linux-v${_upstream}")
 fi
 sha256sums=('SKIP')
+
+# A release built here has to carry this lane: earlier releases lack the files
+# it installs (the AppStream metainfo, the LGPL text, the 16px icon) and the
+# pacman detection the installed app relies on, so they are refused rather
+# than half-built.
+_okp_require_arch_lane() {
+  if [[ ! -f rust/packaging/arch/PKGBUILD ]]; then
+    printf 'ok-player: %s predates the Arch lane (no rust/packaging/arch/PKGBUILD in its source); build a checkout or a later release\n' "${_upstream:-this checkout}" >&2
+    return 1
+  fi
+}
 
 # The build version of the checkout in the current directory:
 # <nearest linux-v tag>[+<commits since it>.g<commit>].
@@ -123,7 +149,9 @@ _build_env() {
 }
 
 prepare() {
-  cd "$_srcname/rust"
+  cd "$_srcname"
+  _okp_require_arch_lane
+  cd rust
   _build_env
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }

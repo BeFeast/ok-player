@@ -83,17 +83,40 @@ else
   ok "a checkout with no linux-v tag in reach is refused"
 fi
 
-# --- tag mode is untouched ----------------------------------------------------
+# --- the default is the checkout the PKGBUILD sits in --------------------------
 got="$(
   cd "$srcdir"
   source "$PKGBUILD"
-  declare -F pkgver >/dev/null && echo "pkgver-defined" || echo "static"
-  _build_env >/dev/null 2>&1 || true
-  printf '%s %s' "$pkgver" "${OKP_BUILD_VERSION:-unset}"
+  declare -F pkgver >/dev/null && fn=stamped || fn=static
+  printf '%s %s %s' "$_srcname" "$_okp_source" "$fn"
 )"
-expected="static
-0.1.0linuxalpha.112 0.1.0-linux-alpha.112"
-[[ "$got" == "$expected" ]] && ok "tag mode keeps the static pkgver and stamps the pinned release" || fail "tag mode: got '$got', want '$expected'"
+expected="ok-player-checkout $(git -C "$ROOT" rev-parse --show-toplevel) stamped"
+[[ "$got" == "$expected" ]] && ok "with nothing set the recipe builds the checkout it sits in" || fail "default mode: got '$got', want '$expected'"
+
+# --- a release is asked for by name, pinned statically, and fetched by tag ----
+got="$(
+  cd "$srcdir"
+  _okp_release=0.1.0-linux-alpha.112 source "$PKGBUILD"
+  declare -F pkgver >/dev/null && fn=stamped || fn=static
+  _build_env >/dev/null 2>&1 || true
+  printf '%s %s %s %s' "$fn" "$pkgver" "${source[0]##*#}" "${OKP_BUILD_VERSION:-unset}"
+)"
+expected="static 0.1.0linuxalpha.112 tag=linux-v0.1.0-linux-alpha.112 0.1.0-linux-alpha.112"
+[[ "$got" == "$expected" ]] && ok "release mode pins the named release statically and stamps it" || fail "release mode: got '$got', want '$expected'"
+
+# --- a source without the lane is refused before anything is built ------------
+LANELESS="$WORK/laneless"; mkdir -p "$LANELESS/rust/packaging/linux"
+if (cd "$LANELESS" && _okp_release=0.1.0-linux-alpha.112 source "$PKGBUILD" && _okp_require_arch_lane 2>/dev/null); then
+  fail "a release whose source lacks rust/packaging/arch/PKGBUILD must be refused"
+else
+  ok "a release that predates the lane is refused"
+fi
+WITHLANE="$WORK/withlane"; mkdir -p "$WITHLANE/rust/packaging/arch"; : > "$WITHLANE/rust/packaging/arch/PKGBUILD"
+if (cd "$WITHLANE" && source "$PKGBUILD" && _okp_require_arch_lane); then
+  ok "a source that carries the lane passes the guard"
+else
+  fail "a source carrying rust/packaging/arch/PKGBUILD must pass the guard"
+fi
 
 if (( failures > 0 )); then
   echo "arch-pkgbuild: $failures failure(s)" >&2

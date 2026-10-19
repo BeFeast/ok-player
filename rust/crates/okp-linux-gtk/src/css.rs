@@ -443,16 +443,6 @@ pub(crate) const OKP_STYLESHEET: &str = "
             background: transparent;
         }
 
-        button.okp-recent-card {
-            min-width: 194px;
-            padding: 0;
-            border: none;
-            border-radius: 12px;
-            background: transparent;
-            box-shadow: none;
-            color: rgba(255, 255, 255, 0.94);
-        }
-
         button.okp-recent-card:focus-visible {
             outline: none;
             box-shadow: 0 0 0 3px alpha(@okp_accent, 0.30);
@@ -3504,6 +3494,14 @@ pub(crate) const OKP_STYLESHEET: &str = "
             color: #ffffff;
         }
 
+        /* The current row stays white while something is dragged over it: its
+           contents are black, so the drag-over cue is a black inset ring. */
+        .is-high-contrast .okp-up-next-row.is-current.is-drop-target {
+            background: #ffffff;
+            border-color: #ffffff;
+            box-shadow: inset 0 0 0 2px #000000;
+        }
+
         .okp-command-surface {
             padding: 6px;
             background: @okp_light_card;
@@ -5941,6 +5939,10 @@ pub(crate) const OKP_STYLESHEET: &str = "
             background: @okp_dark_inset;
         }
 
+        window.okp-settings-window.is-dark .okp-settings-scale slider {
+            border-color: @okp_dark_hairline_hi;
+        }
+
         window.okp-settings-window.is-dark textview.okp-mpv-conf-editor {
             caret-color: @okp_accent;
         }
@@ -6311,6 +6313,8 @@ mod tests {
             "#10938a",
             "#0a655f",
             "#15a89d",
+            "#0c7c75",
+            "#0a5f59",
         ] {
             assert!(
                 !OKP_STYLESHEET.contains(stray),
@@ -6334,6 +6338,8 @@ mod tests {
             "16, 147, 138",
             "57, 190, 249",
             "22, 48, 101",
+            "10, 101, 95",
+            "14, 133, 132",
         ] {
             assert!(
                 !OKP_STYLESHEET.contains(gone),
@@ -6369,8 +6375,6 @@ mod tests {
             "min-width: 36px;",
             "min-height: 82px;",
             "min-height: 84px;",
-            "font-size: 22px;",
-            "font-size: 13px;",
             "min-width: 64px;",
             "min-height: 36px;",
             "min-height: 4px;",
@@ -6396,7 +6400,32 @@ mod tests {
         assert!(OKP_STYLESHEET.contains("padding: 0 16px;"));
         // BeFeast shapes, pinned on the rules that carry them: 12px cards, pill
         // controls, and the History bucket card in every theme.
+        // The 22px h1 / 13px body scale, on the rules that carry it.
+        for title in [
+            ".okp-first-run-title",
+            ".okp-history-title",
+            ".okp-welcome-recents-title",
+        ] {
+            assert!(
+                rule_body(title).contains("font-size: 22px;"),
+                "{title} is the 22px h1"
+            );
+        }
+        for body in [
+            ".okp-first-run-copy",
+            ".okp-history-subtitle",
+            ".okp-welcome-recents-subtitle",
+        ] {
+            assert!(
+                rule_body(body).contains("font-size: 13px;"),
+                "{body} is the 13px body"
+            );
+        }
         assert!(rule_body("button.okp-recent-card").contains("border-radius: 12px;"));
+        assert!(
+            rule_body("button.okp-recent-card").contains("background: @okp_light_card;"),
+            "the recent card is the BeFeast white card"
+        );
         assert!(
             rule_body("button.okp-idle-primary-button,\n        button.okp-idle-secondary-button")
                 .contains("border-radius: 999px;")
@@ -6431,6 +6460,11 @@ mod tests {
         assert!(
             rule_body(".is-high-contrast .okp-up-next-row.is-current")
                 .contains("background: #ffffff;")
+        );
+        assert!(
+            rule_body(".is-high-contrast .okp-up-next-row.is-current.is-drop-target")
+                .contains("background: #ffffff;"),
+            "a drag over the current row keeps it white under its black contents"
         );
         // An inverted row paints white, so what it contains has to go black.
         assert!(
@@ -6514,11 +6548,13 @@ mod tests {
         );
     }
 
-    /// The declarations of the first rule that opens with exactly `selector`.
+    /// The declarations of the last rule that opens with exactly `selector`:
+    /// at equal specificity the cascade applies the later rule, so a pin on
+    /// a selector the sheet states twice has to read the one that wins.
     fn rule_body(selector: &str) -> &'static str {
         let key = format!("\n        {selector} {{\n");
         let start = OKP_STYLESHEET
-            .find(&key)
+            .rfind(&key)
             .unwrap_or_else(|| panic!("rule `{selector}` missing from the stylesheet"))
             + key.len();
         let end = OKP_STYLESHEET[start..].find('}').expect("rule terminator") + start;

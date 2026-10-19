@@ -17,16 +17,17 @@ yet validated on Hyprland: file a report if one misbehaves.
 
 ```bash
 sudo pacman -S --needed base-devel gtk4 mpv libx11 wayland wayland-protocols \
-  libglvnd glib2-devel pkgconf rust cargo git xdg-utils
+  libglvnd pkgconf rust cargo git xdg-utils
 ```
 
 - `gtk4`, `mpv`, `libx11`, `wayland`, `libglvnd` are the runtime libraries the
   binary links; `base-devel` (the build script compiles the native Wayland
   video plane and the generated protocol glue with the system C compiler),
-  `wayland-protocols`, `glib2-devel` (GLib's build-time tools; the build runs
-  `glib-compile-resources` to compile the chrome icon set into the binary),
-  `pkgconf`, `rust`, `cargo` are build-time only. `makepkg` assumes
-  `base-devel` as well, which is why the PKGBUILD does not list a compiler.
+  `wayland-protocols`, `pkgconf`, `rust`, `cargo` are build-time only.
+  `glib-compile-resources`, which the build runs to compile the chrome icon
+  set into the binary, ships in `glib2`, which `gtk4` depends on. `makepkg`
+  assumes `base-devel` as well, which is why the PKGBUILD does not list a
+  compiler.
 - Optional: `yt-dlp` (site URLs), `ffmpeg` (clip export and screenshots).
 - Fonts: the interface asks for **Noto Sans** and **JetBrains Mono** and falls
   back to the system sans-serif and monospace when they are absent. `fc-match
@@ -61,17 +62,17 @@ and point a copy of `rust/packaging/linux/com.befeast.okplayer.desktop`
 
 ```bash
 cd rust/packaging/arch
-makepkg -si            # builds the tagged release named in the PKGBUILD
-```
-
-To package the branch you have checked out rather than the tag:
-
-```bash
-_okp_source="$(git rev-parse --show-toplevel)" makepkg -si
+makepkg -si            # builds the checkout you are in
 ```
 
 The working tree is cloned, so commit what you want built, on a branch: a
-detached HEAD has nothing for the clone to check out. The package is versioned
+detached HEAD has nothing for the clone to check out. To build another
+checkout, name it: `_okp_source=/path/to/checkout makepkg -si`. To build a
+published Linux release instead, `_okp_release=0.12.0 makepkg -si` fetches the
+`linux-v0.12.0` tag — once a release carries this lane. No release does yet
+(the first will be noted here), and the recipe refuses releases that predate
+it, because they lack the files it installs and the pacman detection the app
+relies on. The package is versioned
 by what it is - the nearest `linux-v*` tag and the commits since it, so
 `0.1.0linuxalpha.112.r7.gabc1234` to pacman and `0.1.0-linux-alpha.112+7.gabc1234`
 in About - and the updater compares that, not the pinned release; a checkout

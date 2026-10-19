@@ -310,7 +310,14 @@ def check_arch(root: Path) -> LaneResult:
     with tempfile.TemporaryDirectory(prefix="okp-arch-lane-") as scratch:
         srcdir = Path(scratch) / "src"
         pkgdir = Path(scratch) / "pkg"
-        checkout = srcdir / "ok-player"
+        # The recipe names its source directory by mode (a checkout by default,
+        # a release when one is asked for); stage under whatever it resolves.
+        srcname = subprocess.run(
+            ["bash", "-c", 'source "$1" >/dev/null 2>&1; printf %s "$_srcname"', "_", str(pkgbuild)],
+            capture_output=True,
+            text=True,
+        ).stdout.strip() or "ok-player"
+        checkout = srcdir / srcname
         for name in SHARED_DOCUMENTS:
             source = root / name
             if source.is_file():

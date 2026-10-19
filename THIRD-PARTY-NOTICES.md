@@ -88,12 +88,14 @@ distributed and licensed independently by Freedesktop/Flathub.
   - **Version:** Lucide 0.544.0 (`lucide-static@0.544.0`), taken from the
     design hand-off's Lucide sprite and from upstream's SVGs for the icons that
     sprite does not carry.
-  - **Copyright:** © 2022 Lucide Contributors. Portions © 2013–2022 Cole Bemis,
-    from Feather — the attribution Lucide's own licence file makes.
-  - **License:** ISC. Lucide's licence file is the ISC licence with a copyright
-    line that reserves the portions taken from Feather to Cole Bemis under
-    MIT; upstream does not mark per file which icons those are, so both texts
-    are reproduced here and every icon file names both. The ISC text:
+  - **Copyright:** as Lucide 0.544.0's licence file states it, verbatim:
+    "Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2023 as
+    part of Feather (MIT). All other copyright (c) for Lucide are held by
+    Lucide Contributors 2025."
+  - **License:** ISC, with the portions derived from Feather under MIT. Lucide
+    0.544.0's licence file carries both texts, reproduced below as it has them;
+    upstream does not mark per file which icons are Feather-derived, so every
+    icon file names both. The ISC text:
 
     > Permission to use, copy, modify, and/or distribute this software for any purpose
     > with or without fee is hereby granted, provided that the above copyright notice
@@ -111,7 +113,7 @@ distributed and licensed independently by Freedesktop/Flathub.
 
     > MIT License
     > 
-    > Copyright (c) 2013-2022 Cole Bemis
+    > Copyright (c) 2013-2023 Cole Bemis
     > 
     > Permission is hereby granted, free of charge, to any person obtaining a copy of
     > this software and associated documentation files (the "Software"), to deal in
