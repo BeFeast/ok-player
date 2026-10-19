@@ -415,12 +415,16 @@ mod tests {
         .unwrap_or_else(|err| panic!("{name} is not in the binary: {err}"))
     }
 
-    /// Decodes icon bytes the way GTK's symbolic icon loader does on the GTK
-    /// 4.14-4.20 of today's Ubuntu and Arch - through `gdk_pixbuf_new_from_stream`,
-    /// with no format hint, so the format is sniffed from the bytes. Measured on
-    /// gdk-pixbuf 2.42: a root element 249 bytes in is recognised and one 264
-    /// bytes in is not, by this path and by `Pixbuf::from_file` alike.
-    fn decode_as_gtk_does(bytes: &glib::Bytes) -> Result<gdk_pixbuf::Pixbuf, glib::Error> {
+    /// Decodes icon bytes through gdk-pixbuf's stream loader with no format
+    /// hint - `gdk_pixbuf_new_from_stream` - which is how GTK up to 4.18 (the
+    /// 4.14 of Ubuntu 24.04) loads a symbolic SVG icon out of a resource. GTK
+    /// 4.20 and later parse symbolic icons themselves, into a render node, and
+    /// take neither gdk-pixbuf nor librsvg on the way; see
+    /// `shipped_icons_stay_inside_gtks_symbolic_node_vocabulary` for that path.
+    /// Measured on gdk-pixbuf 2.42: a root element 249 bytes in is recognised
+    /// and one 264 bytes in is not, by this call and by `Pixbuf::from_file`
+    /// alike.
+    fn decode_through_gdk_pixbuf(bytes: &glib::Bytes) -> Result<gdk_pixbuf::Pixbuf, glib::Error> {
         let stream = gio::MemoryInputStream::from_bytes(bytes);
         gdk_pixbuf::Pixbuf::from_stream(&stream, gio::Cancellable::NONE)
     }
@@ -440,21 +444,25 @@ mod tests {
             .sum()
     }
 
-    /// Every icon the binary ships decodes along the path GTK loads it by, and
-    /// paints something. The first cut of this set put its provenance comment
-    /// ahead of the root element, which pushed `<svg` past the loader's sniff
-    /// window: every chrome icon came up as GTK's image-missing marker with
+    /// Every icon the binary ships decodes through gdk-pixbuf's stream loader,
+    /// the path GTK 4.14-4.18 loads it by, and paints something. The first cut
+    /// of this set put its provenance comment between the XML declaration and
+    /// the root element, which pushed `<svg` past the loader's sniff window:
+    /// every chrome icon came up as GTK's image-missing marker with
     /// "Unrecognized image file format" in the log, and a byte search for
-    /// `<svg` is not what decides that - the loader is.
+    /// `<svg` is not what decides that - the loader is. (GTK 4.20+ never
+    /// reaches this loader for a symbolic icon; a bad icon there renders blank
+    /// without a warning, which is what the vocabulary test below guards.)
     #[test]
-    fn every_shipped_icon_decodes_through_gtks_loader_and_paints() {
+    fn every_shipped_icon_decodes_through_gdk_pixbufs_stream_loader_and_paints() {
         for name in shipped_files() {
-            let pixbuf = decode_as_gtk_does(&shipped_bytes(&name))
-                .unwrap_or_else(|err| panic!("{name} does not decode the way GTK loads it: {err}"));
+            let pixbuf = decode_through_gdk_pixbuf(&shipped_bytes(&name))
+                .unwrap_or_else(|err| panic!("{name} does not decode through gdk-pixbuf: {err}"));
             // The set is drawn on the 16px grid (one upstream extent rounds to
             // 15.98, which rasterises to 15 or 16 rows), and a glyph on it has
-            // dozens of inked pixels: an icon that came out tiny or nearly
-            // blank would be as invisible as one that did not decode.
+            // dozens of inked pixels - the sparsest shipped one has 24 - so an
+            // icon that came out tiny or nearly blank would be as invisible as
+            // one that did not decode. The floor sits at half the sparsest.
             assert!(
                 pixbuf.width() == 16 && (15..=16).contains(&pixbuf.height()),
                 "{name} decodes to {}x{}, not the 16px grid",
@@ -462,18 +470,18 @@ mod tests {
                 pixbuf.height()
             );
             let inked = painted_pixels(&pixbuf);
-            assert!(inked >= 24, "{name} decodes but paints only {inked} pixels");
+            assert!(inked >= 12, "{name} decodes but paints only {inked} pixels");
         }
     }
 
     /// Pins the failure the test above guards against, so the guard cannot go
-    /// vacuous: a shipped icon with a comment ahead of its root element - the
-    /// first cut's layout, with the comment made longer than any sniff buffer
-    /// gdk-pixbuf reads (4 KiB), so the pin does not depend on the exact
-    /// window - is refused by that same loader as an unknown format, while the
-    /// same comment inside the element is taken.
+    /// vacuous: a shipped icon with a comment between its XML declaration and
+    /// its root element - the first cut's layout, with the comment made longer
+    /// than any sniff buffer gdk-pixbuf reads (4 KiB), so the pin does not
+    /// depend on the exact window - is refused by that same loader as an
+    /// unknown format, while the same comment inside the element is taken.
     #[test]
-    fn a_root_element_past_the_sniff_window_is_refused_by_gtks_loader() {
+    fn a_root_element_past_the_sniff_window_is_refused_by_gdk_pixbufs_stream_loader() {
         let name = shipped_files()
             .into_iter()
             .next()
@@ -482,9 +490,10 @@ mod tests {
         let comment = format!("<!-- {} -->\n", "provenance ".repeat(400));
         assert!(comment.len() > 4096);
 
-        let mut ahead = comment.clone().into_bytes();
-        ahead.extend_from_slice(&original);
-        let error = decode_as_gtk_does(&glib::Bytes::from_owned(ahead))
+        let text = String::from_utf8(original.to_vec()).expect("icons are UTF-8");
+        let root = text.find("<svg").expect("an icon has a root element");
+        let ahead = format!("{}{comment}{}", &text[..root], &text[root..]);
+        let error = decode_through_gdk_pixbuf(&glib::Bytes::from_owned(ahead.into_bytes()))
             .expect_err("a root element past the sniff window must be refused");
         assert_eq!(
             error.kind::<gdk_pixbuf::PixbufError>(),
@@ -492,17 +501,228 @@ mod tests {
             "unexpected refusal: {error}"
         );
 
-        let text = String::from_utf8(original.to_vec()).expect("icons are UTF-8");
-        let root = text.find("<svg").expect("an icon has a root element");
         let open_end = root + text[root..].find('>').expect("the root element opens") + 1;
         let inside = format!("{}{comment}{}", &text[..open_end], &text[open_end..]);
-        decode_as_gtk_does(&glib::Bytes::from_owned(inside.into_bytes()))
+        decode_through_gdk_pixbuf(&glib::Bytes::from_owned(inside.into_bytes()))
             .expect("the same comment inside the root element decodes");
     }
 
-    /// GTK's symbolic recolour rewrites `fill` and leaves `stroke` alone, so a
-    /// stroked icon would keep its authored colour and stop following the
-    /// foreground.
+    /// One element of a shipped icon: its name and its attributes, in order.
+    fn svg_elements(svg: &str) -> Vec<(String, Vec<(String, String)>)> {
+        // Strip comments first: the provenance comment is free text.
+        let mut text = String::new();
+        let mut rest = svg;
+        while let Some(start) = rest.find("<!--") {
+            text.push_str(&rest[..start]);
+            let end = rest[start..].find("-->").expect("a comment closes") + start + 3;
+            rest = &rest[end..];
+        }
+        text.push_str(rest);
+        let mut elements = Vec::new();
+        let mut cursor = text.as_str();
+        while let Some(open) = cursor.find('<') {
+            let tag = &cursor[open + 1..];
+            let close = tag.find('>').expect("a tag closes");
+            let body = tag[..close].trim_end_matches('/').trim();
+            cursor = &tag[close + 1..];
+            if body.starts_with('?') || body.starts_with('/') {
+                continue;
+            }
+            let (name, attrs) = body.split_once(char::is_whitespace).unwrap_or((body, ""));
+            let mut attributes = Vec::new();
+            let mut attrs = attrs.trim();
+            while let Some(eq) = attrs.find("=\"") {
+                let key = attrs[..eq].trim().to_owned();
+                let value_start = eq + 2;
+                let value_end = attrs[value_start..]
+                    .find('"')
+                    .expect("an attribute value closes")
+                    + value_start;
+                attributes.push((key, attrs[value_start..value_end].to_owned()));
+                attrs = attrs[value_end + 1..].trim();
+            }
+            elements.push((name.to_owned(), attributes));
+        }
+        elements
+    }
+
+    fn is_plain_number(value: &str) -> bool {
+        !value.is_empty() && value.parse::<f64>().is_ok()
+    }
+
+    /// GTK 4.20 and later do not hand a symbolic icon to gdk-pixbuf or librsvg:
+    /// `gsk_render_node_new_from_bytes_symbolic` (gtk/gdktextureutils.c,
+    /// `start_element_cb`, GTK 4.20.0 and 4.22.2) parses the SVG itself into a
+    /// render node, and an icon it cannot parse falls back to GTK's own SVG
+    /// renderer, where a parse failure draws nothing and logs nothing. That
+    /// parser has a small vocabulary, and it diverges from librsvg in ways a
+    /// decode through gdk-pixbuf cannot see, so the set has to stay inside the
+    /// vocabulary the two GTK generations share:
+    ///
+    /// * elements: `svg`, `g`, `circle`, `path` (4.22 adds `rect` and ignores
+    ///   `defs`, `style`, `metadata` and editor namespaces; 4.20 refuses them);
+    /// * `svg` carries numeric `width` and `height` (an optional `px` suffix),
+    ///   and a `viewBox`, if present, that is exactly `0 0 width height` - the
+    ///   parser applies no viewBox transform, so any other box renders wrong;
+    /// * a shape's attributes come from the parser's list - anything else
+    ///   (`transform`, `clip-path`, `visibility` before 4.22) is an unknown
+    ///   attribute and the whole icon falls back;
+    /// * `g` is skipped as an element, so every attribute on it is dropped: a
+    ///   `transform` or `opacity` there renders differently from librsvg. Only
+    ///   `fill` (a colour, overridden by the recolour anyway) and `id` may sit
+    ///   on it;
+    /// * without a `class`, a shape is always filled and never stroked -
+    ///   `fill="none"` is ignored, and stroke attributes are too - so a shape
+    ///   says neither; `class` itself selects semantic colours and is not used.
+    #[test]
+    fn shipped_icons_stay_inside_gtks_symbolic_node_vocabulary() {
+        const SHAPE_ATTRIBUTES: &[&str] = &[
+            "class",
+            "opacity",
+            "fill-rule",
+            "fill-opacity",
+            "stroke-width",
+            "stroke-opacity",
+            "stroke-linecap",
+            "stroke-linejoin",
+            "stroke-miterlimit",
+            "stroke-dasharray",
+            "stroke-dashoffset",
+            "fill",
+            "stroke",
+            "style",
+            "id",
+            "color",
+            "overflow",
+            "d",
+            "cx",
+            "cy",
+            "r",
+        ];
+        for path in icon_files() {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_owned();
+            let svg = std::fs::read_to_string(&path).expect("an icon must be readable");
+            let elements = svg_elements(&svg);
+            assert_eq!(
+                elements.first().map(|(element, _)| element.as_str()),
+                Some("svg"),
+                "{name}: the first element is the root"
+            );
+            for (element, attributes) in &elements {
+                let attribute = |key: &str| {
+                    attributes
+                        .iter()
+                        .find(|(k, _)| k == key)
+                        .map(|(_, v)| v.as_str())
+                };
+                match element.as_str() {
+                    "svg" => {
+                        let size = |key: &str| {
+                            let value = attribute(key)
+                                .unwrap_or_else(|| panic!("{name}: the root has no {key}"));
+                            let value = value.strip_suffix("px").unwrap_or(value);
+                            assert!(is_plain_number(value), "{name}: {key}=\"{value}\"");
+                            value.parse::<f64>().expect("checked above")
+                        };
+                        let (width, height) = (size("width"), size("height"));
+                        if let Some(view_box) = attribute("viewBox") {
+                            let parts: Vec<f64> = view_box
+                                .split(' ')
+                                .map(|part| part.parse::<f64>().unwrap_or(f64::NAN))
+                                .collect();
+                            assert!(
+                                parts == [0.0, 0.0, width, height],
+                                "{name}: viewBox=\"{view_box}\" is not 0 0 {width} {height}; GTK's node \
+                                 parser applies no viewBox transform"
+                            );
+                        }
+                    }
+                    "g" => {
+                        for (key, _) in attributes {
+                            assert!(
+                                key == "fill" || key == "id",
+                                "{name}: <g {key}=…> - GTK's node parser skips <g> and drops its \
+                                 attributes"
+                            );
+                        }
+                    }
+                    "circle" | "path" => {
+                        for (key, value) in attributes {
+                            assert!(
+                                SHAPE_ATTRIBUTES.contains(&key.as_str()),
+                                "{name}: <{element} {key}=…> is outside GTK's node parser vocabulary"
+                            );
+                            assert!(
+                                !(key == "fill" && value == "none") && !key.starts_with("stroke"),
+                                "{name}: <{element} {key}=\"{value}\"> - the node parser always \
+                                 fills and never strokes a class-less shape"
+                            );
+                            assert!(
+                                key != "class",
+                                "{name}: <{element} class> selects semantic colours"
+                            );
+                        }
+                        if element == "circle" {
+                            for key in ["cx", "cy", "r"] {
+                                if let Some(value) = attribute(key) {
+                                    assert!(is_plain_number(value), "{name}: {key}=\"{value}\"");
+                                }
+                            }
+                        } else {
+                            let d =
+                                attribute("d").unwrap_or_else(|| panic!("{name}: a path has no d"));
+                            assert!(
+                                d.chars().all(|c| c.is_ascii_digit()
+                                    || matches!(
+                                        c,
+                                        'M' | 'L'
+                                            | 'H'
+                                            | 'V'
+                                            | 'C'
+                                            | 'S'
+                                            | 'Q'
+                                            | 'T'
+                                            | 'A'
+                                            | 'Z'
+                                            | 'm'
+                                            | 'l'
+                                            | 'h'
+                                            | 'v'
+                                            | 'c'
+                                            | 's'
+                                            | 'q'
+                                            | 't'
+                                            | 'a'
+                                            | 'z'
+                                            | '.'
+                                            | '-'
+                                            | '+'
+                                            | ' '
+                                            | ','
+                                            | 'e'
+                                            | 'E'
+                                    )),
+                                "{name}: d=\"{d}\" is not SVG path data"
+                            );
+                        }
+                    }
+                    other => panic!(
+                        "{name}: <{other}> is outside the vocabulary GTK 4.20's node parser handles"
+                    ),
+                }
+            }
+        }
+    }
+
+    /// The whole set is drawn as fills: the converter renders every Lucide
+    /// stroke as a filled outline, so each icon carries its weight in its
+    /// geometry and one recolouring rule covers the set whichever way a GTK
+    /// version applies it (an alpha mask over the whole drawing, or a `fill`
+    /// rewrite). A stroked icon would be the odd one out on either path.
     #[test]
     fn shipped_icons_are_fills_only() {
         for path in icon_files() {

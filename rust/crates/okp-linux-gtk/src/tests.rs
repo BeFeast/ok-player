@@ -590,14 +590,17 @@ fn assert_white_mark_over(tile: &gdk_pixbuf::Pixbuf, path: &Path, size: i32) {
     );
 }
 
-/// Where a rendered tile is sampled: a 3×3 grid whose outer ring is inset
-/// past the rounded corner radius and whose middle row and column fall on the
-/// mark, as `(x, y, position along the 135° axis)`. The first four are the
-/// corners: top-left, bottom-right, top-right, bottom-left.
+/// Where a rendered tile is sampled, as `(x, y, position along the 135° axis)`:
+/// a ring of eight points inset past the rounded corner radius - the corners
+/// and the edge midpoints, none of which the mark reaches at any size - and
+/// two points on the axis itself, at 30% and 70%, which pass beside the mark.
+/// The first four are the corners: top-left, bottom-right, top-right,
+/// bottom-left.
 fn tile_samples(size: i32) -> Vec<(i32, i32, f64)> {
     let inset = (f64::from(size) * 0.15).round() as i32;
     let far = size - 1 - inset;
     let mid = size / 2;
+    let at = |fraction: f64| (f64::from(size) * fraction).round() as i32;
     let along_axis = |x: i32, y: i32| {
         ((f64::from(x) + 0.5) / f64::from(size) + (f64::from(y) + 0.5) / f64::from(size)) / 2.0
     };
@@ -610,13 +613,17 @@ fn tile_samples(size: i32) -> Vec<(i32, i32, f64)> {
         (inset, mid),
         (far, mid),
         (mid, far),
+        (at(0.3), at(0.3)),
+        (at(0.7), at(0.7)),
     ]
     .into_iter()
     .map(|(x, y)| (x, y, along_axis(x, y)))
     .collect()
 }
 
-/// Whether a sample point lands on the white mark rather than the tile.
+/// Whether a sample point lands on the white mark rather than the tile. The
+/// sample ring is placed to miss the mark, so this is a guard against a
+/// resized mark, not a way to skip the corners: those are always tile.
 fn on_the_mark(pixel: [u8; 4]) -> bool {
     pixel[0] >= 160
 }
@@ -669,11 +676,13 @@ fn assert_tile_paints_the_brand_gradient_on_the_135_degree_axis(path: &Path, siz
 /// the mark the same navy, no gradient.
 fn assert_tile_is_flat_identity_navy(path: &Path, size: i32) {
     let tile = render_launcher_svg(path, size);
-    for (x, y, _) in tile_samples(size) {
+    for (index, (x, y, _)) in tile_samples(size).into_iter().enumerate() {
         let pixel = rendered_pixel(&tile, x, y);
         let [r, g, b, a] = pixel;
         assert_eq!(a, 255, "{} is see-through at ({x}, {y})", path.display());
-        if on_the_mark(pixel) {
+        // The corners are always tile: a tile that is white all over must not
+        // pass by having every sample skipped as "mark".
+        if index >= 4 && on_the_mark(pixel) {
             continue;
         }
         assert!(
