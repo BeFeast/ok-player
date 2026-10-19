@@ -6,8 +6,9 @@
 # itself as a pacman-owned install at runtime (pacman -Qo owns /usr/bin/ok-player,
 # the probe the Debian and Fedora packages rely on with dpkg and rpm), so it never
 # downloads or installs a package of its own and About reports "Install: pacman".
-# It still checks the Linux release feed; a newer release is announced with the
-# instruction to rebuild from this PKGBUILD, because no pacman repository
+# It still checks the Linux release feed; a newer release is announced by name,
+# with the instruction to pull the checkout and rebuild from this PKGBUILD or to
+# build that release with _okp_release=<version>, because no pacman repository
 # carries OK Player yet. OKP_PACKAGE_KIND=arch stamps the build with the lane it
 # came from; it is recorded in the update log, not consulted.
 #

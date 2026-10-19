@@ -90,8 +90,11 @@ An installed package is recognised at runtime: the app asks `pacman -Qo` who
 owns its executable, the same probe the Debian and Fedora packages rely on with
 `dpkg` and `rpm`, and pacman owning `/usr/bin/ok-player` is the **pacman**
 install kind. About reports `Install: pacman`. The app still checks the Linux
-release feed, and when a newer release exists Settings → Updates says to
-rebuild the package from the PKGBUILD (`makepkg -si`): no pacman repository
+release feed, and when a newer release exists Settings → Updates names it and
+says how to get it: pull the checkout and rebuild from the PKGBUILD (`git
+pull`, then `makepkg -si` - the recipe builds the checkout as it stands, so
+rebuilding without pulling rebuilds the commit already running), or build that
+release by name (`_okp_release=<version> makepkg -si`). No pacman repository
 carries OK Player yet, so "update with pacman" would point nowhere. It never
 downloads or installs a package of its own on Arch, and it follows releases
 only: the rolling candidate channel publishes `.deb` and AppImage builds that

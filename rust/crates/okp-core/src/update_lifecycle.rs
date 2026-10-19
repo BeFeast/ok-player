@@ -222,7 +222,12 @@ impl InstallKind {
     /// the suite that carries the version being announced, and it is the answer
     /// to "your updater says there is nothing" — a `stable` machine is never
     /// offered a candidate, and now it can see which channel it is on (#725).
-    fn system_update_hint_text(self, suite: Option<&str>) -> String {
+    ///
+    /// `version` is the release being announced, when one is. The pacman lane
+    /// needs it: the recipe builds the checkout it sits in, so "rebuild" from
+    /// an unchanged checkout rebuilds the same commit - the hint has to say to
+    /// pull first, or to build that release by name.
+    fn system_update_hint_text(self, suite: Option<&str>, version: Option<&str>) -> String {
         match (self, suite) {
             (Self::Deb, Some(suite)) => {
                 format!("Update OK Player with apt — it is in the {suite} suite you subscribe to.")
@@ -231,9 +236,12 @@ impl InstallKind {
             (Self::Rpm, _) => "Update OK Player with your package manager (dnf).".to_owned(),
             // Nothing pacman can reach carries OK Player: the package is built
             // from the recipe, so that is what the sentence has to say.
-            (Self::Pacman, _) => {
-                "Rebuild the package from rust/packaging/arch/PKGBUILD (makepkg -si): no pacman repository carries OK Player yet.".to_owned()
-            }
+            (Self::Pacman, _) => match version {
+                Some(version) => format!(
+                    "Version {version} is published. Pull the checkout and rebuild from rust/packaging/arch/PKGBUILD (git pull, then makepkg -si), or build that release with _okp_release={version} makepkg -si: no pacman repository carries OK Player yet."
+                ),
+                None => "Pull the checkout and rebuild from rust/packaging/arch/PKGBUILD (git pull, then makepkg -si): no pacman repository carries OK Player yet.".to_owned(),
+            },
             (Self::Flatpak, _) => "Update OK Player with Flatpak (flatpak update).".to_owned(),
             (Self::WindowsVelopack | Self::AppImage | Self::DevBuild, _) => {
                 "Update OK Player with your system update tool.".to_owned()
@@ -1303,7 +1311,7 @@ impl UpdateLifecycle {
             state: UpdateState::ManagedExternally {
                 // A lane that never discovers a version has no suite to name:
                 // the tool it points at is the whole answer.
-                hint: install_kind.system_update_hint_text(None),
+                hint: install_kind.system_update_hint_text(None, None),
             },
             package_source: PackageSourceEvidence::Unestablished,
             packaged_suite: None,
@@ -1570,12 +1578,10 @@ impl UpdateLifecycle {
         Some(if self.capability() == UpdateCapability::SelfApply {
             CarriedOffer::Available { version }
         } else {
-            CarriedOffer::AvailableExternally {
-                version,
-                hint: self
-                    .install_kind
-                    .system_update_hint_text(self.package_source.suite()),
-            }
+            let hint = self
+                .install_kind
+                .system_update_hint_text(self.package_source.suite(), Some(&version));
+            CarriedOffer::AvailableExternally { version, hint }
         })
     }
 
@@ -1599,7 +1605,7 @@ impl UpdateLifecycle {
                 version: deliverable.to_owned(),
                 hint: self
                     .install_kind
-                    .system_update_hint_text(self.package_source.suite()),
+                    .system_update_hint_text(self.package_source.suite(), Some(deliverable)),
             };
             return Ok(self.enter(next));
         }
@@ -1656,7 +1662,7 @@ impl UpdateLifecycle {
                     version: deliverable.to_owned(),
                     hint: self
                         .install_kind
-                        .system_update_hint_text(self.package_source.suite()),
+                        .system_update_hint_text(self.package_source.suite(), Some(deliverable)),
                 },
                 None => match self.package_source.suite() {
                     Some(suite) => UpdateState::WithheldBySuite {
@@ -1668,10 +1674,15 @@ impl UpdateLifecycle {
                     // lands here: it discovers from the Linux feed, no suite
                     // applies, and its hint says how the package is rebuilt.
                     // (rpm and flatpak never discover a version at all.)
-                    None => UpdateState::AvailableExternally {
-                        version: published,
-                        hint: self.install_kind.system_update_hint_text(None),
-                    },
+                    None => {
+                        let hint = self
+                            .install_kind
+                            .system_update_hint_text(None, Some(&published));
+                        UpdateState::AvailableExternally {
+                            version: published,
+                            hint,
+                        }
+                    }
                 },
             },
             UpdateCapability::SystemUnreachable => UpdateState::AvailableWithoutSource {
@@ -1743,7 +1754,7 @@ impl UpdateLifecycle {
         // the repository instructions instead.
         let hint = (self.capability() == UpdateCapability::SystemManaged).then(|| {
             self.install_kind
-                .system_update_hint_text(self.package_source.suite())
+                .system_update_hint_text(self.package_source.suite(), Some(&version))
         });
         Ok(self.enter(UpdateState::Skipped {
             version,
@@ -4067,7 +4078,8 @@ mod tests {
                 subscribed("candidate", Some("2.0.0")),
                 UpdateState::AvailableExternally {
                     version: "2.0.0".to_owned(),
-                    hint: InstallKind::Deb.system_update_hint_text(Some("candidate")),
+                    hint: InstallKind::Deb
+                        .system_update_hint_text(Some("candidate"), Some("2.0.0")),
                 },
             ),
         ];
@@ -4702,6 +4714,17 @@ mod tests {
         assert!(
             hint.contains("rust/packaging/arch/PKGBUILD") && hint.contains("makepkg -si"),
             "the hint names the recipe and the command, got {hint}"
+        );
+        // The recipe builds the checkout it sits in, so the hint has to say to
+        // refresh it first, or to build the announced release by name; a bare
+        // "makepkg -si" rebuilds the commit already running.
+        assert!(
+            hint.contains("git pull"),
+            "the hint says to refresh the checkout before rebuilding, got {hint}"
+        );
+        assert!(
+            hint.contains("_okp_release=2.0.0 makepkg -si"),
+            "the hint names the announced release's build command, got {hint}"
         );
         assert!(
             !hint.contains("with your package manager"),
