@@ -51,7 +51,11 @@ options=(!lto)
 # A local checkout overrides the tagged release; see the header. The two modes
 # use different source names on purpose: makepkg keeps one bare mirror per
 # name in SRCDEST, and a mirror of one URL refuses to serve the other.
+# Decided once, here, so every function below asks the same question: the
+# environment variable that selects the mode is not re-read later.
+_okp_from_checkout=0
 if [[ -n ${_okp_source:-} ]]; then
+  _okp_from_checkout=1
   _srcname="$pkgname-checkout"
   source=("$_srcname::git+file://${_okp_source}")
   # A checkout is stamped with what it is, not with the pinned release: the
@@ -106,7 +110,7 @@ _okp_checkout_pkgver() {
 
 _build_env() {
   export CARGO_HOME="$srcdir/cargo-home"
-  if [[ -n ${_okp_source:-} ]]; then
+  if (( _okp_from_checkout )); then
     OKP_BUILD_VERSION="$(cd "$srcdir/$_srcname" && _okp_build_version)" || return 1
     export OKP_BUILD_VERSION
   else
