@@ -41,7 +41,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt;
 
-use crate::update_selection::compare_versions;
+use crate::update_selection::{compare_versions, split_prerelease, strip_build_metadata};
 
 /// What the Updates surface says while a check is in flight. A refresh over a
 /// standing offer appends it to that offer's own message instead of replacing
@@ -62,6 +62,8 @@ pub enum InstallKind {
     Deb,
     /// `.rpm` install owned by rpm/dnf.
     Rpm,
+    /// Arch package owned by pacman — the Arch / Omarchy lane.
+    Pacman,
     /// Flatpak install, updated by the Flatpak runtime.
     Flatpak,
     /// A build that no packaging owns: `cargo run`, a build tree, an unpacked
@@ -79,7 +81,7 @@ impl InstallKind {
     pub const fn capability(self) -> UpdateCapability {
         match self {
             Self::WindowsVelopack | Self::AppImage => UpdateCapability::SelfApply,
-            Self::Deb | Self::Rpm | Self::Flatpak => UpdateCapability::SystemManaged,
+            Self::Deb | Self::Rpm | Self::Pacman | Self::Flatpak => UpdateCapability::SystemManaged,
             Self::DevBuild => UpdateCapability::Unmanaged,
         }
     }
@@ -103,6 +105,7 @@ impl InstallKind {
         match self {
             Self::Deb => "apt",
             Self::Rpm => "dnf",
+            Self::Pacman => "pacman",
             Self::Flatpak => "Flatpak",
             Self::WindowsVelopack | Self::AppImage | Self::DevBuild => "your system update tool",
         }
@@ -125,9 +128,12 @@ impl InstallKind {
     pub const fn refresh_command(self) -> Option<&'static str> {
         match self {
             Self::Deb => Some("sudo apt update"),
-            Self::Rpm | Self::Flatpak | Self::WindowsVelopack | Self::AppImage | Self::DevBuild => {
-                None
-            }
+            Self::Rpm
+            | Self::Pacman
+            | Self::Flatpak
+            | Self::WindowsVelopack
+            | Self::AppImage
+            | Self::DevBuild => None,
         }
     }
 
@@ -160,17 +166,27 @@ impl InstallKind {
             Self::Deb => Some("sudo apt install --only-upgrade ok-player"),
             // Not "there is no such command" but "this app has no state in which to offer
             // one": the rpm and flatpak lanes never discover a version, so they never reach a
-            // state that announces one. What they say is who updates them, unchanged.
-            Self::Rpm | Self::Flatpak | Self::WindowsVelopack | Self::AppImage | Self::DevBuild => {
-                None
-            }
+            // state that announces one. What they say is who updates them, unchanged. The
+            // pacman lane does announce one, but no command fetches it — the package is
+            // rebuilt from the PKGBUILD, and the announcement's hint says so.
+            Self::Rpm
+            | Self::Pacman
+            | Self::Flatpak
+            | Self::WindowsVelopack
+            | Self::AppImage
+            | Self::DevBuild => None,
         }
     }
 
     /// Whether the app discovers versions for this install kind at all. The
-    /// rpm and flatpak lanes never ask — they report who updates them — while
-    /// every other kind, the system-managed `.deb` lane included, polls a feed
-    /// of its own.
+    /// rpm and flatpak lanes never ask — they report who updates them, and a
+    /// repository exists for that tool to read — while every other kind polls
+    /// a feed of its own. That includes the two system-managed lanes whose
+    /// package manager cannot be relied on to know about a release: `.deb`,
+    /// where the machine may subscribe to no suite, and pacman, where no
+    /// repository carries OK Player at all and the package is built from the
+    /// PKGBUILD — telling the user a release exists is the only way they learn
+    /// of it.
     pub const fn discovers_versions(self) -> bool {
         !matches!(self, Self::Rpm | Self::Flatpak)
     }
@@ -191,6 +207,7 @@ impl InstallKind {
             Self::AppImage => "appimage",
             Self::Deb => "deb",
             Self::Rpm => "rpm",
+            Self::Pacman => "pacman",
             Self::Flatpak => "flatpak",
             Self::DevBuild => "dev-build",
         }
@@ -205,13 +222,26 @@ impl InstallKind {
     /// the suite that carries the version being announced, and it is the answer
     /// to "your updater says there is nothing" — a `stable` machine is never
     /// offered a candidate, and now it can see which channel it is on (#725).
-    fn system_update_hint_text(self, suite: Option<&str>) -> String {
+    ///
+    /// `version` is the release being announced, when one is. The pacman lane
+    /// needs it: the recipe builds the checkout it sits in, so "rebuild" from
+    /// an unchanged checkout rebuilds the same commit - the hint has to say to
+    /// pull first, or to build that release by name.
+    fn system_update_hint_text(self, suite: Option<&str>, version: Option<&str>) -> String {
         match (self, suite) {
             (Self::Deb, Some(suite)) => {
                 format!("Update OK Player with apt — it is in the {suite} suite you subscribe to.")
             }
             (Self::Deb, None) => "Update OK Player with your package manager (apt).".to_owned(),
             (Self::Rpm, _) => "Update OK Player with your package manager (dnf).".to_owned(),
+            // Nothing pacman can reach carries OK Player: the package is built
+            // from the recipe, so that is what the sentence has to say.
+            (Self::Pacman, _) => match version {
+                Some(version) => format!(
+                    "Version {version} is published. Pull the checkout and rebuild from rust/packaging/arch/PKGBUILD (git pull, then makepkg -si), or build that release with _okp_release={version} makepkg -si: no pacman repository carries OK Player yet."
+                ),
+                None => "Pull the checkout and rebuild from rust/packaging/arch/PKGBUILD (git pull, then makepkg -si): no pacman repository carries OK Player yet.".to_owned(),
+            },
             (Self::Flatpak, _) => "Update OK Player with Flatpak (flatpak update).".to_owned(),
             (Self::WindowsVelopack | Self::AppImage | Self::DevBuild, _) => {
                 "Update OK Player with your system update tool.".to_owned()
@@ -438,6 +468,8 @@ pub enum PackageOwnership {
     Dpkg,
     /// rpm claims the executable path.
     Rpm,
+    /// pacman claims the executable path.
+    Pacman,
 }
 
 /// Facts about the running process that the shell collects for
@@ -519,6 +551,7 @@ impl InstallEvidence {
         match self.package_ownership {
             PackageOwnership::Dpkg => Some(InstallKind::Deb),
             PackageOwnership::Rpm => Some(InstallKind::Rpm),
+            PackageOwnership::Pacman => Some(InstallKind::Pacman),
             PackageOwnership::Unowned | PackageOwnership::Unknown => None,
         }
     }
@@ -567,72 +600,6 @@ pub fn detect_install_kind(evidence: &InstallEvidence) -> InstallKind {
         return InstallKind::AppImage;
     }
     InstallKind::DevBuild
-}
-
-/// Orders two build versions for the restart check, where a release must
-/// outrank the prereleases that led to it.
-///
-/// [`compare_versions`] compares numeric runs, which is right *within* a lane —
-/// `alpha.109` after `alpha.108` — but reads `1.0.0` as older than
-/// `1.0.0-beta.1`, because the missing fourth run defaults to zero. A
-/// prerelease-to-stable upgrade would then look like a failed restart. So the
-/// numeric core is compared first, a version with no prerelease tail wins a tie
-/// against one that has it, and two prereleases of the same core fall back to
-/// the natural comparison.
-fn compare_build_order(left: &str, right: &str) -> Ordering {
-    let (left_core, left_pre) = split_prerelease(left);
-    let (right_core, right_pre) = split_prerelease(right);
-    match compare_versions(left_core, right_core) {
-        Ordering::Equal => {}
-        order => return order,
-    }
-    match (left_pre, right_pre) {
-        (None, None) => Ordering::Equal,
-        // A release outranks any prerelease of the same core.
-        (None, Some(_)) => Ordering::Greater,
-        (Some(_), None) => Ordering::Less,
-        (Some(left_pre), Some(right_pre)) => compare_prerelease(left_pre, right_pre),
-    }
-}
-
-/// Orders two prerelease tails identifier by identifier, so the *stage* is
-/// compared before its counter: `alpha.109` precedes `beta.1`, which whole-tail
-/// numeric-run comparison gets backwards by looking at 109 against 1 first.
-///
-/// Within an identifier, two numbers compare numerically (`alpha.9` before
-/// `alpha.10`) and anything else compares lexically; a number sorts before a
-/// word, and a tail that is a prefix of another sorts before it (`beta.2`
-/// before the `beta.2.41` candidate builds cut from it).
-fn compare_prerelease(left: &str, right: &str) -> Ordering {
-    let mut left_parts = left.split('.');
-    let mut right_parts = right.split('.');
-    loop {
-        match (left_parts.next(), right_parts.next()) {
-            (None, None) => return Ordering::Equal,
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (Some(left_part), Some(right_part)) => {
-                let order = match (left_part.parse::<u64>(), right_part.parse::<u64>()) {
-                    (Ok(left_number), Ok(right_number)) => left_number.cmp(&right_number),
-                    // A numeric identifier ranks below an alphanumeric one.
-                    (Ok(_), Err(_)) => Ordering::Less,
-                    (Err(_), Ok(_)) => Ordering::Greater,
-                    (Err(_), Err(_)) => left_part.cmp(right_part),
-                };
-                if order != Ordering::Equal {
-                    return order;
-                }
-            }
-        }
-    }
-}
-
-/// Splits `1.0.0-beta.1` into its numeric core and its prerelease tail.
-fn split_prerelease(version: &str) -> (&str, Option<&str>) {
-    match version.split_once('-') {
-        Some((core, pre)) => (core, Some(pre)),
-        None => (version, None),
-    }
 }
 
 /// How completely a shell was able to state a version (#694).
@@ -738,16 +705,16 @@ impl fmt::Display for ReportedVersion {
 ///   release *newer* than the pending candidate, and the restart check turns a
 ///   perfectly good upgrade into a reported downgrade.
 ///
-/// Two complete versions are always decided, by [`compare_build_order`].
+/// Two complete versions are always decided, by [`compare_versions`].
 pub fn compare_reported_build_order(
     left: &ReportedVersion,
     right: &ReportedVersion,
 ) -> Option<Ordering> {
     if left.is_complete() && right.is_complete() {
-        return Some(compare_build_order(&left.text, &right.text));
+        return Some(compare_versions(&left.text, &right.text));
     }
-    let (left_core, _) = split_prerelease(&left.text);
-    let (right_core, _) = split_prerelease(&right.text);
+    let (left_core, _) = split_prerelease(strip_build_metadata(&left.text));
+    let (right_core, _) = split_prerelease(strip_build_metadata(&right.text));
     match compare_versions(left_core, right_core) {
         // The cores tie, so the answer lives entirely in a tail at least one
         // side does not have.
@@ -1344,7 +1311,7 @@ impl UpdateLifecycle {
             state: UpdateState::ManagedExternally {
                 // A lane that never discovers a version has no suite to name:
                 // the tool it points at is the whole answer.
-                hint: install_kind.system_update_hint_text(None),
+                hint: install_kind.system_update_hint_text(None, None),
             },
             package_source: PackageSourceEvidence::Unestablished,
             packaged_suite: None,
@@ -1611,12 +1578,10 @@ impl UpdateLifecycle {
         Some(if self.capability() == UpdateCapability::SelfApply {
             CarriedOffer::Available { version }
         } else {
-            CarriedOffer::AvailableExternally {
-                version,
-                hint: self
-                    .install_kind
-                    .system_update_hint_text(self.package_source.suite()),
-            }
+            let hint = self
+                .install_kind
+                .system_update_hint_text(self.package_source.suite(), Some(&version));
+            CarriedOffer::AvailableExternally { version, hint }
         })
     }
 
@@ -1640,7 +1605,7 @@ impl UpdateLifecycle {
                 version: deliverable.to_owned(),
                 hint: self
                     .install_kind
-                    .system_update_hint_text(self.package_source.suite()),
+                    .system_update_hint_text(self.package_source.suite(), Some(deliverable)),
             };
             return Ok(self.enter(next));
         }
@@ -1697,7 +1662,7 @@ impl UpdateLifecycle {
                     version: deliverable.to_owned(),
                     hint: self
                         .install_kind
-                        .system_update_hint_text(self.package_source.suite()),
+                        .system_update_hint_text(self.package_source.suite(), Some(deliverable)),
                 },
                 None => match self.package_source.suite() {
                     Some(suite) => UpdateState::WithheldBySuite {
@@ -1705,14 +1670,19 @@ impl UpdateLifecycle {
                         suite: suite.to_owned(),
                     },
                     // No suite and no deliverable, on a lane whose delivery is
-                    // not the kind that has to be established — rpm and flatpak
-                    // never discover a version at all, so this is unreachable
-                    // today; announcing the published version with the tool's
-                    // own hint is what the lane would mean if one ever did.
-                    None => UpdateState::AvailableExternally {
-                        version: published,
-                        hint: self.install_kind.system_update_hint_text(None),
-                    },
+                    // not the kind that has to be established. The pacman lane
+                    // lands here: it discovers from the Linux feed, no suite
+                    // applies, and its hint says how the package is rebuilt.
+                    // (rpm and flatpak never discover a version at all.)
+                    None => {
+                        let hint = self
+                            .install_kind
+                            .system_update_hint_text(None, Some(&published));
+                        UpdateState::AvailableExternally {
+                            version: published,
+                            hint,
+                        }
+                    }
                 },
             },
             UpdateCapability::SystemUnreachable => UpdateState::AvailableWithoutSource {
@@ -1784,7 +1754,7 @@ impl UpdateLifecycle {
         // the repository instructions instead.
         let hint = (self.capability() == UpdateCapability::SystemManaged).then(|| {
             self.install_kind
-                .system_update_hint_text(self.package_source.suite())
+                .system_update_hint_text(self.package_source.suite(), Some(&version))
         });
         Ok(self.enter(UpdateState::Skipped {
             version,
@@ -2631,8 +2601,12 @@ mod tests {
 
     const SELF_APPLY_KINDS: [InstallKind; 2] =
         [InstallKind::WindowsVelopack, InstallKind::AppImage];
-    const SYSTEM_MANAGED_KINDS: [InstallKind; 3] =
-        [InstallKind::Deb, InstallKind::Rpm, InstallKind::Flatpak];
+    const SYSTEM_MANAGED_KINDS: [InstallKind; 4] = [
+        InstallKind::Deb,
+        InstallKind::Rpm,
+        InstallKind::Pacman,
+        InstallKind::Flatpak,
+    ];
 
     fn evidence() -> InstallEvidence {
         InstallEvidence::default()
@@ -2904,6 +2878,15 @@ mod tests {
                     ..evidence()
                 },
                 InstallKind::Rpm,
+            ),
+            (
+                "pacman running from /usr",
+                InstallEvidence {
+                    executable_path: Some("/usr/bin/ok-player".to_owned()),
+                    package_ownership: PackageOwnership::Pacman,
+                    ..evidence()
+                },
+                InstallKind::Pacman,
             ),
             (
                 "velopack layout on windows",
@@ -4095,7 +4078,8 @@ mod tests {
                 subscribed("candidate", Some("2.0.0")),
                 UpdateState::AvailableExternally {
                     version: "2.0.0".to_owned(),
-                    hint: InstallKind::Deb.system_update_hint_text(Some("candidate")),
+                    hint: InstallKind::Deb
+                        .system_update_hint_text(Some("candidate"), Some("2.0.0")),
                 },
             ),
         ];
@@ -4449,6 +4433,7 @@ mod tests {
         for (kind, expected) in [
             (InstallKind::Deb, "apt"),
             (InstallKind::Rpm, "dnf"),
+            (InstallKind::Pacman, "pacman"),
             (InstallKind::Flatpak, "flatpak"),
         ] {
             let mut lifecycle = system_managed_lifecycle(kind, "1.0.0");
@@ -4699,6 +4684,58 @@ mod tests {
         );
         let deb = UpdateLifecycle::new(InstallKind::Deb, "1.0.0");
         assert_eq!(deb.describe().action, Some(UpdateAction::CheckNow));
+        // So is the pacman lane: no pacman repository carries OK Player, so
+        // the app has to discover releases itself and say how the package is
+        // rebuilt — pacman owning the files is not pacman delivering updates.
+        assert_eq!(
+            UpdateLifecycle::managed_externally(InstallKind::Pacman, "1.0.0").err(),
+            Some(UpdateTransitionError::NotThisLane(InstallKind::Pacman)),
+            "the pacman lane polls the Linux feed"
+        );
+    }
+
+    /// Invariant: a pacman install discovers releases and, finding one, points
+    /// at the recipe rather than at pacman — nothing pacman can reach carries
+    /// OK Player, so "update with pacman" would send the user nowhere.
+    #[test]
+    fn a_pacman_install_discovers_releases_and_points_at_the_recipe() {
+        assert!(InstallKind::Pacman.discovers_versions());
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Pacman, "1.0.0");
+        assert_eq!(lifecycle.describe().action, Some(UpdateAction::CheckNow));
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+        let UpdateState::AvailableExternally { version, hint } = lifecycle.state() else {
+            panic!(
+                "a pacman install stops at AvailableExternally, got {:?}",
+                lifecycle.state()
+            );
+        };
+        assert_eq!(version, "2.0.0");
+        assert!(
+            hint.contains("rust/packaging/arch/PKGBUILD") && hint.contains("makepkg -si"),
+            "the hint names the recipe and the command, got {hint}"
+        );
+        // The recipe builds the checkout it sits in, so the hint has to say to
+        // refresh it first, or to build the announced release by name; a bare
+        // "makepkg -si" rebuilds the commit already running.
+        assert!(
+            hint.contains("git pull"),
+            "the hint says to refresh the checkout before rebuilding, got {hint}"
+        );
+        assert!(
+            hint.contains("_okp_release=2.0.0 makepkg -si"),
+            "the hint names the announced release's build command, got {hint}"
+        );
+        assert!(
+            !hint.contains("with your package manager"),
+            "pacman cannot deliver what no repository carries, got {hint}"
+        );
+        let presentation = lifecycle.describe();
+        assert_eq!(
+            presentation.upgrade_command, None,
+            "no pacman command fetches a package nothing publishes"
+        );
+        assert!(presentation.updates_message.contains("PKGBUILD"));
     }
 
     /// Invariant: after a restart that came back on the old build, the action
@@ -5229,6 +5266,7 @@ mod tests {
         for (kind, tool) in [
             (InstallKind::Deb, "apt"),
             (InstallKind::Rpm, "dnf"),
+            (InstallKind::Pacman, "pacman"),
             (InstallKind::Flatpak, "flatpak"),
         ] {
             let mut lifecycle = system_managed_lifecycle(kind, "1.0.0");

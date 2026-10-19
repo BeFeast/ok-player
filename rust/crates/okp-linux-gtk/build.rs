@@ -57,9 +57,9 @@ fn main() {
     assert!(
         matches!(
             package_kind.as_str(),
-            "deb" | "appimage" | "rpm" | "development"
+            "deb" | "appimage" | "rpm" | "arch" | "development"
         ),
-        "OKP_PACKAGE_KIND must be deb, appimage, rpm, or development"
+        "OKP_PACKAGE_KIND must be deb, appimage, rpm, arch, or development"
     );
     println!("cargo:rustc-env=OKP_PACKAGE_KIND={package_kind}");
 

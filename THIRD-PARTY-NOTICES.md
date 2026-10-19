@@ -16,11 +16,13 @@ mirrors mpv.net and IINA.
   otherwise LGPL-2.1-or-later. Full text: <https://github.com/mpv-player/mpv/blob/master/LICENSE.GPL>
 - **Copyright:** © the mpv developers and the MPlayer/mplayer2 projects it descends from.
 
-The native Fedora RPM does **not** bundle libmpv or FFmpeg libraries. It
-dynamically links Fedora's `mpv-libs` package and therefore uses the codec set
-provided by the repositories the user has explicitly enabled. Every other lane
-— Windows, the Linux `.deb`, the AppImage and the Flatpak — ships libmpv and
-the FFmpeg libraries inside the artifact.
+The native Fedora RPM and the Arch package built from
+`rust/packaging/arch/PKGBUILD` do **not** bundle libmpv or FFmpeg libraries.
+They dynamically link the distribution's mpv (Fedora's `mpv-libs`, Arch's
+`mpv`) and therefore use the codec set provided by the repositories the user
+has explicitly enabled. Every other lane — Windows, the Linux `.deb`, the
+AppImage and the Flatpak — ships libmpv and the FFmpeg libraries inside the
+artifact.
 
 mpv in turn incorporates or links, among others, FFmpeg, libass, libplacebo,
 and zlib. The dominant licenses of the bundled build are listed below; the
@@ -70,34 +72,79 @@ distributed and licensed independently by Freedesktop/Flathub.
 - **CommunityToolkit.Mvvm** — © .NET Foundation and contributors, MIT License
   (<https://github.com/CommunityToolkit/dotnet>).
 
-## Chrome icon set (Adwaita, plus one first-party icon)
+## Chrome icon set (Lucide, plus one first-party icon)
 
 - **Component:** the symbolic icons the Linux shell resolves for its own chrome
   (`rust/crates/okp-linux-gtk/icons/okp-*-symbolic.svg`), compiled into the
   binary as a `GResource`. The set has two origins under two licences.
-- **Adwaita symbolic artwork** — every icon in the set except the one named
-  below. The files are renamed into an `okp-` namespace so a user's own icon
-  theme cannot shadow them (see issue #731); the artwork itself is upstream's.
-  - **Upstream:** <https://gitlab.gnome.org/GNOME/adwaita-icon-theme>
-  - **Copyright:** © the GNOME Project and contributors.
-  - **License:** Adwaita is dual licensed **"either the GNU LGPL v3 or
-    CC-BY-SA 3.0"**, with newer icons under CC-BY-SA 4.0. This project takes
-    the **LGPL-3 option**, which is compatible with its own GPL-3.0-or-later
-    terms. LGPLv3 §4(b) requires the combined work to be accompanied by both
-    licence documents, so every package ships the full text as
-    [`LICENSE.LGPL-3.0`](LICENSE.LGPL-3.0) next to [`LICENSE`](LICENSE) —
-    see [`scripts/stage-license-documents.sh`](scripts/stage-license-documents.sh)
-    for where each lane installs them.
-- **`okp-process-working-symbolic.svg` (first-party)** — Adwaita has no
-  counterpart for it, so it remains original work drawn for OK Player by
+- **Lucide artwork** — every icon in the set except the one named below. The
+  files are renamed into an `okp-` namespace so a user's own icon theme cannot
+  shadow them (see issue #731), and each 2px stroke is rendered as a filled
+  outline so GTK's symbolic recolour reaches it. The transport glyphs (play,
+  pause, fast-forward, skip back, skip forward), the drag handle and the
+  overflow dots are rendered as solid silhouettes of the same outlines, which
+  is how they read at control sizes. The shapes are upstream's.
+  - **Upstream:** <https://lucide.dev> — <https://github.com/lucide-icons/lucide>
+  - **Version:** Lucide 0.544.0 (`lucide-static@0.544.0`), taken from the
+    design hand-off's Lucide sprite and from upstream's SVGs for the icons that
+    sprite does not carry.
+  - **Copyright:** as Lucide 0.544.0's licence file states it, verbatim:
+    "Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2023 as
+    part of Feather (MIT). All other copyright (c) for Lucide are held by
+    Lucide Contributors 2025."
+  - **License:** ISC, with the portions derived from Feather under MIT. Lucide
+    0.544.0's licence file carries both texts, reproduced below as it has them;
+    upstream does not mark per file which icons are Feather-derived, so every
+    icon file names both. The ISC text:
+
+    > Permission to use, copy, modify, and/or distribute this software for any purpose
+    > with or without fee is hereby granted, provided that the above copyright notice
+    > and this permission notice appear in all copies.
+    > 
+    > THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+    > REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+    > FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+    > INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+    > OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+    > TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+    > THIS SOFTWARE.
+
+    The MIT text, for the Feather-derived icons:
+
+    > MIT License
+    > 
+    > Copyright (c) 2013-2023 Cole Bemis
+    > 
+    > Permission is hereby granted, free of charge, to any person obtaining a copy of
+    > this software and associated documentation files (the "Software"), to deal in
+    > the Software without restriction, including without limitation the rights to
+    > use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+    > the Software, and to permit persons to whom the Software is furnished to do so,
+    > subject to the following conditions:
+    > 
+    > The above copyright notice and this permission notice shall be included in all
+    > copies or substantial portions of the Software.
+    > 
+    > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    > IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+    > FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+    > COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+    > IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+    > CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+- **`okp-process-working-symbolic.svg` (first-party)** — the spinner predates
+  the Lucide set and was left as it was: original work drawn for OK Player by
   [`scripts/generate-chrome-icons.py`](scripts/generate-chrome-icons.py).
   - **License:** GPL-3.0-or-later, the same terms as the rest of OK Player
     (see [`LICENSE`](LICENSE)).
-- **Supersedes:** an earlier revision of this section declared the whole set
-  first-party and explicitly not derived from Adwaita. That described the
-  script-drawn set these files replaced, and does not describe what ships now.
+- **Supersedes:** earlier revisions of this section described an Adwaita set
+  taken under the LGPL-3 option, and before that a wholly first-party
+  script-drawn set. Neither describes what ships now.
+  [`LICENSE.LGPL-3.0`](LICENSE.LGPL-3.0) continues to accompany every package:
+  no component in the current set is under it, but every packaging lane and
+  its gate is wired to stage it, so it stays until the lanes change together.
 - **Not affected:** the application icon and desktop integration
-  (`rust/packaging/linux/`), which are first-party and unchanged.
+  (`rust/packaging/linux/`), which are first-party.
 
 ## Obtaining the source
 

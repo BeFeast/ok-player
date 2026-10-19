@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Adwaita icon theme (GNOME), used under the GNU LGPL v3 option of its dual
-     licence; see THIRD-PARTY-NOTICES.md. Renamed into the okp- namespace so a
-     users own icon theme cannot shadow it. -->
 <svg height="16px" viewBox="0 0 16 16" width="16px" xmlns="http://www.w3.org/2000/svg">
-    <path d="m 3.292969 7.707031 l 4 4 c 0.390625 0.390625 1.023437 0.390625 1.414062 0 l 4 -4 c 0.390625 -0.390625 0.390625 -1.023437 0 -1.414062 s -1.023437 -0.390625 -1.414062 0 l -3.292969 3.292969 l -3.292969 -3.292969 c -0.390625 -0.390625 -1.023437 -0.390625 -1.414062 0 s -0.390625 1.023437 0 1.414062 z m 0 0" fill="#222222" fill-rule="evenodd"/>
+    <!-- Lucide 0.544.0 icon "chevron-down" (ISC, or MIT where Lucide carries it from
+         Feather; see THIRD-PARTY-NOTICES.md), its outlines rendered as fills so GTK's symbolic recolour reaches every pixel, and renamed
+         into the okp- namespace so a user's own icon theme cannot shadow it. -->
+    <path d="M8 9.057L4.471 5.529Q4.378 5.435 4.255 5.384Q4.133 5.333 4 5.333Q3.867 5.333 3.745 5.384Q3.622 5.435 3.529 5.529Q3.435 5.622 3.384 5.745Q3.333 5.867 3.333 6Q3.333 6.133 3.384 6.255Q3.435 6.378 3.529 6.471L7.529 10.471Q7.622 10.565 7.745 10.616Q7.867 10.667 8 10.667Q8.133 10.667 8.255 10.616Q8.378 10.565 8.471 10.471L12.471 6.471Q12.518 6.425 12.554 6.37Q12.591 6.316 12.616 6.255Q12.641 6.194 12.654 6.13Q12.667 6.066 12.667 6Q12.667 5.934 12.654 5.87Q12.641 5.806 12.616 5.745Q12.591 5.684 12.554 5.63Q12.518 5.575 12.471 5.529Q12.378 5.435 12.255 5.384Q12.133 5.333 12 5.333Q11.867 5.333 11.745 5.384Q11.622 5.435 11.529 5.529L8 9.057Z" fill="#2e3436" fill-rule="evenodd"/>
 </svg>

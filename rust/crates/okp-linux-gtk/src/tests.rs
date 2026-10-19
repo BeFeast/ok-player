@@ -1,4 +1,5 @@
 use super::*;
+use gtk::gdk_pixbuf;
 use okp_core::history_format::HistoryStateKind;
 use okp_core::recents_shelf::HistoryItem;
 use okp_core::update_lifecycle::VersionClaim;
@@ -308,24 +309,44 @@ fn timeline_layers_share_one_vertical_center_at_normal_and_live_widths() {
 }
 
 #[test]
+fn the_thumb_ring_stays_inside_the_rail_at_both_ends() {
+    // GTK clips a DrawingArea to its allocation, so a ring that overhangs the
+    // rail's ends is cut flat exactly where the thumb rests at 0:00 and at the end.
+    let footprint = TIMELINE_THUMB_DIAMETER / 2.0 + TIMELINE_THUMB_RING;
+    for width in [300, 900] {
+        let start = timeline_geometry(width, TIMELINE_HEIGHT, 0.0, 0.0);
+        let end = timeline_geometry(width, TIMELINE_HEIGHT, 1.0, 1.0);
+        assert!(
+            start.thumb_center_x - footprint >= 0.0,
+            "ring overhangs the left end"
+        );
+        assert!(
+            end.thumb_center_x + footprint <= f64::from(width),
+            "ring overhangs the right end"
+        );
+        assert_eq!(start.trough.x, footprint);
+        assert_eq!(
+            start.trough.x + start.trough.width + footprint,
+            f64::from(width)
+        );
+    }
+}
+
+#[test]
 fn floating_volume_css_pins_capsule_geometry_motion_and_state_colors() {
     let css = include_str!("css.rs");
     for required in [
         "padding: 9px 13px;",
-        "border-radius: 13px;",
-        "background: rgba(28, 28, 32, 0.72);",
+        "border-radius: 16px;",
+        "background: rgba(12, 20, 36, 0.72);",
         "min-width: 122px;",
         "min-height: 14px;",
         "transition: opacity 150ms cubic-bezier(0.25, 0.1, 0.25, 1), transform 150ms cubic-bezier(0.25, 0.1, 0.25, 1);",
         "transition: opacity 120ms cubic-bezier(0.25, 0.1, 0.25, 1), transform 120ms cubic-bezier(0.25, 0.1, 0.25, 1);",
-        "#F0B840",
+        ".okp-volume-control.is-muted .okp-volume-icon {\n            color: @okp_warning_dark;",
     ] {
         assert!(css.contains(required), "missing volume CSS: {required}");
     }
-
-    let controls = include_str!("controls.rs");
-    assert!(controls.contains("(0.157, 0.702, 0.667)")); // #28B3AA
-    assert!(controls.contains("VolumeState::unity_fraction()"));
 }
 
 #[test]
@@ -421,10 +442,9 @@ fn launcher_identity_resolves_without_replacing_the_about_illustration() {
 #[test]
 fn linux_identity_preserves_launcher_tile_and_separate_about_illustration() {
     let packaging = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packaging/linux");
-    let icon = fs::read_to_string(packaging.join("com.befeast.okplayer.svg"))
-        .expect("shared app icon should be readable");
+    let master = packaging.join("com.befeast.okplayer.svg");
+    let icon = fs::read_to_string(&master).expect("shared app icon should be readable");
     assert!(icon.contains("<rect"));
-    assert!(icon.contains("#15a89d"));
     assert!(icon.contains("cx=\"46\" cy=\"48\" r=\"33\""));
     assert!(icon.contains("x=\"92\" y=\"12\" width=\"15\" height=\"72\" rx=\"4\""));
     assert!(icon.contains("M111 14 L111 82 L161 48 Z"));
@@ -463,12 +483,10 @@ fn linux_identity_preserves_launcher_tile_and_separate_about_illustration() {
             "<circle",
         ),
     ] {
-        let icon = fs::read_to_string(
-            fixed_icons
-                .join(format!("{size}x{size}/apps"))
-                .join("com.befeast.okplayer.svg"),
-        )
-        .expect("fixed-size app icon should be readable");
+        let icon_path = fixed_icons
+            .join(format!("{size}x{size}/apps"))
+            .join("com.befeast.okplayer.svg");
+        let icon = fs::read_to_string(&icon_path).expect("fixed-size app icon should be readable");
         assert!(icon.contains(expected_path), "wrong {size}px icon variant");
         assert!(
             icon.contains(expected_transform),
@@ -479,9 +497,201 @@ fn linux_identity_preserves_launcher_tile_and_separate_about_illustration() {
             "forbidden geometry in {size}px icon"
         );
         assert!(!icon.contains("<text"), "{size}px icon uses a font glyph");
+        if size == 16 {
+            assert_tile_is_flat_identity_navy(&icon_path, size);
+        } else {
+            assert_tile_paints_the_brand_gradient_on_the_135_degree_axis(&icon_path, size);
+        }
     }
+    assert_tile_paints_the_brand_gradient_on_the_135_degree_axis(&master, 128);
     assert_eq!(ABOUT_FRAME_TICKS.len(), 5);
     assert_eq!(ABOUT_FRAME_TICK_OPACITY, [0.10, 0.18, 0.30, 0.44, 0.62]);
+}
+
+/// The brand gradient as the design states it: the identity navy through the
+/// action blue (at 55%) to the mark's cyan, laid along the 135° axis from the
+/// tile's top-left corner to its bottom-right.
+const TILE_GRADIENT_STOPS: [(f64, [u8; 3]); 3] = [
+    (0.0, [0x16, 0x30, 0x65]),
+    (0.55, [0x25, 0x63, 0xeb]),
+    (1.0, [0x39, 0xbe, 0xf9]),
+];
+
+/// The colour the brand gradient puts at `position` along its axis.
+fn brand_gradient_colour(position: f64) -> [u8; 3] {
+    let position = position.clamp(0.0, 1.0);
+    let (from, to) = TILE_GRADIENT_STOPS
+        .windows(2)
+        .map(|pair| (pair[0], pair[1]))
+        .find(|(from, to)| (from.0..=to.0).contains(&position))
+        .expect("the stops span the whole axis");
+    let mix = (position - from.0) / (to.0 - from.0);
+    std::array::from_fn(|channel| {
+        let start = f64::from(from.1[channel]);
+        let end = f64::from(to.1[channel]);
+        (start + (end - start) * mix).round() as u8
+    })
+}
+
+/// Renders a launcher SVG at `size` through gdk-pixbuf, the way the desktop's
+/// icon theme rasterises it.
+fn render_launcher_svg(path: &Path, size: i32) -> gdk_pixbuf::Pixbuf {
+    gdk_pixbuf::Pixbuf::from_file_at_size(path, size, size)
+        .unwrap_or_else(|err| panic!("{} does not render: {err}", path.display()))
+}
+
+fn rendered_pixel(pixbuf: &gdk_pixbuf::Pixbuf, x: i32, y: i32) -> [u8; 4] {
+    let bytes = pixbuf.read_pixel_bytes();
+    let channels = pixbuf.n_channels() as usize;
+    let offset = y as usize * pixbuf.rowstride() as usize + x as usize * channels;
+    let pixel = &bytes[offset..offset + channels];
+    let alpha = if channels == 4 { pixel[3] } else { 255 };
+    [pixel[0], pixel[1], pixel[2], alpha]
+}
+
+fn channels_within(left: [u8; 3], right: [u8; 3], tolerance: u8) -> bool {
+    left.iter()
+        .zip(right)
+        .all(|(left, right)| left.abs_diff(right) <= tolerance)
+}
+
+fn pixels_where(pixbuf: &gdk_pixbuf::Pixbuf, keep: impl Fn([u8; 4]) -> bool) -> usize {
+    (0..pixbuf.height())
+        .flat_map(|y| (0..pixbuf.width()).map(move |x| (x, y)))
+        .filter(|&(x, y)| keep(rendered_pixel(pixbuf, x, y)))
+        .count()
+}
+
+/// The white mark sits on top of the tile: pixels brighter in red than any
+/// point of the gradient can be (its red never passes `0x39`) can only be the
+/// mark. From 32px up the mark is the ring, the bar and the play triangle and
+/// covers about a tenth of the tile; the 24px and 16px tiles carry the
+/// triangle alone, a few percent. The floors sit well under those measured
+/// shares and high enough that a mark missing its ring fails. Most of the
+/// mark's pixels - its interior, away from the antialiased edges - must be
+/// white itself, not a light tint.
+fn assert_white_mark_over(tile: &gdk_pixbuf::Pixbuf, path: &Path, size: i32) {
+    let mark = pixels_where(tile, |[r, _, _, a]| a == 255 && r >= 160);
+    let white = pixels_where(tile, |[r, g, b, a]| {
+        a == 255 && r >= 230 && g >= 230 && b >= 230
+    });
+    let area = f64::from(size * size);
+    let least_share = if size >= 32 { 0.06 } else { 0.01 };
+    assert!(
+        mark as f64 >= (area * least_share).max(2.0),
+        "{} shows too little mark over its tile: {mark} of {} pixels",
+        path.display(),
+        size * size
+    );
+    assert!(
+        white * 10 >= mark * 4,
+        "{} draws its mark in a tint, not white: {white} white pixels out of {mark}",
+        path.display()
+    );
+}
+
+/// Where a rendered tile is sampled, as `(x, y, position along the 135° axis)`:
+/// a ring of eight points inset past the rounded corner radius - the corners
+/// and the edge midpoints, none of which the mark reaches at any size - and
+/// two points on the axis itself, at 30% and 70%, which pass beside the mark.
+/// The first four are the corners: top-left, bottom-right, top-right,
+/// bottom-left.
+fn tile_samples(size: i32) -> Vec<(i32, i32, f64)> {
+    let inset = (f64::from(size) * 0.15).round() as i32;
+    let far = size - 1 - inset;
+    let mid = size / 2;
+    let at = |fraction: f64| (f64::from(size) * fraction).round() as i32;
+    let along_axis = |x: i32, y: i32| {
+        ((f64::from(x) + 0.5) / f64::from(size) + (f64::from(y) + 0.5) / f64::from(size)) / 2.0
+    };
+    [
+        (inset, inset),
+        (far, far),
+        (far, inset),
+        (inset, far),
+        (mid, inset),
+        (inset, mid),
+        (far, mid),
+        (mid, far),
+        (at(0.3), at(0.3)),
+        (at(0.7), at(0.7)),
+    ]
+    .into_iter()
+    .map(|(x, y)| (x, y, along_axis(x, y)))
+    .collect()
+}
+
+/// Whether a sample point lands on the white mark rather than the tile. The
+/// sample ring is placed to miss the mark, so this is a guard against a
+/// resized mark, not a way to skip the corners: those are always tile.
+fn on_the_mark(pixel: [u8; 4]) -> bool {
+    pixel[0] >= 160
+}
+
+/// Renders a launcher tile and reads the brand gradient off its pixels. Every
+/// sample point off the mark must show the colour the gradient puts at its
+/// position along the 135° axis - the top-left corner is the navy end, the
+/// bottom-right the cyan end - and the two corners off that axis, top-right
+/// and bottom-left, both sit halfway along it and so must match each other: a
+/// gradient on any other axis paints them apart. The white mark must be on top
+/// of it.
+fn assert_tile_paints_the_brand_gradient_on_the_135_degree_axis(path: &Path, size: i32) {
+    let tile = render_launcher_svg(path, size);
+    assert_eq!(
+        (tile.width(), tile.height()),
+        (size, size),
+        "{} renders off its size",
+        path.display()
+    );
+    let mut corners = Vec::new();
+    for (index, (x, y, along_axis)) in tile_samples(size).into_iter().enumerate() {
+        let pixel = rendered_pixel(&tile, x, y);
+        let [r, g, b, a] = pixel;
+        assert_eq!(a, 255, "{} is see-through at ({x}, {y})", path.display());
+        if index >= 4 && on_the_mark(pixel) {
+            continue;
+        }
+        let expected = brand_gradient_colour(along_axis);
+        assert!(
+            channels_within([r, g, b], expected, 8),
+            "{} paints #{r:02x}{g:02x}{b:02x} at ({x}, {y}); the brand gradient on its 135° axis puts #{:02x}{:02x}{:02x} there",
+            path.display(),
+            expected[0],
+            expected[1],
+            expected[2],
+        );
+        if index < 4 {
+            corners.push([r, g, b]);
+        }
+    }
+    assert!(
+        channels_within(corners[2], corners[3], 3),
+        "{} paints its top-right and bottom-left corners apart, so its gradient is not on the 135° axis",
+        path.display()
+    );
+    assert_white_mark_over(&tile, path, size);
+}
+
+/// The 16px tile is flat identity navy under its white mark: every sample off
+/// the mark the same navy, no gradient.
+fn assert_tile_is_flat_identity_navy(path: &Path, size: i32) {
+    let tile = render_launcher_svg(path, size);
+    for (index, (x, y, _)) in tile_samples(size).into_iter().enumerate() {
+        let pixel = rendered_pixel(&tile, x, y);
+        let [r, g, b, a] = pixel;
+        assert_eq!(a, 255, "{} is see-through at ({x}, {y})", path.display());
+        // The corners are always tile: a tile that is white all over must not
+        // pass by having every sample skipped as "mark".
+        if index >= 4 && on_the_mark(pixel) {
+            continue;
+        }
+        assert!(
+            channels_within([r, g, b], TILE_GRADIENT_STOPS[0].1, 3),
+            "{} paints #{r:02x}{g:02x}{b:02x} at ({x}, {y}) instead of the identity navy",
+            path.display()
+        );
+    }
+    assert_white_mark_over(&tile, path, size);
 }
 
 #[test]
@@ -3031,7 +3241,7 @@ fn compact_mode_keeps_the_render_surface_and_restores_standard_chrome() {
         "border-radius: 14px;",
         "min-width: 28px;",
         "min-height: 28px;",
-        "background: rgba(22, 22, 25, 0.56);",
+        "background: rgba(12, 20, 36, 0.56);",
         "background: @okp_accent;",
         "min-width: 80px;",
         "min-height: 20px;",
@@ -8086,5 +8296,487 @@ fn the_idle_footer_gives_up_its_status_text_before_its_buttons() {
         // The status is the part that gives way; it is compressed, never removed.
         assert!(status.is_visible(), "the status text stays on the bar");
         assert_eq!(status.ellipsize(), pango::EllipsizeMode::End);
+    });
+}
+
+#[test]
+fn an_arch_package_is_a_pacman_owned_system_install() {
+    // `arch` and `pacman` both name the kind for the QA override
+    // (OKP_UPDATE_INSTALL_KIND), and that kind has to read the system-package
+    // candidate lane with no repository of its own (it discovers releases from
+    // the Linux feed and tells the user to rebuild the PKGBUILD). The build stamp
+    // (OKP_PACKAGE_KIND=arch) is recorded, not consulted: an installed package
+    // is recognised by the runtime evidence asserted at the end.
+    assert_eq!(parse_install_kind("arch"), Some(InstallKind::Pacman));
+    assert_eq!(parse_install_kind("pacman"), Some(InstallKind::Pacman));
+    assert_eq!(
+        candidate_install_lane(InstallKind::Pacman),
+        CandidateInstallLane::SystemPackage
+    );
+    // The rolling candidate channel publishes .deb and AppImage builds; a
+    // pacman install is built from a PKGBUILD that pins a release tag, so a
+    // candidate could be announced to it but never obtained. It follows
+    // releases whatever channel is configured; the .deb lane keeps its choice.
+    assert_eq!(
+        effective_update_channel_for(InstallKind::Pacman, UpdateChannel::Candidate),
+        UpdateChannel::Public
+    );
+    assert_eq!(
+        effective_update_channel_for(InstallKind::Deb, UpdateChannel::Candidate),
+        UpdateChannel::Candidate
+    );
+    assert_eq!(system_repository_hint(InstallKind::Pacman), None);
+    assert_eq!(
+        InstallKind::Pacman.capability(),
+        UpdateCapability::SystemManaged
+    );
+    // And the evidence an installed package produces at runtime - pacman
+    // claiming the executable - has to detect as that same kind.
+    assert_eq!(
+        detect_install_kind(&InstallEvidence {
+            executable_path: Some("/usr/bin/ok-player".to_owned()),
+            package_ownership: PackageOwnership::Pacman,
+            ..InstallEvidence::default()
+        }),
+        InstallKind::Pacman
+    );
+}
+
+#[test]
+fn the_ownership_probe_asks_pacman_for_the_owner_and_reads_its_answer() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // A stand-in pacman that records how it was asked and claims the path.
+    let dir = unique_temp_dir("okp-pacman-probe");
+    let stub = dir.path().join("pacman");
+    let asked = dir.path().join("asked");
+    fs::write(
+        &stub,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexit 0\n",
+            asked.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+    let only_pacman = |tool: &str| (tool == "pacman").then(|| stub.clone());
+    let arch_host = |database: &str| database == "/var/lib/pacman";
+
+    // Without pacman's database the tool on PATH is not a package manager
+    // (Debian ships an arcade game under that name), so it is never run.
+    assert_eq!(
+        query_package_ownership_with(Some("/usr/bin/ok-player"), only_pacman, |_| false),
+        PackageOwnership::Unknown
+    );
+    assert!(
+        !asked.exists(),
+        "a pacman without /var/lib/pacman is not asked"
+    );
+
+    assert_eq!(
+        query_package_ownership_with(Some("/usr/bin/ok-player"), only_pacman, arch_host),
+        PackageOwnership::Pacman
+    );
+    assert_eq!(
+        fs::read_to_string(&asked).unwrap(),
+        "-Qo\n/usr/bin/ok-player\n",
+        "pacman is asked `-Qo <path>`, the query that names a file's owner"
+    );
+
+    // pacman present but disowning the path: a manager was asked, so unowned.
+    fs::write(&stub, "#!/bin/sh\nexit 1\n").unwrap();
+    assert_eq!(
+        query_package_ownership_with(Some("/usr/bin/ok-player"), only_pacman, arch_host),
+        PackageOwnership::Unowned
+    );
+    // No manager at all is not an answer.
+    assert_eq!(
+        query_package_ownership_with(Some("/usr/bin/ok-player"), |_| None, |_| true),
+        PackageOwnership::Unknown
+    );
+}
+
+/// Spins the GTK main context until `done` holds, for display-backed tests
+/// that wait on mapping, allocation or a signal.
+fn pump_until(what: &str, mut done: impl FnMut() -> bool) {
+    let context = glib::MainContext::default();
+    for _ in 0..4000 {
+        if done() {
+            return;
+        }
+        context.iteration(false);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    panic!("{what} never happened");
+}
+
+/// The first descendant whose CSS node is named `name` - GtkScale's trough
+/// and slider are child gizmos, so the slider the pointer maps through can be
+/// measured like any widget.
+fn descendant_named(widget: &gtk::Widget, name: &str) -> Option<gtk::Widget> {
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        if current.css_name() == name {
+            return Some(current);
+        }
+        if let Some(found) = descendant_named(&current, name) {
+            return Some(found);
+        }
+        child = current.next_sibling();
+    }
+    None
+}
+
+/// GtkScale maps the pointer through its slider: the value spans the trough
+/// minus the slider, so where the slider sits at 0 and at 1 is where a click
+/// reaches 0% and 100%. Those two centres have to be where the rail paints its
+/// thumb at the same values, or the control's input and its picture disagree
+/// at the ends.
+#[test]
+#[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
+fn the_seek_scales_input_span_is_the_painted_rail() {
+    on_gtk_thread(|| {
+        crate::css::install_css();
+        let width = 300;
+        let window = gtk::Window::new();
+        // Measured in the parent's frame, which is where the scale's allocation
+        // starts: the player's overlay hands the rail and the scale the same
+        // box, so this is the frame the rail paints in - CSS padding on the
+        // scale, which GTK's own theme adds, shows up here as it would there.
+        let parent = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let seek = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 1.0);
+        seek.set_draw_value(false);
+        seek.add_css_class("okp-seek");
+        seek.set_size_request(width, TIMELINE_HEIGHT);
+        seek.set_halign(gtk::Align::Start);
+        seek.set_valign(gtk::Align::Start);
+        parent.append(&seek);
+        window.set_child(Some(&parent));
+        window.present();
+        pump_until("the seek scale laid out", || {
+            seek.is_mapped() && parent.width() >= width
+        });
+        let slider =
+            descendant_named(seek.upcast_ref(), "slider").expect("GtkScale has a slider gizmo");
+        let slider_centre = || {
+            let bounds = slider.compute_bounds(&parent).expect("slider bounds");
+            f64::from(bounds.x() + bounds.width() / 2.0)
+        };
+
+        for fraction in [0.0, 1.0] {
+            let painted = timeline_geometry(width, TIMELINE_HEIGHT, fraction, fraction);
+            seek.set_value(fraction);
+            // The frame clock lays the slider out on its next tick, so wait for
+            // it (bounded) rather than spinning the context a fixed number of times.
+            let mut waited = 0;
+            pump_until("the slider settled", || {
+                waited += 1;
+                waited > 1500 || (slider_centre() - painted.thumb_center_x).abs() < 0.5
+            });
+            assert!(
+                (slider_centre() - painted.thumb_center_x).abs() < 0.5,
+                "at {fraction} the input slider centres at {} but the rail paints its thumb at {}",
+                slider_centre(),
+                painted.thumb_center_x
+            );
+        }
+        window.destroy();
+    });
+}
+
+/// What a frame paints for `child`: the size, the origin of the painted node in
+/// the parent's frame, and the pixels as straight RGBA, row-major.
+struct Painted {
+    width: i32,
+    height: i32,
+    origin: (f32, f32),
+    pixels: Vec<[u8; 4]>,
+}
+
+impl Painted {
+    fn pixel(&self, x: i32, y: i32) -> [u8; 4] {
+        self.pixels[(y * self.width + x) as usize]
+    }
+
+    /// The pixels inside `bounds`, given in the parent's frame.
+    fn inside(&self, bounds: gtk::graphene::Rect) -> Vec<[u8; 4]> {
+        let x0 = ((bounds.x() - self.origin.0).floor() as i32).max(0);
+        let y0 = ((bounds.y() - self.origin.1).floor() as i32).max(0);
+        let x1 = ((bounds.x() + bounds.width() - self.origin.0).ceil() as i32).min(self.width);
+        let y1 = ((bounds.y() + bounds.height() - self.origin.1).ceil() as i32).min(self.height);
+        (y0..y1)
+            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+            .map(|(x, y)| self.pixel(x, y))
+            .collect()
+    }
+}
+
+/// Paints `child` the way a frame does - through its parent's snapshot, so a
+/// drawing area's draw function runs and CSS states apply.
+fn paint_child(parent: &gtk::Widget, child: &gtk::Widget) -> Painted {
+    let snapshot = gtk::Snapshot::new();
+    parent.snapshot_child(child, &snapshot);
+    let node = snapshot.to_node().expect("the child painted something");
+    let bounds = node.bounds();
+    let (width, height) = (bounds.width().ceil() as i32, bounds.height().ceil() as i32);
+    let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, width, height)
+        .expect("snapshot surface");
+    {
+        let cr = cairo::Context::new(&surface).expect("snapshot context");
+        cr.translate(-f64::from(bounds.x()), -f64::from(bounds.y()));
+        node.draw(&cr);
+    }
+    surface.flush();
+    let stride = surface.stride() as usize;
+    let data = surface.data().expect("snapshot pixels");
+    let mut pixels = Vec::with_capacity((width * height) as usize);
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            let at = y * stride + x * 4;
+            let word = u32::from_ne_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
+            let [a, r, g, b] = word.to_be_bytes();
+            pixels.push(if a == 0 {
+                [0, 0, 0, 0]
+            } else {
+                let straight = |channel: u8| (u32::from(channel) * 255 / u32::from(a)) as u8;
+                [straight(r), straight(g), straight(b), a]
+            });
+        }
+    }
+    Painted {
+        width,
+        height,
+        origin: (bounds.x(), bounds.y()),
+        pixels,
+    }
+}
+
+fn snapshot_pixels(parent: &gtk::Widget, child: &gtk::Widget) -> Vec<[u8; 4]> {
+    paint_child(parent, child).pixels
+}
+
+fn descendant_with_class(widget: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        if current.has_css_class(class) {
+            return Some(current);
+        }
+        if let Some(found) = descendant_with_class(&current, class) {
+            return Some(found);
+        }
+        child = current.next_sibling();
+    }
+    None
+}
+
+/// The resting volume button, as the frame paints it, shows the level as a
+/// cyan wick: it grows with the level and vanishes when muted. Drawn through
+/// the production control, so a wick whose draw function came unhooked, or
+/// that another layer covers, fails here where a unit render of the painter
+/// would not.
+#[test]
+#[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
+fn the_volume_button_shows_the_level_as_a_cyan_wick() {
+    on_gtk_thread(|| {
+        crate::css::install_css();
+        let state = Rc::new(RefCell::new(PlayerState::default()));
+        let control = controls::VolumeControl::new(
+            Rc::clone(&state),
+            Rc::new(Cell::new(false)),
+            Rc::new(ChromeVisibility::new()),
+        );
+        let window = gtk::Window::new();
+        window.set_child(Some(control.widget()));
+        window.present();
+        pump_until("the volume control mapped", || {
+            control.widget().is_mapped() && control.widget().width() > 0
+        });
+        let button = descendant_with_class(control.widget().upcast_ref(), "okp-volume-button")
+            .expect("the control has its resting button");
+
+        let cyan_pixels = |level: f64| {
+            control.sync_level(level);
+            snapshot_pixels(control.widget().upcast_ref(), &button)
+                .into_iter()
+                .filter(|[r, g, b, a]| {
+                    *a == 255 && r.abs_diff(57) <= 2 && g.abs_diff(190) <= 2 && b.abs_diff(249) <= 2
+                })
+                .count()
+        };
+        let half = cyan_pixels(okp_core::volume::MAX_VOLUME / 2.0);
+        assert!(half > 0, "a half-level button shows a cyan wick");
+        let full = cyan_pixels(okp_core::volume::UNITY_VOLUME);
+        assert!(
+            full > half,
+            "the wick grows with the level ({half} cyan pixels at half, {full} at unity)"
+        );
+        assert_eq!(
+            cyan_pixels(okp_core::volume::MIN_VOLUME),
+            0,
+            "a muted button shows no wick"
+        );
+        window.destroy();
+    });
+}
+
+/// In high contrast a hovered or focused History row inverts to white, but
+/// its action menu is a sibling in the row's overlay, not a child, so the
+/// row's black-on-white never reached the glyph and the ellipsis vanished on
+/// the inverted row. The menu button carries its own pill now: painted through
+/// the production overlay, its box holds both near-black and near-white
+/// pixels on the black row at rest and on the white row in its focused state.
+#[test]
+#[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
+fn a_high_contrast_history_rows_action_glyph_stays_visible_when_the_row_inverts() {
+    on_gtk_thread(|| {
+        crate::css::install_css();
+        chrome_icons::register_chrome_icons();
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        root.add_css_class("is-high-contrast");
+        let row = gtk::Button::new();
+        row.add_css_class("okp-history-row");
+        row.set_has_frame(false);
+        row.set_hexpand(true);
+        row.set_size_request(360, 56);
+        row.set_child(Some(&gtk::Label::new(Some("A watched file"))));
+        let (wrap, actions) = history_view::wrap_history_row(&row);
+        root.append(&wrap);
+        let window = gtk::Window::new();
+        window.set_child(Some(&root));
+        window.present();
+        pump_until("the history row mapped", || {
+            actions.is_mapped() && wrap.width() >= 360
+        });
+
+        let near = |pixel: [u8; 4], shade: u8, within: u8| {
+            pixel[3] == 255 && pixel[..3].iter().all(|c| c.abs_diff(shade) <= within)
+        };
+        let row_shade = |painted: &Painted| painted.pixel(20, painted.height / 2);
+        let glyph_box_contrasts = |painted: &Painted| {
+            let inside = painted.inside(actions.compute_bounds(&root).expect("actions bounds"));
+            let dark = inside.iter().filter(|p| near(**p, 0, 40)).count();
+            let light = inside.iter().filter(|p| near(**p, 255, 40)).count();
+            (dark, light)
+        };
+
+        let at_rest = paint_child(root.upcast_ref(), wrap.upcast_ref());
+        assert!(
+            near(row_shade(&at_rest), 0, 10),
+            "at rest the high-contrast row is black, got {:?}",
+            row_shade(&at_rest)
+        );
+        let (dark, light) = glyph_box_contrasts(&at_rest);
+        assert!(
+            dark > 0 && light > 0,
+            "at rest the action glyph's box has no contrast ({dark} dark, {light} light pixels)"
+        );
+
+        // The row in its keyboard-focused state, which the stylesheet inverts.
+        row.set_state_flags(
+            gtk::StateFlags::FOCUSED | gtk::StateFlags::FOCUS_VISIBLE,
+            false,
+        );
+        pump_until("the focused row inverted", || {
+            near(
+                row_shade(&paint_child(root.upcast_ref(), wrap.upcast_ref())),
+                255,
+                10,
+            )
+        });
+        let inverted = paint_child(root.upcast_ref(), wrap.upcast_ref());
+        let (dark, light) = glyph_box_contrasts(&inverted);
+        assert!(
+            dark > 0 && light > 0,
+            "on the inverted row the action glyph's box has no contrast ({dark} dark, {light} light pixels)"
+        );
+        window.destroy();
+    });
+}
+
+#[test]
+#[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
+fn a_themed_surface_rereads_the_scheme_every_time_it_is_shown() {
+    fn reshow(panel: &gtk::Box) {
+        panel.set_visible(false);
+        pump_until("the panel unmapped", || !panel.is_mapped());
+        panel.set_visible(true);
+        pump_until("the panel mapped again", || panel.is_mapped());
+    }
+    on_gtk_thread(|| {
+        // The scheme the desktop reports, flipped behind the panel's back.
+        let reported = Rc::new(Cell::new(IdleScheme {
+            dark: true,
+            high_contrast: false,
+        }));
+        let window = gtk::Window::new();
+        let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        window.set_child(Some(&panel));
+        let scheme = Rc::clone(&reported);
+        follow_idle_scheme(&panel, move || scheme.get());
+        assert!(
+            panel.has_css_class("is-dark"),
+            "the scheme is applied when built"
+        );
+        assert!(!panel.has_css_class("is-high-contrast"));
+
+        window.present();
+        pump_until("the panel mapped", || panel.is_mapped());
+        // The preference changes while the panel is hidden; the next show takes it.
+        reported.set(IdleScheme {
+            dark: false,
+            high_contrast: true,
+        });
+        reshow(&panel);
+        assert!(
+            !panel.has_css_class("is-dark"),
+            "a re-shown surface re-reads the scheme instead of keeping the one it was built with"
+        );
+        assert!(
+            panel.has_css_class("is-high-contrast"),
+            "high contrast follows the same way"
+        );
+        reported.set(IdleScheme {
+            dark: true,
+            high_contrast: false,
+        });
+        reshow(&panel);
+        assert!(panel.has_css_class("is-dark"));
+        assert!(!panel.has_css_class("is-high-contrast"));
+        window.destroy();
+    });
+}
+
+#[test]
+#[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
+fn history_bucket_rows_share_one_clipped_card_under_their_heading() {
+    fn children(widget: &impl IsA<gtk::Widget>) -> Vec<gtk::Widget> {
+        let mut out = Vec::new();
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            out.push(current);
+        }
+        out
+    }
+    on_gtk_thread(|| {
+        let host = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let heading = gtk::Label::new(Some("Today"));
+        let rows: Vec<gtk::Overlay> = (0..3).map(|_| gtk::Overlay::new()).collect();
+
+        let card = append_history_bucket(&host, heading.clone(), rows.clone());
+
+        // The host holds the heading and one card - no row floats on its own.
+        let host_children = children(&host);
+        assert_eq!(host_children.len(), 2, "heading + card, nothing else");
+        assert_eq!(host_children[0], heading.clone().upcast::<gtk::Widget>());
+        assert_eq!(host_children[1], card.clone().upcast::<gtk::Widget>());
+        assert!(card.has_css_class("okp-history-bucket-card"));
+        assert_eq!(card.overflow(), gtk::Overflow::Hidden);
+        // Every row is inside the card, in order.
+        let inside = children(&card);
+        assert_eq!(inside.len(), rows.len());
+        for (row, child) in rows.iter().zip(&inside) {
+            assert_eq!(child, &row.clone().upcast::<gtk::Widget>());
+        }
     });
 }

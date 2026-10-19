@@ -339,6 +339,12 @@ pub(crate) fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>) -
     button.set_halign(gtk::Align::Center);
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    // The rounded clip lives here, on the content, not on the button: whatever
+    // is drawn edge-to-edge inside the card (the poster and its overlays)
+    // follows the card's corners, while the button's own outset hairline,
+    // elevation and focus ring are outside any clip.
+    content.add_css_class("okp-recent-card-content");
+    content.set_overflow(gtk::Overflow::Hidden);
     content.set_size_request(RECENT_CARD_WIDTH, -1);
     let thumbnail = history_thumbnail(item, RECENT_CARD_WIDTH, RECENT_CARD_HEIGHT, false);
     let progress = gtk::ProgressBar::new();
@@ -767,16 +773,19 @@ fn render_history_rows(
         )));
         caption.add_css_class("okp-history-result-caption");
         caption.set_xalign(0.0);
-        host.append(&caption);
-        for item in filtered {
-            host.append(&history_row(
-                item,
-                surface.clone(),
-                Rc::clone(&state),
-                parent,
-                Rc::clone(&status_toast),
-            ));
-        }
+        append_history_bucket(
+            host,
+            caption,
+            filtered.into_iter().map(|item| {
+                history_row(
+                    item,
+                    surface.clone(),
+                    Rc::clone(&state),
+                    parent,
+                    Rc::clone(&status_toast),
+                )
+            }),
+        );
         return;
     }
 
@@ -801,20 +810,65 @@ fn render_history_rows(
         let header = gtk::Label::new(Some(history_format::bucket_header(bucket)));
         header.add_css_class("okp-history-bucket");
         header.set_xalign(0.0);
-        host.append(&header);
-        for item in bucket_items {
-            host.append(&history_row(
-                item,
-                surface.clone(),
-                Rc::clone(&state),
-                parent,
-                Rc::clone(&status_toast),
-            ));
-        }
+        append_history_bucket(
+            host,
+            header,
+            bucket_items.into_iter().map(|item| {
+                history_row(
+                    item,
+                    surface.clone(),
+                    Rc::clone(&state),
+                    parent,
+                    Rc::clone(&status_toast),
+                )
+            }),
+        );
     }
     let end = gtk::Label::new(Some(&history_format::retention_end_cap(retention)));
     end.add_css_class("okp-history-end-cap");
     host.append(&end);
+}
+
+/// Appends one History bucket to `host`: its heading, then every row inside
+/// one card. The rows of a bucket share the card, separated by hairlines,
+/// instead of each floating as its own tile; the card clips its children so a
+/// hovered row keeps the card's rounded corners. Returns the card.
+pub(crate) fn append_history_bucket(
+    host: &gtk::Box,
+    heading: gtk::Label,
+    rows: impl IntoIterator<Item = gtk::Overlay>,
+) -> gtk::Box {
+    host.append(&heading);
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    card.add_css_class("okp-history-bucket-card");
+    card.set_overflow(gtk::Overflow::Hidden);
+    for row in rows {
+        card.append(&row);
+    }
+    host.append(&card);
+    card
+}
+
+/// Wraps a History row button in the overlay that carries its action menu:
+/// the menu button is a sibling of the row inside the overlay, not a child of
+/// it, which is why its high-contrast treatment has to stand on its own (see
+/// the stylesheet's `okp-history-row-actions` rules).
+pub(crate) fn wrap_history_row(button: &gtk::Button) -> (gtk::Overlay, gtk::MenuButton) {
+    let overlay = gtk::Overlay::new();
+    overlay.add_css_class("okp-history-row-wrap");
+    overlay.set_child(Some(button));
+
+    let actions = gtk::MenuButton::builder()
+        .icon_name("okp-view-more-symbolic")
+        .build();
+    actions.add_css_class("okp-history-row-actions");
+    actions.set_has_frame(false);
+    actions.set_tooltip_text(Some("History actions"));
+    actions.set_halign(gtk::Align::End);
+    actions.set_valign(gtk::Align::Center);
+    actions.set_margin_end(8);
+    overlay.add_overlay(&actions);
+    (overlay, actions)
 }
 
 fn history_row(
@@ -907,19 +961,7 @@ fn history_row(
         play_parent.present();
     });
 
-    let overlay = gtk::Overlay::new();
-    overlay.add_css_class("okp-history-row-wrap");
-    overlay.set_child(Some(&button));
-
-    let actions = gtk::MenuButton::builder()
-        .icon_name("okp-view-more-symbolic")
-        .build();
-    actions.add_css_class("okp-history-row-actions");
-    actions.set_has_frame(false);
-    actions.set_tooltip_text(Some("History actions"));
-    actions.set_halign(gtk::Align::End);
-    actions.set_valign(gtk::Align::Center);
-    actions.set_margin_end(8);
+    let (overlay, actions) = wrap_history_row(&button);
 
     let action_list = gtk::Box::new(gtk::Orientation::Vertical, 2);
     action_list.add_css_class("okp-history-actions-popover");
@@ -929,7 +971,7 @@ fn history_row(
 
     let commands = okp_core::history::history_row_commands(&item.source());
     if commands.contains(&okp_core::history::HistoryRowCommand::SaveVideo) {
-        let save = history_action_button("okp-go-down-symbolic", "Save video…");
+        let save = history_action_button("okp-document-save-symbolic", "Save video…");
         let save_parent = parent.clone();
         let save_state = Rc::clone(&state);
         let save_toast = Rc::clone(&status_toast);
@@ -971,7 +1013,7 @@ fn history_row(
         action_list.append(&remove);
     }
     if commands.contains(&okp_core::history::HistoryRowCommand::MoveToTrash) {
-        let trash = history_action_button("okp-edit-clear-symbolic", "Move to Trash…");
+        let trash = history_action_button("okp-user-trash-symbolic", "Move to Trash…");
         let trash_surface = surface;
         let trash_parent = parent.clone();
         let trash_state = Rc::clone(&state);
@@ -991,7 +1033,6 @@ fn history_row(
         action_list.append(&trash);
     }
     actions.set_popover(Some(&popover));
-    overlay.add_overlay(&actions);
     overlay
 }
 

@@ -4,32 +4,38 @@ Upstream-Contact: https://github.com/BeFeast/ok-player/issues
 Source: https://github.com/BeFeast/ok-player
 Comment:
  The full licence texts referenced below are installed next to this file:
- GPL-3.0-or-later as `LICENSE`, LGPL-3.0 as `LICENSE.LGPL-3.0`. The notices
- for every third-party component this package carries are in
- `THIRD-PARTY-NOTICES.md`, also next to this file.
+ GPL-3.0-or-later as `LICENSE`. The LGPL-3.0 text is installed alongside as
+ `LICENSE.LGPL-3.0` (no file in this package is under it; every packaging lane
+ stages it). The notices for every third-party component this package carries
+ are in `THIRD-PARTY-NOTICES.md`, also next to this file.
 
 Files: *
 Copyright: 2025-2026 BeFeast
 License: GPL-3.0-or-later
 
 Files: rust/crates/okp-linux-gtk/icons/*
-Copyright: the GNOME Project and contributors
-License: LGPL-3.0
+Copyright: 2025 Lucide Contributors
+ 2013-2023 Cole Bemis (the portions derived from Feather)
+License: ISC and MIT
 Comment:
- The symbolic icons the Linux shell resolves for its own chrome are Adwaita
- artwork, compiled into the binary as a GResource and therefore present in
- every installed binary. Adwaita is dual licensed "either the GNU LGPL v3 or
- CC-BY-SA 3.0"; OK Player takes the LGPL-3 option, which is compatible with
- its own GPL-3.0-or-later terms. The files are renamed into an `okp-`
- namespace so a user's icon theme cannot shadow them; the artwork is
- upstream's. Source: https://gitlab.gnome.org/GNOME/adwaita-icon-theme
+ The symbolic icons the Linux shell resolves for its own chrome are Lucide
+ artwork (Lucide 0.544.0), compiled into the binary as a GResource and
+ therefore present in every installed binary. The files are renamed into an
+ `okp-` namespace so a user's icon theme cannot shadow them, and each stroke
+ is rendered as a filled outline so GTK's symbolic recolour reaches it (the
+ transport glyphs, the drag handle and the overflow dots as solid silhouettes
+ of the same outlines); the shapes are upstream's. Lucide's licence file is
+ the ISC licence with a copyright line reserving the portions taken from
+ Feather to Cole Bemis under MIT; upstream does not mark per file which icons
+ those are, so both licences are declared for the whole set.
+ Source: https://github.com/lucide-icons/lucide
 
 Files: rust/crates/okp-linux-gtk/icons/okp-process-working-symbolic.svg
 Copyright: 2025-2026 BeFeast
 License: GPL-3.0-or-later
 Comment:
- Adwaita has no counterpart for this icon, so it is original work drawn for
- OK Player and carries the project's own terms.
+ The spinner predates the Lucide set and is original work drawn for OK
+ Player, so it carries the project's own terms.
 
 Files: usr/lib/ok-player/libmpv.so.2 usr/lib/ok-player/lib*
 Copyright: the mpv developers, the MPlayer and mplayer2 projects, and the
@@ -57,21 +63,40 @@ License: GPL-3.0-or-later
  The complete text is installed as `LICENSE` next to this file, and on
  Debian systems it is also in `/usr/share/common-licenses/GPL-3`.
 
-License: LGPL-3.0
- This material is free software: you can redistribute it and/or modify it
- under the terms of the GNU Lesser General Public License, version 3, as
- published by the Free Software Foundation.
+License: ISC
+ Permission to use, copy, modify, and/or distribute this software for any purpose
+ with or without fee is hereby granted, provided that the above copyright notice
+ and this permission notice appear in all copies.
  .
- It is distributed in the hope that it will be useful, but WITHOUT ANY
- WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
- FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for
- more details.
+ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+ REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+ OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+ THIS SOFTWARE.
+
+License: MIT
+ MIT License
  .
- You should have received a copy of the GNU Lesser General Public License
- along with this material. If not, see <https://www.gnu.org/licenses/>.
+ Copyright (c) 2013-2023 Cole Bemis
  .
- The complete text is installed as `LICENSE.LGPL-3.0` next to this file, and
- on Debian systems it is also in `/usr/share/common-licenses/LGPL-3`.
+ Permission is hereby granted, free of charge, to any person obtaining a copy of
+ this software and associated documentation files (the "Software"), to deal in
+ the Software without restriction, including without limitation the rights to
+ use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ the Software, and to permit persons to whom the Software is furnished to do so,
+ subject to the following conditions:
+ .
+ The above copyright notice and this permission notice shall be included in all
+ copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 License: GPL-2.0-or-later
  This material is free software: you can redistribute it and/or modify it

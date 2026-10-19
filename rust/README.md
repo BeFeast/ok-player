@@ -22,6 +22,8 @@ sudo apt-get install build-essential pkg-config libgtk-4-dev libadwaita-1-dev li
 
 Notes:
 
+- Arch Linux / Omarchy: the pacman equivalents, the plain cargo recipe and the
+  PKGBUILD are in [`docs/linux-omarchy.md`](../docs/linux-omarchy.md).
 - GTK4 provides the `GtkGLArea` video host planned for libmpv rendering.
 - `libmpv-dev` provides headers and `mpv.pc` for build-time detection.
 - `libgl1-mesa-dev`, `libegl1-mesa-dev`, and `libglx-dev` provide the OpenGL

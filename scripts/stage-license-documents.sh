@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Stage the licence documents every user-facing artifact has to carry.
 #
-# OK Player is GPL-3.0-or-later and its shipped chrome icons are Adwaita
-# artwork taken under the LGPL-3 option, so GPLv3 §4 and LGPLv3 §4(b) both
-# apply to every package handed to a user: the combined work must be
-# accompanied by the GPL *and* the LGPL license documents. This script is the
-# single place the Linux archive lanes get them from, so a lane cannot drift
-# out of compliance by editing its own copy of the list.
+# OK Player is GPL-3.0-or-later, so GPLv3 §4 applies to every package handed
+# to a user: the work must be accompanied by the GPL licence document and the
+# notices for what it bundles. The LGPL-3 text ships alongside as well - the
+# lanes and their gates were wired for it while the chrome icons were Adwaita
+# artwork, and the set is staged whole. This script is the single place the
+# Linux archive lanes get the documents from, so a lane cannot drift out of
+# compliance by editing its own copy of the list.
 #
 # Usage: stage-license-documents.sh <deb|appimage> <doc-dir>
 #
@@ -25,8 +26,8 @@ esac
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# The project's own terms, the LGPL-3 the Adwaita artwork is taken under, and
-# the notices for everything bundled alongside. All three, in every lane.
+# The project's own terms, the LGPL-3 text every lane stages, and the notices
+# for everything bundled alongside. All three, in every lane.
 install -Dm644 "$ROOT/LICENSE" "$DOC_DIR/LICENSE"
 install -Dm644 "$ROOT/LICENSE.LGPL-3.0" "$DOC_DIR/LICENSE.LGPL-3.0"
 install -Dm644 "$ROOT/THIRD-PARTY-NOTICES.md" "$DOC_DIR/THIRD-PARTY-NOTICES.md"

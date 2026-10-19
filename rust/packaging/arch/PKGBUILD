@@ -1,0 +1,216 @@
+# Maintainer: BeFeast <noreply@github.com>
+#
+# OK Player for Arch Linux and Omarchy. Builds the native GTK4 shell against the
+# distro's libmpv, the way the Fedora lane does, and installs the shared Linux
+# desktop integration from rust/packaging/linux. The installed app recognises
+# itself as a pacman-owned install at runtime (pacman -Qo owns /usr/bin/ok-player,
+# the probe the Debian and Fedora packages rely on with dpkg and rpm), so it never
+# downloads or installs a package of its own and About reports "Install: pacman".
+# It still checks the Linux release feed; a newer release is announced by name,
+# with the instruction to pull the checkout and rebuild from this PKGBUILD or to
+# build that release with _okp_release=<version>, because no pacman repository
+# carries OK Player yet. OKP_PACKAGE_KIND=arch stamps the build with the lane it
+# came from; it is recorded in the update log, not consulted.
+#
+# What it builds is decided once, below:
+#   makepkg -si                                  the checkout this PKGBUILD sits in
+#   _okp_source=/path/to/checkout makepkg -si    that checkout instead
+#   _okp_release=0.12.0 makepkg -si              the published Linux release
+#                                                linux-v0.12.0 - once a release
+#                                                carries this lane; earlier ones
+#                                                are refused in prepare()
+# A checkout is cloned as-is: commit what you want built, on a branch (a
+# detached HEAD has nothing to clone).
+#
+# makepkg assumes base-devel, which provides the C compiler the build script
+# needs for the native Wayland video plane. See docs/linux-omarchy.md for the
+# dependency list and the plain cargo recipe.
+
+pkgname=ok-player
+# pacman forbids '-' in pkgver. Dropping it from a release version gives
+# 0.12.0beta.1, which vercmp orders below the 0.12.0 release it leads to, and
+# candidates order among themselves on the trailing number - the same intent as
+# the '~' the Debian and RPM lanes use (scripts/linux-package-version.sh). The
+# mode block below sets the real value for a release; a checkout build starts
+# from this placeholder and pkgver() stamps it.
+pkgver=0
+pkgrel=1
+pkgdesc="Elegant mpv-based media player — native GTK4 shell"
+arch=(x86_64)
+url="https://github.com/BeFeast/ok-player"
+# The program is GPL-3; the chrome icon set compiled into it is Lucide artwork
+# under ISC and MIT (THIRD-PARTY-NOTICES.md carries both texts and is installed
+# under the licence directory as well as the documentation directory).
+license=(GPL-3.0-or-later ISC MIT)
+depends=(gtk4 mpv libx11 wayland libglvnd xdg-utils)
+# glib-compile-resources, which the build runs for the chrome icon set, ships
+# in glib2, a dependency of gtk4 - not in glib2-devel.
+makedepends=(cargo rust pkgconf wayland-protocols git)
+checkdepends=(dbus python jq procps-ng desktop-file-utils appstream)
+optdepends=(
+  'yt-dlp: open YouTube and other site URLs'
+  'ffmpeg: clip export and screenshot tooling'
+  'noto-fonts: the interface typeface the design targets'
+  'ttf-jetbrains-mono: the data and timing typeface the design targets'
+)
+options=(!lto)
+
+# The checkout this PKGBUILD sits in: rust/packaging/arch/ of a clone.
+_okp_startdir=${startdir:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}
+_okp_enclosing_checkout() {
+  git -C "$_okp_startdir" rev-parse --show-toplevel 2>/dev/null || (cd "$_okp_startdir/../../.." && pwd)
+}
+
+# The mode, decided once so every function below asks the same question (the
+# environment variables that select it are not re-read later). The two modes
+# use different source names on purpose: makepkg keeps one bare mirror per
+# name in SRCDEST, and a mirror of one URL refuses to serve another.
+if [[ -n ${_okp_release:-} ]]; then
+  _okp_from_checkout=0
+  _upstream=$_okp_release
+  pkgver=${_upstream//-/}
+  _srcname="$pkgname"
+  source=("$_srcname::git+${url}.git#tag=linux-v${_upstream}")
+else
+  _okp_from_checkout=1
+  _upstream=''
+  _okp_source=${_okp_source:-$(_okp_enclosing_checkout)}
+  _srcname="$pkgname-checkout"
+  source=("$_srcname::git+file://${_okp_source}")
+  # A checkout is stamped with what it is (0.1.0linuxalpha.112.r7.gabc1234 to
+  # pacman, 0.1.0-linux-alpha.112+7.gabc1234 in the app), so About reports and
+  # the updater compares the version actually built; see _okp_build_version
+  # for how the tag and the count are chosen. A checkout exactly at a release
+  # tag is that release.
+  pkgver() {
+    cd "$_srcname"
+    _okp_checkout_pkgver
+  }
+fi
+sha256sums=('SKIP')
+
+# A release built here has to carry this lane: earlier releases lack the files
+# it installs (the AppStream metainfo, the LGPL text, the 16px icon) and the
+# pacman detection the installed app relies on, so they are refused rather
+# than half-built.
+_okp_require_arch_lane() {
+  if [[ ! -f rust/packaging/arch/PKGBUILD ]]; then
+    printf 'ok-player: %s predates the Arch lane (no rust/packaging/arch/PKGBUILD in its source); build a checkout or a later release\n' "${_upstream:-this checkout}" >&2
+    return 1
+  fi
+}
+
+# The build version of the checkout in the current directory.
+#
+# With a release tag in reach: <nearest linux-v tag>[+<commits since it>.g<commit>].
+# Releases are tagged on their own commits, off the main line, so a checkout of
+# main has none in reach; it is then stamped with the newest linux-v tag the
+# clone knows plus its own commit count: <newest tag>+<commits on HEAD>.g<commit>.
+# That still orders after the release for pacman (the .rN suffix) and ties with
+# it for the updater (build metadata carries no precedence), so a newer release
+# is offered and the release itself is not. A clone with no linux-v tag at all
+# is stamped the same way from the shell crate's own version.
+_okp_build_version() {
+  local described sha count base
+  if described=$(git describe --tags --long --match 'linux-v*' 2>/dev/null); then
+    sha=${described##*-g}
+    described=${described%-g*}
+    count=${described##*-}
+    base=${described%-*}
+    base=${base#linux-v}
+    if (( count == 0 )); then
+      printf '%s\n' "$base"
+    else
+      printf '%s+%s.g%s\n' "$base" "$count" "$sha"
+    fi
+    return 0
+  fi
+  base=$(git tag -l 'linux-v*' --sort=-version:refname | head -n 1)
+  if [[ -n $base ]]; then
+    base=${base#linux-v}
+  else
+    base=$(sed -n 's/^version = "\([^"]*\)"/\1/p' rust/crates/okp-linux-gtk/Cargo.toml 2>/dev/null | head -n 1)
+    if [[ -z $base ]]; then
+      printf 'ok-player: nothing to stamp this checkout with: no linux-v* tag in the clone and no rust/crates/okp-linux-gtk/Cargo.toml version\n' >&2
+      return 1
+    fi
+  fi
+  sha=$(git rev-parse --short=7 HEAD) || return 1
+  count=$(git rev-list --count HEAD) || return 1
+  printf '%s+%s.g%s\n' "$base" "$count" "$sha"
+}
+
+# The same version as pacman spells it: no '-', and '+N.gSHA' as '.rN.gSHA'.
+_okp_checkout_pkgver() {
+  local build
+  build=$(_okp_build_version) || return 1
+  local base=${build%%+*}
+  local rest=${build#"$base"}
+  base=${base//-/}
+  if [[ -n $rest ]]; then
+    rest=${rest#+}
+    printf '%s.r%s.g%s\n' "$base" "${rest%%.*}" "${rest#*.g}"
+  else
+    printf '%s\n' "$base"
+  fi
+}
+
+_build_env() {
+  export CARGO_HOME="$srcdir/cargo-home"
+  if (( _okp_from_checkout )); then
+    OKP_BUILD_VERSION="$(cd "$srcdir/$_srcname" && _okp_build_version)" || return 1
+    export OKP_BUILD_VERSION
+  else
+    export OKP_BUILD_VERSION="$_upstream"
+  fi
+  export OKP_BUILD_SHA="$(git -C "$srcdir/$_srcname" rev-parse HEAD)"
+  export OKP_PACKAGE_KIND=arch
+  export OKP_REQUIRE_SYSTEM_MPV=1
+  export CARGO_TARGET_DIR="$srcdir/target"
+}
+
+prepare() {
+  cd "$_srcname"
+  _okp_require_arch_lane
+  cd rust
+  _build_env
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$_srcname/rust"
+  _build_env
+  cargo build --frozen --release -p okp-linux-gtk --bin okp-linux-gtk
+}
+
+check() {
+  cd "$_srcname/rust"
+  _build_env
+  cargo test --frozen --workspace --all-targets
+  desktop-file-validate packaging/linux/com.befeast.okplayer.desktop
+  appstreamcli validate --no-net --pedantic packaging/linux/com.befeast.okplayer.metainfo.xml
+}
+
+package() {
+  cd "$_srcname"
+  install -Dm0755 "$srcdir/target/release/okp-linux-gtk" "$pkgdir/usr/bin/ok-player"
+  install -Dm0644 rust/packaging/linux/com.befeast.okplayer.desktop \
+    "$pkgdir/usr/share/applications/com.befeast.okplayer.desktop"
+  install -Dm0644 rust/packaging/linux/com.befeast.okplayer.metainfo.xml \
+    "$pkgdir/usr/share/metainfo/com.befeast.okplayer.metainfo.xml"
+  install -Dm0644 rust/packaging/linux/com.befeast.okplayer.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/com.befeast.okplayer.svg"
+  local size
+  for size in 16 24 32 48 64; do
+    install -Dm0644 "rust/packaging/linux/icons/hicolor/${size}x${size}/apps/com.befeast.okplayer.svg" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/com.befeast.okplayer.svg"
+  done
+  # GPLv3 §4: the licence text travels with every artifact, as do the notices
+  # for what is bundled. Every lane also stages the LGPL-3 text.
+  install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm0644 LICENSE.LGPL-3.0 "$pkgdir/usr/share/licenses/$pkgname/LICENSE.LGPL-3.0"
+  install -Dm0644 THIRD-PARTY-NOTICES.md "$pkgdir/usr/share/doc/$pkgname/THIRD-PARTY-NOTICES.md"
+  # The ISC and MIT texts for the icon set live in the notices, and Arch wants
+  # every licence the package declares under /usr/share/licenses/$pkgname.
+  install -Dm0644 THIRD-PARTY-NOTICES.md "$pkgdir/usr/share/licenses/$pkgname/THIRD-PARTY-NOTICES.md"
+}

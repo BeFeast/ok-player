@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Adwaita icon theme (GNOME), used under the GNU LGPL v3 option of its dual
-     licence; see THIRD-PARTY-NOTICES.md. Renamed into the okp- namespace so a
-     users own icon theme cannot shadow it. -->
 <svg height="16px" viewBox="0 0 16 16" width="16px" xmlns="http://www.w3.org/2000/svg">
-    <path d="m 7.996094 0 c -1.105469 0 -2 0.894531 -2 2 s 0.894531 2 2 2 c 1.101562 0 2 -0.894531 2 -2 s -0.898438 -2 -2 -2 z m 0 6 c -1.105469 0 -2 0.894531 -2 2 s 0.894531 2 2 2 c 1.101562 0 2 -0.894531 2 -2 s -0.898438 -2 -2 -2 z m 0 6 c -1.105469 0 -2 0.894531 -2 2 s 0.894531 2 2 2 c 1.101562 0 2 -0.894531 2 -2 s -0.898438 -2 -2 -2 z m 0 0" fill="#2e3436"/>
+    <!-- Lucide 0.544.0 icon "more-vertical" (ISC, or MIT where Lucide carries it from
+         Feather; see THIRD-PARTY-NOTICES.md), rendered as a solid silhouette of its outline, as it reads at control sizes, and renamed
+         into the okp- namespace so a user's own icon theme cannot shadow it. -->
+    <path d="M8 4.667Q9.333 4.667 9.333 3.333Q9.333 2 8 2Q6.667 2 6.667 3.333Q6.667 4.667 8 4.667ZM9.333 8Q9.333 9.333 8 9.333Q6.667 9.333 6.667 8Q6.667 6.667 8 6.667Q9.333 6.667 9.333 8ZM8 14Q9.333 14 9.333 12.667Q9.333 11.333 8 11.333Q6.667 11.333 6.667 12.667Q6.667 14 8 14Z" fill="#2e3436" fill-rule="evenodd"/>
 </svg>

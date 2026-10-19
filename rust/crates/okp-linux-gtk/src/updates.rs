@@ -896,6 +896,7 @@ pub(crate) fn parse_install_kind(value: &str) -> Option<InstallKind> {
     match value.trim().to_ascii_lowercase().as_str() {
         "deb" => Some(InstallKind::Deb),
         "rpm" => Some(InstallKind::Rpm),
+        "pacman" | "arch" => Some(InstallKind::Pacman),
         "appimage" => Some(InstallKind::AppImage),
         "flatpak" => Some(InstallKind::Flatpak),
         "dev-build" | "development" => Some(InstallKind::DevBuild),
@@ -903,21 +904,50 @@ pub(crate) fn parse_install_kind(value: &str) -> Option<InstallKind> {
     }
 }
 
+/// The package managers the ownership probe asks, in order: the tool, the
+/// query that names the owner of a path, the database directory that proves
+/// the tool is that system's package manager, and the ownership a success
+/// proves. The database check matters: Debian ships an arcade game as
+/// `pacman`, on the default PATH, and spawning it would not be a query.
+pub(crate) const PACKAGE_OWNERSHIP_PROBES: [(&str, &str, &str, PackageOwnership); 3] = [
+    ("dpkg", "-S", "/var/lib/dpkg", PackageOwnership::Dpkg),
+    ("rpm", "-qf", "/var/lib/rpm", PackageOwnership::Rpm),
+    ("pacman", "-Qo", "/var/lib/pacman", PackageOwnership::Pacman),
+];
+
 /// Asks the package managers this system has whether they own `path`. An
 /// absent tool is not an answer, so the result stays `Unknown` unless a
 /// manager was actually asked — core treats a failed query as "not packaged"
 /// rather than guessing.
 fn query_package_ownership(path: Option<&str>) -> PackageOwnership {
+    query_package_ownership_with(path, find_executable, |database| {
+        Path::new(database).is_dir()
+    })
+}
+
+/// [`query_package_ownership`] with the host lookups injected: production
+/// passes [`find_executable`] and a directory check, tests a resolver that
+/// points a tool name at a stand-in program and whatever database answer the
+/// case needs, so the command boundary is exercised without a package manager
+/// on the host.
+pub(crate) fn query_package_ownership_with(
+    path: Option<&str>,
+    resolve: impl Fn(&str) -> Option<PathBuf>,
+    has_database: impl Fn(&str) -> bool,
+) -> PackageOwnership {
     let Some(path) = path else {
         return PackageOwnership::Unknown;
     };
     let mut asked = false;
-    for (tool, args) in [("dpkg", ["-S"]), ("rpm", ["-qf"])] {
-        let Some(executable) = find_executable(tool) else {
+    for (tool, query, database, owner) in PACKAGE_OWNERSHIP_PROBES {
+        if !has_database(database) {
+            continue;
+        }
+        let Some(executable) = resolve(tool) else {
             continue;
         };
         let Ok(output) = Command::new(executable)
-            .args(args)
+            .arg(query)
             .arg(path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -928,11 +958,7 @@ fn query_package_ownership(path: Option<&str>) -> PackageOwnership {
         };
         asked = true;
         if output.status.success() {
-            return if tool == "dpkg" {
-                PackageOwnership::Dpkg
-            } else {
-                PackageOwnership::Rpm
-            };
+            return owner;
         }
     }
     if asked {
@@ -1300,13 +1326,15 @@ pub(crate) fn settings_updates_section(
 ) -> gtk::Box {
     let section = settings_section("Updates");
     section.append(&settings_value_row("Current version", APP_BUILD_VERSION));
-    let channel = effective_update_channel(state.borrow().settings.update_channel());
-    let (channel_label, feed_label) = match channel {
+    let configured = effective_update_channel(state.borrow().settings.update_channel());
+    let (channel_text, feed_text) = match configured {
         UpdateChannel::Public => ("linux", "Static (GitHub Pages)"),
         UpdateChannel::Candidate => ("candidate (QA)", "Rolling candidate"),
     };
-    section.append(&settings_value_row("Channel", channel_label));
-    section.append(&settings_value_row("Feed", feed_label));
+    let (channel_row, channel_value) = settings_value_row_with_label("Channel", channel_text);
+    section.append(&channel_row);
+    let (feed_row, feed_value) = settings_value_row_with_label("Feed", feed_text);
+    section.append(&feed_row);
 
     let (install_row, install_label) = settings_value_row_with_label("Install", "—");
     section.append(&install_row);
@@ -1319,6 +1347,13 @@ pub(crate) fn settings_updates_section(
         match install_receiver.try_recv() {
             Ok(kind) => {
                 install_label.set_text(kind.as_str());
+                // The rows say what the check reads, not what is configured:
+                // a pacman install follows releases whatever the channel says
+                // (see `effective_update_channel_for`).
+                if effective_update_channel_for(kind, configured) != configured {
+                    channel_value.set_text(&format!("linux — {PACMAN_CHANNEL_NOTE}"));
+                    feed_value.set_text("Static (GitHub Pages)");
+                }
                 glib::ControlFlow::Break
             }
             Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
@@ -1572,7 +1607,10 @@ pub(crate) fn start_update_check_for_ui(
     }
     refresh_linux_update_views(&state);
 
-    let channel = effective_update_channel(state.borrow().settings.update_channel());
+    let channel = effective_update_channel_for(
+        state.borrow().linux_update.install_kind(),
+        state.borrow().settings.update_channel(),
+    );
     let install_kind = state.borrow().linux_update.install_kind();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
@@ -1974,7 +2012,10 @@ fn skip_current_update(state: &Rc<RefCell<PlayerState>>, status_toast: &StatusTo
             return;
         };
         (
-            effective_update_channel(state.settings.update_channel()),
+            effective_update_channel_for(
+                state.linux_update.install_kind(),
+                state.settings.update_channel(),
+            ),
             version,
         )
     };
@@ -2122,7 +2163,10 @@ pub(crate) fn check_updates_on_startup(
         return;
     }
     refresh_linux_update_views(&state);
-    let channel = effective_update_channel(state.borrow().settings.update_channel());
+    let channel = effective_update_channel_for(
+        state.borrow().linux_update.install_kind(),
+        state.borrow().settings.update_channel(),
+    );
     let install_kind = state.borrow().linux_update.install_kind();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
@@ -2171,7 +2215,7 @@ pub(crate) fn check_for_linux_update(
     channel: UpdateChannel,
     install_kind: InstallKind,
 ) -> LinuxUpdateCheckOutcome {
-    let channel = effective_update_channel(channel);
+    let channel = effective_update_channel_for(install_kind, channel);
     let lane = candidate_install_lane(install_kind);
     if channel == UpdateChannel::Candidate {
         return check_for_linux_candidate_channel_update(lane);
@@ -2224,7 +2268,12 @@ pub(crate) fn check_for_linux_update(
 pub(crate) fn candidate_install_lane(install_kind: InstallKind) -> CandidateInstallLane {
     match install_kind {
         InstallKind::AppImage => CandidateInstallLane::AppImage,
-        InstallKind::Rpm | InstallKind::Flatpak => CandidateInstallLane::SystemPackage,
+        // A pacman install never reads the candidate channel (see
+        // `effective_update_channel_for`), so its lane is the same refusal as
+        // rpm's should anything ask.
+        InstallKind::Rpm | InstallKind::Pacman | InstallKind::Flatpak => {
+            CandidateInstallLane::SystemPackage
+        }
         InstallKind::Deb | InstallKind::DevBuild | InstallKind::WindowsVelopack => {
             CandidateInstallLane::Debian
         }
@@ -2506,7 +2555,7 @@ pub(crate) fn apply_staged_linux_update(
 pub(crate) fn system_repository_hint(install_kind: InstallKind) -> Option<&'static str> {
     match install_kind {
         InstallKind::Deb => Some(APT_REPOSITORY_URL),
-        InstallKind::Rpm | InstallKind::Flatpak => None,
+        InstallKind::Rpm | InstallKind::Pacman | InstallKind::Flatpak => None,
         InstallKind::AppImage | InstallKind::DevBuild | InstallKind::WindowsVelopack => None,
     }
 }
@@ -2549,6 +2598,34 @@ pub(crate) fn effective_update_channel(persisted: UpdateChannel) -> UpdateChanne
         _ => persisted,
     }
 }
+
+/// The channel a check reads for this install. The rolling candidate channel
+/// publishes `.deb` and AppImage builds; a pacman install is built from the
+/// PKGBUILD, which pins a release tag, so a candidate could be announced to it
+/// but never obtained. Such an install follows releases whatever the persisted
+/// channel or the QA override says — and the Updates section says so, rather
+/// than showing a channel the check does not read.
+pub(crate) fn effective_update_channel_for(
+    install_kind: InstallKind,
+    persisted: UpdateChannel,
+) -> UpdateChannel {
+    match install_kind {
+        InstallKind::Pacman => {
+            if effective_update_channel(persisted) == UpdateChannel::Candidate {
+                eprintln!(
+                    "Update channel: candidate builds are not published for pacman installs; checking releases"
+                );
+            }
+            UpdateChannel::Public
+        }
+        _ => effective_update_channel(persisted),
+    }
+}
+
+/// Why a pacman install's Updates section shows the release channel whatever
+/// is configured: the one sentence the row carries in that case.
+pub(crate) const PACMAN_CHANNEL_NOTE: &str =
+    "candidate builds are not published for pacman installs";
 
 pub(crate) fn linux_candidate_feed_url() -> String {
     env::var("OKP_LINUX_CANDIDATE_FEED_URL").unwrap_or_else(|_| LINUX_CANDIDATE_FEED_URL.to_owned())

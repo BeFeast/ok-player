@@ -1,10 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Adwaita icon theme (GNOME), used under the GNU LGPL v3 option of its dual
-     licence; see THIRD-PARTY-NOTICES.md. Renamed into the okp- namespace so a
-     users own icon theme cannot shadow it. -->
 <svg height="16px" viewBox="0 0 16 16" width="16px" xmlns="http://www.w3.org/2000/svg">
-    <g fill="#2e3436">
-        <path d="m 0.679688 3.996094 h -0.679688 v 9 h 0.644531 l 4.355469 -4.53125 z m 0 0"/>
-        <path d="m 7 3.003906 c -1.644531 0 -3 1.355469 -3 3 v 5 c 0 1.644532 1.355469 3 3 3 h 6 c 1.644531 0 3 -1.355468 3 -3 v -5 c 0 -1.644531 -1.355469 -3 -3 -3 z m 0 2 h 6 c 0.570312 0 1 0.429688 1 1 v 5 c 0 0.570313 -0.429688 1 -1 1 h -6 c -0.570312 0 -1 -0.429687 -1 -1 v -5 c 0 -0.570312 0.429688 -1 1 -1 z m 0 0"/>
-    </g>
+    <!-- Lucide 0.544.0 icon "film" (ISC, or MIT where Lucide carries it from
+         Feather; see THIRD-PARTY-NOTICES.md), its outlines rendered as fills so GTK's symbolic recolour reaches every pixel, and renamed
+         into the okp- namespace so a user's own icon theme cannot shadow it. -->
+    <path d="M1.333 12.667L1.333 3.333Q1.333 1.333 3.333 1.333L12.667 1.333Q14.667 1.333 14.667 3.333L14.667 12.667Q14.667 14.667 12.667 14.667L3.333 14.667Q1.333 14.667 1.333 12.667ZM2.667 4.333L2.667 3.333Q2.667 2.667 3.333 2.667L4 2.667L4 4.333L2.667 4.333ZM10.667 7.333L10.667 2.667L5.333 2.667L5.333 7.333L10.667 7.333ZM13.333 4.333L13.333 3.333Q13.333 2.667 12.667 2.667L12 2.667L12 4.333L13.333 4.333ZM4 5.667L4 7.333L2.667 7.333L2.667 5.667L4 5.667ZM13.333 5.667L13.333 7.333L12 7.333L12 5.667L13.333 5.667ZM2.667 10.333L2.667 8.667L4 8.667L4 10.333L2.667 10.333ZM10.667 8.667L10.667 13.333L5.333 13.333L5.333 8.667L10.667 8.667ZM13.333 8.667L13.333 10.333L12 10.333L12 8.667L13.333 8.667ZM2.667 11.667L2.667 12.667Q2.667 13.333 3.333 13.333L4 13.333L4 11.667L2.667 11.667ZM13.333 11.667L12 11.667L12 13.333L12.667 13.333Q13.333 13.333 13.333 12.667L13.333 11.667Z" fill="#2e3436" fill-rule="evenodd"/>
 </svg>

@@ -53,9 +53,10 @@ EXPECTED_FILES=(
   "usr/share/icons/hicolor/48x48/apps/com.befeast.okplayer.svg"
   "usr/share/icons/hicolor/64x64/apps/com.befeast.okplayer.svg"
   "usr/share/icons/hicolor/scalable/apps/com.befeast.okplayer.svg"
-  # Issue #743. The package is distributed to users, so GPLv3 §4 and LGPLv3
-  # §4(b) require its licence documents to be installed with it; Debian policy
-  # §12.5 puts them here. This is the only gate that proves they survive a real
+  # Issue #743. The package is distributed to users, so GPLv3 §4 requires its
+  # licence documents to be installed with it (the LGPL-3 text travels by lane
+  # policy); Debian policy §12.5 puts them here. This is the only gate that
+  # proves they survive a real
   # dpkg transaction.
   "usr/share/doc/ok-player/copyright"
   "usr/share/doc/ok-player/LICENSE"

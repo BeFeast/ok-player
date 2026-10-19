@@ -386,7 +386,11 @@ impl CandidateInstallLane {
         match package_kind {
             "appimage" => Some(Self::AppImage),
             "deb" | "development" => Some(Self::Debian),
-            "rpm" => Some(Self::SystemPackage),
+            // A pacman install never reads this channel at all (the shell keeps
+            // it on releases: candidates are published for the .deb and AppImage
+            // lanes only, and the PKGBUILD pins a release tag), so its lane is
+            // the system-package refusal, the same as rpm's.
+            "rpm" | "arch" => Some(Self::SystemPackage),
             _ => None,
         }
     }
@@ -792,6 +796,10 @@ mod tests {
         );
         assert_eq!(
             CandidateInstallLane::from_package_kind("rpm"),
+            Some(CandidateInstallLane::SystemPackage)
+        );
+        assert_eq!(
+            CandidateInstallLane::from_package_kind("arch"),
             Some(CandidateInstallLane::SystemPackage)
         );
         assert_eq!(CandidateInstallLane::from_package_kind("unknown"), None);

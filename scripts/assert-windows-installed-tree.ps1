@@ -57,7 +57,7 @@ $required = @(
     @{
         Path     = 'LICENSE.LGPL-3.0.txt'
         MinBytes = 1KB
-        Reason   = 'the LGPL-3 the bundled Adwaita chrome artwork is taken under; LGPLv3 section 4(b) requires this text alongside the GPL one'
+        Reason   = 'the LGPL-3 text every packaging lane stages alongside the GPL one; the Windows tree keeps step with the Linux lanes'
     },
     @{
         Path     = 'THIRD-PARTY-NOTICES.md'
