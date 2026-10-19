@@ -8147,7 +8147,19 @@ fn an_arch_package_is_a_pacman_owned_system_install() {
     assert_eq!(parse_install_kind("pacman"), Some(InstallKind::Pacman));
     assert_eq!(
         candidate_install_lane(InstallKind::Pacman),
-        CandidateInstallLane::Pacman
+        CandidateInstallLane::SystemPackage
+    );
+    // The rolling candidate channel publishes .deb and AppImage builds; a
+    // pacman install is built from a PKGBUILD that pins a release tag, so a
+    // candidate could be announced to it but never obtained. It follows
+    // releases whatever channel is configured; the .deb lane keeps its choice.
+    assert_eq!(
+        effective_update_channel_for(InstallKind::Pacman, UpdateChannel::Candidate),
+        UpdateChannel::Public
+    );
+    assert_eq!(
+        effective_update_channel_for(InstallKind::Deb, UpdateChannel::Candidate),
+        UpdateChannel::Candidate
     );
     assert_eq!(system_repository_hint(InstallKind::Pacman), None);
     assert_eq!(

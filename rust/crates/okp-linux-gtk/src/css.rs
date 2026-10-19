@@ -5978,15 +5978,22 @@ pub(crate) const OKP_STYLESHEET: &str = "
             color: @okp_danger_bright;
         }
 
-        window.okp-settings-window.is-dark button.okp-shortcut-chip.is-capturing {
-            background: alpha(@okp_accent, 0.16);
-            border-color: @okp_accent;
-            color: @okp_accent_bright;
-        }
-
+        /* Same order as the light sheet: empty, its hover, then capturing, so a
+           chip that is both empty and capturing (or hovered) shows the later
+           state at equal specificity. */
         window.okp-settings-window.is-dark button.okp-shortcut-chip.is-empty {
             background: transparent;
             border-color: alpha(@okp_accent, 0.35);
+            color: @okp_accent_bright;
+        }
+
+        window.okp-settings-window.is-dark button.okp-shortcut-chip.is-empty:hover {
+            background: alpha(@okp_accent, 0.10);
+        }
+
+        window.okp-settings-window.is-dark button.okp-shortcut-chip.is-capturing {
+            background: alpha(@okp_accent, 0.16);
+            border-color: @okp_accent;
             color: @okp_accent_bright;
         }
 
@@ -6485,6 +6492,30 @@ mod tests {
         assert!(
             body.contains("margin: 0;"),
             "a slider margin would shift the span"
+        );
+    }
+
+    /// The dark Settings sheet restates the shortcut chip's states; they only
+    /// compose the way the light sheet's do if they come in the same order
+    /// (empty, its hover, capturing) at equal specificity.
+    #[test]
+    fn dark_shortcut_chip_states_compose_in_the_light_sheets_order() {
+        let at = |selector: &str| {
+            OKP_STYLESHEET
+                .find(&format!("\n        {selector} {{\n"))
+                .unwrap_or_else(|| panic!("rule `{selector}` missing"))
+        };
+        let dark = "window.okp-settings-window.is-dark button.okp-shortcut-chip";
+        let empty = at(&format!("{dark}.is-empty"));
+        let empty_hover = at(&format!("{dark}.is-empty:hover"));
+        let capturing = at(&format!("{dark}.is-capturing"));
+        assert!(
+            empty < empty_hover && empty_hover < capturing,
+            "dark chip states out of order"
+        );
+        assert!(
+            rule_body(&format!("{dark}.is-empty:hover")).contains("background:"),
+            "an empty chip keeps a hover of its own"
         );
     }
 

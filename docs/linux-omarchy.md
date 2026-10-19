@@ -88,7 +88,11 @@ install kind. About reports `Install: pacman`. The app still checks the Linux
 release feed, and when a newer release exists Settings → Updates says to
 rebuild the package from the PKGBUILD (`makepkg -si`): no pacman repository
 carries OK Player yet, so "update with pacman" would point nowhere. It never
-downloads or installs a package of its own on Arch. (`OKP_PACKAGE_KIND=arch` stamps the
+downloads or installs a package of its own on Arch, and it follows releases
+only: the rolling candidate channel publishes `.deb` and AppImage builds that
+a PKGBUILD pinned to a release tag cannot reproduce, so a pacman install reads
+the release feed whatever update channel is configured, and Settings → Updates
+says so. (`OKP_PACKAGE_KIND=arch` stamps the
 build with the lane it came from; it is recorded in the update log, not
 consulted. Run the binary from an extracted package rather than an installed
 one and pacman does not own it, so it is not that kind.)

@@ -1326,13 +1326,15 @@ pub(crate) fn settings_updates_section(
 ) -> gtk::Box {
     let section = settings_section("Updates");
     section.append(&settings_value_row("Current version", APP_BUILD_VERSION));
-    let channel = effective_update_channel(state.borrow().settings.update_channel());
-    let (channel_label, feed_label) = match channel {
+    let configured = effective_update_channel(state.borrow().settings.update_channel());
+    let (channel_text, feed_text) = match configured {
         UpdateChannel::Public => ("linux", "Static (GitHub Pages)"),
         UpdateChannel::Candidate => ("candidate (QA)", "Rolling candidate"),
     };
-    section.append(&settings_value_row("Channel", channel_label));
-    section.append(&settings_value_row("Feed", feed_label));
+    let (channel_row, channel_value) = settings_value_row_with_label("Channel", channel_text);
+    section.append(&channel_row);
+    let (feed_row, feed_value) = settings_value_row_with_label("Feed", feed_text);
+    section.append(&feed_row);
 
     let (install_row, install_label) = settings_value_row_with_label("Install", "—");
     section.append(&install_row);
@@ -1345,6 +1347,13 @@ pub(crate) fn settings_updates_section(
         match install_receiver.try_recv() {
             Ok(kind) => {
                 install_label.set_text(kind.as_str());
+                // The rows say what the check reads, not what is configured:
+                // a pacman install follows releases whatever the channel says
+                // (see `effective_update_channel_for`).
+                if effective_update_channel_for(kind, configured) != configured {
+                    channel_value.set_text(&format!("linux — {PACMAN_CHANNEL_NOTE}"));
+                    feed_value.set_text("Static (GitHub Pages)");
+                }
                 glib::ControlFlow::Break
             }
             Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
@@ -2197,7 +2206,7 @@ pub(crate) fn check_for_linux_update(
     channel: UpdateChannel,
     install_kind: InstallKind,
 ) -> LinuxUpdateCheckOutcome {
-    let channel = effective_update_channel(channel);
+    let channel = effective_update_channel_for(install_kind, channel);
     let lane = candidate_install_lane(install_kind);
     if channel == UpdateChannel::Candidate {
         return check_for_linux_candidate_channel_update(lane);
@@ -2250,10 +2259,12 @@ pub(crate) fn check_for_linux_update(
 pub(crate) fn candidate_install_lane(install_kind: InstallKind) -> CandidateInstallLane {
     match install_kind {
         InstallKind::AppImage => CandidateInstallLane::AppImage,
-        InstallKind::Rpm | InstallKind::Flatpak => CandidateInstallLane::SystemPackage,
-        // Built from the PKGBUILD: a candidate is announced with the rebuild
-        // hint, never fetched and never "managed" by a tool that cannot reach it.
-        InstallKind::Pacman => CandidateInstallLane::Pacman,
+        // A pacman install never reads the candidate channel (see
+        // `effective_update_channel_for`), so its lane is the same refusal as
+        // rpm's should anything ask.
+        InstallKind::Rpm | InstallKind::Pacman | InstallKind::Flatpak => {
+            CandidateInstallLane::SystemPackage
+        }
         InstallKind::Deb | InstallKind::DevBuild | InstallKind::WindowsVelopack => {
             CandidateInstallLane::Debian
         }
@@ -2356,12 +2367,9 @@ fn check_for_linux_candidate_channel_update(lane: CandidateInstallLane) -> Linux
     );
     eprintln!("Candidate update stage=install-lane lane={lane:?}");
     match candidate_channel::route_candidate_update(&candidate, lane, None) {
-        // Both announce the version and hand nothing over: the lifecycle's
-        // hint says how the install gets it (apt for the .deb lane, a PKGBUILD
-        // rebuild for the pacman lane).
-        Ok(route @ (CandidateUpdateRoute::Debian | CandidateUpdateRoute::Announced)) => {
+        Ok(CandidateUpdateRoute::Debian) => {
             eprintln!(
-                "Candidate update stage=final result=available lane={lane:?} route={route:?} version={}",
+                "Candidate update stage=final result=available lane=deb version={}",
                 candidate.version
             );
             return LinuxUpdateCheckOutcome::Available {
@@ -2370,7 +2378,7 @@ fn check_for_linux_candidate_channel_update(lane: CandidateInstallLane) -> Linux
             };
         }
         Err(candidate_channel::CandidateUpdateRouteError::MissingAppImageCheck) => {}
-        Ok(_) => unreachable!("a route without an AppImage result can only announce"),
+        Ok(_) => unreachable!("a route without an AppImage result can only select Debian"),
         Err(error) => {
             eprintln!("Candidate update stage=final result=failed error={error}");
             return LinuxUpdateCheckOutcome::Failed(error.to_string());
@@ -2581,6 +2589,34 @@ pub(crate) fn effective_update_channel(persisted: UpdateChannel) -> UpdateChanne
         _ => persisted,
     }
 }
+
+/// The channel a check reads for this install. The rolling candidate channel
+/// publishes `.deb` and AppImage builds; a pacman install is built from the
+/// PKGBUILD, which pins a release tag, so a candidate could be announced to it
+/// but never obtained. Such an install follows releases whatever the persisted
+/// channel or the QA override says — and the Updates section says so, rather
+/// than showing a channel the check does not read.
+pub(crate) fn effective_update_channel_for(
+    install_kind: InstallKind,
+    persisted: UpdateChannel,
+) -> UpdateChannel {
+    match install_kind {
+        InstallKind::Pacman => {
+            if effective_update_channel(persisted) == UpdateChannel::Candidate {
+                eprintln!(
+                    "Update channel: candidate builds are not published for pacman installs; checking releases"
+                );
+            }
+            UpdateChannel::Public
+        }
+        _ => effective_update_channel(persisted),
+    }
+}
+
+/// Why a pacman install's Updates section shows the release channel whatever
+/// is configured: the one sentence the row carries in that case.
+pub(crate) const PACMAN_CHANNEL_NOTE: &str =
+    "candidate builds are not published for pacman installs";
 
 pub(crate) fn linux_candidate_feed_url() -> String {
     env::var("OKP_LINUX_CANDIDATE_FEED_URL").unwrap_or_else(|_| LINUX_CANDIDATE_FEED_URL.to_owned())

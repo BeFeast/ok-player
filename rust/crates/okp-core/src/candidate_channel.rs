@@ -379,12 +379,6 @@ pub enum CandidateInstallLane {
     Debian,
     AppImage,
     SystemPackage,
-    /// A pacman-owned install built from `rust/packaging/arch/PKGBUILD`. No
-    /// artifact is published for it and no repository carries it, so a
-    /// candidate is announced - the lifecycle's hint says how the package is
-    /// rebuilt - and never fetched or declared "managed" by a tool that
-    /// cannot reach it.
-    Pacman,
 }
 
 impl CandidateInstallLane {
@@ -392,8 +386,11 @@ impl CandidateInstallLane {
         match package_kind {
             "appimage" => Some(Self::AppImage),
             "deb" | "development" => Some(Self::Debian),
-            "rpm" => Some(Self::SystemPackage),
-            "arch" => Some(Self::Pacman),
+            // A pacman install never reads this channel at all (the shell keeps
+            // it on releases: candidates are published for the .deb and AppImage
+            // lanes only, and the PKGBUILD pins a release tag), so its lane is
+            // the system-package refusal, the same as rpm's.
+            "rpm" | "arch" => Some(Self::SystemPackage),
             _ => None,
         }
     }
@@ -417,10 +414,6 @@ pub enum CandidateUpdateRoute {
     Debian,
     PendingAppImage,
     AppImage,
-    /// Announce the candidate's version and nothing more: the lane has no
-    /// artifact to fetch, and the install kind's own hint says how the user
-    /// gets it (the pacman lane rebuilds its PKGBUILD).
-    Announced,
 }
 
 /// A package-lane result that contradicts the accepted candidate pointer.
@@ -472,7 +465,6 @@ pub fn route_candidate_update(
         CandidateInstallLane::SystemPackage => {
             return Err(CandidateUpdateRouteError::SystemPackageManaged);
         }
-        CandidateInstallLane::Pacman => return Ok(CandidateUpdateRoute::Announced),
         CandidateInstallLane::AppImage => {}
     }
 
@@ -786,14 +778,6 @@ mod tests {
             Err(CandidateUpdateRouteError::SystemPackageManaged),
             "a native system package must remain under its package manager"
         );
-        // A pacman install enrolled in the candidate channel is told about the
-        // candidate and how to rebuild it - not handed a failed check because
-        // pacman cannot fetch what nothing publishes.
-        assert_eq!(
-            route_candidate_update(&candidate, CandidateInstallLane::Pacman, None),
-            Ok(CandidateUpdateRoute::Announced),
-            "a PKGBUILD-built install is announced the candidate it has to rebuild"
-        );
     }
 
     #[test]
@@ -816,7 +800,7 @@ mod tests {
         );
         assert_eq!(
             CandidateInstallLane::from_package_kind("arch"),
-            Some(CandidateInstallLane::Pacman)
+            Some(CandidateInstallLane::SystemPackage)
         );
         assert_eq!(CandidateInstallLane::from_package_kind("unknown"), None);
     }
