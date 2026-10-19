@@ -8484,9 +8484,36 @@ fn the_seek_scales_input_span_is_the_painted_rail() {
     });
 }
 
-/// Paints `child` the way a frame does - through its parent's snapshot, so the
-/// drawing area's draw function runs - and returns the pixels, straight RGBA.
-fn snapshot_pixels(parent: &gtk::Widget, child: &gtk::Widget) -> Vec<[u8; 4]> {
+/// What a frame paints for `child`: the size, the origin of the painted node in
+/// the parent's frame, and the pixels as straight RGBA, row-major.
+struct Painted {
+    width: i32,
+    height: i32,
+    origin: (f32, f32),
+    pixels: Vec<[u8; 4]>,
+}
+
+impl Painted {
+    fn pixel(&self, x: i32, y: i32) -> [u8; 4] {
+        self.pixels[(y * self.width + x) as usize]
+    }
+
+    /// The pixels inside `bounds`, given in the parent's frame.
+    fn inside(&self, bounds: gtk::graphene::Rect) -> Vec<[u8; 4]> {
+        let x0 = ((bounds.x() - self.origin.0).floor() as i32).max(0);
+        let y0 = ((bounds.y() - self.origin.1).floor() as i32).max(0);
+        let x1 = ((bounds.x() + bounds.width() - self.origin.0).ceil() as i32).min(self.width);
+        let y1 = ((bounds.y() + bounds.height() - self.origin.1).ceil() as i32).min(self.height);
+        (y0..y1)
+            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+            .map(|(x, y)| self.pixel(x, y))
+            .collect()
+    }
+}
+
+/// Paints `child` the way a frame does - through its parent's snapshot, so a
+/// drawing area's draw function runs and CSS states apply.
+fn paint_child(parent: &gtk::Widget, child: &gtk::Widget) -> Painted {
     let snapshot = gtk::Snapshot::new();
     parent.snapshot_child(child, &snapshot);
     let node = snapshot.to_node().expect("the child painted something");
@@ -8516,7 +8543,16 @@ fn snapshot_pixels(parent: &gtk::Widget, child: &gtk::Widget) -> Vec<[u8; 4]> {
             });
         }
     }
-    pixels
+    Painted {
+        width,
+        height,
+        origin: (bounds.x(), bounds.y()),
+        pixels,
+    }
+}
+
+fn snapshot_pixels(parent: &gtk::Widget, child: &gtk::Widget) -> Vec<[u8; 4]> {
+    paint_child(parent, child).pixels
 }
 
 fn descendant_with_class(widget: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
@@ -8578,6 +8614,80 @@ fn the_volume_button_shows_the_level_as_a_cyan_wick() {
             cyan_pixels(okp_core::volume::MIN_VOLUME),
             0,
             "a muted button shows no wick"
+        );
+        window.destroy();
+    });
+}
+
+/// In high contrast a hovered or focused History row inverts to white, but
+/// its action menu is a sibling in the row's overlay, not a child, so the
+/// row's black-on-white never reached the glyph and the ellipsis vanished on
+/// the inverted row. The menu button carries its own pill now: painted through
+/// the production overlay, its box holds both near-black and near-white
+/// pixels on the black row at rest and on the white row in its focused state.
+#[test]
+#[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
+fn a_high_contrast_history_rows_action_glyph_stays_visible_when_the_row_inverts() {
+    on_gtk_thread(|| {
+        crate::css::install_css();
+        chrome_icons::register_chrome_icons();
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        root.add_css_class("is-high-contrast");
+        let row = gtk::Button::new();
+        row.add_css_class("okp-history-row");
+        row.set_has_frame(false);
+        row.set_hexpand(true);
+        row.set_size_request(360, 56);
+        row.set_child(Some(&gtk::Label::new(Some("A watched file"))));
+        let (wrap, actions) = history_view::wrap_history_row(&row);
+        root.append(&wrap);
+        let window = gtk::Window::new();
+        window.set_child(Some(&root));
+        window.present();
+        pump_until("the history row mapped", || {
+            actions.is_mapped() && wrap.width() >= 360
+        });
+
+        let near = |pixel: [u8; 4], shade: u8, within: u8| {
+            pixel[3] == 255 && pixel[..3].iter().all(|c| c.abs_diff(shade) <= within)
+        };
+        let row_shade = |painted: &Painted| painted.pixel(20, painted.height / 2);
+        let glyph_box_contrasts = |painted: &Painted| {
+            let inside = painted.inside(actions.compute_bounds(&root).expect("actions bounds"));
+            let dark = inside.iter().filter(|p| near(**p, 0, 40)).count();
+            let light = inside.iter().filter(|p| near(**p, 255, 40)).count();
+            (dark, light)
+        };
+
+        let at_rest = paint_child(root.upcast_ref(), wrap.upcast_ref());
+        assert!(
+            near(row_shade(&at_rest), 0, 10),
+            "at rest the high-contrast row is black, got {:?}",
+            row_shade(&at_rest)
+        );
+        let (dark, light) = glyph_box_contrasts(&at_rest);
+        assert!(
+            dark > 0 && light > 0,
+            "at rest the action glyph's box has no contrast ({dark} dark, {light} light pixels)"
+        );
+
+        // The row in its keyboard-focused state, which the stylesheet inverts.
+        row.set_state_flags(
+            gtk::StateFlags::FOCUSED | gtk::StateFlags::FOCUS_VISIBLE,
+            false,
+        );
+        pump_until("the focused row inverted", || {
+            near(
+                row_shade(&paint_child(root.upcast_ref(), wrap.upcast_ref())),
+                255,
+                10,
+            )
+        });
+        let inverted = paint_child(root.upcast_ref(), wrap.upcast_ref());
+        let (dark, light) = glyph_box_contrasts(&inverted);
+        assert!(
+            dark > 0 && light > 0,
+            "on the inverted row the action glyph's box has no contrast ({dark} dark, {light} light pixels)"
         );
         window.destroy();
     });

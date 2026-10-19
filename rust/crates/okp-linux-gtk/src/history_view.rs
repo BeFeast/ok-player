@@ -849,6 +849,28 @@ pub(crate) fn append_history_bucket(
     card
 }
 
+/// Wraps a History row button in the overlay that carries its action menu:
+/// the menu button is a sibling of the row inside the overlay, not a child of
+/// it, which is why its high-contrast treatment has to stand on its own (see
+/// the stylesheet's `okp-history-row-actions` rules).
+pub(crate) fn wrap_history_row(button: &gtk::Button) -> (gtk::Overlay, gtk::MenuButton) {
+    let overlay = gtk::Overlay::new();
+    overlay.add_css_class("okp-history-row-wrap");
+    overlay.set_child(Some(button));
+
+    let actions = gtk::MenuButton::builder()
+        .icon_name("okp-view-more-symbolic")
+        .build();
+    actions.add_css_class("okp-history-row-actions");
+    actions.set_has_frame(false);
+    actions.set_tooltip_text(Some("History actions"));
+    actions.set_halign(gtk::Align::End);
+    actions.set_valign(gtk::Align::Center);
+    actions.set_margin_end(8);
+    overlay.add_overlay(&actions);
+    (overlay, actions)
+}
+
 fn history_row(
     item: &HistoryItem,
     surface: EmptySurface,
@@ -939,19 +961,7 @@ fn history_row(
         play_parent.present();
     });
 
-    let overlay = gtk::Overlay::new();
-    overlay.add_css_class("okp-history-row-wrap");
-    overlay.set_child(Some(&button));
-
-    let actions = gtk::MenuButton::builder()
-        .icon_name("okp-view-more-symbolic")
-        .build();
-    actions.add_css_class("okp-history-row-actions");
-    actions.set_has_frame(false);
-    actions.set_tooltip_text(Some("History actions"));
-    actions.set_halign(gtk::Align::End);
-    actions.set_valign(gtk::Align::Center);
-    actions.set_margin_end(8);
+    let (overlay, actions) = wrap_history_row(&button);
 
     let action_list = gtk::Box::new(gtk::Orientation::Vertical, 2);
     action_list.add_css_class("okp-history-actions-popover");
@@ -1023,7 +1033,6 @@ fn history_row(
         action_list.append(&trash);
     }
     actions.set_popover(Some(&popover));
-    overlay.add_overlay(&actions);
     overlay
 }
 

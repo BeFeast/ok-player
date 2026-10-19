@@ -1386,6 +1386,34 @@ pub(crate) const OKP_STYLESHEET: &str = "
             color: #000000;
         }
 
+        /* The row's action menu sits in an overlay beside the row button, not
+           inside it, so the row's inversion never reaches its glyph. In high
+           contrast the button carries its own black pill with a white ring,
+           visible on the black row and on the white inverted one alike, and
+           inverts on its own hover and focus. */
+        .is-high-contrast menubutton.okp-history-row-actions > button {
+            background: #000000;
+            border: 1px solid #ffffff;
+            color: #ffffff;
+            box-shadow: none;
+        }
+
+        .is-high-contrast menubutton.okp-history-row-actions > button image {
+            color: #ffffff;
+        }
+
+        .is-high-contrast menubutton.okp-history-row-actions > button:hover,
+        .is-high-contrast menubutton.okp-history-row-actions > button:focus-visible {
+            background: #ffffff;
+            border-color: #000000;
+            color: #000000;
+        }
+
+        .is-high-contrast menubutton.okp-history-row-actions > button:hover image,
+        .is-high-contrast menubutton.okp-history-row-actions > button:focus-visible image {
+            color: #000000;
+        }
+
         .is-high-contrast .okp-history-divider,
         .is-high-contrast .okp-history-end-cap,
         .is-high-contrast .okp-idle-footer {
