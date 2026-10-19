@@ -8139,7 +8139,8 @@ fn the_idle_footer_gives_up_its_status_text_before_its_buttons() {
 fn an_arch_package_is_a_pacman_owned_system_install() {
     // `arch` and `pacman` both name the kind for the QA override
     // (OKP_UPDATE_INSTALL_KIND), and that kind has to read the system-package
-    // candidate lane with no repository of its own. The build stamp
+    // candidate lane with no repository of its own (it discovers releases from
+    // the Linux feed and tells the user to rebuild the PKGBUILD). The build stamp
     // (OKP_PACKAGE_KIND=arch) is recorded, not consulted: an installed package
     // is recognised by the runtime evidence asserted at the end.
     assert_eq!(parse_install_kind("arch"), Some(InstallKind::Pacman));

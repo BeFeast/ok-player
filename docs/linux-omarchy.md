@@ -84,9 +84,11 @@ them.
 An installed package is recognised at runtime: the app asks `pacman -Qo` who
 owns its executable, the same probe the Debian and Fedora packages rely on with
 `dpkg` and `rpm`, and pacman owning `/usr/bin/ok-player` is the **pacman**
-install kind. About reports `Install: pacman`, Settings → Updates says to
-update with pacman, and the app neither checks for releases nor downloads or
-installs a package of its own on Arch. (`OKP_PACKAGE_KIND=arch` stamps the
+install kind. About reports `Install: pacman`. The app still checks the Linux
+release feed, and when a newer release exists Settings → Updates says to
+rebuild the package from the PKGBUILD (`makepkg -si`): no pacman repository
+carries OK Player yet, so "update with pacman" would point nowhere. It never
+downloads or installs a package of its own on Arch. (`OKP_PACKAGE_KIND=arch` stamps the
 build with the lane it came from; it is recorded in the update log, not
 consulted. Run the binary from an extracted package rather than an installed
 one and pacman does not own it, so it is not that kind.)

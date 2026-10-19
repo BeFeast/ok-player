@@ -4,10 +4,12 @@
 # distro's libmpv, the way the Fedora lane does, and installs the shared Linux
 # desktop integration from rust/packaging/linux. The installed app recognises
 # itself as a pacman-owned install at runtime (pacman -Qo owns /usr/bin/ok-player,
-# the probe the Debian and Fedora packages rely on with dpkg and rpm), so its own
-# updater stands down and About reports "Install: pacman": updates come from
-# pacman, never from the app. OKP_PACKAGE_KIND=arch stamps the build with the
-# lane it came from; it is recorded in the update log, not consulted.
+# the probe the Debian and Fedora packages rely on with dpkg and rpm), so it never
+# downloads or installs a package of its own and About reports "Install: pacman".
+# It still checks the Linux release feed; a newer release is announced with the
+# instruction to rebuild from this PKGBUILD, because no pacman repository
+# carries OK Player yet. OKP_PACKAGE_KIND=arch stamps the build with the lane it
+# came from; it is recorded in the update log, not consulted.
 #
 # Build a release:   makepkg -si                      (from this directory)
 # Build a checkout:  _okp_source=/path/to/checkout makepkg -si

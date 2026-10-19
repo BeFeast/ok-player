@@ -166,7 +166,9 @@ impl InstallKind {
             Self::Deb => Some("sudo apt install --only-upgrade ok-player"),
             // Not "there is no such command" but "this app has no state in which to offer
             // one": the rpm and flatpak lanes never discover a version, so they never reach a
-            // state that announces one. What they say is who updates them, unchanged.
+            // state that announces one. What they say is who updates them, unchanged. The
+            // pacman lane does announce one, but no command fetches it — the package is
+            // rebuilt from the PKGBUILD, and the announcement's hint says so.
             Self::Rpm
             | Self::Pacman
             | Self::Flatpak
@@ -177,11 +179,16 @@ impl InstallKind {
     }
 
     /// Whether the app discovers versions for this install kind at all. The
-    /// rpm and flatpak lanes never ask — they report who updates them — while
-    /// every other kind, the system-managed `.deb` lane included, polls a feed
-    /// of its own.
+    /// rpm and flatpak lanes never ask — they report who updates them, and a
+    /// repository exists for that tool to read — while every other kind polls
+    /// a feed of its own. That includes the two system-managed lanes whose
+    /// package manager cannot be relied on to know about a release: `.deb`,
+    /// where the machine may subscribe to no suite, and pacman, where no
+    /// repository carries OK Player at all and the package is built from the
+    /// PKGBUILD — telling the user a release exists is the only way they learn
+    /// of it.
     pub const fn discovers_versions(self) -> bool {
-        !matches!(self, Self::Rpm | Self::Pacman | Self::Flatpak)
+        !matches!(self, Self::Rpm | Self::Flatpak)
     }
 
     /// Whether taking a discovered offer downloads *and* applies it in one
@@ -222,7 +229,11 @@ impl InstallKind {
             }
             (Self::Deb, None) => "Update OK Player with your package manager (apt).".to_owned(),
             (Self::Rpm, _) => "Update OK Player with your package manager (dnf).".to_owned(),
-            (Self::Pacman, _) => "Update OK Player with your package manager (pacman).".to_owned(),
+            // Nothing pacman can reach carries OK Player: the package is built
+            // from the recipe, so that is what the sentence has to say.
+            (Self::Pacman, _) => {
+                "Rebuild the package from rust/packaging/arch/PKGBUILD (makepkg -si): no pacman repository carries OK Player yet.".to_owned()
+            }
             (Self::Flatpak, _) => "Update OK Player with Flatpak (flatpak update).".to_owned(),
             (Self::WindowsVelopack | Self::AppImage | Self::DevBuild, _) => {
                 "Update OK Player with your system update tool.".to_owned()
@@ -1719,10 +1730,10 @@ impl UpdateLifecycle {
                         suite: suite.to_owned(),
                     },
                     // No suite and no deliverable, on a lane whose delivery is
-                    // not the kind that has to be established — rpm and flatpak
-                    // never discover a version at all, so this is unreachable
-                    // today; announcing the published version with the tool's
-                    // own hint is what the lane would mean if one ever did.
+                    // not the kind that has to be established. The pacman lane
+                    // lands here: it discovers from the Linux feed, no suite
+                    // applies, and its hint says how the package is rebuilt.
+                    // (rpm and flatpak never discover a version at all.)
                     None => UpdateState::AvailableExternally {
                         version: published,
                         hint: self.install_kind.system_update_hint_text(None),
@@ -4662,11 +4673,7 @@ mod tests {
     /// it and offers nothing — not even the check an `Idle` surface offers.
     #[test]
     fn a_system_owned_install_reports_its_manager_instead_of_offering_a_check() {
-        for (kind, tool) in [
-            (InstallKind::Rpm, "dnf"),
-            (InstallKind::Pacman, "pacman"),
-            (InstallKind::Flatpak, "flatpak"),
-        ] {
+        for (kind, tool) in [(InstallKind::Rpm, "dnf"), (InstallKind::Flatpak, "flatpak")] {
             let mut lifecycle = UpdateLifecycle::managed_externally(kind, "1.0.0")
                 .expect("a system-managed install can be owned outright");
 
@@ -4731,6 +4738,47 @@ mod tests {
         );
         let deb = UpdateLifecycle::new(InstallKind::Deb, "1.0.0");
         assert_eq!(deb.describe().action, Some(UpdateAction::CheckNow));
+        // So is the pacman lane: no pacman repository carries OK Player, so
+        // the app has to discover releases itself and say how the package is
+        // rebuilt — pacman owning the files is not pacman delivering updates.
+        assert_eq!(
+            UpdateLifecycle::managed_externally(InstallKind::Pacman, "1.0.0").err(),
+            Some(UpdateTransitionError::NotThisLane(InstallKind::Pacman)),
+            "the pacman lane polls the Linux feed"
+        );
+    }
+
+    /// Invariant: a pacman install discovers releases and, finding one, points
+    /// at the recipe rather than at pacman — nothing pacman can reach carries
+    /// OK Player, so "update with pacman" would send the user nowhere.
+    #[test]
+    fn a_pacman_install_discovers_releases_and_points_at_the_recipe() {
+        assert!(InstallKind::Pacman.discovers_versions());
+        let mut lifecycle = UpdateLifecycle::new(InstallKind::Pacman, "1.0.0");
+        assert_eq!(lifecycle.describe().action, Some(UpdateAction::CheckNow));
+        lifecycle.start_check().unwrap();
+        lifecycle.check_found("2.0.0").unwrap();
+        let UpdateState::AvailableExternally { version, hint } = lifecycle.state() else {
+            panic!(
+                "a pacman install stops at AvailableExternally, got {:?}",
+                lifecycle.state()
+            );
+        };
+        assert_eq!(version, "2.0.0");
+        assert!(
+            hint.contains("rust/packaging/arch/PKGBUILD") && hint.contains("makepkg -si"),
+            "the hint names the recipe and the command, got {hint}"
+        );
+        assert!(
+            !hint.contains("with your package manager"),
+            "pacman cannot deliver what no repository carries, got {hint}"
+        );
+        let presentation = lifecycle.describe();
+        assert_eq!(
+            presentation.upgrade_command, None,
+            "no pacman command fetches a package nothing publishes"
+        );
+        assert!(presentation.updates_message.contains("PKGBUILD"));
     }
 
     /// Invariant: after a restart that came back on the old build, the action

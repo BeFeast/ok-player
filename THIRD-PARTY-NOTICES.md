@@ -16,11 +16,13 @@ mirrors mpv.net and IINA.
   otherwise LGPL-2.1-or-later. Full text: <https://github.com/mpv-player/mpv/blob/master/LICENSE.GPL>
 - **Copyright:** © the mpv developers and the MPlayer/mplayer2 projects it descends from.
 
-The native Fedora RPM does **not** bundle libmpv or FFmpeg libraries. It
-dynamically links Fedora's `mpv-libs` package and therefore uses the codec set
-provided by the repositories the user has explicitly enabled. Every other lane
-— Windows, the Linux `.deb`, the AppImage and the Flatpak — ships libmpv and
-the FFmpeg libraries inside the artifact.
+The native Fedora RPM and the Arch package built from
+`rust/packaging/arch/PKGBUILD` do **not** bundle libmpv or FFmpeg libraries.
+They dynamically link the distribution's mpv (Fedora's `mpv-libs`, Arch's
+`mpv`) and therefore use the codec set provided by the repositories the user
+has explicitly enabled. Every other lane — Windows, the Linux `.deb`, the
+AppImage and the Flatpak — ships libmpv and the FFmpeg libraries inside the
+artifact.
 
 mpv in turn incorporates or links, among others, FFmpeg, libass, libplacebo,
 and zlib. The dominant licenses of the bundled build are listed below; the

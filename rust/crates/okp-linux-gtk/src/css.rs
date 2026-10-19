@@ -1458,6 +1458,37 @@ pub(crate) const OKP_STYLESHEET: &str = "
             color: #000000;
         }
 
+        /* The light scheme's state rules are more specific than the resets
+           above (.is-light X:hover outranks .is-high-contrast X, and the root
+           keeps both classes), so every hover, drag-over, focus and scoped
+           label rule is restated at a specificity that wins. */
+        .is-high-contrast button.okp-recents-history-button:hover,
+        .is-high-contrast button.okp-idle-secondary-button:hover,
+        .is-high-contrast button.okp-first-run-drop-target:hover,
+        .is-high-contrast button.okp-welcome-drop-target:hover,
+        .is-high-contrast button.okp-recent-card:hover,
+        .is-high-contrast .okp-empty-surface.is-drop-target button.okp-first-run-drop-target,
+        .is-high-contrast .okp-empty-surface.is-drop-target button.okp-welcome-drop-target {
+            background: #000000;
+            border-color: #ffffff;
+            box-shadow: inset 0 0 0 1px #ffffff;
+            color: #ffffff;
+        }
+
+        .is-high-contrast button.okp-idle-primary-button:focus-visible,
+        .is-high-contrast button.okp-idle-secondary-button:focus-visible,
+        .is-high-contrast button.okp-recents-history-button:focus-visible,
+        .is-high-contrast button.okp-first-run-drop-target:focus-visible,
+        .is-high-contrast button.okp-welcome-drop-target:focus-visible,
+        .is-high-contrast button.okp-recent-card:focus-visible {
+            box-shadow: 0 0 0 2px #000000, 0 0 0 4px #ffffff;
+        }
+
+        .is-high-contrast .okp-first-run-drop-target .okp-drop-primary,
+        .is-high-contrast .okp-welcome-drop-target .okp-drop-primary {
+            color: #ffffff;
+        }
+
         .is-high-contrast progressbar.okp-recent-progress progress {
             background: #ffffff;
         }
@@ -5803,6 +5834,8 @@ mod tests {
             "window.okp-settings-window.is-high-contrast .okp-about-identity",
             "window.okp-settings-window.is-high-contrast .okp-update-setup-commands",
             "window.okp-media-info-window.is-high-contrast .okp-media-info-tab-strip",
+            ".is-high-contrast button.okp-recents-history-button:hover,\n        .is-high-contrast button.okp-idle-secondary-button:hover,\n        .is-high-contrast button.okp-first-run-drop-target:hover,\n        .is-high-contrast button.okp-welcome-drop-target:hover,\n        .is-high-contrast button.okp-recent-card:hover,\n        .is-high-contrast .okp-empty-surface.is-drop-target button.okp-first-run-drop-target,\n        .is-high-contrast .okp-empty-surface.is-drop-target button.okp-welcome-drop-target",
+            ".is-high-contrast button.okp-idle-primary-button:focus-visible,\n        .is-high-contrast button.okp-idle-secondary-button:focus-visible,\n        .is-high-contrast button.okp-recents-history-button:focus-visible,\n        .is-high-contrast button.okp-first-run-drop-target:focus-visible,\n        .is-high-contrast button.okp-welcome-drop-target:focus-visible,\n        .is-high-contrast button.okp-recent-card:focus-visible",
         ] {
             let body = rule_body(selector);
             assert!(
@@ -5810,6 +5843,15 @@ mod tests {
                 "{selector} must paint black on a white border, got {body}"
             );
         }
+        // The scoped light heading (.is-light .okp-first-run-drop-target
+        // .okp-drop-primary) outranks a bare .is-high-contrast .okp-drop-primary,
+        // so the high-contrast heading has to be scoped the same way.
+        assert!(
+            rule_body(
+                ".is-high-contrast .okp-first-run-drop-target .okp-drop-primary,\n        .is-high-contrast .okp-welcome-drop-target .okp-drop-primary"
+            )
+            .contains("color: #ffffff;")
+        );
         // The idle root keeps .is-light / .is-dark beside .is-high-contrast,
         // and the themed state-card rules have the same specificity as the
         // reset, so the reset only wins by coming later in the sheet.
