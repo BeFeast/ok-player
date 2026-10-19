@@ -451,14 +451,18 @@ mod tests {
         for name in shipped_files() {
             let pixbuf = decode_as_gtk_does(&shipped_bytes(&name))
                 .unwrap_or_else(|err| panic!("{name} does not decode the way GTK loads it: {err}"));
+            // The set is drawn on the 16px grid (one upstream extent rounds to
+            // 15.98, which rasterises to 15 or 16 rows), and a glyph on it has
+            // dozens of inked pixels: an icon that came out tiny or nearly
+            // blank would be as invisible as one that did not decode.
             assert!(
-                pixbuf.width() > 0 && pixbuf.height() > 0,
-                "{name} decodes to an empty image"
+                pixbuf.width() == 16 && (15..=16).contains(&pixbuf.height()),
+                "{name} decodes to {}x{}, not the 16px grid",
+                pixbuf.width(),
+                pixbuf.height()
             );
-            assert!(
-                painted_pixels(&pixbuf) > 0,
-                "{name} decodes but paints nothing"
-            );
+            let inked = painted_pixels(&pixbuf);
+            assert!(inked >= 24, "{name} decodes but paints only {inked} pixels");
         }
     }
 

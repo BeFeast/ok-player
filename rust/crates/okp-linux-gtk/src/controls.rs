@@ -354,7 +354,7 @@ pub(crate) struct VolumeControl {
 }
 
 impl VolumeControl {
-    fn new(
+    pub(crate) fn new(
         state: Rc<RefCell<PlayerState>>,
         updating: Rc<Cell<bool>>,
         chrome: Rc<ChromeVisibility>,
@@ -1933,7 +1933,144 @@ pub(crate) fn open_seek_preview(controls: &Controls) {
 
 #[cfg(test)]
 mod tests {
-    use super::update_hover_thumbnail_request;
+    use super::{
+        VOLUME_THUMB_SIZE, VOLUME_TRACK_WIDTH, VOLUME_WICK_HEIGHT, VOLUME_WICK_WIDTH,
+        draw_volume_track, draw_volume_wick, update_hover_thumbnail_request,
+    };
+    use gtk::cairo;
+    use okp_core::volume::{MAX_VOLUME, UNITY_VOLUME, VolumeState};
+
+    /// The brand cyan the volume paints its level in (`#39bef9`) and the amber
+    /// it paints the boost above unity in (`#fbbf24`).
+    const CYAN: [u8; 3] = [57, 190, 249];
+    const AMBER: [u8; 3] = [251, 191, 36];
+
+    fn painted(width: i32, height: i32, draw: impl FnOnce(&cairo::Context)) -> cairo::ImageSurface {
+        let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, width, height)
+            .expect("test surface");
+        {
+            let cr = cairo::Context::new(&surface).expect("test context");
+            draw(&cr);
+        }
+        surface.flush();
+        surface
+    }
+
+    /// The pixel at `(x, y)` as straight `[r, g, b, a]` (cairo stores
+    /// premultiplied native-endian ARGB).
+    fn pixel(surface: &mut cairo::ImageSurface, x: i32, y: i32) -> [u8; 4] {
+        let stride = surface.stride() as usize;
+        let data = surface.data().expect("surface pixels");
+        let at = y as usize * stride + x as usize * 4;
+        let word = u32::from_ne_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
+        let [a, r, g, b] = word.to_be_bytes();
+        if a == 0 {
+            return [0, 0, 0, 0];
+        }
+        let straight = |channel: u8| (u32::from(channel) * 255 / u32::from(a)) as u8;
+        [straight(r), straight(g), straight(b), a]
+    }
+
+    fn is_opaque(pixel: [u8; 4], colour: [u8; 3]) -> bool {
+        pixel[3] == 255
+            && pixel[..3]
+                .iter()
+                .zip(colour)
+                .all(|(got, want)| got.abs_diff(want) <= 2)
+    }
+
+    /// The resting wick is the level readout users see most: cyan up to the
+    /// level, the bare rail past it, nothing when muted, amber once the level
+    /// is above unity.
+    #[test]
+    fn the_wick_paints_the_level_in_cyan_and_the_boost_in_amber() {
+        let (width, height) = (VOLUME_WICK_WIDTH, VOLUME_WICK_HEIGHT);
+        let row = height / 2;
+
+        let half = VolumeState::new(MAX_VOLUME / 2.0);
+        let mut wick = painted(width, height, |cr| {
+            draw_volume_wick(cr, width, height, half)
+        });
+        let filled = pixel(&mut wick, 3, row);
+        assert!(
+            is_opaque(filled, CYAN),
+            "the filled span is the brand cyan, got {filled:?}"
+        );
+        let bare = pixel(&mut wick, width - 3, row);
+        assert!(
+            bare[3] < 80 && bare[0] > 200 && bare[1] > 200 && bare[2] > 200,
+            "past the level the rail is translucent white, got {bare:?}"
+        );
+
+        let mut muted = half;
+        muted.toggle_mute();
+        let mut wick = painted(width, height, |cr| {
+            draw_volume_wick(cr, width, height, muted)
+        });
+        assert!(
+            (0..width).all(|x| !is_opaque(pixel(&mut wick, x, row), CYAN)),
+            "a muted wick paints no level"
+        );
+
+        let boosted = VolumeState::new(MAX_VOLUME);
+        let mut wick = painted(width, height, |cr| {
+            draw_volume_wick(cr, width, height, boosted)
+        });
+        for x in [3, width - 3] {
+            let got = pixel(&mut wick, x, row);
+            assert!(
+                is_opaque(got, AMBER),
+                "above unity the whole wick is amber, got {got:?} at x={x}"
+            );
+        }
+    }
+
+    /// The capsule's track hands over from cyan to amber exactly at the unity
+    /// mark - the point `VolumeState::unity_fraction` puts 100% at - with the
+    /// white tick drawn over the hand-over, and paints nothing past the tick
+    /// while the level sits at unity.
+    #[test]
+    fn the_track_hands_over_from_cyan_to_amber_at_the_unity_mark() {
+        let (width, height) = (VOLUME_TRACK_WIDTH, VOLUME_THUMB_SIZE);
+        let row = height / 2;
+        let unity_x = 3.0 + (f64::from(width) - 6.0) * (UNITY_VOLUME / MAX_VOLUME);
+        let before = (unity_x - 5.0).floor() as i32;
+        let after = (unity_x + 4.0).floor() as i32;
+
+        let boosted = VolumeState::new(MAX_VOLUME);
+        let mut track = painted(width, height, |cr| {
+            draw_volume_track(cr, width, height, boosted)
+        });
+        let below = pixel(&mut track, before, row);
+        assert!(
+            is_opaque(below, CYAN),
+            "below unity the track is cyan, got {below:?}"
+        );
+        let above = pixel(&mut track, after, row);
+        assert!(
+            is_opaque(above, AMBER),
+            "above unity the boost is amber, got {above:?}"
+        );
+        let tick = pixel(&mut track, unity_x.floor() as i32, row);
+        assert!(
+            tick[0] > 120 && tick[1] > 200 && tick[2] > 100,
+            "the unity tick is drawn over the hand-over, got {tick:?}"
+        );
+
+        let at_unity = VolumeState::new(UNITY_VOLUME);
+        let mut track = painted(width, height, |cr| {
+            draw_volume_track(cr, width, height, at_unity)
+        });
+        assert!(
+            is_opaque(pixel(&mut track, before, row), CYAN),
+            "at unity the track is cyan up to the tick"
+        );
+        let past = pixel(&mut track, after, row);
+        assert!(
+            past[3] < 80,
+            "at unity nothing is painted past the tick, got {past:?}"
+        );
+    }
 
     #[test]
     fn cached_hover_clears_superseded_request_so_it_can_be_retried() {

@@ -347,10 +347,6 @@ fn floating_volume_css_pins_capsule_geometry_motion_and_state_colors() {
     ] {
         assert!(css.contains(required), "missing volume CSS: {required}");
     }
-
-    let controls = include_str!("controls.rs");
-    assert!(controls.contains("(0.224, 0.745, 0.976)")); // #39BEF9
-    assert!(controls.contains("VolumeState::unity_fraction()"));
 }
 
 #[test]
@@ -568,37 +564,70 @@ fn pixels_where(pixbuf: &gdk_pixbuf::Pixbuf, keep: impl Fn([u8; 4]) -> bool) -> 
 
 /// The white mark sits on top of the tile: pixels brighter in red than any
 /// point of the gradient can be (its red never passes `0x39`) can only be the
-/// mark, there are enough of them for the tile's size (at 16px the mark is a
-/// handful of pixels), and the mark's own colour is white.
+/// mark. From 32px up the mark is the ring, the bar and the play triangle and
+/// covers about a tenth of the tile; the 24px and 16px tiles carry the
+/// triangle alone, a few percent. The floors sit well under those measured
+/// shares and high enough that a mark missing its ring fails. Most of the
+/// mark's pixels - its interior, away from the antialiased edges - must be
+/// white itself, not a light tint.
 fn assert_white_mark_over(tile: &gdk_pixbuf::Pixbuf, path: &Path, size: i32) {
     let mark = pixels_where(tile, |[r, _, _, a]| a == 255 && r >= 160);
     let white = pixels_where(tile, |[r, g, b, a]| {
         a == 255 && r >= 230 && g >= 230 && b >= 230
     });
+    let area = f64::from(size * size);
+    let least_share = if size >= 32 { 0.06 } else { 0.01 };
     assert!(
-        mark >= ((size * size) / 160).max(2) as usize && white >= 1,
-        "{} shows no white mark over its tile ({mark} mark pixels, {white} of them white)",
+        mark as f64 >= (area * least_share).max(2.0),
+        "{} shows too little mark over its tile: {mark} of {} pixels",
+        path.display(),
+        size * size
+    );
+    assert!(
+        white * 10 >= mark * 4,
+        "{} draws its mark in a tint, not white: {white} white pixels out of {mark}",
         path.display()
     );
 }
 
-/// The four sample points of a rendered tile: its corners, inset past the
-/// rounded corner radius, as `(x, y, position along the 135° axis)`.
-fn tile_corner_samples(size: i32) -> [(i32, i32, f64); 4] {
+/// Where a rendered tile is sampled: a 3×3 grid whose outer ring is inset
+/// past the rounded corner radius and whose middle row and column fall on the
+/// mark, as `(x, y, position along the 135° axis)`. The first four are the
+/// corners: top-left, bottom-right, top-right, bottom-left.
+fn tile_samples(size: i32) -> Vec<(i32, i32, f64)> {
     let inset = (f64::from(size) * 0.15).round() as i32;
     let far = size - 1 - inset;
+    let mid = size / 2;
     let along_axis = |x: i32, y: i32| {
         ((f64::from(x) + 0.5) / f64::from(size) + (f64::from(y) + 0.5) / f64::from(size)) / 2.0
     };
-    [(inset, inset), (far, far), (far, inset), (inset, far)].map(|(x, y)| (x, y, along_axis(x, y)))
+    [
+        (inset, inset),
+        (far, far),
+        (far, inset),
+        (inset, far),
+        (mid, inset),
+        (inset, mid),
+        (far, mid),
+        (mid, far),
+    ]
+    .into_iter()
+    .map(|(x, y)| (x, y, along_axis(x, y)))
+    .collect()
 }
 
-/// Renders a launcher tile and reads the brand gradient off its pixels. Each
-/// corner must show the colour the gradient puts at its position along the
-/// 135° axis - the top-left is the navy end, the bottom-right the cyan end -
-/// and the two corners off that axis, top-right and bottom-left, both sit
-/// halfway along it and so must match each other: a gradient on any other axis
-/// paints them apart. The white mark must be on top of it.
+/// Whether a sample point lands on the white mark rather than the tile.
+fn on_the_mark(pixel: [u8; 4]) -> bool {
+    pixel[0] >= 160
+}
+
+/// Renders a launcher tile and reads the brand gradient off its pixels. Every
+/// sample point off the mark must show the colour the gradient puts at its
+/// position along the 135° axis - the top-left corner is the navy end, the
+/// bottom-right the cyan end - and the two corners off that axis, top-right
+/// and bottom-left, both sit halfway along it and so must match each other: a
+/// gradient on any other axis paints them apart. The white mark must be on top
+/// of it.
 fn assert_tile_paints_the_brand_gradient_on_the_135_degree_axis(path: &Path, size: i32) {
     let tile = render_launcher_svg(path, size);
     assert_eq!(
@@ -607,37 +636,46 @@ fn assert_tile_paints_the_brand_gradient_on_the_135_degree_axis(path: &Path, siz
         "{} renders off its size",
         path.display()
     );
-    let corners = tile_corner_samples(size).map(|(x, y, along_axis)| {
-        let [r, g, b, a] = rendered_pixel(&tile, x, y);
+    let mut corners = Vec::new();
+    for (index, (x, y, along_axis)) in tile_samples(size).into_iter().enumerate() {
+        let pixel = rendered_pixel(&tile, x, y);
+        let [r, g, b, a] = pixel;
         assert_eq!(a, 255, "{} is see-through at ({x}, {y})", path.display());
+        if index >= 4 && on_the_mark(pixel) {
+            continue;
+        }
         let expected = brand_gradient_colour(along_axis);
         assert!(
             channels_within([r, g, b], expected, 8),
-            "{} paints #{r:02x}{g:02x}{b:02x} at ({x}, {y}); the brand gradient on its 135° axis \
-             puts #{:02x}{:02x}{:02x} there",
+            "{} paints #{r:02x}{g:02x}{b:02x} at ({x}, {y}); the brand gradient on its 135° axis puts #{:02x}{:02x}{:02x} there",
             path.display(),
             expected[0],
             expected[1],
             expected[2],
         );
-        [r, g, b]
-    });
+        if index < 4 {
+            corners.push([r, g, b]);
+        }
+    }
     assert!(
         channels_within(corners[2], corners[3], 3),
-        "{} paints its top-right and bottom-left corners apart, so its gradient is not on the \
-         135° axis",
+        "{} paints its top-right and bottom-left corners apart, so its gradient is not on the 135° axis",
         path.display()
     );
     assert_white_mark_over(&tile, path, size);
 }
 
-/// The 16px tile is flat identity navy under its white mark: every corner the
-/// same navy, no gradient.
+/// The 16px tile is flat identity navy under its white mark: every sample off
+/// the mark the same navy, no gradient.
 fn assert_tile_is_flat_identity_navy(path: &Path, size: i32) {
     let tile = render_launcher_svg(path, size);
-    for (x, y, _) in tile_corner_samples(size) {
-        let [r, g, b, a] = rendered_pixel(&tile, x, y);
+    for (x, y, _) in tile_samples(size) {
+        let pixel = rendered_pixel(&tile, x, y);
+        let [r, g, b, a] = pixel;
         assert_eq!(a, 255, "{} is see-through at ({x}, {y})", path.display());
+        if on_the_mark(pixel) {
+            continue;
+        }
         assert!(
             channels_within([r, g, b], TILE_GRADIENT_STOPS[0].1, 3),
             "{} paints #{r:02x}{g:02x}{b:02x} at ({x}, {y}) instead of the identity navy",
@@ -8433,6 +8471,105 @@ fn the_seek_scales_input_span_is_the_painted_rail() {
                 painted.thumb_center_x
             );
         }
+        window.destroy();
+    });
+}
+
+/// Paints `child` the way a frame does - through its parent's snapshot, so the
+/// drawing area's draw function runs - and returns the pixels, straight RGBA.
+fn snapshot_pixels(parent: &gtk::Widget, child: &gtk::Widget) -> Vec<[u8; 4]> {
+    let snapshot = gtk::Snapshot::new();
+    parent.snapshot_child(child, &snapshot);
+    let node = snapshot.to_node().expect("the child painted something");
+    let bounds = node.bounds();
+    let (width, height) = (bounds.width().ceil() as i32, bounds.height().ceil() as i32);
+    let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, width, height)
+        .expect("snapshot surface");
+    {
+        let cr = cairo::Context::new(&surface).expect("snapshot context");
+        cr.translate(-f64::from(bounds.x()), -f64::from(bounds.y()));
+        node.draw(&cr);
+    }
+    surface.flush();
+    let stride = surface.stride() as usize;
+    let data = surface.data().expect("snapshot pixels");
+    let mut pixels = Vec::with_capacity((width * height) as usize);
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            let at = y * stride + x * 4;
+            let word = u32::from_ne_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
+            let [a, r, g, b] = word.to_be_bytes();
+            pixels.push(if a == 0 {
+                [0, 0, 0, 0]
+            } else {
+                let straight = |channel: u8| (u32::from(channel) * 255 / u32::from(a)) as u8;
+                [straight(r), straight(g), straight(b), a]
+            });
+        }
+    }
+    pixels
+}
+
+fn descendant_with_class(widget: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        if current.has_css_class(class) {
+            return Some(current);
+        }
+        if let Some(found) = descendant_with_class(&current, class) {
+            return Some(found);
+        }
+        child = current.next_sibling();
+    }
+    None
+}
+
+/// The resting volume button, as the frame paints it, shows the level as a
+/// cyan wick: it grows with the level and vanishes when muted. Drawn through
+/// the production control, so a wick whose draw function came unhooked, or
+/// that another layer covers, fails here where a unit render of the painter
+/// would not.
+#[test]
+#[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
+fn the_volume_button_shows_the_level_as_a_cyan_wick() {
+    on_gtk_thread(|| {
+        crate::css::install_css();
+        let state = Rc::new(RefCell::new(PlayerState::default()));
+        let control = controls::VolumeControl::new(
+            Rc::clone(&state),
+            Rc::new(Cell::new(false)),
+            Rc::new(ChromeVisibility::new()),
+        );
+        let window = gtk::Window::new();
+        window.set_child(Some(control.widget()));
+        window.present();
+        pump_until("the volume control mapped", || {
+            control.widget().is_mapped() && control.widget().width() > 0
+        });
+        let button = descendant_with_class(control.widget().upcast_ref(), "okp-volume-button")
+            .expect("the control has its resting button");
+
+        let cyan_pixels = |level: f64| {
+            control.sync_level(level);
+            snapshot_pixels(control.widget().upcast_ref(), &button)
+                .into_iter()
+                .filter(|[r, g, b, a]| {
+                    *a == 255 && r.abs_diff(57) <= 2 && g.abs_diff(190) <= 2 && b.abs_diff(249) <= 2
+                })
+                .count()
+        };
+        let half = cyan_pixels(okp_core::volume::MAX_VOLUME / 2.0);
+        assert!(half > 0, "a half-level button shows a cyan wick");
+        let full = cyan_pixels(okp_core::volume::UNITY_VOLUME);
+        assert!(
+            full > half,
+            "the wick grows with the level ({half} cyan pixels at half, {full} at unity)"
+        );
+        assert_eq!(
+            cyan_pixels(okp_core::volume::MIN_VOLUME),
+            0,
+            "a muted button shows no wick"
+        );
         window.destroy();
     });
 }
