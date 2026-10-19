@@ -206,12 +206,15 @@ if ! awk -v residual="$tagline_residual" 'BEGIN { exit !(residual > 0.01) }'; th
 fi
 
 # The in-canvas Open action keeps the brand accent inside the drop target: its
-# label is set in the identity navy on the light surface and in the mark's cyan
-# on the dark one, both with blue well above red. Measured as the share of
-# accent pixels across the label's band rather than a channel mean over the
-# crop, so the font's width and the card's white do not dilute it.
-primary_accent_share="$(magick "$OUT_DIR/window.png" -crop 200x26+460+397 +repage \
-  -fx '(b-r>0.2)?1:0' -format '%[fx:mean]' info:)"
+# label is set in the identity navy (#163065, blue above red by 0.31) on the
+# light surface and in the mark's cyan (#39bef9, by 0.75) on the dark one.
+# Measured as the share of accent pixels across the primary label's own row
+# rather than a channel mean over the crop, so the font's width and the card's
+# white do not dilute it. The row stops above the secondary "or drop…" line,
+# and the 0.25 floor on blue-minus-red also excludes that line's dark-theme
+# muted colour (#98aecf, 0.22), so only the primary label can satisfy it.
+primary_accent_share="$(magick "$OUT_DIR/window.png" -crop 200x20+460+399 +repage \
+  -fx '(b-r>0.25)?1:0' -format '%[fx:mean]' info:)"
 if ! awk -v share="$primary_accent_share" 'BEGIN { exit !(share > 0.012) }'; then
   echo "Primary action accent missing from welcome surface: accent share=${primary_accent_share}" >&2
   exit 1
