@@ -205,11 +205,15 @@ if ! awk -v residual="$tagline_residual" 'BEGIN { exit !(residual > 0.01) }'; th
   exit 1
 fi
 
-# The in-canvas Open action keeps the teal label inside the dashed drop target.
-primary_red="$(magick "$OUT_DIR/window.png" -crop 140x24+490+395 -format '%[fx:mean.r]' info:)"
-primary_green="$(magick "$OUT_DIR/window.png" -crop 140x24+490+395 -format '%[fx:mean.g]' info:)"
-if ! awk -v r="$primary_red" -v g="$primary_green" 'BEGIN { exit !(g - r > 0.02) }'; then
-  echo "Primary action accent missing from welcome surface: red=${primary_red} green=${primary_green}" >&2
+# The in-canvas Open action keeps the brand accent inside the drop target: its
+# label is set in the identity navy on the light surface and in the mark's cyan
+# on the dark one, both with blue well above red. Measured as the share of
+# accent pixels across the label's band rather than a channel mean over the
+# crop, so the font's width and the card's white do not dilute it.
+primary_accent_share="$(magick "$OUT_DIR/window.png" -crop 200x26+460+397 +repage \
+  -fx '(b-r>0.2)?1:0' -format '%[fx:mean]' info:)"
+if ! awk -v share="$primary_accent_share" 'BEGIN { exit !(share > 0.012) }'; then
+  echo "Primary action accent missing from welcome surface: accent share=${primary_accent_share}" >&2
   exit 1
 fi
 
