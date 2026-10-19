@@ -415,11 +415,11 @@ mod tests {
         .unwrap_or_else(|err| panic!("{name} is not in the binary: {err}"))
     }
 
-    /// Decodes icon bytes the way GTK's symbolic icon loader does - through
-    /// `gdk_pixbuf_new_from_stream`, with no format hint. That loader sniffs
-    /// the format from the first 256 bytes it is handed and no further (the
-    /// file loader looks 4096 bytes in, so `Pixbuf::from_file` would not catch
-    /// what GTK rejects).
+    /// Decodes icon bytes the way GTK's symbolic icon loader does on the GTK
+    /// 4.14-4.20 of today's Ubuntu and Arch - through `gdk_pixbuf_new_from_stream`,
+    /// with no format hint, so the format is sniffed from the bytes. Measured on
+    /// gdk-pixbuf 2.42: a root element 249 bytes in is recognised and one 264
+    /// bytes in is not, by this path and by `Pixbuf::from_file` alike.
     fn decode_as_gtk_does(bytes: &glib::Bytes) -> Result<gdk_pixbuf::Pixbuf, glib::Error> {
         let stream = gio::MemoryInputStream::from_bytes(bytes);
         gdk_pixbuf::Pixbuf::from_stream(&stream, gio::Cancellable::NONE)
@@ -469,9 +469,9 @@ mod tests {
     /// Pins the failure the test above guards against, so the guard cannot go
     /// vacuous: a shipped icon with a comment ahead of its root element - the
     /// first cut's layout, with the comment made longer than any sniff buffer
-    /// gdk-pixbuf has (4 KiB for files, less for streams), so the pin does not
-    /// depend on the exact window - is refused by that same loader as an
-    /// unknown format, while the same comment inside the element is taken.
+    /// gdk-pixbuf reads (4 KiB), so the pin does not depend on the exact
+    /// window - is refused by that same loader as an unknown format, while the
+    /// same comment inside the element is taken.
     #[test]
     fn a_root_element_past_the_sniff_window_is_refused_by_gtks_loader() {
         let name = shipped_files()
