@@ -8147,7 +8147,7 @@ fn an_arch_package_is_a_pacman_owned_system_install() {
     assert_eq!(parse_install_kind("pacman"), Some(InstallKind::Pacman));
     assert_eq!(
         candidate_install_lane(InstallKind::Pacman),
-        CandidateInstallLane::SystemPackage
+        CandidateInstallLane::Pacman
     );
     assert_eq!(system_repository_hint(InstallKind::Pacman), None);
     assert_eq!(

@@ -2250,9 +2250,10 @@ pub(crate) fn check_for_linux_update(
 pub(crate) fn candidate_install_lane(install_kind: InstallKind) -> CandidateInstallLane {
     match install_kind {
         InstallKind::AppImage => CandidateInstallLane::AppImage,
-        InstallKind::Rpm | InstallKind::Pacman | InstallKind::Flatpak => {
-            CandidateInstallLane::SystemPackage
-        }
+        InstallKind::Rpm | InstallKind::Flatpak => CandidateInstallLane::SystemPackage,
+        // Built from the PKGBUILD: a candidate is announced with the rebuild
+        // hint, never fetched and never "managed" by a tool that cannot reach it.
+        InstallKind::Pacman => CandidateInstallLane::Pacman,
         InstallKind::Deb | InstallKind::DevBuild | InstallKind::WindowsVelopack => {
             CandidateInstallLane::Debian
         }
@@ -2355,9 +2356,12 @@ fn check_for_linux_candidate_channel_update(lane: CandidateInstallLane) -> Linux
     );
     eprintln!("Candidate update stage=install-lane lane={lane:?}");
     match candidate_channel::route_candidate_update(&candidate, lane, None) {
-        Ok(CandidateUpdateRoute::Debian) => {
+        // Both announce the version and hand nothing over: the lifecycle's
+        // hint says how the install gets it (apt for the .deb lane, a PKGBUILD
+        // rebuild for the pacman lane).
+        Ok(route @ (CandidateUpdateRoute::Debian | CandidateUpdateRoute::Announced)) => {
             eprintln!(
-                "Candidate update stage=final result=available lane=deb version={}",
+                "Candidate update stage=final result=available lane={lane:?} route={route:?} version={}",
                 candidate.version
             );
             return LinuxUpdateCheckOutcome::Available {
@@ -2366,7 +2370,7 @@ fn check_for_linux_candidate_channel_update(lane: CandidateInstallLane) -> Linux
             };
         }
         Err(candidate_channel::CandidateUpdateRouteError::MissingAppImageCheck) => {}
-        Ok(_) => unreachable!("a route without an AppImage result can only select Debian"),
+        Ok(_) => unreachable!("a route without an AppImage result can only announce"),
         Err(error) => {
             eprintln!("Candidate update stage=final result=failed error={error}");
             return LinuxUpdateCheckOutcome::Failed(error.to_string());
