@@ -324,11 +324,6 @@ fn continue_watching_welcome(
 pub(crate) fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>) -> gtk::Button {
     let button = gtk::Button::new();
     button.add_css_class("okp-recent-card");
-    // GtkPicture clips to its own rounded box; the card clips too, so whatever
-    // is drawn edge-to-edge inside it (the poster's progress bar and chip
-    // overlays) follows the card's corners as well. The card's own outset
-    // shadows and focus ring are drawn before the clip and are not affected.
-    button.set_overflow(gtk::Overflow::Hidden);
     button.set_has_frame(false);
     button.set_tooltip_text(Some(&item.path));
     // A card is exactly this wide however wide its cell turns out to be, so the row stays
@@ -344,6 +339,12 @@ pub(crate) fn recent_card(item: &HistoryItem, state: Rc<RefCell<PlayerState>>) -
     button.set_halign(gtk::Align::Center);
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    // The rounded clip lives here, on the content, not on the button: whatever
+    // is drawn edge-to-edge inside the card (the poster and its overlays)
+    // follows the card's corners, while the button's own outset hairline,
+    // elevation and focus ring are outside any clip.
+    content.add_css_class("okp-recent-card-content");
+    content.set_overflow(gtk::Overflow::Hidden);
     content.set_size_request(RECENT_CARD_WIDTH, -1);
     let thumbnail = history_thumbnail(item, RECENT_CARD_WIDTH, RECENT_CARD_HEIGHT, false);
     let progress = gtk::ProgressBar::new();

@@ -888,6 +888,13 @@ pub(crate) const OKP_STYLESHEET: &str = "
            three cards and the round History button still share one row: the
            poster bleeds to the card's edges, the hairline is a spread shadow
            rather than a border, and only the caption is inset. */
+        /* The card's rounded clip lives on this inner box, never on the button,
+           so the button's own outset hairline, elevation and focus ring are
+           outside any clip whatever GTK does with Overflow::Hidden. */
+        .okp-recent-card-content {
+            border-radius: 12px;
+        }
+
         button.okp-recent-card {
             min-width: 194px;
             padding: 0 0 12px;
@@ -2057,6 +2064,15 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-seek {
             min-width: 48px;
             min-height: 20px;
+        }
+
+        /* GTK's own theme pads a scale by 12px on every side, which would
+           start the pointer-to-value span 12px inside the painted rail (the
+           rail is a sibling drawn over the same box). No padding: the trough is
+           the whole width, and the 18px slider puts 0% and 100% exactly where
+           the rail paints its thumb. */
+        scale.okp-seek {
+            padding: 0;
         }
 
         .okp-timeline-rail {
@@ -3255,7 +3271,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
             background: #ffffff;
             border-color: #ffffff;
             color: #000000;
-            box-shadow: inset 0 0 0 1px #ffffff;
+            /* The pill is white, so its hover ring has to be black. */
+            box-shadow: inset 0 0 0 2px #000000;
         }
 
         .is-high-contrast .okp-add-bookmark-row .okp-add-bookmark-icon {
@@ -4222,7 +4239,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .is-high-contrast .okp-track-divider {
-            background: #000000;
+            background: #ffffff;
         }
 
         .is-high-contrast .okp-quick-delay-label {
@@ -6471,28 +6488,6 @@ mod tests {
                 "{themed} comes after the high-contrast reset and would win"
             );
         }
-    }
-
-    /// GtkScale spreads its value over the trough minus the slider, so the
-    /// invisible seek slider has to be exactly twice the inset the rail paints
-    /// with, or a click near either end maps to a time the painted rail does
-    /// not show.
-    #[test]
-    fn the_seek_scale_hit_span_matches_the_painted_rail() {
-        use crate::controls::{TIMELINE_THUMB_DIAMETER, TIMELINE_THUMB_RING};
-        let expected = format!(
-            "min-width: {}px;",
-            2.0 * (TIMELINE_THUMB_DIAMETER / 2.0 + TIMELINE_THUMB_RING)
-        );
-        let body = rule_body("scale.okp-seek slider");
-        assert!(
-            body.contains(&expected),
-            "the seek slider must be {expected} to match the rail inset, got {body}"
-        );
-        assert!(
-            body.contains("margin: 0;"),
-            "a slider margin would shift the span"
-        );
     }
 
     /// The dark Settings sheet restates the shortcut chip's states; they only

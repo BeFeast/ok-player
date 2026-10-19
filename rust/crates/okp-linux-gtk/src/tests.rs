@@ -8232,20 +8232,97 @@ fn the_ownership_probe_asks_pacman_for_the_owner_and_reads_its_answer() {
     );
 }
 
+/// Spins the GTK main context until `done` holds, for display-backed tests
+/// that wait on mapping, allocation or a signal.
+fn pump_until(what: &str, mut done: impl FnMut() -> bool) {
+    let context = glib::MainContext::default();
+    for _ in 0..4000 {
+        if done() {
+            return;
+        }
+        context.iteration(false);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    panic!("{what} never happened");
+}
+
+/// The first descendant whose CSS node is named `name` - GtkScale's trough
+/// and slider are child gizmos, so the slider the pointer maps through can be
+/// measured like any widget.
+fn descendant_named(widget: &gtk::Widget, name: &str) -> Option<gtk::Widget> {
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        if current.css_name() == name {
+            return Some(current);
+        }
+        if let Some(found) = descendant_named(&current, name) {
+            return Some(found);
+        }
+        child = current.next_sibling();
+    }
+    None
+}
+
+/// GtkScale maps the pointer through its slider: the value spans the trough
+/// minus the slider, so where the slider sits at 0 and at 1 is where a click
+/// reaches 0% and 100%. Those two centres have to be where the rail paints its
+/// thumb at the same values, or the control's input and its picture disagree
+/// at the ends.
+#[test]
+#[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
+fn the_seek_scales_input_span_is_the_painted_rail() {
+    on_gtk_thread(|| {
+        crate::css::install_css();
+        let width = 300;
+        let window = gtk::Window::new();
+        // Measured in the parent's frame, which is where the scale's allocation
+        // starts: the player's overlay hands the rail and the scale the same
+        // box, so this is the frame the rail paints in - CSS padding on the
+        // scale, which GTK's own theme adds, shows up here as it would there.
+        let parent = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let seek = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 1.0);
+        seek.set_draw_value(false);
+        seek.add_css_class("okp-seek");
+        seek.set_size_request(width, TIMELINE_HEIGHT);
+        seek.set_halign(gtk::Align::Start);
+        seek.set_valign(gtk::Align::Start);
+        parent.append(&seek);
+        window.set_child(Some(&parent));
+        window.present();
+        pump_until("the seek scale laid out", || {
+            seek.is_mapped() && parent.width() >= width
+        });
+        let slider =
+            descendant_named(seek.upcast_ref(), "slider").expect("GtkScale has a slider gizmo");
+        let slider_centre = || {
+            let bounds = slider.compute_bounds(&parent).expect("slider bounds");
+            f64::from(bounds.x() + bounds.width() / 2.0)
+        };
+
+        for fraction in [0.0, 1.0] {
+            let painted = timeline_geometry(width, TIMELINE_HEIGHT, fraction, fraction);
+            seek.set_value(fraction);
+            // The frame clock lays the slider out on its next tick, so wait for
+            // it (bounded) rather than spinning the context a fixed number of times.
+            let mut waited = 0;
+            pump_until("the slider settled", || {
+                waited += 1;
+                waited > 1500 || (slider_centre() - painted.thumb_center_x).abs() < 0.5
+            });
+            assert!(
+                (slider_centre() - painted.thumb_center_x).abs() < 0.5,
+                "at {fraction} the input slider centres at {} but the rail paints its thumb at {}",
+                slider_centre(),
+                painted.thumb_center_x
+            );
+        }
+        window.destroy();
+    });
+}
+
 #[test]
 #[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
 fn a_themed_surface_rereads_the_scheme_every_time_it_is_shown() {
-    fn pump_until(what: &str, mut done: impl FnMut() -> bool) {
-        let context = glib::MainContext::default();
-        for _ in 0..4000 {
-            if done() {
-                return;
-            }
-            context.iteration(false);
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        panic!("{what} never happened");
-    }
     fn reshow(panel: &gtk::Box) {
         panel.set_visible(false);
         pump_until("the panel unmapped", || !panel.is_mapped());
