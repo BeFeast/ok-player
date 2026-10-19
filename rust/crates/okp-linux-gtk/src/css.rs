@@ -2080,8 +2080,12 @@ pub(crate) const OKP_STYLESHEET: &str = "
             box-shadow: none;
         }
 
+        /* The slider is invisible; its width is the hit mapping. GtkScale spreads
+           its value over the trough minus the slider, so the slider is twice the
+           inset the rail paints with (thumb radius + ring, controls.rs) and a
+           click at either end of the painted rail reaches 0% and 100%. */
         scale.okp-seek slider {
-            min-width: 12px;
+            min-width: 18px;
             min-height: 12px;
             margin: 0;
             background: transparent;
@@ -5870,6 +5874,28 @@ mod tests {
                 "{themed} comes after the high-contrast reset and would win"
             );
         }
+    }
+
+    /// GtkScale spreads its value over the trough minus the slider, so the
+    /// invisible seek slider has to be exactly twice the inset the rail paints
+    /// with, or a click near either end maps to a time the painted rail does
+    /// not show.
+    #[test]
+    fn the_seek_scale_hit_span_matches_the_painted_rail() {
+        use crate::controls::{TIMELINE_THUMB_DIAMETER, TIMELINE_THUMB_RING};
+        let expected = format!(
+            "min-width: {}px;",
+            2.0 * (TIMELINE_THUMB_DIAMETER / 2.0 + TIMELINE_THUMB_RING)
+        );
+        let body = rule_body("scale.okp-seek slider");
+        assert!(
+            body.contains(&expected),
+            "the seek slider must be {expected} to match the rail inset, got {body}"
+        );
+        assert!(
+            body.contains("margin: 0;"),
+            "a slider margin would shift the span"
+        );
     }
 
     /// The declarations of the first rule that opens with exactly `selector`.

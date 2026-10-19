@@ -8222,6 +8222,55 @@ fn the_ownership_probe_asks_pacman_for_the_owner_and_reads_its_answer() {
 
 #[test]
 #[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
+fn a_themed_surface_rereads_the_scheme_every_time_it_is_shown() {
+    fn pump_until(what: &str, mut done: impl FnMut() -> bool) {
+        let context = glib::MainContext::default();
+        for _ in 0..4000 {
+            if done() {
+                return;
+            }
+            context.iteration(false);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        panic!("{what} never happened");
+    }
+    on_gtk_thread(|| {
+        // The scheme the desktop reports, flipped behind the panel's back.
+        let dark = Rc::new(Cell::new(true));
+        let window = gtk::Window::new();
+        let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        window.set_child(Some(&panel));
+        let reported = Rc::clone(&dark);
+        follow_idle_scheme(&panel, move || reported.get());
+        assert!(
+            panel.has_css_class("is-dark"),
+            "the scheme is applied when built"
+        );
+
+        window.present();
+        pump_until("the panel mapped", || panel.is_mapped());
+        // The preference changes while the panel is hidden; the next show takes it.
+        dark.set(false);
+        panel.set_visible(false);
+        pump_until("the panel unmapped", || !panel.is_mapped());
+        panel.set_visible(true);
+        pump_until("the panel mapped again", || panel.is_mapped());
+        assert!(
+            !panel.has_css_class("is-dark"),
+            "a re-shown surface re-reads the scheme instead of keeping the one it was built with"
+        );
+        dark.set(true);
+        panel.set_visible(false);
+        pump_until("the panel unmapped", || !panel.is_mapped());
+        panel.set_visible(true);
+        pump_until("the panel mapped again", || panel.is_mapped());
+        assert!(panel.has_css_class("is-dark"));
+        window.destroy();
+    });
+}
+
+#[test]
+#[ignore = "needs a display server; run via scripts/smoke-linux-toast-behaviour.sh"]
 fn history_bucket_rows_share_one_clipped_card_under_their_heading() {
     fn children(widget: &impl IsA<gtk::Widget>) -> Vec<gtk::Widget> {
         let mut out = Vec::new();
