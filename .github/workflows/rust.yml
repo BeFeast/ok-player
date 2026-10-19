@@ -174,7 +174,19 @@ jobs:
         working-directory: rust
         env:
           OKP_RUN_VELOPACK_PACK_TEST: 1
-        run: cargo test --workspace
+        run: |
+          set -o pipefail
+          cargo test --workspace 2>&1 | tee "$RUNNER_TEMP/cargo-test.log"
+
+      # A failed test's name otherwise lives only in the job log. Surfacing it
+      # as a check annotation makes the failure readable through the Checks
+      # API as well as in the UI, so a reviewer (or a session without access to
+      # the log store) sees which test failed, not just that cargo exited 101.
+      - name: Name the failing tests in the check's annotations
+        if: failure() && hashFiles(format('{0}/cargo-test.log', runner.temp)) != ''
+        run: |
+          grep -E '^test .* FAILED$|^---- .* stdout ----$|panicked at ' "$RUNNER_TEMP/cargo-test.log" \
+            | head -40 | sed 's/^/::error title=cargo test::/' || true
 
       - name: AppStream MetaInfo validation smoke
         run: ./scripts/smoke-linux-appstream.sh
