@@ -174,6 +174,7 @@ pub(crate) fn clear_loaded_media_state(state: &Rc<RefCell<PlayerState>>) {
     state.current_video_dimensions = None;
     advance_source_generation(&mut state);
     state.playlist.clear();
+    state.replay_on_reach.clear();
     state.thumbnail_request_key = None;
     state.hover_thumbnail_request_key = None;
     state.chapters_snapshot.clear();
@@ -208,13 +209,33 @@ pub(crate) fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
 }
 
 pub(crate) fn load_media_url(state: &Rc<RefCell<PlayerState>>, url: String) {
-    load_media_url_with_intent(state, url, okp_core::history::HistoryOpenIntent::Explicit);
+    load_media_url_with_intent(
+        state,
+        url,
+        okp_core::history::HistoryOpenIntent::Explicit,
+        true,
+    );
+}
+
+/// Open a URL an `ok-player:` link names. Exactly the ordinary URL open, except that a direct
+/// media URL never arms the replay cache: the file streams from the server the page points
+/// at, and a background copy of it would only duplicate that. A page URL keeps the usual
+/// replay behaviour.
+pub(crate) fn load_link_url(state: &Rc<RefCell<PlayerState>>, url: String) {
+    let arm_replay = !ok_player_uri::is_direct_media_url(&url);
+    load_media_url_with_intent(
+        state,
+        url,
+        okp_core::history::HistoryOpenIntent::Explicit,
+        arm_replay,
+    );
 }
 
 fn load_media_url_with_intent(
     state: &Rc<RefCell<PlayerState>>,
     url: String,
     intent: okp_core::history::HistoryOpenIntent,
+    arm_replay: bool,
 ) {
     if !is_media_url(&url) {
         return;
@@ -235,7 +256,9 @@ fn load_media_url_with_intent(
                 .borrow_mut()
                 .history
                 .begin_source_open(&source, intent);
-            arm_replay_cache_candidate(state, url);
+            if arm_replay {
+                arm_replay_cache_candidate(state, url);
+            }
         }
         Some(Err(error)) => {
             eprintln!("Failed to load URL '{url}': {error}");
@@ -248,7 +271,9 @@ fn load_media_url_with_intent(
                 .borrow_mut()
                 .history
                 .begin_source_open(&source, intent);
-            arm_replay_cache_candidate(state, url);
+            if arm_replay {
+                arm_replay_cache_candidate(state, url);
+            }
         }
     }
 }
@@ -435,6 +460,7 @@ pub(crate) fn remember_loaded_media_with_playlist(
     state
         .nfo_title_jobs
         .resolve(state.source_generation, nfo_path);
+    forget_replay_on_reach_outside(&mut state.replay_on_reach, &playlist);
     state.playlist.reset(playlist, &current);
     state.thumbnail_request_key = None;
     state.hover_thumbnail_request_key = None;
@@ -586,6 +612,7 @@ pub(crate) fn remember_loaded_url_with_playlist(
     state.current_file = None;
     state.current_url = Some(url);
     state.current_nfo_title = okp_core::nfo_metadata::NfoTitleState::NotApplicable;
+    forget_replay_on_reach_outside(&mut state.replay_on_reach, &playlist);
     state.playlist.reset(playlist, &current);
     state.thumbnail_request_key = None;
     state.hover_thumbnail_request_key = None;
@@ -614,6 +641,17 @@ pub(crate) fn remember_loaded_url_with_playlist(
     state.last_load_diagnostic = None;
 }
 
+/// A URL stays marked to arm the replay cache when reached only while it is still in Up Next.
+fn forget_replay_on_reach_outside(marked: &mut HashSet<String>, playlist: &[PlaylistItem]) {
+    if !marked.is_empty() {
+        marked.retain(|url| {
+            playlist
+                .iter()
+                .any(|item| matches!(item, PlaylistItem::Url(queued) if queued == url))
+        });
+    }
+}
+
 fn arm_replay_cache_candidate(state: &Rc<RefCell<PlayerState>>, url: String) {
     let mut state = state.borrow_mut();
     let generation = state.source_generation;
@@ -638,7 +676,15 @@ pub(crate) fn load_playlist_item_with_playlist(
         PlaylistItem::Local(path) => {
             load_media_path_with_playlist(state, path, playlist, save_previous)
         }
-        PlaylistItem::Url(url) => load_media_url_with_playlist(state, url, playlist, save_previous),
+        PlaylistItem::Url(url) => {
+            let loaded = load_media_url_with_playlist(state, url.clone(), playlist, save_previous);
+            // A page URL an `ok-player:` link queued arms the replay cache when it is reached,
+            // exactly as it would have had the link opened it.
+            if loaded && state.borrow().replay_on_reach.contains(&url) {
+                arm_replay_cache_candidate(state, url);
+            }
+            loaded
+        }
     };
     // All current callers that save the previous item are user-driven selections. EOF passes
     // `false`, so repeat/auto-advance never releases a per-session History removal guard.
@@ -972,6 +1018,26 @@ pub(crate) fn restart_current_file(state: &Rc<RefCell<PlayerState>>) -> bool {
     state.pending_preferences =
         preferences.map(|preferences| (PlaylistItem::Local(path), preferences));
     true
+}
+
+/// Seek the loaded media to `seconds` without reloading it, as an explicit launch position: an
+/// `ok-player:` link that opens the item already playing, with a start time. A source that is
+/// still loading takes the position as soon as its duration is known, like a launch resume.
+pub(crate) fn seek_current_media_to(state: &Rc<RefCell<PlayerState>>, seconds: f64) {
+    {
+        let mut state = state.borrow_mut();
+        let source_generation = state.source_generation;
+        state.pending_resume = Some(PendingResume {
+            source_generation,
+            target: launch_args::ResumeTarget {
+                seconds,
+                origin: launch_args::ResumeOrigin::ExplicitLaunch,
+            },
+        });
+    }
+    if let Some(duration) = observed_playback(state).and_then(|playback| playback.duration) {
+        try_pending_resume(state, duration);
+    }
 }
 
 pub(crate) fn try_pending_resume(state: &Rc<RefCell<PlayerState>>, duration: f64) {
@@ -1610,7 +1676,12 @@ pub(crate) fn fallback_cached_replay_to_url(
         state.replay_cache_pin = None;
         state.replay_cache.invalidate(&url);
     }
-    load_media_url_with_intent(state, url, okp_core::history::HistoryOpenIntent::Automatic);
+    load_media_url_with_intent(
+        state,
+        url,
+        okp_core::history::HistoryOpenIntent::Automatic,
+        true,
+    );
     true
 }
 
@@ -1710,25 +1781,6 @@ pub(crate) fn is_media_path(path: &Path) -> bool {
 
 pub(crate) fn is_media_url(url: &str) -> bool {
     media_formats::is_playable_url(Some(url))
-}
-
-/// The local diagnostic to surface when `text` uses the reserved `ok-player://` scheme
-/// (PRD §13.4), or `None` when it is a normal path/URL the caller should open as usual.
-/// The core parses the v1 link contract, but this shell does not execute links yet (#849),
-/// so every link is reported rather than played — this keeps an `ok-player://` token from
-/// ever reaching the media engine. A link that parses names its action in the notice; one
-/// that breaks the grammar is reported as malformed. See [`ok_player_uri::interpret`].
-pub(crate) fn reserved_uri_notice(text: &str) -> Option<String> {
-    let reserved = |action: &str| {
-        format!("ok-player:// control is reserved — \"{action}\" is not available yet")
-    };
-    ok_player_uri::interpret(text).map(|request| match request {
-        ok_player_uri::Request::Action(request) => reserved(request.action.as_str()),
-        ok_player_uri::Request::Unsupported { action } => reserved(&action),
-        ok_player_uri::Request::Malformed { .. } => {
-            "Ignored a malformed ok-player:// request".to_owned()
-        }
-    })
 }
 
 /// True when the YouTube resolver ([`youtube_open::YOUTUBE_RESOLVER`]) is installed on the

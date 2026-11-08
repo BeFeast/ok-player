@@ -363,6 +363,7 @@ pub(crate) fn connect_progress_persistence(
     app: &gtk::Application,
     window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
+    launch_delivery: LaunchDeliveryGate,
 ) {
     let timer_state = Rc::clone(&state);
     glib::timeout_add_local(Duration::from_secs(10), move || {
@@ -394,6 +395,9 @@ pub(crate) fn connect_progress_persistence(
             let mut state = close_state.borrow_mut();
             (state.mpv.take(), state.native_render_loop.take())
         };
+        // Said where it happens: a launch forwarded from now on, or a link whose check is still
+        // running, waits for an engine instead of being applied to none.
+        launch_delivery.borrow_mut().mark_player_unavailable();
         if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
             eprintln!("window close lifecycle: engine detached");
         }

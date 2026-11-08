@@ -169,8 +169,9 @@ pub(crate) fn open_url_dialog(
     dialog.connect_response(move |dialog, response| {
         if response == gtk::ResponseType::Accept {
             let url = entry.text().trim().to_owned();
-            if let Some(notice) = reserved_uri_notice(&url) {
-                status_toast.show(&notice);
+            if ok_player_uri::is_link(std::ffi::OsStr::new(&url)) {
+                // A link pasted here runs exactly as if a page had launched it.
+                dispatch_link_text(&state, &url, LinkOrigin::OpenUrl);
             } else {
                 match youtube_open::resolve_open_url(&url, youtube_resolver_available()) {
                     youtube_open::OpenUrlOutcome::PlayDirect

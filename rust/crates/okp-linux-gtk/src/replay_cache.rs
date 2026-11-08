@@ -131,6 +131,28 @@ impl ReplayCacheRuntime {
         self.candidate = None;
     }
 
+    /// A runtime that behaves as if the download tool were installed, so a test can see which
+    /// stream gets armed on a host without it. Its downloads fail at once.
+    #[cfg(test)]
+    pub(crate) fn with_tool_for_tests(root: PathBuf) -> Self {
+        Self {
+            root,
+            tool_available: true,
+            downloader: media_download::MediaDownloader::with_executable(PathBuf::from(
+                "/bin/false",
+            )),
+            ..Self::default()
+        }
+    }
+
+    /// The stream armed for a background replay download, if any.
+    #[cfg(test)]
+    pub(crate) fn armed_url(&self) -> Option<&str> {
+        self.candidate
+            .as_ref()
+            .map(|candidate| candidate.url.as_str())
+    }
+
     pub(crate) fn acquire(
         &mut self,
         source_url: &str,

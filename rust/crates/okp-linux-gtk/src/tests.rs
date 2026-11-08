@@ -2300,29 +2300,99 @@ fn uri_scheme_row_reflects_registration_and_default_handler() {
 }
 
 #[test]
-fn reserved_uri_notice_intercepts_scheme_but_leaves_media_urls() {
-    // A reserved request yields a local diagnostic naming the parsed command...
-    let reserved = reserved_uri_notice("ok-player://open?path=/media/a.mkv")
-        .expect("ok-player:// request should be reported");
-    assert!(reserved.contains("reserved"));
-    assert!(reserved.contains("open"));
-    // ...so is a v1 url= link and an action v1 does not have, until links execute (#849)...
-    let url_link = reserved_uri_notice("ok-player://add?url=https%3A%2F%2Fexample.test%2Fa.mp4")
-        .expect("a v1 link should be reported, not played");
-    assert!(url_link.contains("\"add\" is not available yet"));
-    assert!(
-        reserved_uri_notice("ok-player://pause")
-            .is_some_and(|notice| notice.contains("\"pause\" is not available yet"))
-    );
-    // ...a malformed request is reported too, not silently accepted...
-    assert!(reserved_uri_notice("ok-player://").is_some());
+fn command_lines_with_a_link_become_link_launches_and_others_parse_as_before() {
+    fn launch(args: &[&str]) -> CommandLineLaunch {
+        command_line_launch(
+            args.iter().map(Into::into).collect(),
+            Some(Path::new("/cwd")),
+            Some("startup-1".to_owned()),
+        )
+    }
+    let link_parts = |launch: CommandLineLaunch| match launch {
+        CommandLineLaunch::Link(link) => link,
+        CommandLineLaunch::Args(_) => panic!("a command line with a link is a link launch"),
+    };
+
+    let link = link_parts(launch(&["ok-player://open?path=%2Fmedia%2Fa.mkv&t=5"]));
+    let parsed = link.parsed.as_ref().expect("a well-formed link parses");
+    assert_eq!(parsed.action, ok_player_uri::Action::Open);
     assert_eq!(
-        reserved_uri_notice("ok-player://open?url=%G1").as_deref(),
-        Some("Ignored a malformed ok-player:// request")
+        parsed.target,
+        ok_player_uri::Target::Path("/media/a.mkv".into())
     );
-    // ...and ordinary media stays untouched so file/URL open behavior is unchanged.
-    assert_eq!(reserved_uri_notice("https://example.test/a.mp4"), None);
-    assert_eq!(reserved_uri_notice("/media/movie.mkv"), None);
+    assert_eq!(parsed.start, Some(5.0));
+    assert_eq!(link.startup_id.as_deref(), Some("startup-1"));
+
+    // A link with anything else rejects the whole launch: no file opens, no switch counts.
+    for args in [
+        &["ok-player://open?path=%2Fmedia%2Fa.mkv", "/media/b.mkv"][..],
+        &["--resume", "10", "ok-player://open?path=%2Fmedia%2Fa.mkv"],
+    ] {
+        let link = link_parts(launch(args));
+        assert_eq!(
+            link.parsed.as_ref().err(),
+            Some(&(None, ok_player_uri::Reason::LaunchShape)),
+            "{args:?}"
+        );
+    }
+    // An action v1 does not have rejects with the core's fixed reason, not the action text.
+    let link = link_parts(launch(&["ok-player://pause"]));
+    assert_eq!(
+        link.parsed.as_ref().err(),
+        Some(&(None, ok_player_uri::Reason::UnsupportedAction))
+    );
+    let link = link_parts(launch(&["ok-player://add?url=%G1"]));
+    assert_eq!(
+        link.parsed.as_ref().err(),
+        Some(&(
+            Some(ok_player_uri::Action::Add),
+            ok_player_uri::Reason::BadPercentEncoding
+        ))
+    );
+
+    // Ordinary media keeps its path through the old parser, relative paths and all.
+    let CommandLineLaunch::Args(args) = launch(&["https://example.test/a.mp4", "clip.mkv"]) else {
+        panic!("a command line without a link parses as before");
+    };
+    assert_eq!(
+        args.items,
+        vec![
+            url_item("https://example.test/a.mp4"),
+            local_item("/cwd/clip.mkv"),
+        ]
+    );
+}
+
+#[test]
+fn a_launching_process_hands_over_its_startup_id_in_the_platform_data() {
+    let data = |entries: &[(&str, &str)]| {
+        let dict = glib::VariantDict::new(None);
+        for (key, value) in entries {
+            dict.insert(key, *value);
+        }
+        dict.end()
+    };
+    assert_eq!(
+        startup_id_from_platform_data(Some(&data(&[("activation-token", "wayland-token")]))),
+        Some("wayland-token".to_owned())
+    );
+    assert_eq!(
+        startup_id_from_platform_data(Some(&data(&[("desktop-startup-id", "x11-id")]))),
+        Some("x11-id".to_owned())
+    );
+    assert_eq!(
+        startup_id_from_platform_data(Some(&data(&[
+            ("desktop-startup-id", "x11-id"),
+            ("activation-token", "wayland-token"),
+        ]))),
+        Some("wayland-token".to_owned())
+    );
+    assert_eq!(
+        startup_id_from_platform_data(Some(&data(&[("activation-token", "")]))),
+        None
+    );
+    assert_eq!(startup_id_from_platform_data(Some(&data(&[]))), None);
+    assert_eq!(startup_id_from_platform_data(None), None);
 }
 
 #[test]
@@ -2361,16 +2431,20 @@ fn find_executable_rejects_a_file_without_an_execute_bit() {
 }
 
 #[test]
-fn open_url_checks_reserved_scheme_before_youtube_classification() {
+fn open_url_routes_links_before_youtube_classification() {
     use youtube_open::OpenUrlOutcome;
 
-    // The dialog checks the reserved ok-player:// scheme first, so a reserved request is
-    // reported and never reaches the YouTube / engine routing...
-    assert!(reserved_uri_notice("ok-player://open").is_some());
+    // The dialog sends an ok-player: link to the link dispatcher first, so it never reaches
+    // the YouTube / engine routing...
+    assert!(ok_player_uri::is_link(std::ffi::OsStr::new(
+        "ok-player://open"
+    )));
 
-    // ...a real YouTube link is not reserved and, with no resolver on the host, lands in the
+    // ...a real YouTube link is not a link and, with no resolver on the host, lands in the
     // deliberate missing-tooling state rather than a silent hand-off to libmpv...
-    assert_eq!(reserved_uri_notice("https://youtu.be/abc123"), None);
+    assert!(!ok_player_uri::is_link(std::ffi::OsStr::new(
+        "https://youtu.be/abc123"
+    )));
     assert_eq!(
         youtube_open::resolve_open_url("https://youtu.be/abc123", false),
         OpenUrlOutcome::YouTubeToolingMissing
@@ -2392,18 +2466,25 @@ fn open_url_checks_reserved_scheme_before_youtube_classification() {
 }
 
 #[test]
-fn launch_args_report_reserved_scheme_without_queuing_it_as_media() {
-    let launch = parse_launch_args_from(
-        [
-            "ok-player://play?id=42",
-            "https://example.test/a.mp4",
-            "/media/b.mkv",
-        ]
-        .into_iter()
-        .map(Into::into),
-    );
+fn launch_args_never_queue_a_link_as_media() {
+    // `command_line_launch` keeps links away from this parser; should one reach it anyway, it
+    // is dropped rather than handed to the engine as a stream URL.
+    let mut args: Vec<std::ffi::OsString> = [
+        "ok-player://play?id=42",
+        "https://example.test/a.mp4",
+        "/media/b.mkv",
+    ]
+    .into_iter()
+    .map(Into::into)
+    .collect();
+    {
+        use std::os::unix::ffi::OsStringExt;
+        args.push(std::ffi::OsString::from_vec(
+            b"ok-player://open/media/\xff.mkv".to_vec(),
+        ));
+    }
+    let launch = parse_launch_args_from(args.into_iter());
 
-    // The reserved request never becomes a playlist item, but the real media does.
     assert_eq!(
         launch.items,
         vec![
@@ -2411,10 +2492,7 @@ fn launch_args_report_reserved_scheme_without_queuing_it_as_media() {
             local_item("/media/b.mkv"),
         ]
     );
-    let notice = launch
-        .reserved_notice()
-        .expect("reserved request should surface a launch notice");
-    assert!(notice.contains("play"));
+    assert!(launch.playlists.is_empty() && launch.subtitles.is_empty());
 }
 
 #[test]
@@ -4054,7 +4132,6 @@ fn load_launch_args_uses_explicit_playlist_for_multiple_items() {
         playlists: Vec::new(),
         subtitles: Vec::new(),
         directives: LaunchDirectives::default(),
-        reserved_notices: Vec::new(),
     };
 
     assert!(load_launch_args(&state, &launch));
@@ -4198,7 +4275,7 @@ fn hold_launch_request(
     let mut held = None;
     drive_released_launch_requests(delivery, state, released, deadline, |_, _, released| {
         held = Some(released);
-        None
+        LaunchApply::Pending
     });
     held.expect("an idle, ready player takes the request at once")
 }
@@ -4212,7 +4289,9 @@ fn complete_held_launch_request(
 ) {
     let launch_args::ReleasedLaunch { ticket, request } = held;
     if delivery.borrow().is_in_flight(ticket) {
-        let LaunchRequest::Args(launch_args) = request;
+        let LaunchRequest::Args(launch_args) = request else {
+            panic!("the held request is a command line");
+        };
         apply_launch_args(state, &launch_args);
     }
     finish_launch_request(delivery, state, ticket);

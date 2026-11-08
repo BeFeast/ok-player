@@ -34,19 +34,19 @@ pub(crate) fn parse_launch_args_from_cwd(
     // Preserve non-UTF-8 POSIX paths. The portable parser intentionally handles strings only;
     // raw filesystem arguments still follow the existing path classification in the shell.
     for arg in args.into_iter().filter(|arg| arg.to_str().is_none()) {
-        add_launch_path_arg(&mut launch, launch_path_arg(arg, cwd));
+        if !ok_player_uri::is_link(&arg) {
+            add_launch_path_arg(&mut launch, launch_path_arg(arg, cwd));
+        }
     }
 
     launch
 }
 
 pub(crate) fn add_launch_text_arg(launch: &mut LaunchArgs, text: &str, cwd: Option<&Path>) {
-    // The reserved ok-player:// scheme is checked before the URL/path branches so a control
-    // request is never mistaken for a stream URL and handed to the engine.
-    if let Some(notice) = reserved_uri_notice(text) {
-        if !launch.reserved_notices.contains(&notice) {
-            launch.reserved_notices.push(notice);
-        }
+    // A command line carrying an ok-player: link never reaches this parser (see
+    // `command_line_launch`). Should one arrive here anyway it is dropped before the URL/path
+    // branches, so a link is never mistaken for a stream URL and handed to the engine.
+    if ok_player_uri::is_link(std::ffi::OsStr::new(text)) {
         return;
     }
 
@@ -102,7 +102,53 @@ pub(crate) fn push_unique_playlist_item(items: &mut Vec<PlaylistItem>, item: Pla
     }
 }
 
-pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> AppRuntime {
+/// What one command line asks of the player.
+pub(crate) enum CommandLineLaunch {
+    /// Files, URLs and switches, parsed as always.
+    Args(LaunchArgs),
+    /// A command line carrying an `ok-player:` link: the link alone, or a launch rejected
+    /// because the link came with other arguments (then no switch on it is honoured).
+    Link(LinkLaunch),
+}
+
+/// Read a command line (the arguments after the program name). The launch shape is checked
+/// first: an argument list that contains an `ok-player:` link is a link launch or a rejected
+/// one, and only an argument list without one reaches the ordinary parser, whose `cwd` is
+/// therefore never joined to a link's path.
+pub(crate) fn command_line_launch(
+    args: Vec<std::ffi::OsString>,
+    cwd: Option<&Path>,
+    startup_id: Option<String>,
+) -> CommandLineLaunch {
+    match ok_player_uri::launch_shape(&args) {
+        ok_player_uri::LaunchShape::NoLink => {
+            CommandLineLaunch::Args(parse_launch_args_from_cwd(args.into_iter(), cwd))
+        }
+        // `launch_shape` only returns a token that uses the scheme, which always parses to
+        // some request; the fallback keeps even an impossible miss from opening anything.
+        ok_player_uri::LaunchShape::Link(text) => CommandLineLaunch::Link(
+            LinkLaunch::from_text(&text, LinkOrigin::CommandLine, startup_id.clone())
+                .unwrap_or_else(|| {
+                    LinkLaunch::rejected_launch(ok_player_uri::Reason::InvalidCharacter, startup_id)
+                }),
+        ),
+        ok_player_uri::LaunchShape::Rejected(reason) => {
+            CommandLineLaunch::Link(LinkLaunch::rejected_launch(reason, startup_id))
+        }
+    }
+}
+
+/// The startup-notification id a launching process handed over in its command line's platform
+/// data (`activation-token` on Wayland, `desktop-startup-id` on X11).
+pub(crate) fn startup_id_from_platform_data(data: Option<&glib::Variant>) -> Option<String> {
+    let data = glib::VariantDict::new(Some(data?));
+    ["activation-token", "desktop-startup-id"]
+        .into_iter()
+        .find_map(|key| data.lookup::<String>(key).ok().flatten())
+        .filter(|id| !id.is_empty())
+}
+
+pub(crate) fn build_window(app: &gtk::Application, launch: CommandLineLaunch) -> AppRuntime {
     apply_gtk_theme_preview();
     // Before any widget exists: the chrome's icons come out of the binary, and
     // the icon theme has to know that before it resolves its first name (#731).
@@ -281,9 +327,18 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     chrome.add_cursor_widget(&overlay);
     connect_chrome_activity(&overlay, Rc::clone(&chrome));
 
-    let launch_reserved_notice = launch_args.reserved_notice().map(str::to_owned);
+    let startup_request = match launch {
+        CommandLineLaunch::Args(launch_args) => LaunchRequest::Args(launch_args),
+        // The cold start presents the window itself; a later present needs no token.
+        CommandLineLaunch::Link(link) => LaunchRequest::Link(link.without_startup_id()),
+    };
     let launch_delivery: LaunchDeliveryGate = Rc::new(RefCell::new(
-        launch_args::LaunchDelivery::with_startup(LaunchRequest::Args(launch_args)),
+        launch_args::LaunchDelivery::with_startup(startup_request),
+    ));
+    state.borrow_mut().link_dispatch = Some(LinkDispatch::for_window(
+        &window,
+        Rc::clone(&status_toast),
+        Rc::clone(&launch_delivery),
     ));
     let mapped_launch = Rc::clone(&launch_delivery);
     let mapped_state = Rc::clone(&state);
@@ -335,7 +390,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         Rc::clone(&status_toast),
         mpris_commands,
     );
-    connect_progress_persistence(app, &window, Rc::clone(&state));
+    connect_progress_persistence(app, &window, Rc::clone(&state), Rc::clone(&launch_delivery));
     // Visual smoke hook: render the Chapters/Up Next side panel with representative
     // fixture rows so its layout can be screenshot-tested without loaded media.
     // `OKP_OPEN_SIDE_PANEL_ON_STARTUP=up-next` previews the queue; `=bookmarks`
@@ -677,16 +732,9 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         Rc::clone(&status_toast),
         auto_check_updates,
     );
-    if let Some(notice) = launch_reserved_notice {
-        eprintln!("Ignoring reserved ok-player:// request: {notice}");
-        let notice_toast = Rc::clone(&status_toast);
-        glib::idle_add_local_once(move || notice_toast.show(&notice));
-    }
-
     AppRuntime {
         window,
         state,
-        status_toast,
         launch_delivery,
     }
 }
@@ -1240,18 +1288,33 @@ fn schedule_explicit_player_window_fit(
     });
 }
 
-pub(crate) fn open_runtime_launch_args(runtime: &AppRuntime, launch_args: LaunchArgs) {
-    runtime.window.present();
-    if let Some(notice) = launch_args.reserved_notice() {
-        eprintln!("Ignoring reserved ok-player:// request: {notice}");
-        runtime.status_toast.show(notice);
+/// A command line a later process forwarded to this running instance.
+///
+/// A file-manager or CLI launch presents the window at once. A link presents (or explicitly
+/// ends the desktop's startup notification) when the queue releases it, because whether it
+/// comes forward depends on its action and on what is playing by then.
+pub(crate) fn open_runtime_launch_args(runtime: &AppRuntime, launch: CommandLineLaunch) {
+    if matches!(launch, CommandLineLaunch::Args(_)) {
+        runtime.window.present();
     }
-    if launch_args.has_payload() {
-        deliver_launch_request(
-            &runtime.launch_delivery,
-            &runtime.state,
-            LaunchRequest::Args(launch_args),
-        );
+    deliver_command_line_launch(&runtime.launch_delivery, &runtime.state, launch);
+}
+
+/// The payload half of a forwarded command line: hand it to the ordered launch queue. Needs no
+/// window, so the second-instance path can be driven before and after readiness.
+pub(crate) fn deliver_command_line_launch(
+    delivery: &LaunchDeliveryGate,
+    state: &Rc<RefCell<PlayerState>>,
+    launch: CommandLineLaunch,
+) {
+    match launch {
+        CommandLineLaunch::Args(launch_args) if launch_args.has_payload() => {
+            deliver_launch_request(delivery, state, LaunchRequest::Args(launch_args));
+        }
+        CommandLineLaunch::Args(_) => {}
+        CommandLineLaunch::Link(link) => {
+            deliver_launch_request(delivery, state, LaunchRequest::Link(link));
+        }
     }
 }
 
@@ -1293,26 +1356,35 @@ pub(crate) fn apply_released_launch_requests(
     );
 }
 
-/// Start applying one released request. Returns what the queue releases next when the request was
-/// applied before returning, or `None` when it finishes later and its completion acknowledges it
+/// Start applying one released request: [`LaunchApply::Applied`] when it was applied before
+/// returning, [`LaunchApply::Pending`] when it finishes later and its completion acknowledges it
 /// through `finish_launch_request`.
 fn apply_launch_request(
     delivery: &LaunchDeliveryGate,
     state: &Rc<RefCell<PlayerState>>,
     released: ReleasedLaunchRequest,
-) -> Option<ReleasedLaunchRequest> {
+) -> LaunchApply {
     let launch_args::ReleasedLaunch { ticket, request } = released;
     match request {
         LaunchRequest::Args(launch_args) => {
             apply_launch_args(state, &launch_args);
-            delivery.borrow_mut().mark_applied(ticket)
+            LaunchApply::Applied
         }
+        LaunchRequest::Open(PlaylistItem::Local(path)) => {
+            load_media_path(state, path);
+            LaunchApply::Applied
+        }
+        LaunchRequest::Open(PlaylistItem::Url(url)) => {
+            load_media_url(state, url);
+            LaunchApply::Applied
+        }
+        LaunchRequest::Link(link) => start_link_request(delivery, state, ticket, link),
     }
 }
 
-/// Hand released requests to `apply` one at a time. A request `apply` leaves in flight holds every
-/// later one until its completion reports it, or until `deadline` passes and the queue gives up on
-/// it.
+/// Hand released requests to `apply` one at a time. A request `apply` reports as pending holds
+/// every later one until its completion reports it, or until `deadline` passes and the queue gives
+/// up on it.
 pub(crate) fn drive_released_launch_requests(
     delivery: &LaunchDeliveryGate,
     state: &Rc<RefCell<PlayerState>>,
@@ -1322,14 +1394,21 @@ pub(crate) fn drive_released_launch_requests(
         &LaunchDeliveryGate,
         &Rc<RefCell<PlayerState>>,
         ReleasedLaunchRequest,
-    ) -> Option<ReleasedLaunchRequest>,
+    ) -> LaunchApply,
 ) {
     while let Some(request) = released {
         let ticket = request.ticket;
-        released = apply(delivery, state, request);
-        if delivery.borrow().is_in_flight(ticket) {
-            give_up_on_launch_request_after(delivery, state, ticket, deadline);
-        }
+        released = match apply(delivery, state, request) {
+            LaunchApply::Applied => delivery.borrow_mut().mark_applied(ticket),
+            LaunchApply::Pending => {
+                // The completion may already have reported it (or requeued it) by the time
+                // the handler returns; only a request still in flight needs the deadline.
+                if delivery.borrow().is_in_flight(ticket) {
+                    give_up_on_launch_request_after(delivery, state, ticket, deadline);
+                }
+                None
+            }
+        };
     }
 }
 

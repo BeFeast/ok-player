@@ -204,14 +204,15 @@ pub(crate) fn handle_mpris_command(
                 }
             }
         }
+        // Every OpenUri goes through the launch queue, so it keeps its turn behind a link whose
+        // filesystem check is still running; an ok-player: link goes through the link dispatcher.
         MprisCommand::OpenUri(uri) => {
-            if let Some(notice) = reserved_uri_notice(&uri) {
-                eprintln!("Ignoring reserved ok-player:// request from OpenUri: {notice}");
-                status_toast.show(&notice);
+            if ok_player_uri::is_link(std::ffi::OsStr::new(&uri)) {
+                dispatch_link_text(state, &uri, LinkOrigin::Mpris);
             } else if let Some(path) = file_uri_path(&uri) {
-                load_media_path(state, path);
+                deliver_open_request(state, PlaylistItem::Local(path));
             } else if is_media_url(&uri) {
-                load_media_url(state, uri);
+                deliver_open_request(state, PlaylistItem::Url(uri));
             }
         }
     }

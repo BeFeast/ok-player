@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::Read;
@@ -80,6 +80,7 @@ mod history_actions;
 mod history_view;
 mod integration;
 mod keyboard;
+mod link_dispatch;
 mod lyrics;
 mod media_download;
 mod media_info;
@@ -118,6 +119,7 @@ pub(crate) use history_actions::*;
 pub(crate) use history_view::*;
 pub(crate) use integration::*;
 pub(crate) use keyboard::*;
+pub(crate) use link_dispatch::*;
 pub(crate) use lyrics::*;
 pub(crate) use media_info::*;
 pub(crate) use mpris::*;
@@ -213,8 +215,8 @@ const LINUX_KEY_MEDIA_MIME_TYPES: &[&str] = &[
     "audio/x-wav",
     "audio/ogg",
 ];
-// The reserved ok-player:// control scheme (PRD §13.4). The MIME type is what a desktop
-// entry advertises to claim the scheme; the display form is what diagnostics show.
+// The ok-player:// link scheme (PRD §13.4, #845). The MIME type is what a desktop entry
+// advertises to claim the scheme; the display form is what diagnostics show.
 const LINUX_URI_SCHEME_MIME: &str = "x-scheme-handler/ok-player";
 const LINUX_RESERVED_URI_SCHEME: &str = "ok-player://";
 const AUDIO_DEVICE_AUTO: &str = "auto";
@@ -276,6 +278,12 @@ struct PlayerState {
     current_video_dimensions: Option<VideoDimensions>,
     seek_generation: u64,
     playlist: Playlist,
+    /// Page URLs an `ok-player:` link queued: each arms the replay cache when Up Next reaches
+    /// it, as it would have had the link opened it. Direct media URLs never enter (#849).
+    replay_on_reach: HashSet<String>,
+    /// Executes `ok-player:` links: the launch queue they share with every other launch and
+    /// the window they present. `None` until the window is built.
+    link_dispatch: Option<LinkDispatch>,
     pending_subtitles: Vec<PathBuf>,
     pending_resume: Option<PendingResume>,
     pending_launch_tracks: Option<PendingLaunchTracks>,
@@ -391,21 +399,11 @@ struct LaunchArgs {
     playlists: Vec<PathBuf>,
     subtitles: Vec<PathBuf>,
     directives: LaunchDirectives,
-    /// Local diagnostics for reserved `ok-player://` requests seen on this launch — the
-    /// scheme is recognized but its external-control commands are [Later], so each is
-    /// reported rather than opened as media (PRD §13.4).
-    reserved_notices: Vec<String>,
 }
 
 impl LaunchArgs {
     fn has_payload(&self) -> bool {
         !self.items.is_empty() || !self.playlists.is_empty() || !self.subtitles.is_empty()
-    }
-
-    /// The message to surface for the first reserved `ok-player://` request on this launch,
-    /// if any. Only the first is shown so a batch of URIs cannot flood the toast.
-    fn reserved_notice(&self) -> Option<&str> {
-        self.reserved_notices.first().map(String::as_str)
     }
 
     fn has_media_payload(&self) -> bool {
@@ -417,23 +415,37 @@ impl LaunchArgs {
 struct AppRuntime {
     window: gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
-    status_toast: Rc<StatusToast>,
     launch_delivery: LaunchDeliveryGate,
 }
 
-/// One launch waiting in the ordered delivery queue. The cold-start command line and every
-/// command line a later process forwards share the queue, so each reaches the player in arrival
-/// order and only once the window is mapped and the engine is ready.
+/// One launch waiting in the ordered delivery queue. The cold-start command line, every command
+/// line a later process forwards, MPRIS `OpenUri` and links typed into Open URL share the queue,
+/// so each reaches the player in arrival order and only once the window is mapped and the engine
+/// is ready.
 ///
 /// Another kind of launch request becomes another variant with an arm in `apply_launch_request`.
-/// A kind applied before its arm returns acknowledges its ticket there, as `Args` does. A kind
-/// that finishes later (work off the UI thread) must defer the acknowledgement: its arm returns
-/// `None`, and its completion applies the request only while `LaunchDelivery::is_in_flight` still
-/// holds for its ticket, then calls `finish_launch_request` with that ticket. A completion that
-/// never arrives is given up on after `launch_args::LAUNCH_APPLY_DEADLINE`, and the next request
-/// is released.
+/// A kind applied before its arm returns reports [`LaunchApply::Applied`], as `Args` does. A kind
+/// that finishes later (work off the UI thread, as a link's filesystem check is) reports
+/// [`LaunchApply::Pending`]; its completion applies the request only while
+/// `LaunchDelivery::is_in_flight` still holds for its ticket, then calls `finish_launch_request`
+/// with that ticket, or `LaunchDelivery::requeue` when the player went away meanwhile. A
+/// completion that never arrives is given up on after `launch_args::LAUNCH_APPLY_DEADLINE`, and
+/// the next request is released.
 enum LaunchRequest {
     Args(LaunchArgs),
+    /// MPRIS `OpenUri` with a local file or a media URL: opened exactly as before, in turn.
+    Open(PlaylistItem),
+    /// An `ok-player:` link (#849).
+    Link(LinkLaunch),
+}
+
+/// How applying a released launch request went.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LaunchApply {
+    /// Applied before the handler returned: the next request may follow at once.
+    Applied,
+    /// Still being applied off the UI thread; its completion reports the ticket.
+    Pending,
 }
 
 type LaunchDeliveryGate = Rc<RefCell<launch_args::LaunchDelivery<LaunchRequest>>>;
@@ -2065,15 +2077,16 @@ fn main() -> glib::ExitCode {
 
     let runtime = Rc::new(RefCell::new(None::<AppRuntime>));
     app.connect_command_line(move |app, command_line| {
-        let mut args = command_line.arguments().into_iter();
-        let _argv0 = args.next();
+        let args = command_line.arguments().into_iter().skip(1).collect();
         let cwd = command_line.cwd();
-        let launch_args = parse_launch_args_from_cwd(args, cwd.as_deref());
+        let platform_data = command_line.platform_data();
+        let startup_id = startup_id_from_platform_data(platform_data.as_ref());
+        let launch = command_line_launch(args, cwd.as_deref(), startup_id);
 
         if let Some(runtime) = runtime.borrow().as_ref() {
-            open_runtime_launch_args(runtime, launch_args);
+            open_runtime_launch_args(runtime, launch);
         } else {
-            runtime.replace(Some(build_window(app, launch_args)));
+            runtime.replace(Some(build_window(app, launch)));
         }
 
         glib::ExitCode::SUCCESS

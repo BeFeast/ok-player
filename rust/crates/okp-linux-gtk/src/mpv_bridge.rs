@@ -458,10 +458,18 @@ fn connect_native_mpv(
 
     let unrealize_started = Rc::clone(&started);
     let unrealize_state = Rc::clone(&state);
+    let unrealize_launch = Rc::clone(&launch_delivery);
     video_area.connect_unrealize(move |_| {
         // A later realization must be able to build the engine again.
         unrealize_started.set(false);
         let mut state = unrealize_state.borrow_mut();
+        // A live native session is torn down below and rebuilt only by the next realization,
+        // which reports the player ready again: launches wait for it rather than reach an
+        // engine without a video plane. (A failed native start never stored a plane; the GTK
+        // fallback owns readiness then.)
+        if state.native_video_plane.is_some() {
+            unrealize_launch.borrow_mut().mark_player_unavailable();
+        }
         let uses_wayland_dmabuf = state
             .mpv
             .as_ref()
