@@ -38,14 +38,16 @@ t      = seconds (90, 90.5) | m:ss | h:mm:ss  ; alias: resume
 2. The query is split on `&` only, and each pair on its first `=`. Each key may appear at
    most once. Two targets or a repeated key reject the request.
 3. Values are percent-decoded exactly once, strictly: a `%` not followed by two hex digits
-   rejects. `%252F` stays the literal text `%2F`.
+   rejects the request, except in the optional `t` or `resume` (rule 7). `%252F` stays
+   the literal text `%2F`.
 4. `+` in a query value decodes to a space, for compatibility with `URLSearchParams`,
    Python `urlencode` and PHP. A real plus is `%2B`.
 5. A non-empty fragment rejects. In practice that is an unencoded `#`.
 6. Unknown keys are ignored (logged) and never forwarded. No engine option ever travels
    through a link (compare IINA advisory GHSA-w5xh-98j7-jp5q).
-7. A malformed optional parameter (`t`) is dropped with a notice. A malformed target
-   rejects the request.
+7. A malformed optional parameter (`t` or its alias `resume`) is dropped with a notice and
+   the target still plays. That includes a malformed `%` escape inside its value, such as
+   `t=1%G0`. A malformed target rejects the request.
 8. The raw link is capped at 4096 bytes.
 9. The authority must be exactly the action: userinfo (`user@open`) and a port
    (`open:8080`) reject.
@@ -60,21 +62,51 @@ t      = seconds (90, 90.5) | m:ss | h:mm:ss  ; alias: resume
   (`ok-player://open/https://…`) rejects.
 - The opaque form `ok-player:<action>?…`.
 - `url=file:///…` (empty host or `localhost`) is converted to the local path it names and
-  then follows the path rules.
+  then follows the path rules. See the next section for how it decodes.
+
+### `file:` URLs in `url=`
+
+A `file:` URL in `url=` is converted with file-URL semantics. The link layer decodes the
+`url=` value once, as it decodes every value (rule 3). The result is a `file:` URL that
+still carries its own `%XX` escapes, and those are decoded once more, to bytes. That
+second step is strict as well: a malformed escape in the file URL rejects the request.
+
+- This is why a space in such a target is written `%2520` in the link, and a `#` as `%2523`:
+  the link layer turns them into `%20` and `%23`, and the file URL turns those into a space
+  and a `#`. Test row O8 relies on it.
+- An encoded slash is no exception. `%2F` inside a segment of the file URL decodes to a
+  real `/`, which separates path components: `file:///media/a%2Fb.mkv` (in the link
+  `url=file%3A%2F%2F%2Fmedia%2Fa%252Fb.mkv`) names `/media/a/b.mkv`, not a file called
+  `a%2Fb.mkv`. The path rules then judge the decoded path, so `file:///%2Fnas/a.mkv` names
+  `//nas/a.mkv` and rejects as a network path. Test row O9 shows the separator case.
+- `path=` and the path form decode only once. There `%252F` stays the literal text `%2F`
+  (rule 3, test row H14), while the same `%252F` inside a `file:` URL in `url=` ends up as
+  `/`.
 
 ## What a link may point at
 
 Everything below is checked in `okp-core` before anything executes.
 
-- **`url=`** is `http` or `https` only. A host is required; `@` and `\` reject (the same
-  rules as `validate_public_http_url` in `okp-core`). Everything else rejects: `smb`,
-  `file://host/`, `rtsp`, `ftp`, nested `ok-player:`, and every mpv-internal protocol
+- **`url=`** is `http` or `https` only. A host is required. The URL authority (the part
+  after `//`, up to the first `/`, `?` or `#`) must not contain `@` or `\`, so a URL cannot
+  carry userinfo such as `http://user@host/`. An `@` or `\` later in the URL, in its path
+  or query, is allowed. These are the rules of `validate_public_http_url` in `okp-core`. A
+  URL needs no media extension, so page URLs that the player resolves through yt-dlp work.
+  Every other scheme rejects: `smb`, `file://host/`, `rtsp`, `ftp`, nested `ok-player:`,
+  and every mpv-internal protocol
   (`edl av lavfi memory fd fdclose hex slice null mf cdda dvd bd dvb appending ytdl`).
-- **`path=`** is absolute, with exactly one leading `/`; `//host/…` rejects. It must name
-  an existing regular file: a directory, a FIFO or anything under `/dev` rejects. The check
-  runs off the UI thread with a timeout. The player plays and records the path exactly as
-  given, not its canonical form, so History keys match other opens of the same path. The
-  current working directory is never joined to a link's path.
+- **`path=`** is absolute, with exactly one leading `/`; `//host/…` rejects. This and the
+  rules below apply to every local path: `path=`, the path form and a converted `file:`
+  URL.
+- A local path must end in a **known media extension**, in any letter case: one of the
+  video and audio extensions that the file chooser and Up Next accept (`media_formats` in
+  `okp-core`). A name without an extension, or with an unknown one, rejects as not a media
+  file, even when the file itself would play. Otherwise the player could accept a link for
+  a file that Up Next then refuses to queue.
+- It must name an existing regular file: a directory, a FIFO or anything under `/dev`
+  rejects. The check runs off the UI thread with a timeout. The player plays and records
+  the path exactly as given, not its canonical form, so History keys match other opens of
+  the same path. The current working directory is never joined to a link's path.
 - **Playlist files** (`.m3u .m3u8 .pls .cue .edl`) and **subtitle files** are not targets
   in v1 and reject.
 - The engine receives a single `loadfile` argument. Nothing from the link becomes an option.
@@ -115,15 +147,20 @@ how to test a link that a browser would rewrite first, as the browser notes expl
   yields `[A, B]`.
 - History is recorded as for any other open. A private session suppresses it.
 - A direct media URL (its last path segment has a known media extension) streams from the
-  server and never starts a background Replay cache download. Page URLs for sites the
-  player resolves through yt-dlp keep their usual behaviour.
+  server and never starts a background Replay cache download, whether it is opened or
+  queued. Page URLs for sites the player resolves through yt-dlp keep their usual
+  behaviour; a queued page URL arms the Replay cache when playback reaches it, as an opened
+  one does.
 
 ### Rejections
 
-A rejected link shows a fixed-text toast and writes one log line. The full path is kept out
-of Copy Diagnostics. Nothing is sent back to the page: there is no response channel, and
-the window comes forward or stays behind the same way for a played link and a rejected one,
-so a page cannot tell them apart.
+A rejected link shows a fixed-text toast and writes one log line. The toast text comes
+from `okp-core` and never repeats text from the link. An unknown action is no exception:
+`ok-player://play?…` and `ok-player://anything-else?…` get the same fixed rejection
+message, so a page cannot put its own words into the toast. The full path is kept out of
+Copy Diagnostics. Nothing is sent back to the page: there is no response channel, and the
+window comes forward or stays behind the same way for a played link and a rejected one, so
+a page cannot tell them apart.
 
 ## Writing links
 
@@ -289,10 +326,11 @@ accepted:
 
 [`ok-player-links-test.html`](ok-player-links-test.html) is a static page for live
 acceptance. Open it from disk (`file://`) in the browser under test. It lists valid links
-(local paths with spaces, Unicode and `#`, an http URL with its own query string, `t=`,
-`add`, `next`) and hostile ones (`edl://`, `//host/x`, a UNC path, `.m3u`, malformed `%`,
-an unencoded `#`, userinfo), each with the expected result, and explains how to create the
-test clips.
+(local paths with spaces, Unicode and `#`, `file:` URLs including an encoded `/`, an http
+URL with its own query string, `t=`, `add`, `next`, a malformed `t`) and hostile ones
+(`edl://`, `//host/x`, a UNC path, `.m3u`, a folder, an extensionless file, malformed `%`,
+an unencoded `#`, userinfo, unknown actions), each with the expected result, and explains
+how to create the test clips.
 
 - Queued clips live in a `queue/` subfolder, so they are never folder siblings of the
   playing clip and each `add` or `next` visibly changes Up Next.
@@ -301,4 +339,7 @@ test clips.
   rather than a rejection for a missing file.
 - The malformed-`%` rows show a terminal command, because Chromium repairs those links
   before the player sees them.
+- The HTTP base URL field names a folder: the page adds a missing trailing `/`, and while
+  the field does not hold a valid `http://` or `https://` URL the rows that need it are
+  greyed out and have no link.
 - Rejected `add` and `next` are tested while playing, idle and not running.

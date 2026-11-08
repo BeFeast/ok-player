@@ -11,6 +11,9 @@
     th, td { border: 1px solid color-mix(in srgb, currentColor 25%, transparent); padding: .4rem .6rem; text-align: left; vertical-align: top; }
     tbody th { white-space: nowrap; }
     td:nth-child(2) { width: 45%; }
+    tr.unavailable td, tr.unavailable th { opacity: .45; }
+    #base-status { margin: .25rem 0 0; font-size: .9em; }
+    #base-status.error { color: #e53935; font-weight: 600; }
     code.href, code.cli { display: block; font-size: .8em; opacity: .75; word-break: break-all; margin-top: .25rem; }
     code.cli { opacity: 1; }
     label { display: block; margin: .5rem 0; }
@@ -36,11 +39,13 @@
       moving test pattern. The clips under <code>queue/</code> show colour bars; they are
       never folder siblings of a playing clip, so queueing them always changes Up Next. The
       clips under <code>trap/</code> are solid red: only a link handler that skips a rule
-      ever plays one. <code>list.m3u</code> and <code>notes.srt</code> exist and must still
-      be refused. Keep the folder under your home folder; H11 relies on it.
+      ever plays one. Among them, <code>trap/red</code> is an MP4 without an extension and
+      <code>trap/folder.mp4</code> is a folder with a red clip inside. They, and
+      <code>list.m3u</code> and <code>notes.srt</code>, exist and must still be refused.
+      Keep the folder under your home folder; H11 relies on it.
     </p>
     <pre><code>dir="$HOME/Videos/ok-player links"
-mkdir -p "$dir/queue" "$dir/trap/a"
+mkdir -p "$dir/queue" "$dir/trap/a" "$dir/trap/folder.mp4"
 clip() {  # clip OUTPUT SOURCE: 60 s of a lavfi video source with a tone
   ffmpeg -hide_banner -loglevel error -y -f lavfi -i "$2" \
     -f lavfi -i "sine=frequency=440:duration=60" -t 60 \
@@ -52,14 +57,14 @@ done
 for name in b c d e; do
   clip "$dir/queue/$name clip.mp4" "smptebars=size=640x360:rate=30"
 done
-for name in red.mp4 "a%G1.mp4" "a clip.mp4%2" a/clip.mp4; do
+for name in red.mp4 red "a%G1.mp4" a/clip.mp4 folder.mp4/red.mp4; do
   clip "$dir/trap/$name" "color=c=red:size=640x360:rate=30"
 done
 printf '#EXTM3U\na clip.mp4\n' &gt; "$dir/list.m3u"
 printf '1\n00:00:01,000 --&gt; 00:00:05,000\nHello\n\n' &gt; "$dir/notes.srt"</code></pre>
     <p>
-      Serve the same folder on the base URL below for the HTTP rows (U1 to U3, Q3) and for
-      H18, H19 and H22. Python's built-in server is enough for all of them except U2: it
+      Serve the same folder on the base URL below for the HTTP rows (U1 to U4, Q3) and for
+      H13, H18, H19 and H22. Python's built-in server is enough for all of them except U2: it
       ignores Range requests, so U2 cannot seek over it. For U2 use a server that answers
       Range with <code>206 Partial Content</code>; check with the second command.
     </p>
@@ -67,6 +72,9 @@ printf '1\n00:00:01,000 --&gt; 00:00:05,000\nHello\n\n' &gt; "$dir/notes.srt"</c
 curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1:8000/a%20clip.mp4'</code></pre>
     <p>
       Enter where the clips are; the fixture links below follow. The page keeps both values.
+      The base URL names a folder, so the page adds a missing trailing <code>/</code>. While
+      it is not a valid <code>http://</code> or <code>https://</code> URL, the rows that need
+      it are greyed out and have no link.
       Under some rows the page also shows the same link as a terminal command. The desktop
       entry starts the player the same way (<code>ok-player %U</code>), so the command
       delivers the link exactly as written, with no browser in between.
@@ -75,8 +83,9 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
       <input id="folder" value="/home/alice/Videos/ok-player links" spellcheck="false">
     </label>
     <label>HTTP base URL of the same folder
-      <input id="base" value="http://127.0.0.1:8000/" spellcheck="false">
+      <input id="base" value="http://127.0.0.1:8000/" spellcheck="false" aria-describedby="base-status">
     </label>
+    <p id="base-status" role="status"></p>
   </section>
 
   <section id="open">
@@ -123,7 +132,12 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
       <tr id="O8">
         <th scope="row">O8</th>
         <td><a class="fx" href="ok-player://open?url=file%3A%2F%2F%2Fhome%2Falice%2FVideos%2Fok-player%2520links%2Ftake%2520%25233.mp4" data-kind="fileurl" data-file="take #3.mp4"><code>url=file:///…</code></a><code class="href"></code></td>
-        <td>Plays <code>take #3.mp4</code> as a local file, with the folder as Up Next.</td>
+        <td>Plays <code>take #3.mp4</code> as a local file, with the folder as Up Next. The link layer decodes the value once, to <code>file:///…/take%20%233.mp4</code>; the file URL's own escapes are then decoded once more.</td>
+      </tr>
+      <tr id="O9">
+        <th scope="row">O9</th>
+        <td><a class="fx" href="ok-player://open?url=file%3A%2F%2F%2Fhome%2Falice%2FVideos%2Fok-player%2520links%2Fqueue%252Fb%2520clip.mp4" data-kind="fileurl" data-one-segment data-file="queue/b clip.mp4"><code>url=file:///…</code> with an encoded <code>/</code> in a segment (<code>queue%2Fb%20clip.mp4</code>)</a><code class="href"></code></td>
+        <td>Plays <code>queue/b clip.mp4</code> (colour bars) as a local file: inside a file URL, <code>%2F</code> decodes to a real <code>/</code> and separates two path components. Up Next lists the four clips of <code>queue/</code>, <code>b clip.mp4</code> first.</td>
       </tr>
       </tbody>
     </table>
@@ -179,6 +193,11 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
         <th scope="row">U3</th>
         <td><a class="fx" href="ok-player://open/?url=http%3A%2F%2F127.0.0.1%3A8000%2Ftake%2520%25233.mp4" data-kind="url" data-ref="take%20%233.mp4" data-sep="/?"><code>ok-player://open/?url=…</code></a><code class="href"></code></td>
         <td>Streams <code>take #3.mp4</code> (an empty path is not a target).</td>
+      </tr>
+      <tr id="U4">
+        <th scope="row">U4</th>
+        <td><a class="fx" href="ok-player://open?url=http%3A%2F%2F127.0.0.1%3A8000%2Fa%2520clip.mp4%3Fby%3Dalice%40example.org" data-kind="url" data-ref="a%20clip.mp4?by=alice@example.org">http URL with an <code>@</code> in its query string</a><code class="href"></code></td>
+        <td>Streams <code>a clip.mp4</code>. Only an <code>@</code> in the authority is userinfo (H18); one in the query is allowed.</td>
       </tr>
       </tbody>
     </table>
@@ -255,6 +274,11 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
         <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fa%20clip.mp4&amp;t=abc" data-kind="path" data-file="a clip.mp4" data-extra="&amp;t=abc">malformed <code>t</code></a><code class="href"></code></td>
         <td>Plays as if no start time was given; a notice says the start time was dropped.</td>
       </tr>
+      <tr id="P3">
+        <th scope="row">P3</th>
+        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fa%20clip.mp4&amp;t=30%G1" data-kind="path" data-file="a clip.mp4" data-extra="&amp;t=30%G1">malformed <code>%G1</code> in <code>t</code>, run from a terminal or Firefox</a><code class="href"></code><code class="cli"></code></td>
+        <td>Plays <code>a clip.mp4</code> as if no start time was given; a notice says the start time was dropped. A malformed escape in <code>t</code> drops <code>t</code> and never rejects the link. In Chromium this row proves nothing: Chromium rewrites <code>%G1</code> to <code>%25G1</code>, so the player sees a well-formed but invalid <code>t</code>.</td>
+      </tr>
       </tbody>
     </table>
   </section>
@@ -318,8 +342,8 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
       </tr>
       <tr id="H8">
         <th scope="row">H8</th>
-        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links" data-kind="folder">directory</a><code class="href"></code></td>
-        <td>Rejected: not a regular file.</td>
+        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftrap%2Ffolder.mp4" data-kind="path" data-file="trap/folder.mp4">directory named like a media file (<code>trap/folder.mp4</code>)</a><code class="href"></code></td>
+        <td>Rejected: not a regular file. The name ends in <code>.mp4</code>, so only the folder rule can refuse it; without that rule the engine would open the folder and play the red clip inside.</td>
       </tr>
       <tr id="H9">
         <th scope="row">H9</th>
@@ -343,8 +367,8 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
       </tr>
       <tr id="H13">
         <th scope="row">H13</th>
-        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftrap%2Fa%20clip.mp4%2" data-kind="raw" data-raw="%2Ftrap%2Fa%20clip.mp4%2">truncated <code>%2</code>, run from a terminal or Firefox</a><code class="href"></code><code class="cli"></code></td>
-        <td>Rejected: <code>%</code> not followed by two hex digits. In Chromium this row proves nothing. Chromium rewrites the trailing <code>%2</code> to <code>%252</code>, so the player correctly plays the red <code>trap/a clip.mp4%2</code>.</td>
+        <td><a class="fx" href="ok-player://open?url=http%3A%2F%2F127.0.0.1%3A8000%2Ftrap%2Fred.mp4%3Fx%3D%2" data-kind="rawurl" data-ref="trap/red.mp4?x=" data-raw="%2">truncated <code>%2</code> at the end of the link, run from a terminal or Firefox</a><code class="href"></code><code class="cli"></code></td>
+        <td>Rejected: <code>%</code> not followed by two hex digits. In Chromium this row proves nothing. Chromium rewrites the trailing <code>%2</code> to <code>%252</code>, so the player correctly streams the red <code>trap/red.mp4</code> with the query <code>?x=%2</code>.</td>
       </tr>
       <tr id="H14">
         <th scope="row">H14</th>
@@ -369,7 +393,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
       <tr id="H18">
         <th scope="row">H18</th>
         <td><a class="fx" href="ok-player://open?url=http%3A%2F%2Fuser%40127.0.0.1%3A8000%2Ftrap%2Fred.mp4" data-kind="url" data-user="user" data-ref="trap/red.mp4">userinfo in the target URL</a><code class="href"></code></td>
-        <td>Rejected: <code>@</code> is not allowed in the URL.</td>
+        <td>Rejected: userinfo is not allowed in the URL. The <code>@</code> is in the authority, the part before the first <code>/</code>, <code>?</code> or <code>#</code>; compare U4.</td>
       </tr>
       <tr id="H19">
         <th scope="row">H19</th>
@@ -404,7 +428,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
       <tr id="H25">
         <th scope="row">H25</th>
         <td><a class="fx" href="ok-player://play?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftrap%2Fred.mp4" data-kind="path" data-action="play" data-file="trap/red.mp4">unknown action</a><code class="href"></code></td>
-        <td>Rejected: the action must be <code>open</code>, <code>add</code> or <code>next</code>.</td>
+        <td>Rejected: the action must be <code>open</code>, <code>add</code> or <code>next</code>. The toast has a fixed text and does not repeat <code>play</code>.</td>
       </tr>
       <tr id="H26">
         <th scope="row">H26</th>
@@ -421,6 +445,16 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
         <td><a class="fx" href="ok-player://next?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fmissing.mp4" data-kind="path" data-action="next" data-file="missing.mp4">rejected <code>next</code> with OK Player not running</a><code class="href"></code></td>
         <td>OK Player starts; its window opens idle with a rejection toast.</td>
       </tr>
+      <tr id="H29">
+        <th scope="row">H29</th>
+        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftrap%2Fred" data-kind="path" data-file="trap/red">extensionless file (<code>trap/red</code>, a working MP4)</a><code class="href"></code></td>
+        <td>Rejected: not a media file. A local path needs a known media extension even when the file itself would play.</td>
+      </tr>
+      <tr id="H30">
+        <th scope="row">H30</th>
+        <td><a class="fx" href="ok-player://call-support-now?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftrap%2Fred.mp4" data-kind="path" data-action="call-support-now" data-file="trap/red.mp4">unknown action that reads as a message</a><code class="href"></code></td>
+        <td>Rejected with the same fixed text as H25. The toast does not contain <code>call-support-now</code>, so a page cannot put its own words into it.</td>
+      </tr>
       </tbody>
     </table>
   </section>
@@ -430,6 +464,10 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
     const enc = encodeURIComponent;
     const folderInput = document.getElementById("folder");
     const baseInput = document.getElementById("base");
+    const baseStatus = document.getElementById("base-status");
+
+    // The parsed HTTP base URL, or null while the field does not hold a usable one.
+    let base = null;
 
     function folder() {
       return folderInput.value.trim().replace(/\/+$/, "");
@@ -443,8 +481,24 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
       return path.split("/").map(enc).join("/");
     }
 
+    // The base names a folder: without a trailing "/", new URL() would resolve "a.mp4" next
+    // to its last segment instead of inside it, so a missing "/" is added. Anything that is
+    // not an absolute http(s) URL gives null.
+    function parseBase(text) {
+      let url;
+      try {
+        url = new URL(text.trim());
+      } catch (error) {
+        return null;
+      }
+      if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+      if (!url.pathname.endsWith("/")) url.pathname += "/";
+      return url;
+    }
+
     function httpUrl(ref, user) {
-      const url = new URL(ref, baseInput.value.trim());
+      if (!base) throw new Error("no usable HTTP base URL");
+      const url = new URL(ref, base);
       if (user) url.username = user;
       return url.href;
     }
@@ -464,6 +518,13 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
       });
     }
 
+    // A file: URL for a fixture file. With data-one-segment the file name is encoded as one
+    // segment, so a "/" in it travels as %2F.
+    function fileUrl(d) {
+      const file = d.oneSegment !== undefined ? enc(d.file) : segments(d.file);
+      return "file://" + (d.host || "") + segments(folder()) + "/" + file;
+    }
+
     // Same rules as the static hrefs: values encoded with encodeURIComponent.
     function build(d) {
       const action = d.action || "open";
@@ -474,13 +535,13 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
         case "plus": return `ok-player://${action}?path=${enc(filePath(d.file)).replace(/%20/g, "+")}${extra}`;
         case "pathform": return `ok-player://${action}${segments(lead + filePath(d.file))}`;
         case "opaque": return `ok-player:${action}?path=${enc(filePath(d.file))}${extra}`;
-        case "fileurl": return `ok-player://${action}?url=${enc("file://" + (d.host || "") + segments(filePath(d.file)))}${extra}`;
+        case "fileurl": return `ok-player://${action}?url=${enc(fileUrl(d))}${extra}`;
         case "url": return `ok-player://${action}${d.sep || "?"}url=${enc(httpUrl(d.ref, d.user))}${extra}`;
         case "pathurl": return `ok-player://${action}/${httpUrl(d.ref)}`;
         case "value": return `ok-player://${action}?url=${enc(expand(d.value))}${extra}`;
         case "relhome": return `ok-player://${action}?path=${enc(homeRelative(filePath(d.file)))}${extra}`;
         case "raw": return `ok-player://${action}?path=${enc(folder())}${d.raw}${extra}`;
-        case "folder": return `ok-player://${action}?path=${enc(folder())}${extra}`;
+        case "rawurl": return `ok-player://${action}?url=${enc(httpUrl(d.ref))}${d.raw}${extra}`;
         default: throw new Error(`unknown kind ${d.kind}`);
       }
     }
@@ -490,18 +551,49 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
     }
 
     function refresh() {
-      for (const link of document.querySelectorAll("a.fx")) {
-        try {
-          link.href = build(link.dataset);
-        } catch (error) {
-          // An unparsable base URL leaves the previous href in place.
-        }
+      base = parseBase(baseInput.value);
+      baseStatus.classList.toggle("error", !base);
+      if (base) {
+        baseStatus.textContent = `HTTP links use ${base.href}`;
+      } else {
+        baseStatus.textContent = "The HTTP base URL is not a valid http:// or https:// URL. " +
+          "The rows that need it are greyed out until it is fixed.";
       }
-      for (const link of document.querySelectorAll("td > a[href^='ok-player:']")) {
-        const href = link.getAttribute("href");
-        link.parentElement.querySelector("code.href").textContent = href;
+      for (const link of document.querySelectorAll("td > a")) {
+        let href = link.getAttribute("href");
+        let problem = "";
+        if (link.classList.contains("fx")) {
+          try {
+            href = build(link.dataset);
+            link.setAttribute("href", href);
+          } catch (error) {
+            // Never leave a stale link behind: a row that cannot be built is not clickable.
+            problem = base ? `Cannot build this link: ${error.message}` : "Needs a valid HTTP base URL (see Setup).";
+            link.removeAttribute("href");
+          }
+        }
+        link.closest("tr").classList.toggle("unavailable", problem !== "");
+        link.parentElement.querySelector("code.href").textContent = problem || href;
         const cli = link.parentElement.querySelector("code.cli");
-        if (cli) cli.textContent = `ok-player ${shellQuote(href)}`;
+        if (cli) cli.textContent = problem ? "" : `ok-player ${shellQuote(href)}`;
+      }
+    }
+
+    function save(input) {
+      try {
+        localStorage.setItem(`ok-player-links-test.${input.id}`, input.value);
+      } catch (error) {
+        // Not persisted; the links still follow the input.
+      }
+    }
+
+    // Write the normalised base back into the field once editing is done (or on load), so
+    // the field shows the URL the links use. While typing, only the links follow it.
+    function normaliseBaseField() {
+      const parsed = parseBase(baseInput.value);
+      if (parsed && parsed.href !== baseInput.value) {
+        baseInput.value = parsed.href;
+        save(baseInput);
       }
     }
 
@@ -513,14 +605,15 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
         // Storage can be unavailable on file: pages; the defaults stay.
       }
       input.addEventListener("input", () => {
-        try {
-          localStorage.setItem(`ok-player-links-test.${input.id}`, input.value);
-        } catch (error) {
-          // Not persisted; the links still follow the input.
-        }
+        save(input);
         refresh();
       });
     }
+    baseInput.addEventListener("change", () => {
+      normaliseBaseField();
+      refresh();
+    });
+    normaliseBaseField();
     refresh();
   </script>
 </body>
