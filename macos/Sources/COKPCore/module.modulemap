@@ -1,0 +1,5 @@
+module COKPCore [system] {
+    header "COKPCore.h"
+    link "okp_ffi"
+    export *
+}

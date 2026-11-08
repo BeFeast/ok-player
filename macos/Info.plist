@@ -1,14 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template. scripts/generate-macos-info-plist.py stamps both version keys from git
+     on every build. The bundle id is final: macOS keys privacy grants on it. -->
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>ok-player</string>
-<key>CFBundleIdentifier</key><string>uk.oklabs.ok-player.preview</string>
+<key>CFBundleIdentifier</key><string>uk.oklabs.ok-player</string>
 <key>CFBundleName</key><string>OK Player</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>1</string>
-<key>LSMinimumSystemVersion</key><string>13.0</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
+<key>CFBundleShortVersionString</key><string>0.0.0</string>
+<key>CFBundleVersion</key><string>0</string>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>NSLocalNetworkUsageDescription</key><string>OK Player opens videos and subtitles from network shares and media servers on your local network.</string>
 <key>CFBundleDocumentTypes</key><array><dict>
 <key>CFBundleTypeName</key><string>Video</string>
 <key>CFBundleTypeRole</key><string>Viewer</string>

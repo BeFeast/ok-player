@@ -10,19 +10,182 @@ Errors stay visible until another explicit open attempt.
 This preview is for local testing. It does not yet contain the Linux shell's URL
 resolver, History, saving/cache UI, subtitle controls or update service. Its chrome
 uses the shared BeFeast palette in light and dark, following the system appearance;
-the full macOS UI redesign is still ahead. The app is ad-hoc signed; Developer ID signing and notarization remain
-separate distribution work. No global libmpv or package-manager installation is
-needed to run the packaged app.
+the full macOS UI redesign is still ahead. The app needs macOS 14 or later on Apple
+Silicon. It is signed with a stable self-signed identity when one is configured (see
+[Signing](#signing)); Developer ID signing, notarization and a DMG remain separate
+distribution work. No global libmpv or package-manager installation is needed to run
+the packaged app.
 
-## Build and artifact
+## Install a build on a Mac
 
-The manual Forgejo `macOS player preview` workflow uses an existing macOS runner
-with Rust, Swift and the Apple SDK. It accepts an exact source SHA, a numeric-IP
-Forgejo endpoint and an existing toolchain location. It downloads the checksum-pinned
-ARM64 runtime and H.264/AAC fixture from Forgejo generic packages, without installing
-system tools. `scripts/build-macos-preview.sh` builds the opt-in `live-mpv` FFI,
-compiles this shell against the generated header, bundles the entire dylib closure,
-rewrites library locations, and signs the app ad hoc.
+Every pull request that touches the Mac build gets an artifact on its Forgejo check
+run (see [Forgejo pull request check](#forgejo-pull-request-check)), named
+`macos-player-<commit SHA>`. Download it from a shell, not a browser: `curl` and
+`ditto` set no quarantine flag, so Gatekeeper does not hold the app back and no
+administrator rights are needed. `jq` ships with macOS 15; on macOS 14 copy the
+artifact link from the run page instead.
+
+```sh
+sha=<full commit SHA the check built>
+api=https://<forgejo host>/api/v1/repos/BeFeast/ok-player
+work="$(mktemp -d)"
+url="$(curl -fsS "$api/actions/artifacts?name=macos-player-$sha" | jq -r '.[0].archive_download_url')"
+curl -fsSL -o "$work/artifact.zip" "$url"
+ditto -x -k "$work/artifact.zip" "$work/artifact"
+(cd "$work/artifact" && shasum -a 256 -c SHA256SUMS.txt)   # must print: ok-player-macos-arm64.zip: OK
+pkill -x ok-player || true                                  # quit a running build
+rm -rf "$HOME/Applications/OK Player.app"                   # replace the previous build
+mkdir -p "$HOME/Applications"
+ditto -x -k "$work/artifact/ok-player-macos-arm64.zip" "$HOME/Applications"
+open "$HOME/Applications/OK Player.app"
+```
+
+To see which build is installed, read its version, `CFBundleVersion` and source
+revision (the exact `git describe` it was built from):
+
+```sh
+for key in CFBundleShortVersionString CFBundleVersion OKPSourceRevision; do
+  plutil -extract "$key" raw "$HOME/Applications/OK Player.app/Contents/Info.plist"
+done
+```
+
+## Build and package layout
+
+`scripts/build-macos-preview.sh` builds everything from a caller-supplied runtime
+prefix (`OKP_MPV_PREFIX`), into an empty `OKP_MACOS_OUTPUT`, with an isolated
+`CARGO_TARGET_DIR`:
+
+1. It runs the okp-ffi tests and builds its opt-in `live-mpv` dylib.
+2. It copies that dylib and the whole runtime dylib closure into a staging directory
+   and rewrites install names and absolute references to `@rpath`.
+3. It writes the Swift package's two generated inputs, both ignored by git:
+   `Sources/COKPCore/okp_core.h` (the FFI header) and
+   `Sources/OKPlayerShell/Generated/Palette.swift` (see [Colours](#colours)).
+4. `swift build -c release` builds the `ok-player` executable and `swift test` runs
+   the XCTest target against the staged dylibs.
+5. It assembles `OK Player.app`: executable, dylibs, `Info.plist` stamped by
+   `scripts/generate-macos-info-plist.py`, `Resources/AppIcon.icns`, licence, this
+   README and the runtime provenance. Every rpath that points into a build machine is
+   removed.
+6. It signs every dylib, the executable and the bundle with one identity, records the
+   designated requirement in `signing.txt`, and zips the app with its SHA-256.
+
+The Swift package (`Package.swift`, no Xcode project) has three targets:
+
+| Target | What it is |
+|---|---|
+| `COKPCore` | System library module over the okp-ffi C ABI; links `libokp_ffi` |
+| `OKPlayerShell` | The AppKit shell: window, video view, palette, launcher |
+| `OKPlayer` | The thin `ok-player` executable; it only calls `PlayerLauncher.run()` |
+| `OKPlayerShellTests` | XCTest target for `OKPlayerShell` |
+
+## Bundle identity, version and icon
+
+- **Bundle id** `uk.oklabs.ok-player`. It is final and must not change again: macOS
+  keys privacy grants (Downloads, Desktop, network volumes, local network) on it.
+- **Version.** `CFBundleShortVersionString` is `MAJOR.MINOR.PATCH` of the nearest
+  `v<semver>` tag, without a prerelease suffix, because macOS reads three integers
+  there. `CFBundleVersion` is the number of commits reachable from the build commit,
+  then the CI run number (0 locally), so a newer build always has the higher value.
+  The build needs the full history and tags; a shallow clone fails instead of
+  stamping a wrong version.
+- **Icon.** `Resources/AppIcon.icns` is generated from the Linux app icon SVGs in
+  `rust/packaging/linux/` by `scripts/generate-macos-icon.py`, on Apple's icon grid
+  (an 824-unit body on a 1024-unit canvas), with the size-tuned hicolor SVGs at 64 px
+  and below. It is checked in, because rasterising needs librsvg; rerun the script
+  after the icon source changes.
+- `NSLocalNetworkUsageDescription` explains the local network prompt.
+
+## Signing
+
+An ad-hoc signature is the binary's hash, so every ad-hoc build is a new app to macOS
+and every privacy grant is asked for again after an install. A certificate gives
+every build the same designated requirement,
+`identifier "uk.oklabs.ok-player" and certificate leaf = H"<certificate SHA-1>"`,
+so the grants carry over to the next build.
+
+The GitHub-hosted workflow imports a self-signed code-signing certificate from two
+repository secrets, `MACOS_SIGNING_P12_BASE64` and `MACOS_SIGNING_P12_PASSWORD`, into a
+temporary keychain (`scripts/macos-signing-identity.sh`), signs with it and deletes the
+keychain at the end. Without the secrets it signs ad hoc and says so in the job
+summary. `security` reports the certificate as not trusted; that is expected for a
+self-signed certificate and does not stop `codesign`.
+`scripts/tests/macos-signing-identity.Tests.sh` runs in every macOS job: it makes a
+throwaway certificate with the recipe below, signs two different builds through the
+same script and requires one designated requirement for both, and different ones for
+two ad-hoc builds.
+
+One-time setup, on any machine with OpenSSL and `gh` logged in to the mirror. The
+certificate must stay the same for the life of the app, because replacing it changes
+the designated requirement; keep `identity.p12` and its password in the team's secret
+store as the master copy.
+
+```sh
+work="$(mktemp -d)" && cd "$work"
+cat > cert.cnf <<'EOF'
+[req]
+distinguished_name = dn
+x509_extensions = ext
+prompt = no
+[dn]
+CN = OK Player self-signed code signing
+[ext]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,codeSigning
+subjectKeyIdentifier = hash
+EOF
+openssl req -x509 -newkey rsa:3072 -nodes -days 7300 -config cert.cnf -keyout key.pem -out cert.pem
+password="$(openssl rand -hex 24)"
+# The legacy algorithms are the ones macOS `security import` accepts.
+openssl pkcs12 -export -inkey key.pem -in cert.pem -name "OK Player self-signed code signing" \
+  -out identity.p12 -passout "pass:$password" -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1
+base64 < identity.p12 | tr -d '\n' | gh secret set MACOS_SIGNING_P12_BASE64 -R BeFeast/ok-player
+printf '%s' "$password" | gh secret set MACOS_SIGNING_P12_PASSWORD -R BeFeast/ok-player
+openssl x509 -in cert.pem -noout -fingerprint -sha1   # the H"..." in the designated requirement
+```
+
+## Forgejo pull request check
+
+`.forgejo/workflows/macos-pr-check.yml` gives every Forgejo pull request the check
+**`macOS PR check / Apple Silicon app (GitHub-hosted) (pull_request)`**. It runs
+`scripts/mac-ci-bridge.py`:
+
+- `scope` diffs the pull request against its merge base. When nothing the Mac build
+  reads changed (the bridge's `MACOS_PATHS`: `macos/`, the macOS scripts, `brand/`,
+  the Cargo manifest and lock file, okp-ffi, okp-session, okp-mpv, okp-core and both
+  workflow files), the check passes at once.
+- Otherwise `run` pushes the head commit to `mac-ci/pr-<number>` on the GitHub mirror.
+  That push starts `.github/workflows/macos-player-preview.yml`; no GitHub pull request
+  is opened. The bridge waits up to 60 minutes, prints the run link, fails unless the
+  run concluded `success` and its `ok-player-macos-arm64.zip` matches
+  `SHA256SUMS.txt`, prints the failing job's log tail when it did not, and deletes the
+  branch. A newer push to the pull request cancels both the superseded Forgejo job and
+  its GitHub run.
+- The downloaded artifact is published again as `macos-player-<commit SHA>` on the
+  Forgejo run.
+
+One-time setup: create a GitHub fine-grained token for `BeFeast/ok-player` with
+**Contents**, **Workflows** and **Actions** set to read and write (Workflows because a
+pushed commit may change workflow files), and store it as the Forgejo repository
+Actions secret `MAC_CI_GITHUB_TOKEN`. Until it exists, a macOS-relevant pull request
+fails with a message that names the secret. Once the check is green, add its name
+above to the required checks of `main`.
+
+The bridge also runs by hand, for example before the secret exists, from a clone that
+has the pull request's head commit. With `--forgejo-status` it posts the result as the
+commit status `macOS PR check / manual bridge`:
+
+```sh
+MAC_CI_GITHUB_TOKEN="$(gh auth token)" FORGEJO_TOKEN=<forgejo token> \
+  python3 scripts/mac-ci-bridge.py run --sha <head SHA> --ref mac-ci/pr-<number> \
+  --download-dir "$(mktemp -d)" --forgejo-status --forgejo-api https://<forgejo host>/api/v1
+```
+
+The manual Forgejo `macOS player preview` workflow stays as an on-demand fallback on
+the self-hosted Mac. It accepts an exact source SHA, a numeric-IP Forgejo endpoint and
+an existing toolchain location, downloads the checksum-pinned ARM64 runtime and
+H.264/AAC fixture from Forgejo generic packages, and runs the same build script.
 
 ## Colours
 
@@ -44,14 +207,15 @@ follows the system light/dark switch while it is open:
 
 The video surface gets no tint. A malformed palette or a role missing from one
 appearance fails the build. `scripts/tests/macos-palette.Tests.py` checks that the
-generated table carries the JSON values.
+generated table carries the JSON values, and the XCTest target checks that every role
+resolves to its light value in Aqua and its dark value in Dark Aqua.
 
-The workflow uploads `ok-player-macos-arm64.zip`, source identity, SHA-256, compiler
-logs, dylib/rpath/signature inspection and smoke output. With smoke enabled it also
-uploads `snapshots/window-light.png` and `window-dark.png`: after the playback check
-the app renders its own window content in each appearance, overriding only that
-window's appearance. The OpenGL video area is not part of that render and stays empty. Extract the ZIP and open
-**OK Player.app** from the extracted directory. The app does not require
+The workflow uploads `ok-player-macos-arm64.zip`, source identity, SHA-256, version,
+signing mode, compiler and test logs, dylib/rpath/signature inspection and smoke
+output. With smoke enabled it also uploads `snapshots/window-light.png` and
+`window-dark.png`: after the playback check the app renders its own window content in
+each appearance, overriding only that window's appearance. The OpenGL video area is
+not part of that render and stays empty. The app does not require
 `DYLD_LIBRARY_PATH` or a fixed installation path.
 
 The pinned runtime comes from media-kit/libmpv-darwin-build v0.7.2, containing
@@ -61,11 +225,11 @@ Lua or bundled yt-dlp, which is why the preview is scoped to local-file playback
 
 ## GitHub-hosted build
 
-`.github/workflows/macos-player-preview.yml` builds the same app on a GitHub-hosted
-Apple Silicon runner, so a build does not wait for the one self-hosted Mac. It runs on
-demand and on pull requests that touch this shell, its build script, `brand/` or the
-Rust crates the app links. Pull requests build their head commit, not the merge preview.
-Its inputs come from public sources, each pinned by SHA-256:
+`.github/workflows/macos-player-preview.yml` builds the app on a GitHub-hosted Apple
+Silicon runner. It runs on demand, on GitHub pull requests that touch the bridge's
+path set, and on pushes to `mac-ci/**` branches, which is how the Forgejo check starts
+it. Pull requests build their head commit, not the merge preview. Its inputs come from
+public sources, each pinned by SHA-256:
 
 - The runtime is assembled from the upstream media-kit v0.7.2 release archive and the
   mpv 0.36.0 source archive (for the headers). Its `provenance.json` is regenerated from
@@ -93,5 +257,6 @@ process deadline prevents a blocked render callback from keeping the job alive.
 
 The ZIP is created before smoke execution and uploaded even when smoke fails.
 Successful engine events and rendering calls are automated evidence; seeing the
-image and hearing the sound on a physical Mac remain separate operator observations.
+image and hearing the sound on a physical Mac remain separate operator observations,
+and so does the check that privacy grants survive an update with the stable identity.
 The wider codec/display/audio acceptance matrix remains tracked in issue #348.
