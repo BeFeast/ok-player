@@ -8,9 +8,11 @@ use okp_core::player::{
     PlayerCommand, PlayerError, PlayerErrorKind, PlayerEvent, PropertyChange, SeekMode, TrackKind,
 };
 use okp_core::playlist::PlaylistItem;
-use okp_mpv::{EndFileReason, Mpv, MpvEvent, PlaybackState, error_description};
+use okp_mpv::{Mpv, MpvEvent, PlaybackState, error_description};
+use okp_session::SessionMachine;
+use okp_session::reconcile::{core_end_reason, endfile_error, event_matches_source};
 
-use crate::session_machine::SessionMachine;
+use crate::c_text::copy_text;
 use crate::{
     OkpCommand, OkpCommandOutcome, OkpPlaybackStatus, OkpRejectReason, command_from_c,
     outcome_to_c, rejected,
@@ -492,6 +494,10 @@ fn forward_command(engine: &Mpv, command: &PlayerCommand, request_id: u64) -> Re
         PlayerCommand::SetSubtitleDelay(seconds) => engine.set_subtitle_delay(*seconds),
         PlayerCommand::SetSpeed(speed) => engine.set_speed(*speed),
         PlayerCommand::SetVolume(volume) => engine.set_volume(*volume),
+        PlayerCommand::SetMute(muted) => engine.command_async_with_userdata(
+            &["set", "mute", if *muted { "yes" } else { "no" }],
+            request_id,
+        ),
         PlayerCommand::RequestScreenshot { .. } => {
             return Err(
                 "the live C ABI requires the native shell to choose a screenshot path".to_owned(),
@@ -499,43 +505,6 @@ fn forward_command(engine: &Mpv, command: &PlayerCommand, request_id: u64) -> Re
         }
     };
     result.map_err(|error| error.to_string())
-}
-
-fn event_matches_source(current: Option<&PlaylistItem>, ended_path: Option<&str>) -> bool {
-    let Some(current) = current else { return false };
-    ended_path.is_none_or(|ended| match current {
-        PlaylistItem::Local(path) => path.to_string_lossy() == ended,
-        PlaylistItem::Url(url) => url == ended,
-    })
-}
-
-fn endfile_error(reason: EndFileReason, messages: &[String]) -> Option<String> {
-    match reason {
-        EndFileReason::Error(code) | EndFileReason::Unknown(code) => {
-            let mut message = error_description(code);
-            if let Some(diagnostic) = messages.last() {
-                message.push_str(": ");
-                message.push_str(diagnostic.trim());
-            }
-            Some(message)
-        }
-        EndFileReason::Eof => okp_core::playback_failure::diagnose_mpv_eof(
-            messages,
-            okp_core::playback_failure::CodecEnvironment::System,
-        )
-        .map(|diagnostic| diagnostic.detail),
-        _ => None,
-    }
-}
-
-fn core_end_reason(reason: EndFileReason) -> EndReason {
-    match reason {
-        EndFileReason::Eof => EndReason::Eof,
-        EndFileReason::Stop => EndReason::Stopped,
-        EndFileReason::Quit => EndReason::Quit,
-        EndFileReason::Error(_) | EndFileReason::Unknown(_) => EndReason::Error,
-        EndFileReason::Redirect => EndReason::Redirect,
-    }
 }
 
 fn live_command_result(outcome: OkpCommandOutcome, result: OkpLiveResult) -> OkpLiveCommandResult {
@@ -547,74 +516,4 @@ fn invalid_command_result() -> OkpLiveCommandResult {
         rejected(OkpRejectReason::InvalidArgument),
         OkpLiveResult::InvalidArgument,
     )
-}
-
-/// Copy bytes and always terminate when capacity allows. Interior nuls from foreign
-/// diagnostic text are replaced so C consumers never observe a truncated message.
-unsafe fn copy_text(text: &str, buffer: *mut c_char, capacity: usize) -> usize {
-    let required = text.len().saturating_add(1);
-    if buffer.is_null() || capacity == 0 {
-        return required;
-    }
-    let count = text.len().min(capacity.saturating_sub(1));
-    for (index, byte) in text.as_bytes()[..count].iter().copied().enumerate() {
-        unsafe {
-            buffer
-                .add(index)
-                .write(if byte == 0 { b'?' } else { byte } as c_char)
-        };
-    }
-    unsafe { buffer.add(count).write(0) };
-    required
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn superseded_source_errors_do_not_match_the_current_video() {
-        let current = PlaylistItem::Local("/media/b.mp4".into());
-        assert!(!event_matches_source(Some(&current), Some("/media/a.mp4")));
-        assert!(event_matches_source(Some(&current), Some("/media/b.mp4")));
-        assert!(event_matches_source(Some(&current), None));
-        assert!(!event_matches_source(None, None));
-    }
-
-    #[test]
-    fn decoder_failure_at_eof_is_reported_but_normal_eof_is_not() {
-        let messages = vec!["Failed to open codec".to_owned()];
-        assert!(endfile_error(EndFileReason::Eof, &messages).is_some());
-        assert!(endfile_error(EndFileReason::Eof, &[]).is_none());
-        assert!(endfile_error(EndFileReason::Stop, &messages).is_none());
-    }
-
-    #[test]
-    fn error_copy_reports_required_size_and_nul_terminates_truncation() {
-        let mut buffer = [b'x' as c_char; 5];
-        let required = unsafe { copy_text("abcdef", buffer.as_mut_ptr(), buffer.len()) };
-
-        assert_eq!(required, 7);
-        assert_eq!(
-            &buffer,
-            &[
-                b'a' as c_char,
-                b'b' as c_char,
-                b'c' as c_char,
-                b'd' as c_char,
-                0
-            ]
-        );
-    }
-
-    #[test]
-    fn end_file_reasons_keep_core_meaning() {
-        assert_eq!(core_end_reason(EndFileReason::Eof), EndReason::Eof);
-        assert_eq!(core_end_reason(EndFileReason::Stop), EndReason::Stopped);
-        assert_eq!(core_end_reason(EndFileReason::Error(-12)), EndReason::Error);
-        assert_eq!(
-            core_end_reason(EndFileReason::Redirect),
-            EndReason::Redirect
-        );
-    }
 }

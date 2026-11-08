@@ -4,24 +4,27 @@ use okp_core::player::{
 };
 
 /// Couples command validation to engine dispatch without teaching a native shell a
-/// second lifecycle. The live libmpv adapter and its behavioral tests both use this
-/// boundary.
-pub(crate) struct SessionMachine {
+/// second lifecycle. The session, the older live libmpv C ABI in `okp-ffi`, and
+/// their behavioral tests all use this boundary.
+#[derive(Debug, Default)]
+pub struct SessionMachine {
     machine: PlayerMachine,
 }
 
 impl SessionMachine {
-    pub(crate) fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             machine: PlayerMachine::new(),
         }
     }
 
-    pub(crate) fn machine(&self) -> &PlayerMachine {
+    #[must_use]
+    pub fn machine(&self) -> &PlayerMachine {
         &self.machine
     }
 
-    pub(crate) fn apply_event(&mut self, event: PlayerEvent) {
+    pub fn apply_event(&mut self, event: PlayerEvent) {
         self.machine.apply_event(event);
     }
 
@@ -29,7 +32,7 @@ impl SessionMachine {
     /// portable core accepts it. Engine failures are folded back into the core error
     /// state; failed opens additionally become an ended load rather than remaining
     /// stuck in `Opening`.
-    pub(crate) fn dispatch<F>(
+    pub fn dispatch<F>(
         &mut self,
         command: &PlayerCommand,
         forward: F,

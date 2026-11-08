@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "result": {
+    "rejected": { "reason": "no_active_media", "message": "the command needs loaded media" }
+  }
+}

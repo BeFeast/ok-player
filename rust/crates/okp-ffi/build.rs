@@ -25,6 +25,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed=src/lib.rs");
     println!("cargo:rerun-if-changed=src/live.rs");
-    println!("cargo:rerun-if-changed=src/session_machine.rs");
+    println!("cargo:rerun-if-changed=src/session.rs");
+    println!("cargo:rerun-if-changed=src/c_text.rs");
     println!("cargo:rerun-if-changed=cbindgen.toml");
 }

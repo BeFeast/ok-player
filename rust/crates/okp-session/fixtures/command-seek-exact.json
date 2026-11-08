@@ -1,0 +1,4 @@
+{
+  "schema_version": 1,
+  "command": { "seek": { "seconds": 90.25, "mode": "absolute", "precision": "exact" } }
+}

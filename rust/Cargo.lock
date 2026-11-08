@@ -1253,6 +1253,7 @@ dependencies = [
  "cbindgen",
  "okp-core",
  "okp-mpv",
+ "okp-session",
 ]
 
 [[package]]
@@ -1286,6 +1287,18 @@ dependencies = [
  "okp-test-fixtures",
  "pkg-config",
  "thiserror",
+]
+
+[[package]]
+name = "okp-session"
+version = "0.1.0"
+dependencies = [
+ "okp-core",
+ "okp-ffi",
+ "okp-mpv",
+ "okp-test-fixtures",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

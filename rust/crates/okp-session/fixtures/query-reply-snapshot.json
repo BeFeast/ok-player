@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "result": {
+    "snapshot": {
+      "snapshot": {
+        "status": "playing",
+        "source": { "kind": "local", "location": "/Users/example/Movies/film.mkv" },
+        "time_pos": 12.5,
+        "duration": 5400.0,
+        "volume": 100.0,
+        "mute": false,
+        "speed": 1.0,
+        "subtitle_delay": 0.0,
+        "tracks": [
+          {
+            "id": 1,
+            "kind": "audio",
+            "selected": true,
+            "external": false,
+            "default": true,
+            "title": "Stereo",
+            "lang": "eng"
+          },
+          {
+            "id": 1,
+            "kind": "subtitle",
+            "selected": false,
+            "external": true,
+            "default": false,
+            "title": null,
+            "lang": null
+          }
+        ],
+        "chapters": [
+          { "index": 0, "time": 0.0, "title": "Opening" },
+          { "index": 1, "time": 300.0, "title": null }
+        ],
+        "end_reason": null,
+        "title": "film.mkv",
+        "video": { "width": 1920, "height": 800, "display_aspect": 2.4 },
+        "buffering": false,
+        "cache_ahead": 20.0
+      }
+    }
+  }
+}
