@@ -150,7 +150,7 @@ final class PlayerWindowControllerTests: XCTestCase {
         try release(clickCount: 1)
         XCTAssertEqual(pauses, 0, "the pause waits for a possible second click")
         XCTAssertEqual(held.count, 1)
-        held[0].fire()
+        try XCTUnwrap(held.first, "the click reached no arbiter").fire()
         XCTAssertEqual(pauses, 1)
 
         try release(clickCount: 1)
