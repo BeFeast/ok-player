@@ -6,7 +6,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
-/// Holds a directory read until the test opens it.
+/// Holds a directory read until the test opens it, or for ten seconds at most:
+/// a read made on a test's own thread (a scan that blocks its caller) must
+/// fail that test, not hang it.
 #[derive(Default)]
 struct Gate {
     open: Mutex<bool>,
@@ -15,12 +17,18 @@ struct Gate {
 
 impl Gate {
     fn wait(&self) {
+        let deadline = Instant::now() + Duration::from_secs(10);
         let mut open = lock(&self.open);
         while !*open {
+            let now = Instant::now();
+            if now >= deadline {
+                return;
+            }
             open = self
                 .condvar
-                .wait(open)
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .wait_timeout(open, deadline - now)
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .0;
         }
     }
 
