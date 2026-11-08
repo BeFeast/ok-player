@@ -86,6 +86,8 @@ enum Command: Codable, Equatable {
     /// `id: nil` turns that kind of track off.
     case selectTrack(kind: TrackKind, id: Int64?)
     case setSubtitleDelay(seconds: Double)
+    /// Change the volume by `delta` percent; the session clamps it (OSC/TransportProtocol.swift).
+    case nudgeVolume(delta: Double)
 }
 
 struct CommandEnvelope: Codable, Equatable {
@@ -115,6 +117,8 @@ struct DispatchReply: Codable, Equatable {
 
 enum Query: Codable, Equatable {
     case snapshot
+    /// What the transport controls show; with `at`, the readout at that position.
+    case transport(at: Double? = nil)
 }
 
 struct QueryEnvelope: Codable, Equatable {
@@ -124,6 +128,7 @@ struct QueryEnvelope: Codable, Equatable {
 
 enum QueryResult: Codable, Equatable {
     case snapshot(snapshot: SessionSnapshot)
+    case transport(transport: TransportView)
     case rejected(reason: RejectReason, message: String)
 }
 

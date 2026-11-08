@@ -4,7 +4,9 @@ The first Apple Silicon shell is a small native AppKit window over the Rust sess
 (`okp-session`, through the JSON session ABI in [docs/session-abi.md](../docs/session-abi.md))
 and the same libmpv engine as the Linux player. It opens local videos through
 **File → Open**, the Open button, a file argument, or Finder's Open With action.
-**Space** and the transport button toggle pause. Closing the window stops playback,
+The video fills the window and the transport controls float over it (see
+[Transport controls](#transport-controls)); **Space** and their play button toggle
+pause. Closing the window stops playback,
 destroys the render context and then frees the session. Errors stay visible until
 another explicit open attempt.
 
@@ -222,11 +224,14 @@ follows the system light/dark switch while it is open:
 | Element | Role |
 |---|---|
 | Window background | `canvas` |
-| Control bar and its top edge | `surface`, `borderSubtle` |
-| Open and transport buttons | `accent` fill, `onAccent` label |
-| Keyboard focus ring on the buttons | `focus` |
-| Playback progress line on the control bar | `accent` |
-| Status text: hint, time, error | `textMuted`, `text`, `danger` |
+| Open button | `accent` fill, `onAccent` label |
+| Keyboard focus ring on the Open button and the scrubber | `focus` |
+| Status text: hint, error | `textMuted`, `danger` |
+| Transport icons, elapsed time, speed, chapter ticks | `text` |
+| Trailing time label | `textMuted` |
+| Scrubber track, buffered range, progress and knob | `borderSubtle`, `border`, `accent` |
+| Volume track, level up to 100 %, boost above it, 100 % mark | `borderSubtle`, `accent`, `warning`, `text` |
+| Volume level while muted | `textMuted` |
 
 The video surface gets no tint. A malformed palette or a role missing from one
 appearance fails the build. `scripts/tests/macos-palette.Tests.py` checks that the
@@ -295,6 +300,34 @@ Ticks without a due frame pause the link again, so a paused or idle player draws
 nothing and stops ticking. A resize redraws the current frame once; it never
 creates another GL context. Nothing draws on the main thread.
 
+## Transport controls
+
+The transport controls (`Sources/OKPlayerShell/OSC/`) float at the bottom of the
+video on a `popover` visual-effect material: the scrubber, previous and next item,
+play/pause, the time readout, the speed menu, mute, the volume slider and the
+fullscreen button. Every string, fraction and rule they show comes from the
+session's `transport` query (`docs/session-abi.md`, "Transport controls"), which
+applies the core's time, buffered-range, chapter, volume and visibility rules; the
+Swift side only turns input into commands and keeps the hide timer.
+
+- **Scrubber:** a click or drag sends keyframe seeks while the pointer moves and
+  one exact seek where it is released; the readout follows the drag position. It
+  shows the buffered range and chapter ticks, and Left/Right step five seconds
+  while it has keyboard focus.
+- **Time:** elapsed time and a trailing label that switches between remaining and
+  total time on a click, in tabular digits.
+- **Volume:** 0-130 % with mute. Scrolling anywhere over the video sends
+  `nudge_volume` steps: a wheel notch is one step however fast the wheel spins,
+  trackpad points add up to steps (at most three per event), and the inertia after
+  lifting the fingers changes nothing.
+- **Speed:** 0.5, 0.75, 1, 1.25, 1.5 and 2×, with the current speed checked.
+- **Previous/next item:** disabled until the session has a playlist to step through.
+- **Auto-hide:** while media plays, the controls and the cursor hide after the
+  session's idle timeout (2.5 s) without pointer movement. Paused or loading media
+  keeps them up, and the pointer over them, an open menu or a scrubber drag holds
+  them. Hidden controls take no clicks, and clicks outside the bar always reach the
+  video.
+
 ## Verification boundary
 
 The optional bounded smoke mode opens the deterministic local fixture in a native
@@ -309,11 +342,15 @@ window and checks, from the session's events and the video layer's counters:
   has drawn into no context but the layer's own;
 - every frame drawn reported a swap that reached libmpv: the count
   `okp_session_render_report_swap` returns equals the frames drawn;
+- the transport controls stay up through the paused seconds, hide after the idle
+  timeout once playback resumes without pointer activity, and come back on
+  activity with the session's time readout, so both window snapshots show them;
 - closing the window during playback tears down in order (close, destroy the
   render context, free the session).
 
-Its `OKP_SMOKE` line also reports those counts, the pixel format, and the
-volume and track count from the session snapshot. The complete app is copied
+Its `OKP_SMOKE` line also reports those counts, the pixel format, the
+volume and track count from the session snapshot, and the time readout the
+controls showed. The complete app is copied
 to a new directory and launched with `DYLD_LIBRARY_PATH` unset. A separate 40-second
 process deadline prevents a blocked render callback from keeping the job alive.
 

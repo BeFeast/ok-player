@@ -20,30 +20,18 @@ extension NSColor {
     }
 }
 
-/// Paints its bounds with one palette role. The control bar adds a separator along
-/// its top edge and draws the playback progress over it in the accent colour.
+/// Paints its bounds with one palette role.
 final class PaletteSurface: NSView {
     let fill: PaletteRole
-    let separator: PaletteRole?
-    var progress = 0.0 { didSet { if progress != oldValue { needsDisplay = true } } }
 
-    init(fill: PaletteRole, separator: PaletteRole? = nil) {
+    init(fill: PaletteRole) {
         self.fill = fill
-        self.separator = separator
         super.init(frame: .zero)
     }
-    required init?(coder: NSCoder) { fatalError("Use init(fill:separator:)") }
+    required init?(coder: NSCoder) { fatalError("Use init(fill:)") }
     override func draw(_ dirtyRect: NSRect) {
         fill.color.setFill()
         bounds.fill()
-        guard let separator else { return }
-        let top = isFlipped ? bounds.minY : bounds.maxY - 1
-        separator.color.setFill()
-        NSRect(x: bounds.minX, y: top, width: bounds.width, height: 1).fill()
-        guard progress > 0 else { return }
-        PaletteRole.accent.color.setFill()
-        let line = isFlipped ? bounds.minY : bounds.maxY - 2
-        NSRect(x: bounds.minX, y: line, width: bounds.width * CGFloat(min(progress, 1)), height: 2).fill()
     }
 }
 
@@ -115,8 +103,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var window: NSWindow!
     var video: VideoView?
     let status = NSTextField(labelWithString: "Open a video to begin")
-    let pause = AccentButton(label: "Pause", target: nil, action: nil)
-    let bar = PaletteSurface(fill: .surface, separator: .borderSubtle)
+    /// The Open button and the status line, centred over the video while nothing plays.
+    let prompt = NSStackView()
+    /// The floating transport controls over the video.
+    let osc = TransportOverlay()
     var statusRole = PaletteRole.textMuted
     var client: SessionClient?
     var pendingPath: String?
@@ -148,22 +138,22 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let surface = GLSurface.make()
         let videoArea: NSView = surface.map { VideoView(surface: $0) as NSView } ?? NSView()
         video = videoArea as? VideoView
-        videoArea.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(videoArea)
-        bar.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(bar)
+        // The video fills the window; the transport controls float over it.
+        for view in [videoArea, osc] {
+            view.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(view)
+            NSLayoutConstraint.activate([
+                view.topAnchor.constraint(equalTo: root.topAnchor), view.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+                view.leadingAnchor.constraint(equalTo: root.leadingAnchor), view.trailingAnchor.constraint(equalTo: root.trailingAnchor)
+            ])
+        }
         let open = AccentButton(label: "Open…", target: self, action: #selector(openFile))
-        pause.target = self; pause.action = #selector(togglePause)
         status.textColor = statusRole.color
-        let controls = NSStackView(views: [open, pause, status])
-        controls.orientation = .horizontal; controls.spacing = 14
-        controls.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(controls)
+        prompt.addArrangedSubview(open); prompt.addArrangedSubview(status)
+        prompt.orientation = .vertical; prompt.alignment = .centerX; prompt.spacing = 10
+        prompt.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(prompt)
         NSLayoutConstraint.activate([
-            videoArea.topAnchor.constraint(equalTo: root.topAnchor), videoArea.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            videoArea.trailingAnchor.constraint(equalTo: root.trailingAnchor), videoArea.bottomAnchor.constraint(equalTo: controls.topAnchor, constant: -8),
-            bar.topAnchor.constraint(equalTo: videoArea.bottomAnchor), bar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            bar.trailingAnchor.constraint(equalTo: root.trailingAnchor), bar.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            controls.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
-            controls.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -12),
-            controls.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10), controls.heightAnchor.constraint(equalToConstant: 30)
+            prompt.centerXAnchor.constraint(equalTo: root.centerXAnchor), prompt.centerYAnchor.constraint(equalTo: root.centerYAnchor),
+            prompt.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 12)
         ])
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         guard let video else { fail("No OpenGL pixel format is available for video"); return }
@@ -175,6 +165,11 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         self.client = client
         client.onBatch = { [weak self] batch in self?.sessionChanged(batch) }
+        osc.dispatch = { [weak client] command in _ = client?.dispatch(command) }
+        osc.query = { [weak client] at in
+            guard case .transport(let view)? = client?.query(.transport(at: at)) else { return nil }
+            return view
+        }
         video.onTogglePause = { [weak self] in self?.togglePause() }
         video.videoLayer.onError = { [weak self] message in self?.fail(message) }
         if let handle = client.handle { video.videoLayer.attach(session: handle) }
@@ -205,8 +200,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         case .rejected(_, let message), .failed(_, let message): fail(message); return
         }
         window.title = "\((path as NSString).lastPathComponent) — OK Player"
-        bar.progress = 0
         showStatus("Opening…", .textMuted)
+        prompt.isHidden = false
     }
     @objc func togglePause() { client?.dispatch(.togglePause) }
     /// The session reported a batch; the store already holds the new state.
@@ -219,19 +214,15 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard !errorShown else { return }
         let snapshot = client.store.snapshot
         video?.hasVideo = snapshot.video != nil
-        let transport = snapshot.status == .paused ? "Play" : "Pause"
-        if pause.title != transport { pause.title = transport }
-        if let time = snapshot.timePos {
-            let duration = snapshot.duration ?? 0
-            showStatus(String(format: "%.0f / %.0f s", time, duration), .text)
-            bar.progress = duration > 0 ? max(0, time / duration) : 0
-        }
+        osc.sessionChanged(snapshot)
+        prompt.isHidden = snapshot.source != nil && snapshot.status != .opening
         smokeRun?.sessionChanged(snapshot)
     }
     func fail(_ message: String) {
         guard !shuttingDown, !errorShown else { return }
         errorShown = true
         showStatus(message, .danger)
+        prompt.isHidden = false
         fputs("OK Player: \(message)\n", stderr)
         if smoke { shutdown(); exit(1) }
         let alert = NSAlert(); alert.messageText = "Could not play video"; alert.informativeText = message
@@ -297,12 +288,15 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 ///    context and has drawn into no context but the layer's own;
 /// 6. presented: every frame drawn reported a swap that reached libmpv (the swap
 ///    count the session returns equals the frames drawn);
-/// 7. closed while playing: teardown runs in order and the app exits.
+/// 7. transport controls: they stay up through the paused seconds, hide after the
+///    session's idle timeout once playback resumes without activity, come back on
+///    activity with the session's time readout, and are in the snapshots;
+/// 8. closed while playing: teardown runs in order and the app exits.
 ///
 /// The timed steps use one-shot timers; the session state itself arrives through
 /// wakeup-driven drains, never through polling.
 final class SmokeRun {
-    enum Phase { case idle, playing, pausing, holding, resuming, resizing, finished }
+    enum Phase { case idle, playing, pausing, holding, resuming, resizing, hiding, finished }
 
     private weak var app: PlayerApp?
     private let path: String?
@@ -371,6 +365,11 @@ final class SmokeRun {
         guard renders == pausedRenders else {
             fail("\(renders - pausedRenders) render calls in two paused seconds"); return
         }
+        // Playing before the pause and paused since: longer than the idle timeout,
+        // so controls that hid while paused would be gone by now.
+        guard app.osc.isRevealed, !app.osc.panel.isHidden else {
+            fail("The transport controls hid while paused"); return
+        }
         phase = .resuming
         client.dispatch(.setPaused(paused: false))
     }
@@ -388,7 +387,7 @@ final class SmokeRun {
     }
 
     private func finish() {
-        guard let app, let client = app.client, let layer = app.video?.videoLayer, !cancelled else { return }
+        guard let app, app.client != nil, let layer = app.video?.videoLayer, !cancelled else { return }
         let surface = layer.surface
         let use = surface.contextUse
         guard use.held == 1, use.drawnInto == [surface.context] else {
@@ -400,14 +399,40 @@ final class SmokeRun {
         guard counts.swaps == counts.renders else {
             fail("\(counts.swaps) swaps reached libmpv for \(counts.renders) frames drawn"); return
         }
+        phase = .hiding
+        // Playing without pointer activity since the resume: the controls hide once
+        // the idle timeout has passed.
+        let hideAfter = app.osc.transport?.osc.hideAfter ?? 2.5
+        if app.osc.isRevealed {
+            app.osc.onRevealChange = { [weak self] revealed in
+                if !revealed { self?.controlsHid() }
+            }
+            after(hideAfter + 1.5) { [self] in
+                if phase == .hiding { fail("The transport controls did not hide during playback") }
+            }
+        } else {
+            controlsHid()
+        }
+    }
+
+    private func controlsHid() {
+        guard phase == .hiding, let app, let client = app.client, let layer = app.video?.videoLayer, !cancelled else { return }
+        app.osc.onRevealChange = nil
+        app.osc.noteActivity()
+        let elapsed = app.osc.elapsedLabel.stringValue, trailing = app.osc.trailingLabel.stringValue
+        guard app.osc.isRevealed, !app.osc.panel.isHidden, elapsed.contains(":"), elapsed != "00:00" else {
+            fail("The transport controls did not come back with the time (\(elapsed))"); return
+        }
         phase = .finished
+        let counts = layer.counts, use = layer.surface.contextUse
         let snapshot = client.store.snapshot
-        let pixelFormat = surface.floatColor ? "float16" : "rgba8"
+        let pixelFormat = layer.surface.floatColor ? "float16" : "rgba8"
         print("OKP_SMOKE loaded=true progressed=true pause=true resume=true idle_render_calls=0 paused_render_calls=0 "
               + "render_calls=\(counts.renders) swaps=\(counts.swaps) before_pause=\(playingRenders) "
               + "before_resize=\(resizeRenders) ca_contexts_held=\(use.held) ca_context_copies=\(use.copies) "
               + "draw_contexts=\(use.drawnInto.count) pixel_format=\(pixelFormat) "
-              + "volume=\(Int(snapshot.volume ?? -1)) tracks=\(snapshot.tracks.count)")
+              + "volume=\(Int(snapshot.volume ?? -1)) tracks=\(snapshot.tracks.count) "
+              + "osc_paused_shown=true osc_auto_hidden=true osc_elapsed=\(elapsed) osc_trailing=\(trailing)")
         if let directory = app.snapshotDirectory { app.captureAppearances(to: directory) }
         // Closing the window during playback runs the real teardown path; the app
         // reports it once teardown has returned.
