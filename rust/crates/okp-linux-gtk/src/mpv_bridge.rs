@@ -379,7 +379,7 @@ pub(crate) fn mark_startup_player_ready(
 fn apply_ready_startup_launch(
     launch_delivery: &LaunchDeliveryGate,
     state: &Rc<RefCell<PlayerState>>,
-    released: Option<LaunchRequest>,
+    released: Option<ReleasedLaunchRequest>,
 ) {
     if released.is_none() {
         return;

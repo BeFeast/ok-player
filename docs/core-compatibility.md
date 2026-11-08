@@ -158,9 +158,12 @@ behaves identically on both sides.
   command line a second instance forwards. A request is released only after both the primary
   window map and media-engine readiness, regardless of which arrives first, and only after the
   request before it has been applied, so rapid launches reach the player in arrival order and none
-  is recorded as loaded before an engine exists. Windows achieves the same user-facing ordering for
-  its initial file through its `MainWindow` activation and queued initial-file lifecycle rather
-  than this Rust helper.
+  is recorded as loaded before an engine exists. The shell reports each applied request with the
+  ticket it was released with, and a ticket that is no longer in flight is ignored, so a request
+  applied asynchronously holds later ones until its own completion reports it; if that completion
+  never arrives, the shell gives up after `LAUNCH_APPLY_DEADLINE`. Windows achieves the same
+  user-facing ordering for its initial file through its `MainWindow` activation and queued
+  initial-file lifecycle rather than this Rust helper.
 
 ## ImageLuma → `okp_core::image_luma`
 

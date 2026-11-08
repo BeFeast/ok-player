@@ -7,6 +7,7 @@
 //! disk) and applies the result.
 
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use crate::time_code;
 
@@ -90,6 +91,29 @@ pub struct LaunchArgs {
     pub audio: Option<TrackSelection>,
 }
 
+/// How long a released launch request may stay unacknowledged before the shell gives up on it and
+/// releases the next one.
+///
+/// A request applied before the shell's handler returns is acknowledged at once, so this only
+/// bounds a request applied asynchronously (work off the UI thread) whose completion never arrives:
+/// its worker died or its callback was dropped. Without it every later launch would wait forever.
+/// Asynchronous work must finish, or time out on its own and report failure, well inside it.
+pub const LAUNCH_APPLY_DEADLINE: Duration = Duration::from_secs(10);
+
+/// Identifies one request [`LaunchDelivery`] released. The shell hands it back to
+/// [`LaunchDelivery::mark_applied`] once that request has been applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaunchTicket(u64);
+
+/// A request [`LaunchDelivery`] released for the shell to apply now.
+#[derive(Debug, PartialEq, Eq)]
+#[must_use = "a released request must be applied and then reported with mark_applied"]
+pub struct ReleasedLaunch<T> {
+    /// Hand this to [`LaunchDelivery::mark_applied`] once the request has been applied.
+    pub ticket: LaunchTicket,
+    pub request: T,
+}
+
 /// Launch requests waiting for the player, released one at a time in arrival order.
 ///
 /// Native shells can construct their window and media engine in either order, and a running
@@ -99,16 +123,19 @@ pub struct LaunchArgs {
 /// be lost when those edges arrive in an unexpected order, and must not overtake an earlier one.
 ///
 /// The queue releases its oldest request once the window is mapped, the player is ready and no
-/// earlier request is still being applied. The shell applies the released request, then reports it
-/// with [`LaunchDelivery::mark_applied`], which releases the next one. Every request comes out
-/// exactly once. `T` is the shell's own request type, typically an enum, so further request kinds
-/// share the same ordering.
+/// earlier request is still being applied. The shell applies the released request, possibly
+/// asynchronously, then reports it with [`LaunchDelivery::mark_applied`] and the ticket it was
+/// released with, which releases the next one. A ticket that is no longer in flight changes
+/// nothing, so a late or repeated report cannot release a later request early. Every request
+/// comes out exactly once. `T` is the shell's own request type, typically an enum, so further
+/// request kinds share the same ordering.
 #[derive(Debug)]
 pub struct LaunchDelivery<T> {
     pending: VecDeque<T>,
     window_mapped: bool,
     player_ready: bool,
-    applying: bool,
+    in_flight: Option<LaunchTicket>,
+    next_ticket: u64,
 }
 
 impl<T> Default for LaunchDelivery<T> {
@@ -125,7 +152,8 @@ impl<T> LaunchDelivery<T> {
             pending: VecDeque::new(),
             window_mapped: false,
             player_ready: false,
-            applying: false,
+            in_flight: None,
+            next_ticket: 0,
         }
     }
 
@@ -140,21 +168,21 @@ impl<T> LaunchDelivery<T> {
     /// Queue a request behind every earlier one. Returns it straight back when the player can take
     /// it now: window mapped, player ready, nothing earlier waiting or being applied.
     #[must_use = "a released request must be applied and then reported with mark_applied"]
-    pub fn push(&mut self, request: T) -> Option<T> {
+    pub fn push(&mut self, request: T) -> Option<ReleasedLaunch<T>> {
         self.pending.push_back(request);
         self.release()
     }
 
     /// Record that the primary window is mapped and eligible to receive a launch.
     #[must_use = "a released request must be applied and then reported with mark_applied"]
-    pub fn mark_window_mapped(&mut self) -> Option<T> {
+    pub fn mark_window_mapped(&mut self) -> Option<ReleasedLaunch<T>> {
         self.window_mapped = true;
         self.release()
     }
 
     /// Record that the media engine can accept a launch.
     #[must_use = "a released request must be applied and then reported with mark_applied"]
-    pub fn mark_player_ready(&mut self) -> Option<T> {
+    pub fn mark_player_ready(&mut self) -> Option<ReleasedLaunch<T>> {
         self.player_ready = true;
         self.release()
     }
@@ -165,12 +193,24 @@ impl<T> LaunchDelivery<T> {
         self.player_ready = false;
     }
 
-    /// Record that the request released last has been applied. Returns the next request when the
-    /// player can take it now.
+    /// Record that the request released with `ticket` has been applied, or that the shell gave up
+    /// on it. Returns the next request when the player can take it now. A ticket that is not in
+    /// flight (reported already, or from an earlier request) is ignored and returns `None`.
     #[must_use = "a released request must be applied and then reported with mark_applied"]
-    pub fn mark_applied(&mut self) -> Option<T> {
-        self.applying = false;
+    pub fn mark_applied(&mut self, ticket: LaunchTicket) -> Option<ReleasedLaunch<T>> {
+        if self.in_flight != Some(ticket) {
+            return None;
+        }
+        self.in_flight = None;
         self.release()
+    }
+
+    /// Whether the request released with `ticket` is still being applied. An asynchronous
+    /// completion checks this before it applies anything: `false` means the shell gave up on the
+    /// request and later requests may already have been applied.
+    #[must_use]
+    pub fn is_in_flight(&self, ticket: LaunchTicket) -> bool {
+        self.in_flight == Some(ticket)
     }
 
     /// Requests still waiting, not counting one that has been released and is being applied.
@@ -185,13 +225,15 @@ impl<T> LaunchDelivery<T> {
         self.pending.is_empty()
     }
 
-    fn release(&mut self) -> Option<T> {
-        if self.applying || !self.window_mapped || !self.player_ready {
+    fn release(&mut self) -> Option<ReleasedLaunch<T>> {
+        if self.in_flight.is_some() || !self.window_mapped || !self.player_ready {
             return None;
         }
         let request = self.pending.pop_front()?;
-        self.applying = true;
-        Some(request)
+        let ticket = LaunchTicket(self.next_ticket);
+        self.next_ticket = self.next_ticket.wrapping_add(1);
+        self.in_flight = Some(ticket);
+        Some(ReleasedLaunch { ticket, request })
     }
 }
 
@@ -301,19 +343,39 @@ mod tests {
         assert_eq!(parsed.resume_seconds, None);
     }
 
+    /// The request and ticket of a release the test expects.
+    #[track_caller]
+    fn released<T>(release: Option<ReleasedLaunch<T>>) -> (T, LaunchTicket) {
+        let release = release.expect("the queue should release a request");
+        (release.request, release.ticket)
+    }
+
+    /// Report every request as applied as soon as it comes out, collecting them in release order.
+    fn apply_all<T>(delivery: &mut LaunchDelivery<T>, first: (T, LaunchTicket)) -> Vec<T> {
+        let (request, mut ticket) = first;
+        let mut applied = vec![request];
+        while let Some(next) = delivery.mark_applied(ticket) {
+            applied.push(next.request);
+            ticket = next.ticket;
+        }
+        applied
+    }
+
     #[test]
     fn startup_launch_waits_for_window_and_player_in_either_order() {
         let mut window_first = LaunchDelivery::with_startup("window-first");
         assert_eq!(window_first.mark_window_mapped(), None);
-        assert_eq!(window_first.mark_player_ready(), Some("window-first"));
+        let (request, ticket) = released(window_first.mark_player_ready());
+        assert_eq!(request, "window-first");
         assert_eq!(window_first.mark_player_ready(), None);
-        assert_eq!(window_first.mark_applied(), None);
+        assert_eq!(window_first.mark_applied(ticket), None);
 
         let mut player_first = LaunchDelivery::with_startup("player-first");
         assert_eq!(player_first.mark_player_ready(), None);
-        assert_eq!(player_first.mark_window_mapped(), Some("player-first"));
+        let (request, ticket) = released(player_first.mark_window_mapped());
+        assert_eq!(request, "player-first");
         assert_eq!(player_first.mark_window_mapped(), None);
-        assert_eq!(player_first.mark_applied(), None);
+        assert_eq!(player_first.mark_applied(ticket), None);
     }
 
     #[test]
@@ -323,9 +385,10 @@ mod tests {
         assert_eq!(delivery.mark_window_mapped(), None);
         assert_eq!(delivery.len(), 1);
 
-        assert_eq!(delivery.mark_player_ready(), Some("forwarded"));
+        let (request, ticket) = released(delivery.mark_player_ready());
+        assert_eq!(request, "forwarded");
         assert!(delivery.is_empty());
-        assert_eq!(delivery.mark_applied(), None);
+        assert_eq!(delivery.mark_applied(ticket), None);
     }
 
     #[test]
@@ -335,15 +398,16 @@ mod tests {
         assert_eq!(delivery.push("first"), None);
         assert_eq!(delivery.push("second"), None);
 
-        assert_eq!(delivery.mark_player_ready(), Some("startup"));
+        let startup = released(delivery.mark_player_ready());
+        assert_eq!(startup.0, "startup");
         // Arrives while the startup launch is still being applied: it queues behind the others.
         assert_eq!(delivery.push("third"), None);
         assert_eq!(delivery.len(), 3);
 
-        assert_eq!(delivery.mark_applied(), Some("first"));
-        assert_eq!(delivery.mark_applied(), Some("second"));
-        assert_eq!(delivery.mark_applied(), Some("third"));
-        assert_eq!(delivery.mark_applied(), None);
+        assert_eq!(
+            apply_all(&mut delivery, startup),
+            ["startup", "first", "second", "third"]
+        );
         assert!(delivery.is_empty());
     }
 
@@ -351,13 +415,15 @@ mod tests {
     fn launch_while_playing_is_released_at_once() {
         let mut delivery = LaunchDelivery::with_startup("startup");
         assert_eq!(delivery.mark_player_ready(), None);
-        assert_eq!(delivery.mark_window_mapped(), Some("startup"));
-        assert_eq!(delivery.mark_applied(), None);
+        let (_, startup) = released(delivery.mark_window_mapped());
+        assert_eq!(delivery.mark_applied(startup), None);
 
-        assert_eq!(delivery.push("replacement"), Some("replacement"));
-        assert_eq!(delivery.mark_applied(), None);
-        assert_eq!(delivery.push("another"), Some("another"));
-        assert_eq!(delivery.mark_applied(), None);
+        let (request, replacement) = released(delivery.push("replacement"));
+        assert_eq!(request, "replacement");
+        assert_eq!(delivery.mark_applied(replacement), None);
+        let (request, another) = released(delivery.push("another"));
+        assert_eq!(request, "another");
+        assert_eq!(delivery.mark_applied(another), None);
     }
 
     #[test]
@@ -370,9 +436,8 @@ mod tests {
         assert_eq!(delivery.push("held"), None);
         assert_eq!(delivery.push("next"), None);
 
-        assert_eq!(delivery.mark_player_ready(), Some("held"));
-        assert_eq!(delivery.mark_applied(), Some("next"));
-        assert_eq!(delivery.mark_applied(), None);
+        let held = released(delivery.mark_player_ready());
+        assert_eq!(apply_all(&mut delivery, held), ["held", "next"]);
     }
 
     #[test]
@@ -389,10 +454,64 @@ mod tests {
         assert_eq!(delivery.push(Request::Args("url")), None);
         assert_eq!(delivery.mark_window_mapped(), None);
 
-        assert_eq!(delivery.mark_player_ready(), Some(Request::Args("file")));
-        assert_eq!(delivery.mark_applied(), Some(Request::Other(7)));
-        assert_eq!(delivery.mark_applied(), Some(Request::Args("url")));
-        assert_eq!(delivery.mark_applied(), None);
+        let first = released(delivery.mark_player_ready());
+        assert_eq!(
+            apply_all(&mut delivery, first),
+            [
+                Request::Args("file"),
+                Request::Other(7),
+                Request::Args("url")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_request_applied_later_holds_the_next_one_until_its_own_ticket_comes_back() {
+        // Cold `open A` then `add B`: A is applied asynchronously (its target is checked off the
+        // UI thread), so B must not come out before A has really been applied.
+        let mut delivery = LaunchDelivery::with_startup("open A");
+        assert_eq!(delivery.mark_window_mapped(), None);
+        assert_eq!(delivery.push("add B"), None);
+        let (request, a) = released(delivery.mark_player_ready());
+        assert_eq!(request, "open A");
+
+        assert!(delivery.is_in_flight(a));
+        assert_eq!(delivery.push("add C"), None);
+        assert_eq!(delivery.mark_player_ready(), None);
+        assert_eq!(delivery.mark_window_mapped(), None);
+
+        let (request, b) = released(delivery.mark_applied(a));
+        assert_eq!(request, "add B");
+        assert!(!delivery.is_in_flight(a));
+        // A late or repeated report for A must not release C while B is still being applied.
+        assert_eq!(delivery.mark_applied(a), None);
+        assert!(delivery.is_in_flight(b));
+        assert_eq!(delivery.len(), 1);
+
+        let (request, c) = released(delivery.mark_applied(b));
+        assert_eq!(request, "add C");
+        assert_eq!(delivery.mark_applied(b), None);
+        assert!(delivery.is_in_flight(c));
+        assert_eq!(delivery.mark_applied(c), None);
+        assert!(!delivery.is_in_flight(c));
+    }
+
+    #[test]
+    fn a_ticket_from_an_earlier_request_cannot_end_a_later_one() {
+        let mut delivery = LaunchDelivery::new();
+        assert_eq!(delivery.mark_window_mapped(), None);
+        assert_eq!(delivery.mark_player_ready(), None);
+
+        let (_, a) = released(delivery.push("A"));
+        assert_eq!(delivery.mark_applied(a), None);
+        // The queue was idle, so B comes out at once and is now the request in flight.
+        let (_, b) = released(delivery.push("B"));
+        assert_ne!(a, b);
+
+        assert_eq!(delivery.mark_applied(a), None);
+        assert_eq!(delivery.push("C"), None, "B is still being applied");
+        let (request, _) = released(delivery.mark_applied(b));
+        assert_eq!(request, "C");
     }
 
     #[test]

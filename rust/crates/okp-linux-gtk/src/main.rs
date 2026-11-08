@@ -423,13 +423,21 @@ struct AppRuntime {
 
 /// One launch waiting in the ordered delivery queue. The cold-start command line and every
 /// command line a later process forwards share the queue, so each reaches the player in arrival
-/// order and only once the window is mapped and the engine is ready. Another kind of launch
-/// request becomes another variant.
+/// order and only once the window is mapped and the engine is ready.
+///
+/// Another kind of launch request becomes another variant with an arm in `apply_launch_request`.
+/// A kind applied before its arm returns acknowledges its ticket there, as `Args` does. A kind
+/// that finishes later (work off the UI thread) must defer the acknowledgement: its arm returns
+/// `None`, and its completion applies the request only while `LaunchDelivery::is_in_flight` still
+/// holds for its ticket, then calls `finish_launch_request` with that ticket. A completion that
+/// never arrives is given up on after `launch_args::LAUNCH_APPLY_DEADLINE`, and the next request
+/// is released.
 enum LaunchRequest {
     Args(LaunchArgs),
 }
 
 type LaunchDeliveryGate = Rc<RefCell<launch_args::LaunchDelivery<LaunchRequest>>>;
+type ReleasedLaunchRequest = launch_args::ReleasedLaunch<LaunchRequest>;
 
 #[derive(Clone)]
 struct MprisController {

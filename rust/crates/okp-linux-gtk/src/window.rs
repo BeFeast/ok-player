@@ -1282,16 +1282,86 @@ pub(crate) fn deliver_launch_request(
 pub(crate) fn apply_released_launch_requests(
     delivery: &LaunchDeliveryGate,
     state: &Rc<RefCell<PlayerState>>,
-    mut released: Option<LaunchRequest>,
+    released: Option<ReleasedLaunchRequest>,
+) {
+    drive_released_launch_requests(
+        delivery,
+        state,
+        released,
+        launch_args::LAUNCH_APPLY_DEADLINE,
+        apply_launch_request,
+    );
+}
+
+/// Start applying one released request. Returns what the queue releases next when the request was
+/// applied before returning, or `None` when it finishes later and its completion acknowledges it
+/// through `finish_launch_request`.
+fn apply_launch_request(
+    delivery: &LaunchDeliveryGate,
+    state: &Rc<RefCell<PlayerState>>,
+    released: ReleasedLaunchRequest,
+) -> Option<ReleasedLaunchRequest> {
+    let launch_args::ReleasedLaunch { ticket, request } = released;
+    match request {
+        LaunchRequest::Args(launch_args) => {
+            apply_launch_args(state, &launch_args);
+            delivery.borrow_mut().mark_applied(ticket)
+        }
+    }
+}
+
+/// Hand released requests to `apply` one at a time. A request `apply` leaves in flight holds every
+/// later one until its completion reports it, or until `deadline` passes and the queue gives up on
+/// it.
+pub(crate) fn drive_released_launch_requests(
+    delivery: &LaunchDeliveryGate,
+    state: &Rc<RefCell<PlayerState>>,
+    mut released: Option<ReleasedLaunchRequest>,
+    deadline: Duration,
+    mut apply: impl FnMut(
+        &LaunchDeliveryGate,
+        &Rc<RefCell<PlayerState>>,
+        ReleasedLaunchRequest,
+    ) -> Option<ReleasedLaunchRequest>,
 ) {
     while let Some(request) = released {
-        match request {
-            LaunchRequest::Args(launch_args) => {
-                apply_launch_args(state, &launch_args);
-            }
+        let ticket = request.ticket;
+        released = apply(delivery, state, request);
+        if delivery.borrow().is_in_flight(ticket) {
+            give_up_on_launch_request_after(delivery, state, ticket, deadline);
         }
-        released = delivery.borrow_mut().mark_applied();
     }
+}
+
+/// Report that a released request has been applied, then apply what the queue releases after it.
+/// A ticket that is no longer in flight (reported already, or given up on at the deadline) changes
+/// nothing, so a late or repeated completion cannot release a later request early.
+pub(crate) fn finish_launch_request(
+    delivery: &LaunchDeliveryGate,
+    state: &Rc<RefCell<PlayerState>>,
+    ticket: launch_args::LaunchTicket,
+) {
+    let next = delivery.borrow_mut().mark_applied(ticket);
+    apply_released_launch_requests(delivery, state, next);
+}
+
+fn give_up_on_launch_request_after(
+    delivery: &LaunchDeliveryGate,
+    state: &Rc<RefCell<PlayerState>>,
+    ticket: launch_args::LaunchTicket,
+    deadline: Duration,
+) {
+    let delivery = Rc::clone(delivery);
+    let state = Rc::clone(state);
+    glib::timeout_add_local_once(deadline, move || {
+        if delivery.borrow().is_in_flight(ticket) {
+            eprintln!(
+                "Launch request unfinished after {} ms; releasing the next one",
+                deadline.as_millis()
+            );
+            finish_launch_request(&delivery, &state, ticket);
+        }
+    });
 }
 
 pub(crate) fn sync_player_window_chrome_fullscreen(

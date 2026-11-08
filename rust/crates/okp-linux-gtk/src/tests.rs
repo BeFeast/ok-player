@@ -4148,6 +4148,159 @@ fn forwarded_launch_after_the_engine_is_detached_waits_for_an_engine() {
     assert_eq!(state.borrow().current_file.as_deref(), Some(clip.as_path()));
 }
 
+/// Media files in a fresh folder, and a ready, idle player with a real engine whose launch queue
+/// has already applied an empty cold start.
+fn idle_player_with_launch_queue(
+    names: &[&str],
+) -> (
+    tempfile::TempDir,
+    Vec<PathBuf>,
+    Rc<RefCell<PlayerState>>,
+    LaunchDeliveryGate,
+) {
+    let root = tempfile::tempdir().expect("test folder should be created");
+    let paths: Vec<PathBuf> = names.iter().map(|name| root.path().join(name)).collect();
+    for path in &paths {
+        fs::write(path, []).expect("test media should be written");
+    }
+    let state = Rc::new(RefCell::new(PlayerState {
+        history: history::HistoryStore::open_test(root.path().join("history.json")),
+        mpv: Some(Mpv::new().expect("libmpv is required by the existing GTK suite")),
+        ..PlayerState::default()
+    }));
+    let delivery = launch_delivery_without_startup_media();
+    mark_startup_player_ready(&delivery, &state);
+    mark_startup_window_mapped(&delivery, &state);
+    (root, paths, state, delivery)
+}
+
+/// Stands in for a launch request kind that is applied asynchronously: its handler keeps the
+/// released request instead of applying it, so it stays in flight until the test completes it.
+fn hold_launch_request(
+    delivery: &LaunchDeliveryGate,
+    state: &Rc<RefCell<PlayerState>>,
+    request: LaunchRequest,
+    deadline: Duration,
+) -> ReleasedLaunchRequest {
+    let released = delivery.borrow_mut().push(request);
+    let mut held = None;
+    drive_released_launch_requests(delivery, state, released, deadline, |_, _, released| {
+        held = Some(released);
+        None
+    });
+    held.expect("an idle, ready player takes the request at once")
+}
+
+/// What an asynchronous completion does: apply the request only while the queue still holds it in
+/// flight, then report it.
+fn complete_held_launch_request(
+    delivery: &LaunchDeliveryGate,
+    state: &Rc<RefCell<PlayerState>>,
+    held: ReleasedLaunchRequest,
+) {
+    let launch_args::ReleasedLaunch { ticket, request } = held;
+    if delivery.borrow().is_in_flight(ticket) {
+        let LaunchRequest::Args(launch_args) = request;
+        apply_launch_args(state, &launch_args);
+    }
+    finish_launch_request(delivery, state, ticket);
+}
+
+fn run_main_context_until(context: &glib::MainContext, mut done: impl FnMut() -> bool) {
+    let give_up = Instant::now() + Duration::from_secs(2);
+    while !done() && Instant::now() < give_up {
+        context.iteration(false);
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn a_launch_applied_later_holds_the_next_launch_until_it_completes() {
+    let _serial = SAVE_SHUTDOWN_CONTEXT_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let context = glib::MainContext::default();
+    let _context_guard = context.acquire().unwrap();
+    let (_root, paths, state, delivery) = idle_player_with_launch_queue(&["A.mkv", "B.mkv"]);
+    let [first, second] = paths.as_slice() else {
+        unreachable!()
+    };
+    let deadline = Duration::from_millis(20);
+
+    // `open A` is still being applied off the UI thread when `add B` arrives.
+    let held = hold_launch_request(&delivery, &state, forwarded_launch(first), deadline);
+    deliver_launch_request(&delivery, &state, forwarded_launch(second));
+    assert_eq!(
+        state.borrow().current_file,
+        None,
+        "a launch must wait while the one before it is still being applied"
+    );
+
+    complete_held_launch_request(&delivery, &state, held);
+    {
+        let state = state.borrow();
+        assert_eq!(state.source_generation, 2, "A is applied, then B");
+        assert_eq!(state.current_file.as_deref(), Some(second.as_path()));
+    }
+
+    // A's deadline passing after A was reported changes nothing.
+    let after_deadline = Instant::now() + deadline * 3;
+    run_main_context_until(&context, || Instant::now() >= after_deadline);
+    assert_eq!(state.borrow().source_generation, 2);
+}
+
+#[test]
+fn a_launch_whose_completion_never_arrives_is_given_up_after_the_deadline() {
+    let _serial = SAVE_SHUTDOWN_CONTEXT_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let context = glib::MainContext::default();
+    let _context_guard = context.acquire().unwrap();
+    let (_root, paths, state, delivery) =
+        idle_player_with_launch_queue(&["A.mkv", "B.mkv", "C.mkv", "D.mkv"]);
+    let [first, second, third, fourth] = paths.as_slice() else {
+        unreachable!()
+    };
+    let deadline = Duration::from_millis(20);
+
+    let lost = hold_launch_request(&delivery, &state, forwarded_launch(first), deadline);
+    deliver_launch_request(&delivery, &state, forwarded_launch(second));
+    assert_eq!(state.borrow().current_file, None);
+
+    run_main_context_until(&context, || state.borrow().current_file.is_some());
+    {
+        let state = state.borrow();
+        assert_eq!(
+            state.current_file.as_deref(),
+            Some(second.as_path()),
+            "the next launch is applied once the queue gives up on the one before it"
+        );
+        assert_eq!(state.source_generation, 1);
+    }
+
+    // C is being applied with D waiting behind it when A's completion finally turns up. It must
+    // neither apply A over B nor release D before C has been applied.
+    let held = hold_launch_request(&delivery, &state, forwarded_launch(third), deadline);
+    deliver_launch_request(&delivery, &state, forwarded_launch(fourth));
+    complete_held_launch_request(&delivery, &state, lost);
+    {
+        let state = state.borrow();
+        assert_eq!(state.current_file.as_deref(), Some(second.as_path()));
+        assert_eq!(state.source_generation, 1);
+    }
+
+    complete_held_launch_request(&delivery, &state, held);
+    {
+        let state = state.borrow();
+        assert_eq!(state.current_file.as_deref(), Some(fourth.as_path()));
+        assert_eq!(state.source_generation, 3, "B, then C, then D");
+    }
+
+    let after_deadline = Instant::now() + deadline * 3;
+    run_main_context_until(&context, || Instant::now() >= after_deadline);
+    assert_eq!(state.borrow().source_generation, 3);
+}
+
 #[test]
 fn explicit_launch_resume_overrides_remembered_position_for_one_open_only() {
     let path = PathBuf::from("/media/resume-precedence.mkv");
