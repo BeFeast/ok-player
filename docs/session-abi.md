@@ -81,7 +81,7 @@ written as `null` and may be left out on input.
 | Config (`okp_session_new`) | `schema_version`, `app` (`name`, `platform`), absolute `data_dir`, `config_dir`, `cache_dir`, optional `hwdec`, ordered `mpv_options` (`name`, `value`) applied after the session defaults |
 | Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay` |
 | Reply | `{"schema_version":1,"result":{...}}`: `accepted {request_id}`, `no_op {}`, `rejected {reason, message}`, or `failed {request_id, message}` when the engine refused an accepted command at once |
-| Query (`okp_session_query`) | `{"schema_version":1,"query":{"snapshot":{}}}`, answered with `result.snapshot.snapshot` (the full state) or `result.rejected` |
+| Query (`okp_session_query`) | `{"schema_version":1,"query":{"snapshot":{}}}`, answered with `result.snapshot.snapshot` (the full state) or `result.rejected`; `window_fit` and `video_click` (see Window queries) |
 | Event batch (`okp_session_drain_events`) | `{"schema_version":1,"events":[...]}` |
 
 An open source is `{"kind":"local"|"url","location":"..."}`. A URL is handed
@@ -101,6 +101,30 @@ The snapshot carries `status`, `source`, `time_pos`, `duration`, `volume`,
 
 The golden documents in `rust/crates/okp-session/fixtures/` pin every shape and
 every enum value. Change them only together with the protocol.
+
+## Window queries
+
+Two queries answer window questions with okp-core's rules, so every shell sizes
+its window and reads clicks on the video the same way. Neither reads session
+state or needs loaded media.
+
+- `window_fit {video, backing_scale, visible_frame, min_size}` gives the frame
+  of a window fitted to a video: `result.window_fit.frame`
+  (`{x, y, width, height}`), or `null` when there is nothing to fit. `video` is
+  the snapshot's video size in pixels, `backing_scale` the screen's device
+  pixels per logical unit, `visible_frame` the part of the screen windows may
+  use, and the optional `min_size` the window's minimum. The video is shown at
+  no more than one video pixel per device pixel, inside core's desktop margin
+  and title-strip reserve, centered in `visible_frame`. A fit below `min_size`
+  grows to it with the video's aspect. `x`, `y` is the corner with the smallest
+  coordinates, so the same numbers work for y-down desktops and for AppKit's
+  bottom-left screen coordinates. The frame is the whole window: the shell's
+  title strip lies over the video.
+- `video_click {press_count}` says what a primary-button release with that
+  click count on the video means: `result.video_click.intent` is
+  `schedule_play_pause` (toggle pause once the double-click interval passes
+  without a second click), `cancel_play_pause_and_toggle_fullscreen` (drop that
+  pending toggle and toggle fullscreen) or `ignore`. The shell owns the timer.
 
 ## Events
 

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "query": {
+    "window_fit": {
+      "video": { "width": 3840, "height": 2160 },
+      "backing_scale": 2.0,
+      "visible_frame": { "x": 0, "y": 0, "width": 1512, "height": 945 },
+      "min_size": { "width": 420, "height": 280 }
+    }
+  }
+}

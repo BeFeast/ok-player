@@ -72,7 +72,7 @@ final class SessionProtocolTests: XCTestCase {
         let covered = Set(Self.commands.keys).union(Self.replies.keys).union([
             "config.json", "enums.json", "events-batch.json", "events-empty.json",
             "query-snapshot.json", "query-reply-snapshot.json", "query-reply-rejected.json",
-        ])
+        ]).union(WindowSessionQueryTests.fixtures)
         XCTAssertFalse(names.isEmpty, "no fixtures found in \(GoldenFixtures.directory.path)")
         XCTAssertEqual(Set(names), covered, "a fixture was added or removed without a Swift test")
     }
@@ -181,6 +181,7 @@ final class SessionProtocolTests: XCTestCase {
             "source_kind": SourceKind.allCases.map(\.rawValue),
             "seek_mode": SeekMode.allCases.map(\.rawValue),
             "seek_precision": SeekPrecision.allCases.map(\.rawValue),
+            "video_click_intent": VideoClickIntent.allCases.map(\.rawValue),
         ]
         XCTAssertEqual(swift, lists)
     }

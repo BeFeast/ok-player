@@ -277,6 +277,8 @@ private func videoLayerUpdate(_ ctx: UnsafeMutableRawPointer?) {
 final class VideoView: NSView {
     let videoLayer: VideoLayer
     var onTogglePause: (() -> Void)?
+    /// A primary-button release on the video, with AppKit's click count.
+    var onClick: ((Int) -> Void)?
     /// The current media has video. Only then does a resize redraw the frame.
     var hasVideo = false
     private var frameLink: CADisplayLink?
@@ -295,6 +297,13 @@ final class VideoView: NSView {
     required init?(coder: NSCoder) { fatalError("Use init(surface:)") }
 
     override var acceptsFirstResponder: Bool { true }
+
+    // Taking the press keeps the release coming back to this view.
+    override func mouseDown(with event: NSEvent) {}
+
+    override func mouseUp(with event: NSEvent) {
+        onClick?(event.clickCount)
+    }
 
     override func keyDown(with event: NSEvent) {
         if event.charactersIgnoringModifiers == " " {

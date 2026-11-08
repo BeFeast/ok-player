@@ -16,6 +16,8 @@ use okp_core::player as core;
 use okp_core::playlist::PlaylistItem;
 use serde::{Deserialize, Serialize};
 
+pub use crate::window::{VideoClickIntent, WindowRect, WindowSize};
+
 /// Version of every envelope below. Bump on any change a shell built against
 /// the previous version could not decode or would misread.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -196,11 +198,27 @@ pub struct QueryEnvelope {
     pub query: Query,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Query {
     /// The full session state, as the event stream has reported it so far.
     Snapshot {},
+    /// The frame of a window fitted to a video on one screen
+    /// ([`crate::window::fit_window`]). Reads no session state.
+    WindowFit {
+        /// Display size of the video in pixels, as the snapshot's `video`.
+        video: WindowSize,
+        /// Device pixels per logical unit on that screen.
+        backing_scale: f64,
+        /// The part of the screen windows may use, in logical units.
+        visible_frame: WindowRect,
+        /// The window's minimum size, if it has one.
+        #[serde(default)]
+        min_size: Option<WindowSize>,
+    },
+    /// What a primary-button release with `press_count` clicks on the video
+    /// means ([`crate::window::video_click_intent`]). Reads no session state.
+    VideoClick { press_count: i32 },
 }
 
 /// `{"schema_version":1,"result":{...}}`, the answer to a query.
@@ -216,6 +234,13 @@ pub struct QueryReply {
 pub enum QueryResult {
     Snapshot {
         snapshot: SessionSnapshot,
+    },
+    /// `null` when there is nothing to fit.
+    WindowFit {
+        frame: Option<WindowRect>,
+    },
+    VideoClick {
+        intent: VideoClickIntent,
     },
     Rejected {
         reason: RejectReason,

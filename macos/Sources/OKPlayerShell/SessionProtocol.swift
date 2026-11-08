@@ -115,6 +115,9 @@ struct DispatchReply: Codable, Equatable {
 
 enum Query: Codable, Equatable {
     case snapshot
+    /// See `SessionClient.windowFit`.
+    case windowFit(video: WindowSize, backingScale: Double, visibleFrame: WindowRect, minSize: WindowSize?)
+    case videoClick(pressCount: Int32)
 }
 
 struct QueryEnvelope: Codable, Equatable {
@@ -124,6 +127,8 @@ struct QueryEnvelope: Codable, Equatable {
 
 enum QueryResult: Codable, Equatable {
     case snapshot(snapshot: SessionSnapshot)
+    case windowFit(frame: WindowRect?)
+    case videoClick(intent: VideoClickIntent)
     case rejected(reason: RejectReason, message: String)
 }
 

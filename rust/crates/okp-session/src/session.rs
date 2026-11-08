@@ -23,6 +23,7 @@ use crate::protocol::{
     SessionConfig, SessionSnapshot, Track, TrackKind, VideoGeometry, parse_envelope, to_json,
 };
 use crate::reconcile::{core_end_reason, endfile_error, event_matches_source};
+use crate::window;
 
 /// Called from the session's event thread when a new batch of events is ready.
 /// It should only schedule a drain on the shell's own thread.
@@ -220,6 +221,17 @@ impl Session {
         match query {
             Query::Snapshot {} => QueryResult::Snapshot {
                 snapshot: self.snapshot(),
+            },
+            Query::WindowFit {
+                video,
+                backing_scale,
+                visible_frame,
+                min_size,
+            } => QueryResult::WindowFit {
+                frame: window::fit_window(*video, *backing_scale, *visible_frame, *min_size),
+            },
+            Query::VideoClick { press_count } => QueryResult::VideoClick {
+                intent: window::video_click_intent(*press_count),
             },
         }
     }
