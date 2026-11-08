@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "command": {
+    "history": {
+      "action": {
+        "remove": {
+          "source": { "kind": "local", "location": "/Users/example/Movies/film.mkv" }
+        }
+      }
+    }
+  }
+}

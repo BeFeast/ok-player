@@ -81,7 +81,7 @@ written as `null` and may be left out on input.
 | Config (`okp_session_new`) | `schema_version`, `app` (`name`, `platform`), absolute `data_dir`, `config_dir`, `cache_dir`, optional `hwdec`, ordered `mpv_options` (`name`, `value`) applied after the session defaults, optional `shell_commands` (see Command registry) |
 | Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay`, `invoke_command {id}` |
 | Reply | `{"schema_version":1,"result":{...}}`: `accepted {request_id}`, `no_op {}`, `rejected {reason, message}`, `failed {request_id, message}` when the engine refused an accepted command at once, or `perform {}` (`invoke_command` only) |
-| Query (`okp_session_query`) | `{"schema_version":1,"query":{...}}`: `snapshot {}`, answered with `result.snapshot.snapshot` (the full state); `command_registry {fullscreen, mini_player}` (both optional), answered with `result.command_registry.commands`; `shortcut_table {}`, answered with `result.shortcut_table.shortcuts`; or `result.rejected` |
+| Query (`okp_session_query`) | `{"schema_version":1,"query":{...}}`: `snapshot {}`, answered with `result.snapshot.snapshot` (the full state); `command_registry {fullscreen, mini_player}` (both optional), answered with `result.command_registry.commands`; `shortcut_table {}`, answered with `result.shortcut_table.shortcuts`; or `result.rejected`; `history` queries are below |
 | Event batch (`okp_session_drain_events`) | `{"schema_version":1,"events":[...]}` |
 
 An open source is `{"kind":"local"|"url","location":"..."}`. A URL is handed
@@ -160,6 +160,60 @@ command) follow in the order they happened, and `shutdown` comes last.
 `time_pos` and `cache_ahead` change on every frame. On their own they are
 published at most about ten times a second; whenever another field changes they
 are published with it at once.
+
+## Watch history
+
+The session keeps the watch history in `history.json` under `data_dir`, in the
+same document the Linux build writes (`okp_core::history::History`), so the
+file moves between the two. Writes go to a temporary file that is flushed and
+renamed over the old one; a shell never touches the file. The session writes
+it on a thread of its own, so `dispatch`, `query` and `drain_events` never
+wait for the disk. Two calls do: `okp_session_free`, which waits for the last
+save, and `history.remove`, which waits for its own write to answer.
+
+What the session does on its own:
+
+- An `open` without `resume_from` starts at the remembered position when the
+  core resume rule allows it: past the first 5%, before the last 30 s (the last
+  5% for media under 10 minutes), and not finished. Once that media has loaded,
+  a `resumed` event reports the position. A `resume_from` in the open wins.
+- Progress is saved every 10 s while playing, and on pause, `close`, the next
+  `open`, `okp_session_free` and the engine quitting. Playing to the end marks
+  the entry finished, so it opens from the start next time.
+- `select_track`, `set_subtitle_delay`, `set_volume` and `set_speed` are
+  remembered for the current media and written with the next save, or 10 s
+  after the first unsaved one, so a dragged slider writes once. Reopening it
+  sets the volume and speed with the open, and selects the tracks (only those
+  the file has) and sets the subtitle delay once it has loaded; tracks named in
+  the open win.
+- While the private session is on, nothing new is recorded and nothing
+  remembered is applied. The history stays readable and entries can still be
+  removed. It starts off with every session.
+- A `history.json` that is there but cannot be read (damaged, written by a
+  newer build, or unreadable when the session starts) is never written over.
+  The first save renames it to `history.json.unreadable-<unix seconds>` and
+  then writes a new file; if the rename fails, nothing is written and
+  `save_failed` follows. The page reports `read_failed` and, once the file has
+  been moved, its new path in `unreadable_copy`.
+
+| Document | Shape |
+|---|---|
+| Command | `{"command":{"history":{"action":{...}}}}`: `set_private {enabled}`, `remove {source}` (the media is untouched; removing the media that plays stops recording it until it is opened again) |
+| Reply | `{"result":{"history":{"result":{...}}}}`: `done {}`, `unchanged {}` or `failed {message}` (the file could not be written; nothing changed) |
+| Query | `{"query":{"history":{"query":{...}}}}`: `welcome_shelf {limit, utc_offset_seconds}`, `page {search, utc_offset_seconds}` (`search` may be left out) |
+| Query reply | `{"result":{"history":{"result":{...}}}}`: `welcome_shelf {private_session, entries}` or `page {private_session, read_failed, unreadable_copy, summary, end_cap, sections}`; a section is `{bucket, header, entries}`, newest first |
+| Event | `{"history":{"event":{...}}}`: `resumed {position}`, `changed {}` (query again), `private_session {enabled}`, `save_failed {message}` (once until a save succeeds) |
+
+An entry carries `source`, `title`, `location` (the folder breadcrumb),
+`position`, `duration`, `progress` (0 to 1), `state` (`finished`, `progress`,
+`barely`), `state_label`, `when_label`, `updated_at_unix` and `resume_from`
+(where opening it starts, `null` for the start). Days and `when` labels are
+local to the `utc_offset_seconds` the shell passes: its current offset, applied
+to every entry. Entries for local files that no longer exist are left out.
+
+History events are discrete: they keep their order among the `error` events.
+The golden documents for this group are in
+`rust/crates/okp-session/fixtures/history/`.
 
 ## Threading and ownership
 

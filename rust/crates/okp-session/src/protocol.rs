@@ -17,6 +17,10 @@ use okp_core::playlist::PlaylistItem;
 use serde::{Deserialize, Serialize};
 
 pub use crate::commands::{CommandGroup, CommandMenu, RegistryCommand, ShortcutRow};
+pub use crate::history::{
+    HistoryAction, HistoryActionResult, HistoryBucket, HistoryEntry, HistoryEvent, HistoryQuery,
+    HistoryQueryResult, HistorySection, HistoryState,
+};
 
 /// Version of every envelope below. Bump on any change a shell built against
 /// the previous version could not decode or would misread.
@@ -133,6 +137,10 @@ pub enum Command {
     InvokeCommand {
         id: String,
     },
+    /// A watch-history action; see [`HistoryAction`].
+    History {
+        action: HistoryAction,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,6 +193,8 @@ pub enum DispatchResult {
     /// An invoked registry command the shell carries out itself. The session
     /// found it available; nothing reached the engine.
     Perform {},
+    /// The answer to a `history` command.
+    History { result: HistoryActionResult },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,6 +239,8 @@ pub enum Query {
     },
     /// Every bindable action with its chords on this platform.
     ShortcutTable {},
+    /// A watch-history query; see [`HistoryQuery`].
+    History { query: HistoryQuery },
 }
 
 /// `{"schema_version":1,"result":{...}}`, the answer to a query.
@@ -250,6 +262,10 @@ pub enum QueryResult {
     },
     ShortcutTable {
         shortcuts: Vec<ShortcutRow>,
+    },
+    /// The answer to a `history` query.
+    History {
+        result: HistoryQueryResult,
     },
     Rejected {
         reason: RejectReason,
@@ -283,6 +299,10 @@ pub enum Event {
     },
     /// The engine has quit; the session accepts no further playback.
     Shutdown {},
+    /// A watch-history event; see [`HistoryEvent`].
+    History {
+        event: HistoryEvent,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -459,11 +479,22 @@ impl MediaSource {
     }
 }
 
+/// Where the session sends a command.
+pub(crate) enum Route<'a> {
+    /// The core command `PlayerMachine` validates before the engine sees it.
+    Player(core::PlayerCommand),
+    /// A history action, which the session carries out itself.
+    History(&'a HistoryAction),
+    /// `invoke_command`, which names a registry command instead of carrying
+    /// one; the session resolves it before routing.
+    Registry,
+}
+
 impl Command {
-    /// The core command `PlayerMachine` validates for this intent; `None` for
-    /// `invoke_command`, which names a registry command instead of carrying one.
-    pub(crate) fn to_core(&self) -> Option<core::PlayerCommand> {
-        Some(match self {
+    /// Where this command goes: a player command becomes the core command the
+    /// state machine validates.
+    pub(crate) fn route(&self) -> Route<'_> {
+        Route::Player(match self {
             Self::Open {
                 source,
                 resume_from,
@@ -496,7 +527,8 @@ impl Command {
                 id: *id,
             },
             Self::SetSubtitleDelay { seconds } => core::PlayerCommand::SetSubtitleDelay(*seconds),
-            Self::InvokeCommand { .. } => return None,
+            Self::History { action } => return Route::History(action),
+            Self::InvokeCommand { .. } => return Route::Registry,
         })
     }
 }

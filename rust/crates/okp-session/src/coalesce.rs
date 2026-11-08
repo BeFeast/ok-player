@@ -204,6 +204,13 @@ impl Coalescer {
         self.discrete.push(event);
     }
 
+    /// Queue `event` unless an equal event is already waiting to be drained.
+    pub(crate) fn push_once(&mut self, event: Event) {
+        if !self.discrete.contains(&event) {
+            self.discrete.push(event);
+        }
+    }
+
     pub(crate) fn has_pending(&self) -> bool {
         !self.dirty.is_empty() || !self.discrete.is_empty()
     }

@@ -98,6 +98,27 @@ final class SessionClientTests: XCTestCase {
         }
     }
 
+    func testTheSessionKeepsTheHistoryAndReportsThePrivateSession() throws {
+        guard case .history(.welcomeShelf(false, let entries))? =
+            client.query(.history(query: .welcomeShelf(limit: 8, utcOffsetSeconds: 0))) else {
+            return XCTFail("the shelf query was not answered with a public shelf")
+        }
+        XCTAssertEqual(entries, [], "a new data directory has no history")
+
+        let reported = expectation(description: "a drained batch reports the private session")
+        reported.assertForOverFulfill = false
+        client.onBatch = { batch in
+            if batch.events.contains(.history(event: .privateSession(enabled: true))) { reported.fulfill() }
+        }
+        XCTAssertEqual(client.dispatch(.history(action: .setPrivate(enabled: true))), .history(result: .done))
+        XCTAssertEqual(client.dispatch(.history(action: .setPrivate(enabled: true))), .history(result: .unchanged))
+        wait(for: [reported], timeout: 5)
+        guard case .history(.page(true, _, _, _, _, _))? =
+            client.query(.history(query: .page(utcOffsetSeconds: 0))) else {
+            return XCTFail("the page does not report the private session")
+        }
+    }
+
     func testAClosedClientRefusesCommandsWithoutTouchingTheSession() {
         client.close()
         guard case .rejected(.invalidArgument, _) = client.dispatch(.setVolume(volume: 10)) else {

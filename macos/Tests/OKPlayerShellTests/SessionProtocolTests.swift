@@ -13,6 +13,12 @@ enum GoldenFixtures {
         .deletingLastPathComponent()  // repository root
         .appendingPathComponent("rust/crates/okp-session/fixtures")
 
+    /// Every fixture, by its path below `directory` (`history/events.json`).
+    static func names() throws -> [String] {
+        let walker = try XCTUnwrap(FileManager.default.enumerator(atPath: directory.path))
+        return walker.compactMap { $0 as? String }.filter { $0.hasSuffix(".json") }
+    }
+
     static func data(_ name: String) throws -> Data {
         try Data(contentsOf: directory.appendingPathComponent(name))
     }
@@ -58,6 +64,8 @@ final class SessionProtocolTests: XCTestCase {
         "command-set-subtitle-delay.json": .setSubtitleDelay(seconds: -0.25),
         "command-set-volume.json": .setVolume(volume: 85),
         "command-toggle-pause.json": .togglePause,
+        "history/command-remove.json": .history(action: .remove(source: MediaSource(kind: .local, location: "/Users/example/Movies/film.mkv"))),
+        "history/command-set-private.json": .history(action: .setPrivate(enabled: true)),
     ]
 
     static let replies: [String: DispatchResult] = [
@@ -66,16 +74,27 @@ final class SessionProtocolTests: XCTestCase {
         "reply-no-op.json": .noOp,
         "reply-perform.json": .perform,
         "reply-rejected.json": .rejected(reason: .noActiveMedia, message: "the command needs loaded media"),
+        "history/reply-done.json": .history(result: .done),
+        "history/reply-unchanged.json": .history(result: .unchanged),
+        "history/reply-failed.json": .history(result: .failed(message: "the history could not be saved: Permission denied")),
+    ]
+
+    static let queries: [String: Query] = [
+        "query-snapshot.json": .snapshot,
+        "query-command-registry.json": .commandRegistry(fullscreen: true, miniPlayer: false),
+        "query-shortcut-table.json": .shortcutTable,
+        "history/query-page.json": .history(query: .page(search: "severance", utcOffsetSeconds: -18000)),
+        "history/query-welcome-shelf.json": .history(query: .welcomeShelf(limit: 8, utcOffsetSeconds: 7200)),
     ]
 
     func testEveryFixtureIsCoveredHere() throws {
-        let names = try FileManager.default.contentsOfDirectory(atPath: GoldenFixtures.directory.path)
-            .filter { $0.hasSuffix(".json") }
-        let covered = Set(Self.commands.keys).union(Self.replies.keys).union([
+        let names = try GoldenFixtures.names()
+        let covered = Set(Self.commands.keys).union(Self.replies.keys).union(Self.queries.keys).union([
             "config.json", "enums.json", "events-batch.json", "events-empty.json",
-            "query-snapshot.json", "query-reply-snapshot.json", "query-reply-rejected.json",
-            "query-command-registry.json", "query-reply-command-registry.json",
-            "query-shortcut-table.json", "query-reply-shortcut-table.json",
+            "query-reply-snapshot.json", "query-reply-rejected.json",
+            "query-reply-command-registry.json", "query-reply-shortcut-table.json",
+            "history/enums.json", "history/events.json",
+            "history/query-reply-page.json", "history/query-reply-welcome-shelf.json",
         ])
         XCTAssertFalse(names.isEmpty, "no fixtures found in \(GoldenFixtures.directory.path)")
         XCTAssertEqual(Set(names), covered, "a fixture was added or removed without a Swift test")
@@ -97,18 +116,8 @@ final class SessionProtocolTests: XCTestCase {
         }
     }
 
-    func testTheSnapshotQueryRoundTrips() throws {
-        let query = QueryEnvelope(query: .snapshot)
-        XCTAssertEqual(try GoldenFixtures.decode(QueryEnvelope.self, "query-snapshot.json"), query)
-        XCTAssertEqual(try GoldenFixtures.encodedObject(query), try GoldenFixtures.object("query-snapshot.json"))
-    }
-
-    func testTheRegistryQueriesRoundTrip() throws {
-        let queries: [String: Query] = [
-            "query-command-registry.json": .commandRegistry(fullscreen: true, miniPlayer: false),
-            "query-shortcut-table.json": .shortcutTable,
-        ]
-        for (name, query) in queries {
+    func testEveryQueryFixtureDecodesAndEncodesBackToTheSameDocument() throws {
+        for (name, query) in Self.queries {
             let envelope = QueryEnvelope(query: query)
             XCTAssertEqual(try GoldenFixtures.decode(QueryEnvelope.self, name), envelope, name)
             XCTAssertEqual(try GoldenFixtures.encodedObject(envelope), try GoldenFixtures.object(name), name)
@@ -152,6 +161,48 @@ final class SessionProtocolTests: XCTestCase {
         XCTAssertEqual(shortcuts.first { $0.action == "open-settings" }?.primary,
                        ShortcutChord(key: "comma", modifiers: ShortcutModifiers(cmd: true), label: "Cmd+,"))
         XCTAssertEqual(try GoldenFixtures.encodedObject(reply), try GoldenFixtures.object("query-reply-shortcut-table.json"))
+    }
+
+    func testTheHistoryShelfReplyDecodesEveryField() throws {
+        let name = "history/query-reply-welcome-shelf.json"
+        let reply = try GoldenFixtures.decode(QueryReply.self, name)
+        let entry = HistoryEntry(
+            source: MediaSource(kind: .local, location: "/Users/example/Movies/Severance/Season 02/Severance S02E03.mkv"),
+            title: "Severance S02E03", location: "Severance › Season 02",
+            position: 1325.5, duration: 3120, progress: 0.42, state: .progress,
+            stateLabel: "30m left", whenLabel: "Today 21:14", updatedAtUnix: 1_699_990_000, resumeFrom: 1325.5)
+        XCTAssertEqual(reply.result, .history(result: .welcomeShelf(privateSession: false, entries: [entry])))
+        XCTAssertEqual(try GoldenFixtures.encodedObject(reply), try GoldenFixtures.object(name))
+    }
+
+    func testTheHistoryPageReplyDecodesEveryField() throws {
+        let name = "history/query-reply-page.json"
+        let reply = try GoldenFixtures.decode(QueryReply.self, name)
+        let entry = HistoryEntry(
+            source: MediaSource(kind: .url, location: "https://example.com/watch?v=abc123"),
+            title: "Example talk", location: "https://example.com/watch?v=abc123",
+            position: 0, duration: 900, progress: 0, state: .finished,
+            stateLabel: "Finished", whenLabel: "12 Jun", updatedAtUnix: 1_686_528_000, resumeFrom: nil)
+        XCTAssertEqual(reply.result, .history(result: .page(
+            privateSession: true, readFailed: false, unreadableCopy: nil,
+            summary: "Everything you’ve opened · kept forever", endCap: "End of history · kept forever",
+            sections: [HistorySection(bucket: .earlier, header: "EARLIER", entries: [entry])])))
+        XCTAssertEqual(try GoldenFixtures.encodedObject(reply), try GoldenFixtures.object(name))
+    }
+
+    func testHistoryEventsDecodeAndLeaveTheSnapshotAlone() throws {
+        let batch = try GoldenFixtures.decode(EventBatch.self, "history/events.json")
+        XCTAssertEqual(batch.events, [
+            .history(event: .resumed(position: 754.5)),
+            .history(event: .changed),
+            .history(event: .privateSession(enabled: true)),
+            .history(event: .saveFailed(message: "the history could not be saved: No space left on device")),
+        ])
+        let store = SessionStore()
+        store.apply(batch)
+        XCTAssertEqual(store.snapshot, SessionSnapshot())
+        XCTAssertNil(store.lastError)
+        XCTAssertFalse(store.shutDown)
     }
 
     func testTheSnapshotReplyDecodesEveryField() throws {
@@ -241,5 +292,13 @@ final class SessionProtocolTests: XCTestCase {
             "command_menu": CommandMenu.allCases.map(\.rawValue),
         ]
         XCTAssertEqual(swift, lists)
+    }
+
+    func testEveryHistoryEnumValueMatchesTheRustList() throws {
+        let lists = try XCTUnwrap(JSONSerialization.jsonObject(with: GoldenFixtures.data("history/enums.json")) as? [String: [String]])
+        XCTAssertEqual(lists, [
+            "history_state": HistoryState.allCases.map(\.rawValue),
+            "history_bucket": HistoryBucket.allCases.map(\.rawValue),
+        ])
     }
 }

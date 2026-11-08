@@ -92,6 +92,8 @@ enum Command: Codable, Equatable {
     case setSubtitleDelay(seconds: Double)
     /// Run a command of the registry (`Query.commandRegistry`) by its id.
     case invokeCommand(id: String)
+    /// A watch-history action, answered with `DispatchResult.history`.
+    case history(action: HistoryAction)
 }
 
 struct CommandEnvelope: Codable, Equatable {
@@ -117,6 +119,8 @@ enum DispatchResult: Codable, Equatable {
     /// An invoked registry command the shell carries out itself; nothing reached
     /// the engine.
     case perform
+    /// The answer to a `history` command.
+    case history(result: HistoryActionResult)
 }
 
 struct DispatchReply: Codable, Equatable {
@@ -131,6 +135,8 @@ enum Query: Codable, Equatable {
     case commandRegistry(fullscreen: Bool = false, miniPlayer: Bool = false)
     /// Every bindable action with its chords on the config's platform.
     case shortcutTable
+    /// A watch-history query, answered with `QueryResult.history`.
+    case history(query: HistoryQuery)
 }
 
 struct QueryEnvelope: Codable, Equatable {
@@ -142,6 +148,7 @@ enum QueryResult: Codable, Equatable {
     case snapshot(snapshot: SessionSnapshot)
     case commandRegistry(commands: [RegistryCommand])
     case shortcutTable(shortcuts: [ShortcutRow])
+    case history(result: HistoryQueryResult)
     case rejected(reason: RejectReason, message: String)
 }
 
@@ -309,9 +316,97 @@ enum Event: Codable, Equatable {
     case snapshotChanged(changes: [SnapshotChange])
     case error(kind: ErrorKind, message: String, requestId: UInt64?)
     case shutdown
+    case history(event: HistoryEvent)
 }
 
 struct EventBatch: Codable, Equatable {
     var schemaVersion: Int
     var events: [Event]
+}
+
+// MARK: - Watch history (rust/crates/okp-session/src/history/wire.rs)
+//
+// Resume, progress and per-file memory need no command: the session does them as
+// media opens, plays and changes. These are the shell's ways in: the private
+// session, removing an entry, and the two lists it renders.
+
+enum HistoryAction: Codable, Equatable {
+    /// While the private session is on, nothing new is recorded and nothing
+    /// remembered is applied to an open.
+    case setPrivate(enabled: Bool)
+    /// Forget one entry; the media itself is untouched.
+    case remove(source: MediaSource)
+}
+
+enum HistoryActionResult: Codable, Equatable {
+    case done
+    /// There was nothing to change.
+    case unchanged
+    /// The history file could not be written; nothing changed.
+    case failed(message: String)
+}
+
+enum HistoryQuery: Codable, Equatable {
+    /// The newest entries for the welcome screen's Continue watching shelf.
+    /// `utcOffsetSeconds` is the shell's current offset from UTC, for the labels.
+    case welcomeShelf(limit: UInt32, utcOffsetSeconds: Int32)
+    /// Every entry for the History page, newest first and grouped by day, keeping
+    /// those whose title, folder or location contains `search` (empty keeps all).
+    case page(search: String = "", utcOffsetSeconds: Int32)
+}
+
+enum HistoryState: String, Codable, CaseIterable {
+    case finished, progress, barely
+}
+
+enum HistoryBucket: String, Codable, CaseIterable {
+    case today, yesterday
+    case earlierThisWeek = "earlier_this_week"
+    case earlier
+}
+
+/// One remembered source, ready to render.
+struct HistoryEntry: Codable, Equatable {
+    /// What to open to play it again.
+    var source: MediaSource
+    var title: String
+    /// The folder breadcrumb, or the location itself when it has no folder.
+    var location: String
+    /// Seconds; 0 once finished.
+    var position: Double
+    /// Seconds; 0 when unknown.
+    var duration: Double
+    /// Watched fraction, 0 to 1.
+    var progress: Double
+    var state: HistoryState
+    var stateLabel: String
+    var whenLabel: String
+    var updatedAtUnix: Int64
+    /// Where opening it starts, or `nil` for the start.
+    var resumeFrom: Double?
+}
+
+/// One day group of the History page.
+struct HistorySection: Codable, Equatable {
+    var bucket: HistoryBucket
+    var header: String
+    var entries: [HistoryEntry]
+}
+
+enum HistoryQueryResult: Codable, Equatable {
+    case welcomeShelf(privateSession: Bool, entries: [HistoryEntry])
+    /// `readFailed`: the history file could not be read at start, so only what was
+    /// recorded since is listed; `unreadableCopy` is where that file was moved.
+    case page(privateSession: Bool, readFailed: Bool, unreadableCopy: String?, summary: String, endCap: String,
+              sections: [HistorySection])
+}
+
+enum HistoryEvent: Codable, Equatable {
+    /// The media that just loaded started from its remembered position.
+    case resumed(position: Double)
+    /// What the history queries answer has changed; query again.
+    case changed
+    case privateSession(enabled: Bool)
+    /// The history file could not be written; reported once until a save succeeds.
+    case saveFailed(message: String)
 }
