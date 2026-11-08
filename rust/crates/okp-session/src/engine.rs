@@ -55,8 +55,11 @@ pub(crate) trait Engine: Send + Sync {
     fn render(&self, _width: i32, _height: i32) -> Result<(), String> {
         Err(NO_RENDERING.to_owned())
     }
-    /// The frame drawn last has been presented.
-    fn render_report_swap(&self) {}
+    /// The frame drawn last has been presented. Returns the swaps reported to
+    /// the render context so far, 0 without one.
+    fn render_report_swap(&self) -> u64 {
+        0
+    }
     /// Free the render context, if there is one.
     fn render_destroy(&self) {}
 }
@@ -246,10 +249,10 @@ impl Engine for MpvEngine {
         }
     }
 
-    fn render_report_swap(&self) {
-        if let Some(renderer) = self.renderer().as_mut() {
-            renderer.report_swap();
-        }
+    fn render_report_swap(&self) -> u64 {
+        self.renderer()
+            .as_mut()
+            .map_or(0, OpenGlRenderer::report_swap)
     }
 
     fn render_destroy(&self) {

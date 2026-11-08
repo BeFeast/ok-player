@@ -232,8 +232,8 @@ fn a_render_context_is_refused_without_an_update_callback() {
     // Without a render context the render calls do nothing and report so.
     assert!(!unsafe { okp_session_render_update(session) });
     assert!(!unsafe { okp_session_render(session, 64, 36) });
+    assert_eq!(unsafe { okp_session_render_report_swap(session) }, 0);
     unsafe {
-        okp_session_render_report_swap(session);
         okp_session_render_destroy(session);
         okp_session_free(session);
     }

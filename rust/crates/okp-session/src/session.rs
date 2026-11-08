@@ -275,9 +275,11 @@ impl Session {
     }
 
     /// Tell the engine that the frame drawn last has been presented (after the
-    /// shell's flush), so it can time the next one.
-    pub fn render_report_swap(&self) {
-        self.shared.engine.render_report_swap();
+    /// shell's flush), so it can time the next one. Returns the swaps reported
+    /// to the current render context so far, this one included; 0 without a
+    /// render context.
+    pub fn render_report_swap(&self) -> u64 {
+        self.shared.engine.render_report_swap()
     }
 
     /// Free the render context, if there is one, with its OpenGL context
@@ -802,8 +804,8 @@ mod tests {
             self.0.frame_due.swap(false, Ordering::SeqCst)
         }
 
-        fn render_report_swap(&self) {
-            self.0.swaps.fetch_add(1, Ordering::SeqCst);
+        fn render_report_swap(&self) -> u64 {
+            self.0.swaps.fetch_add(1, Ordering::SeqCst) as u64 + 1
         }
 
         fn render_destroy(&self) {
@@ -912,8 +914,13 @@ mod tests {
             session.render_update(),
             "the engine's due frame is reported"
         );
-        session.render_report_swap();
-        assert_eq!(engine.swaps.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            session.render_report_swap(),
+            1,
+            "the engine's swap count comes back to the shell"
+        );
+        assert_eq!(session.render_report_swap(), 2);
+        assert_eq!(engine.swaps.load(Ordering::SeqCst), 2);
 
         session.render_destroy();
         fire();

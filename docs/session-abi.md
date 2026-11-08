@@ -24,7 +24,7 @@ bool        okp_session_render_create(const OkpSession *session, OkpSessionRende
                                       char *error_buffer, uintptr_t error_capacity);
 bool        okp_session_render_update(const OkpSession *session);
 bool        okp_session_render(const OkpSession *session, int32_t width, int32_t height);
-void        okp_session_render_report_swap(const OkpSession *session);
+uint64_t    okp_session_render_report_swap(const OkpSession *session);
 void        okp_session_render_destroy(const OkpSession *session);
 ```
 
@@ -46,7 +46,11 @@ The render context is created with libmpv's advanced control, and the shell's
 3. When the shell is ready to present (macOS paces this with the display
    link), `okp_session_render` draws the frame into the bound framebuffer.
 4. After the shell's flush, `okp_session_render_report_swap` tells libmpv the
-   frame was presented, so it can time the next one.
+   frame was presented, so it can time the next one. It returns the number of
+   swaps reported to the render context so far (0 without one), so the shell
+   can check that every frame it presented reached libmpv. Once libmpv has
+   seen one swap it waits for a swap after every frame it presents, so a shell
+   that stops reporting them drops to a few frames per second.
 
 A shell may also redraw the current frame without a callback, after a resize
 for instance: `okp_session_render`, flush, `okp_session_render_report_swap`.

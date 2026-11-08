@@ -1120,6 +1120,8 @@ pub struct OpenGlRenderer {
     /// Boxed again so libmpv holds a thin pointer to it. libmpv may call it
     /// until `Drop` has removed it, and only then is it released.
     on_update: Box<RenderUpdate>,
+    /// Swaps reported to libmpv through this context so far.
+    swaps: u64,
 }
 
 impl fmt::Debug for OpenGlRenderer {
@@ -1127,6 +1129,7 @@ impl fmt::Debug for OpenGlRenderer {
         formatter
             .debug_struct("OpenGlRenderer")
             .field("context", &self.context)
+            .field("swaps", &self.swaps)
             .finish_non_exhaustive()
     }
 }
@@ -1178,6 +1181,7 @@ impl OpenGlRenderer {
         let renderer = Self {
             context,
             on_update: Box::new(on_update),
+            swaps: 0,
         };
         let callback_ctx = ptr::from_ref::<RenderUpdate>(&renderer.on_update)
             .cast_mut()
@@ -1211,12 +1215,16 @@ impl OpenGlRenderer {
     }
 
     /// Tell libmpv that the frame drawn last has been presented, so it can time
-    /// the next one.
-    pub fn report_swap(&mut self) {
+    /// the next one. Returns the number of swaps reported through this context
+    /// so far, this one included, so a shell can check that every frame it
+    /// presented reached libmpv.
+    pub fn report_swap(&mut self) -> u64 {
         RenderUpdateHandle {
             context: self.context,
         }
         .report_swap();
+        self.swaps += 1;
+        self.swaps
     }
 }
 
@@ -3047,7 +3055,7 @@ mod tests {
     use std::fs;
     use std::process::{Command, Stdio};
     use std::rc::Rc;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicU64, AtomicUsize};
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
@@ -3244,11 +3252,14 @@ mod tests {
     }
 
     /// The render thread of a caller-owned renderer, the way a shell runs it:
-    /// it waits for the update callback, serves it with `update`, and draws and
-    /// reports a swap only when `update` says a frame is due. It counts the
-    /// frames it drew.
+    /// it waits for the update callback, serves it with `update`, and draws a
+    /// frame only when `update` says one is due. After each frame it reports the
+    /// swap, unless the test has stopped that. It counts the frames it drew and
+    /// keeps the swap count `report_swap` returned last.
     struct RenderThread {
         frames: Arc<AtomicUsize>,
+        swaps: Arc<AtomicU64>,
+        report_swaps: Arc<std::sync::atomic::AtomicBool>,
         stop: Arc<std::sync::atomic::AtomicBool>,
         wake: Arc<(Mutex<bool>, std::sync::Condvar)>,
         join: Option<std::thread::JoinHandle<()>>,
@@ -3260,9 +3271,16 @@ mod tests {
             wake: Arc<(Mutex<bool>, std::sync::Condvar)>,
         ) -> Self {
             let frames = Arc::new(AtomicUsize::new(0));
+            let swaps = Arc::new(AtomicU64::new(0));
+            let report_swaps = Arc::new(std::sync::atomic::AtomicBool::new(true));
             let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let (thread_frames, thread_stop, thread_wake) =
-                (Arc::clone(&frames), Arc::clone(&stop), Arc::clone(&wake));
+            let (thread_frames, thread_swaps, thread_report, thread_stop, thread_wake) = (
+                Arc::clone(&frames),
+                Arc::clone(&swaps),
+                Arc::clone(&report_swaps),
+                Arc::clone(&stop),
+                Arc::clone(&wake),
+            );
             let join = std::thread::spawn(move || {
                 let (width, height) = (64, 36);
                 let stride = 64 * 4;
@@ -3281,7 +3299,9 @@ mod tests {
                     if fired && renderer.update() {
                         render_software_frame(renderer.context, width, height, stride, &mut pixels)
                             .expect("the due frame should draw");
-                        renderer.report_swap();
+                        if thread_report.load(Ordering::SeqCst) {
+                            thread_swaps.store(renderer.report_swap(), Ordering::SeqCst);
+                        }
                         thread_frames.fetch_add(1, Ordering::SeqCst);
                     }
                 }
@@ -3291,6 +3311,8 @@ mod tests {
             });
             Self {
                 frames,
+                swaps,
+                report_swaps,
                 stop,
                 wake,
                 join: Some(join),
@@ -3299,6 +3321,29 @@ mod tests {
 
         fn frames(&self) -> usize {
             self.frames.load(Ordering::SeqCst)
+        }
+
+        fn swaps(&self) -> u64 {
+            self.swaps.load(Ordering::SeqCst)
+        }
+
+        fn stop_reporting_swaps(&self) {
+            self.report_swaps.store(false, Ordering::SeqCst);
+        }
+
+        /// Frames drawn during `window`.
+        fn frames_during(&self, window: Duration) -> usize {
+            let before = self.frames();
+            std::thread::sleep(window);
+            self.frames() - before
+        }
+
+        fn wait_for_frames(&self, count: usize, timeout: Duration) -> bool {
+            let deadline = Instant::now() + timeout;
+            while self.frames() < count && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            self.frames() >= count
         }
 
         fn finish(mut self) {
@@ -3312,27 +3357,25 @@ mod tests {
         }
     }
 
-    #[test]
-    fn client_renderer_announces_frames_by_callback_and_goes_quiet_while_paused() {
-        if !enter_real_mpv_case(
-            "client-renderer-updates",
-            "player::tests::client_renderer_announces_frames_by_callback_and_goes_quiet_while_paused",
-        ) {
-            return;
-        }
-        // Three seconds of 30 fps video as an mpv image sequence: no codec
-        // beyond the PPM decoder, so it plays wherever libmpv does.
-        let root = unique_temp_dir("okp-mpv-client-renderer");
+    /// A playing 30 fps image sequence of `frames` frames, drawn by a
+    /// software advanced-control renderer on its own [`RenderThread`]. The
+    /// sequence needs no codec beyond the PPM decoder, so it plays wherever
+    /// libmpv does. Returns the engine, the render thread and the number of
+    /// update callbacks so far.
+    fn play_on_client_renderer(
+        root: &Path,
+        frames: usize,
+    ) -> (Mpv, RenderThread, Arc<AtomicUsize>) {
         let mut list = String::new();
-        for index in 0..90 {
-            let frame = root.path().join(format!("frame-{index:03}.ppm"));
+        for index in 0..frames {
+            let frame = root.join(format!("frame-{index:03}.ppm"));
             let mut ppm = b"P6\n64 36\n255\n".to_vec();
-            ppm.resize(ppm.len() + 64 * 36 * 3, (index * 2) as u8);
+            ppm.resize(ppm.len() + 64 * 36 * 3, (index * 2 % 256) as u8);
             fs::write(&frame, ppm).expect("frame should be written");
             list.push_str(frame.to_str().expect("temporary paths are UTF-8"));
             list.push('\n');
         }
-        let list_path = root.path().join("frames.txt");
+        let list_path = root.join("frames.txt");
         fs::write(&list_path, list).expect("frame list should be written");
 
         let options = [
@@ -3364,12 +3407,21 @@ mod tests {
         // control forbids the render thread to wait for the core.
         mpv.command(&["loadfile", &format!("mf://@{}", list_path.display())])
             .expect("the image sequence should load");
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while render.frames() < 5 && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
+        (mpv, render, callbacks)
+    }
+
+    #[test]
+    fn client_renderer_announces_frames_by_callback_and_goes_quiet_while_paused() {
+        if !enter_real_mpv_case(
+            "client-renderer-updates",
+            "player::tests::client_renderer_announces_frames_by_callback_and_goes_quiet_while_paused",
+        ) {
+            return;
         }
+        let root = unique_temp_dir("okp-mpv-client-renderer");
+        let (mpv, render, callbacks) = play_on_client_renderer(root.path(), 90);
         assert!(
-            render.frames() >= 5,
+            render.wait_for_frames(5, Duration::from_secs(5)),
             "frames should arrive while playing; drew {} after {} callbacks",
             render.frames(),
             callbacks.load(Ordering::SeqCst)
@@ -3386,14 +3438,50 @@ mod tests {
         );
 
         mpv.command(&["set", "pause", "no"]).expect("resume");
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while render.frames() < paused_at + 3 && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
         assert!(
-            render.frames() >= paused_at + 3,
+            render.wait_for_frames(paused_at + 3, Duration::from_secs(3)),
             "frames should arrive again after resuming; drew {}",
             render.frames() - paused_at
+        );
+
+        render.finish();
+        drop(mpv);
+        root.close().expect("frame directory should be removed");
+    }
+
+    #[test]
+    fn client_renderer_swaps_reach_libmpv_and_pace_its_frames() {
+        if !enter_real_mpv_case(
+            "client-renderer-swaps",
+            "player::tests::client_renderer_swaps_reach_libmpv_and_pace_its_frames",
+        ) {
+            return;
+        }
+        // Eight seconds, so playback outlasts both measurements.
+        let root = unique_temp_dir("okp-mpv-client-renderer-swaps");
+        let (mpv, render, callbacks) = play_on_client_renderer(root.path(), 240);
+        assert!(
+            render.wait_for_frames(5, Duration::from_secs(5)),
+            "frames should arrive while playing; drew {} after {} callbacks",
+            render.frames(),
+            callbacks.load(Ordering::SeqCst)
+        );
+        let reporting = render.frames_during(Duration::from_secs(1));
+        assert_eq!(
+            render.swaps(),
+            render.frames() as u64,
+            "report_swap counts every swap reported through the context"
+        );
+
+        // Once libmpv has seen a swap it waits for one after every frame it
+        // presents (up to 0.2 s each), so only swaps that really reached it keep
+        // the frame rate up. Stopping them must slow the video right down.
+        render.stop_reporting_swaps();
+        std::thread::sleep(Duration::from_millis(400));
+        let silent = render.frames_during(Duration::from_secs(1));
+        assert!(
+            reporting >= 12 && silent * 2 < reporting && silent <= 7,
+            "frames per second: {reporting} while reporting swaps, {silent} after stopping"
         );
 
         render.finish();

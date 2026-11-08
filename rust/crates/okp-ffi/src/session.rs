@@ -218,16 +218,17 @@ pub unsafe extern "C" fn okp_session_render(
 }
 
 /// Tell libmpv that the frame drawn last has been presented, after the shell's
-/// flush, so it can time the next one. Does nothing without a render context.
+/// flush, so it can time the next one. Returns the number of swaps reported to
+/// the current render context so far, this one included, so the shell can check
+/// that every frame it presented reached libmpv. Does nothing and returns 0
+/// without a render context.
 ///
 /// # Safety
 /// `session` must be null or live. The OpenGL context the render context was
 /// created under must be current on the calling thread.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn okp_session_render_report_swap(session: *const OkpSession) {
-    if let Some(session) = unsafe { session.as_ref() } {
-        session.inner.render_report_swap();
-    }
+pub unsafe extern "C" fn okp_session_render_report_swap(session: *const OkpSession) -> u64 {
+    unsafe { session.as_ref() }.map_or(0, |session| session.inner.render_report_swap())
 }
 
 /// Free the render context, if there is one. When this returns, the update
@@ -341,10 +342,8 @@ mod tests {
         assert_eq!(message, "the session is null");
         assert!(!unsafe { okp_session_render_update(ptr::null()) });
         assert!(!unsafe { okp_session_render(ptr::null(), 16, 16) });
-        unsafe {
-            okp_session_render_report_swap(ptr::null());
-            okp_session_render_destroy(ptr::null());
-        }
+        assert_eq!(unsafe { okp_session_render_report_swap(ptr::null()) }, 0);
+        unsafe { okp_session_render_destroy(ptr::null()) };
     }
 
     #[test]
