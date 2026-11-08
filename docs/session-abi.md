@@ -79,9 +79,9 @@ written as `null` and may be left out on input.
 | Document | Shape |
 |---|---|
 | Config (`okp_session_new`) | `schema_version`, `app` (`name`, `platform`), absolute `data_dir`, `config_dir`, `cache_dir`, optional `hwdec`, ordered `mpv_options` (`name`, `value`) applied after the session defaults |
-| Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay` |
-| Reply | `{"schema_version":1,"result":{...}}`: `accepted {request_id}`, `no_op {}`, `rejected {reason, message}`, or `failed {request_id, message}` when the engine refused an accepted command at once |
-| Query (`okp_session_query`) | `{"schema_version":1,"query":{"snapshot":{}}}`, answered with `result.snapshot.snapshot` (the full state) or `result.rejected` |
+| Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay`, `playlist` (see Playlist) |
+| Reply | `{"schema_version":1,"result":{...}}`: `accepted {request_id}`, `no_op {}`, `rejected {reason, message}`, `failed {request_id, message}` when the engine refused an accepted command at once, or `applied {}` when the session carried the command out itself and nothing reached libmpv yet |
+| Query (`okp_session_query`) | `{"schema_version":1,"query":{"snapshot":{}}}`, answered with `result.snapshot.snapshot` (the full state) or `result.rejected`; `{"playlist":{}}`, answered with `result.playlist.playlist` |
 | Event batch (`okp_session_drain_events`) | `{"schema_version":1,"events":[...]}` |
 
 An open source is `{"kind":"local"|"url","location":"..."}`. A URL is handed
@@ -99,12 +99,15 @@ The snapshot carries `status`, `source`, `time_pos`, `duration`, `volume`,
 `mute`, `speed`, `subtitle_delay`, `tracks`, `chapters`, `end_reason`, `title`,
 `video` (`width`, `height`, `display_aspect`), `buffering` and `cache_ahead`.
 
-The golden documents in `rust/crates/okp-session/fixtures/` pin every shape and
-every enum value. Change them only together with the protocol.
+The golden documents in `rust/crates/okp-session/fixtures/` (the playlist's in
+`fixtures/playlist/`) pin every shape and every enum value. Change them only
+together with the protocol.
 
 ## Events
 
-A batch holds at most one `snapshot_changed` event, first. Its `changes` list
+A batch holds at most one `snapshot_changed` event, first, and then at most one
+`playlist_changed` event carrying the whole playlist as it is at the drain. The
+`snapshot_changed` event's `changes` list
 the latest value of every snapshot field that changed since the previous batch,
 in snapshot order, each as `{"<field>":{"value":...}}`. A field that changed
 several times between drains appears once. Applying the changes in order to the
@@ -117,8 +120,60 @@ command) follow in the order they happened, and `shutdown` comes last.
 published at most about ten times a second; whenever another field changes they
 are published with it at once.
 
+## Playlist
+
+The session owns the playlist: Up Next, what plays after the current item, and
+the edits a shell offers. A playlist command is
+`{"schema_version":1,"command":{"playlist":{"action":{...}}}}`; indexes count
+from 0 in the order of the playlist's `items`.
+
+| Action | Effect | Reply |
+|---|---|---|
+| `open {sources}` | replaces the playlist; see Opening below | the open's reply, `applied` while folders or a playlist file are read, `no_op` when nothing is playable |
+| `next {}`, `previous {}` | one step in play order, wrapping at both ends whatever the repeat mode | the open's reply; `no_op` with fewer than two items |
+| `jump {index}` | plays that item (the current one restarts) | the open's reply; `no_op` out of range |
+| `queue {sources, mode}` | `append` or `play_next` around the current item; only media files and plain `http`/`https` URLs, each once | `applied`; `no_op` when nothing new is queueable; `rejected`/`no_active_media` without media |
+| `play_next {index}`, `move {from, to}`, `remove {index}`, `clear_queue {}` | queue edits; the current item is never removed | `applied`, or `no_op` when nothing changed |
+| `set_repeat {mode}` | `off`, `one` or `all` | `applied` or `no_op` |
+| `set_shuffle {enabled, seed}` | shuffles the play order with the current item first; a `seed` makes it reproducible | `applied` or `no_op` |
+
+An item the playlist plays is opened exactly like an `open` command, so the
+reply and the snapshot are the same as for one. `applied` means the session
+carried the command out itself and nothing reached libmpv yet.
+
+Opening:
+
+- One local media file, through `open` or a playlist `open`, plays at once and
+  is alone in the playlist while its folder is listed on a scan thread. When
+  the listing finishes, the folder's media (by extension) fill in, in natural
+  order of their file names, with anything queued meanwhile after them.
+- Several sources play in the given order, without repeats; a folder expands to
+  its media in natural order. A subtitle is not media. An `.m3u`/`.m3u8` file
+  counts only when nothing else is media: its entries play in document order,
+  relative entries resolved against the playlist file's folder.
+- Folders and playlist files are read on a scan thread too. The reply is
+  `applied`; the first item opens when the read finishes, and an `error` event
+  (`load_failed`, no `request_id`) reports a read that found nothing playable.
+- A newer open or a `close` supersedes a read in flight: it is cancelled, and
+  whatever it reports is dropped. A listing reads at most 20,000 directory
+  entries; a bigger folder is not listed.
+- A URL source is played as given; nothing resolves it yet.
+
+When the current item reaches its end without an error, the next item in play
+order plays (`repeat` `all` wraps to the first), and `one` restarts the same
+item. A plain `open` of anything other than a local media file makes a
+one-item playlist (libmpv is handed the source as it is, so folders and
+playlist files belong in a playlist `open`); `close` empties it.
+
+The query `{"schema_version":1,"query":{"playlist":{}}}` answers
+`result.playlist.playlist`: `items` (`source`, `title`), `current_index`,
+`repeat`, `shuffle`, and `scanning` (a folder or playlist file is being read).
+
 ## Threading and ownership
 
+- Folder listings and playlist-file reads run on short-lived scan threads of
+  their own, never on a caller's thread or the event thread. A scan thread only
+  hands its result to the event thread; one stuck on a hung mount is abandoned.
 - The session runs its own event thread. The wakeup is called on that thread,
   once per batch: after it fires it fires again only when
   `okp_session_drain_events` has taken the batch. The wakeup should only
