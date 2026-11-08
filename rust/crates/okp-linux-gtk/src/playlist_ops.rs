@@ -750,36 +750,84 @@ pub(crate) fn save_m3u_playlist(
     }
 }
 
+/// What a queue request did, for the caller to put into words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum QueueRequestOutcome {
+    /// This many new entries are in Up Next.
+    Queued(usize),
+    /// None of the requested entries is something the load path can play.
+    NothingPlayable,
+    /// No media is loaded, so there is no queue to insert into.
+    NothingLoaded,
+    /// Every requested entry is already playing or already queued.
+    AlreadyQueued,
+}
+
+/// Queue local files and stream URLs around the loaded media per `mode`.
+///
+/// Entries the load path would refuse (a path without a media extension, a string that is not
+/// a playable URL) are dropped first, as are repeats within the request, so the queue only
+/// holds items that [`load_playlist_item_with_playlist`] can open when they are reached.
+pub(crate) fn queue_playlist_items(
+    state: &Rc<RefCell<PlayerState>>,
+    items: Vec<PlaylistItem>,
+    mode: QueueInsertMode,
+) -> QueueRequestOutcome {
+    let mut additions = Vec::new();
+    for item in items {
+        if is_playable_playlist_item(&item) && !additions.contains(&item) {
+            additions.push(item);
+        }
+    }
+    if additions.is_empty() {
+        return QueueRequestOutcome::NothingPlayable;
+    }
+
+    let mut state = state.borrow_mut();
+    let current_file = state.current_file.clone();
+    let current_url = state.current_url.clone();
+    if current_file.is_none() && current_url.is_none() {
+        return QueueRequestOutcome::NothingLoaded;
+    }
+    match state.playlist.queue_insert(
+        current_file.as_deref(),
+        current_url.as_deref(),
+        additions,
+        mode,
+    ) {
+        Some(count) => QueueRequestOutcome::Queued(count),
+        None => QueueRequestOutcome::AlreadyQueued,
+    }
+}
+
+fn is_playable_playlist_item(item: &PlaylistItem) -> bool {
+    match item {
+        PlaylistItem::Local(path) => is_media_path(path),
+        PlaylistItem::Url(url) => is_media_url(url),
+    }
+}
+
 pub(crate) fn queue_media_paths(
     state: &Rc<RefCell<PlayerState>>,
     paths: Vec<PathBuf>,
     mode: QueueInsertMode,
     status_toast: &StatusToast,
 ) -> bool {
-    let additions = unique_media_paths(paths);
-    if additions.is_empty() {
-        status_toast.show("Choose media files");
-        return false;
-    }
-
-    let count = {
-        let mut state = state.borrow_mut();
-        let current_file = state.current_file.clone();
-        let current_url = state.current_url.clone();
-        if current_file.is_none() && current_url.is_none() {
+    let items = paths.into_iter().map(PlaylistItem::Local).collect();
+    let count = match queue_playlist_items(state, items, mode) {
+        QueueRequestOutcome::Queued(count) => count,
+        QueueRequestOutcome::NothingPlayable => {
+            status_toast.show("Choose media files");
+            return false;
+        }
+        QueueRequestOutcome::NothingLoaded => {
             status_toast.show("Open local media first");
             return false;
         }
-        let Some(count) = state.playlist.queue_insert(
-            current_file.as_deref(),
-            current_url.as_deref(),
-            additions,
-            mode,
-        ) else {
+        QueueRequestOutcome::AlreadyQueued => {
             status_toast.show("Already in queue");
             return false;
-        };
-        count
+        }
     };
 
     let action = match mode {
@@ -1712,4 +1760,215 @@ pub(crate) fn shuffle_seed() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos() as u64)
         .unwrap_or(0x9E37_79B9_7F4A_7C15)
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::*;
+
+    const CLIP: &str = "https://clips.example/cam/C0001.MP4?token=abc";
+
+    fn local(path: &str) -> PlaylistItem {
+        PlaylistItem::Local(PathBuf::from(path))
+    }
+
+    fn clip() -> PlaylistItem {
+        PlaylistItem::Url(CLIP.to_owned())
+    }
+
+    fn playing_local(
+        history: history::HistoryStore,
+        items: Vec<PlaylistItem>,
+    ) -> Rc<RefCell<PlayerState>> {
+        let current = local("/media/current.mkv");
+        Rc::new(RefCell::new(PlayerState {
+            current_file: Some(PathBuf::from("/media/current.mkv")),
+            playlist: Playlist::from_items(items, Some(&current), false),
+            media_load_state: network_media::MediaLoadState::Playing,
+            history,
+            ..PlayerState::default()
+        }))
+    }
+
+    #[test]
+    fn appended_url_plays_through_the_url_load_path_and_reaches_history() {
+        let root = tempfile::tempdir().expect("temporary history directory");
+        let state = playing_local(
+            history::HistoryStore::open_test(root.path().join("history.json")),
+            vec![local("/media/current.mkv")],
+        );
+
+        assert_eq!(
+            queue_playlist_items(&state, vec![clip()], QueueInsertMode::Append),
+            QueueRequestOutcome::Queued(1)
+        );
+        assert_eq!(
+            state.borrow().playlist.items(),
+            [local("/media/current.mkv"), clip()]
+        );
+        assert_eq!(
+            playlist_item_title(&state.borrow(), &clip()),
+            "C0001.MP4",
+            "Up Next labels a queued clip by its file name"
+        );
+
+        // The current file ends: auto-advance reaches the queued URL.
+        assert!(advance_playlist_on_eof(&state));
+        {
+            let state = state.borrow();
+            assert_eq!(state.current_url.as_deref(), Some(CLIP));
+            assert!(state.current_file.is_none());
+            assert_eq!(state.playlist.current(), Some(&clip()));
+            assert_eq!(
+                state.playlist.items(),
+                [local("/media/current.mkv"), clip()]
+            );
+            assert_eq!(
+                state.media_load_state,
+                network_media::MediaLoadState::Loading
+            );
+            assert_eq!(
+                state.retry_load_source,
+                Some(network_media::LoadFailureSource::url(CLIP))
+            );
+        }
+
+        // The engine reports FileLoaded; the URL open is recorded like any other.
+        state.borrow_mut().media_load_state = network_media::MediaLoadState::Playing;
+        record_successful_url_open(&state);
+        let rows = state.borrow().history.search("");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source(), clip());
+    }
+
+    #[test]
+    fn play_next_url_is_next_and_opens_when_chosen_in_up_next() {
+        let root = tempfile::tempdir().expect("temporary history directory");
+        let state = playing_local(
+            history::HistoryStore::open_test(root.path().join("history.json")),
+            vec![local("/media/current.mkv"), local("/media/later.mkv")],
+        );
+
+        assert_eq!(
+            queue_playlist_items(&state, vec![clip()], QueueInsertMode::PlayNext),
+            QueueRequestOutcome::Queued(1)
+        );
+        assert_eq!(
+            state.borrow().playlist.items(),
+            [
+                local("/media/current.mkv"),
+                clip(),
+                local("/media/later.mkv")
+            ]
+        );
+        assert_eq!(state.borrow().playlist.peek_next(), Some(&clip()));
+
+        assert!(jump_playlist_index(&state, 1));
+        let state = state.borrow();
+        assert_eq!(state.current_url.as_deref(), Some(CLIP));
+        assert!(state.current_file.is_none());
+        assert_eq!(state.playlist.current_index(), Some(1));
+    }
+
+    #[test]
+    fn queue_request_reports_why_nothing_was_queued() {
+        let root = tempfile::tempdir().expect("temporary history directory");
+        let history = || history::HistoryStore::open_test(root.path().join("history.json"));
+
+        let idle = Rc::new(RefCell::new(PlayerState {
+            history: history(),
+            ..PlayerState::default()
+        }));
+        assert_eq!(
+            queue_playlist_items(&idle, vec![clip()], QueueInsertMode::Append),
+            QueueRequestOutcome::NothingLoaded
+        );
+        assert!(idle.borrow().playlist.items().is_empty());
+
+        let state = playing_local(history(), vec![local("/media/current.mkv")]);
+        assert_eq!(
+            queue_playlist_items(
+                &state,
+                vec![
+                    local("/media/readme.txt"),
+                    PlaylistItem::Url("not a url".to_owned()),
+                ],
+                QueueInsertMode::Append,
+            ),
+            QueueRequestOutcome::NothingPlayable
+        );
+        // Repeats inside one request count once.
+        assert_eq!(
+            queue_playlist_items(&state, vec![clip(), clip()], QueueInsertMode::Append),
+            QueueRequestOutcome::Queued(1)
+        );
+        for mode in [QueueInsertMode::Append, QueueInsertMode::PlayNext] {
+            assert_eq!(
+                queue_playlist_items(&state, vec![local("/media/current.mkv")], mode),
+                QueueRequestOutcome::AlreadyQueued
+            );
+        }
+        assert_eq!(
+            queue_playlist_items(&state, vec![clip()], QueueInsertMode::Append),
+            QueueRequestOutcome::AlreadyQueued
+        );
+        assert_eq!(
+            state.borrow().playlist.items(),
+            [local("/media/current.mkv"), clip()]
+        );
+    }
+
+    #[test]
+    fn local_file_requests_keep_the_menu_action_semantics() {
+        let root = tempfile::tempdir().expect("temporary history directory");
+        let state = playing_local(
+            history::HistoryStore::open_test(root.path().join("history.json")),
+            vec![local("/media/current.mkv"), local("/media/queued.mkv")],
+        );
+
+        // Non-media entries and repeats are dropped before the queue sees them, as
+        // `unique_media_paths` did for the Add to Queue / Play Next dialogs.
+        assert_eq!(
+            queue_playlist_items(
+                &state,
+                vec![
+                    local("/media/notes.txt"),
+                    local("/media/new.mp4"),
+                    local("/media/new.mp4"),
+                    local("/media/queued.mkv"),
+                    local("/media/album.flac"),
+                ],
+                QueueInsertMode::Append,
+            ),
+            QueueRequestOutcome::Queued(2)
+        );
+        assert_eq!(
+            state.borrow().playlist.items(),
+            [
+                local("/media/current.mkv"),
+                local("/media/queued.mkv"),
+                local("/media/new.mp4"),
+                local("/media/album.flac"),
+            ]
+        );
+
+        assert_eq!(
+            queue_playlist_items(
+                &state,
+                vec![local("/media/album.flac")],
+                QueueInsertMode::PlayNext
+            ),
+            QueueRequestOutcome::Queued(1)
+        );
+        assert_eq!(
+            state.borrow().playlist.items(),
+            [
+                local("/media/current.mkv"),
+                local("/media/album.flac"),
+                local("/media/queued.mkv"),
+                local("/media/new.mp4"),
+            ]
+        );
+        assert_eq!(state.borrow().playlist.current_index(), Some(0));
+    }
 }

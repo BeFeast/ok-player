@@ -117,6 +117,11 @@ impl PlaylistItem {
     }
 
     /// Short human-readable label: the file name, or the last URL segment.
+    ///
+    /// A direct media URL shows its media file name without the query or fragment and with
+    /// percent-escapes undone (`…/My%20Clip.MOV?token=…` → `My Clip.MOV`), so a queued link
+    /// reads like the local file it names. Other URLs (extractor pages, bare hosts) keep the
+    /// raw last segment, whose query is often the only part that tells two entries apart.
     pub fn display_name(&self) -> String {
         match self {
             Self::Local(path) => path
@@ -125,12 +130,13 @@ impl PlaylistItem {
                 .filter(|name| !name.is_empty())
                 .map(str::to_owned)
                 .unwrap_or_else(|| path.display().to_string()),
-            Self::Url(url) => url
-                .rsplit('/')
-                .next()
-                .filter(|name| !name.is_empty())
-                .map(str::to_owned)
-                .unwrap_or_else(|| url.to_owned()),
+            Self::Url(url) => direct_media_file_name(url).unwrap_or_else(|| {
+                url.rsplit('/')
+                    .next()
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| url.to_owned())
+            }),
         }
     }
 
@@ -157,6 +163,44 @@ impl PlaylistItem {
             Self::Url(url) => Some(url.as_str()),
         }
     }
+}
+
+/// The last path segment of `url` when it names a media file, decoded for display; `None` for
+/// URLs without a path or whose last segment has no media extension.
+fn direct_media_file_name(url: &str) -> Option<String> {
+    let (_, rest) = url.split_once("://")?;
+    let end = rest.find(['?', '#']).unwrap_or(rest.len());
+    let (_, path) = rest[..end].split_once('/')?;
+    let segment = path
+        .rsplit('/')
+        .next()
+        .filter(|segment| !segment.is_empty())?;
+    let name = percent_decoded_label(segment).unwrap_or_else(|| segment.to_owned());
+    media_formats::is_media(Path::new(&name)).then_some(name)
+}
+
+/// Undo percent-escapes for a label. `None` (show the raw text instead) when an escape is
+/// malformed, the bytes are not UTF-8, or the result would carry control characters.
+fn percent_decoded_label(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = bytes.get(index + 1..index + 3)?;
+            if !hex.iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
+            let hex = std::str::from_utf8(hex).ok()?;
+            decoded.push(u8::from_str_radix(hex, 16).ok()?);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    let decoded = String::from_utf8(decoded).ok()?;
+    (!decoded.chars().any(char::is_control)).then_some(decoded)
 }
 
 // Non-zero fallback so shuffle stays usable when a shell never seeds (xorshift locks on zero;
@@ -421,17 +465,22 @@ impl Playlist {
     /// Queue `additions` around the current media per `mode`, returning how many were queued, or
     /// `None` (playlist untouched) when nothing new would be added.
     ///
+    /// `additions` may mix local files and stream URLs; both kinds follow the same rules. The
+    /// playing item is never queued again, Append skips entries already in the playlist, and
+    /// Play Next moves an entry already in the playlist to the slot after the current item.
+    /// Entries match by exact item equality, so a URL matches only the identical URL string.
+    ///
     /// `current_file` / `current_url` describe the loaded media (one or both may be `None`). A
     /// local current file not yet represented in the playlist is synthesized at the head so the
     /// queue always builds around the playing file, and the cursor lands on it; a stream URL is
     /// always inserted by the load path, so it is never synthesized here. This lets a
     /// single-URL / no-folder session grow a queue (PRD §2.6 short-queue state) — the URL stays
-    /// current and the new local files append after it.
+    /// current and the new items append after it.
     pub fn queue_insert(
         &mut self,
         current_file: Option<&Path>,
         current_url: Option<&str>,
-        additions: Vec<PathBuf>,
+        additions: Vec<PlaylistItem>,
         mode: QueueInsertMode,
     ) -> Option<usize> {
         let mut items = self.items.clone();
@@ -447,13 +496,10 @@ impl Playlist {
             }
         }
 
-        let additions = match current_file {
-            Some(current) => additions
-                .into_iter()
-                .filter(|path| path.as_path() != current)
-                .collect::<Vec<_>>(),
-            None => additions,
-        };
+        let additions = additions
+            .into_iter()
+            .filter(|addition| !addition.is_current(current_file, current_url))
+            .collect::<Vec<_>>();
         if additions.is_empty() {
             return None;
         }
@@ -462,12 +508,7 @@ impl Playlist {
             QueueInsertMode::Append => {
                 let additions = additions
                     .into_iter()
-                    .filter(|path| {
-                        !items.iter().any(
-                            |item| matches!(item, PlaylistItem::Local(item_path) if item_path == path),
-                        )
-                    })
-                    .map(PlaylistItem::Local)
+                    .filter(|addition| !items.contains(addition))
                     .collect::<Vec<_>>();
                 if additions.is_empty() {
                     return None;
@@ -478,20 +519,13 @@ impl Playlist {
                 count
             }
             QueueInsertMode::PlayNext => {
-                items.retain(|item| {
-                    !additions.iter().any(
-                        |addition| matches!(item, PlaylistItem::Local(path) if path == addition),
-                    )
-                });
+                items.retain(|item| !additions.contains(item));
                 let current_index = items
                     .iter()
                     .position(|item| item.is_current(current_file, current_url))
                     .unwrap_or(0);
                 let count = additions.len();
-                items.splice(
-                    current_index + 1..current_index + 1,
-                    additions.into_iter().map(PlaylistItem::Local),
-                );
+                items.splice(current_index + 1..current_index + 1, additions);
                 count
             }
         };
@@ -878,10 +912,10 @@ mod tests {
             false,
         );
         let additions = vec![
-            PathBuf::from("/media/current.mkv"),
-            PathBuf::from("/media/queued.mkv"),
-            PathBuf::from("/media/new.mp4"),
-            PathBuf::from("/media/album.flac"),
+            local("/media/current.mkv"),
+            local("/media/queued.mkv"),
+            local("/media/new.mp4"),
+            local("/media/album.flac"),
         ];
 
         let count = playlist
@@ -920,10 +954,7 @@ mod tests {
             Some(&local("/media/current.mkv")),
             false,
         );
-        let additions = vec![
-            PathBuf::from("/media/later.mkv"),
-            PathBuf::from("/media/new.mp4"),
-        ];
+        let additions = vec![local("/media/later.mkv"), local("/media/new.mp4")];
 
         let count = playlist
             .queue_insert(
@@ -961,7 +992,7 @@ mod tests {
             playlist.queue_insert(
                 Some(Path::new("/media/current.mkv")),
                 None,
-                vec![PathBuf::from("/media/current.mkv")],
+                vec![local("/media/current.mkv")],
                 QueueInsertMode::Append,
             ),
             None
@@ -983,10 +1014,7 @@ mod tests {
             .queue_insert(
                 None,
                 Some(stream),
-                vec![
-                    PathBuf::from("/media/queued-a.mkv"),
-                    PathBuf::from("/media/queued-b.mp4"),
-                ],
+                vec![local("/media/queued-a.mkv"), local("/media/queued-b.mp4")],
                 QueueInsertMode::Append,
             )
             .expect("url short queue should grow");
@@ -1014,7 +1042,7 @@ mod tests {
             .queue_insert(
                 None,
                 Some(stream),
-                vec![PathBuf::from("/media/play-next.mkv")],
+                vec![local("/media/play-next.mkv")],
                 QueueInsertMode::PlayNext,
             )
             .expect("play next should insert after the url");
@@ -1042,12 +1070,216 @@ mod tests {
             playlist.queue_insert(
                 None,
                 Some(stream),
-                vec![PathBuf::from("/media/queued.mkv")],
+                vec![local("/media/queued.mkv")],
                 QueueInsertMode::Append,
             ),
             None
         );
         assert_eq!(playlist.items(), [url(stream), local("/media/queued.mkv")]);
+    }
+
+    #[test]
+    fn queue_append_adds_urls_after_local_current_and_skips_queued_entries() {
+        let mut playlist = Playlist::from_items(
+            vec![
+                local("/media/current.mkv"),
+                url("https://clips.example/C0001.MP4"),
+                local("/media/queued.mkv"),
+            ],
+            Some(&local("/media/current.mkv")),
+            false,
+        );
+
+        let count = playlist
+            .queue_insert(
+                Some(Path::new("/media/current.mkv")),
+                None,
+                vec![
+                    url("https://clips.example/C0001.MP4"),
+                    url("https://clips.example/C0002.MOV"),
+                    local("/media/queued.mkv"),
+                    local("/media/new.mp4"),
+                    // A different query is a different URL; entries match by exact string.
+                    url("https://clips.example/C0001.MP4?range=full"),
+                ],
+                QueueInsertMode::Append,
+            )
+            .expect("new urls and files should append");
+
+        assert_eq!(count, 3);
+        assert_eq!(
+            playlist.items(),
+            [
+                local("/media/current.mkv"),
+                url("https://clips.example/C0001.MP4"),
+                local("/media/queued.mkv"),
+                url("https://clips.example/C0002.MOV"),
+                local("/media/new.mp4"),
+                url("https://clips.example/C0001.MP4?range=full"),
+            ]
+        );
+        assert_eq!(playlist.current_index(), Some(0));
+        assert_eq!(
+            playlist.peek_next(),
+            Some(&url("https://clips.example/C0001.MP4"))
+        );
+    }
+
+    #[test]
+    fn queue_play_next_moves_a_queued_url_and_inserts_new_urls_after_current() {
+        let mut playlist = Playlist::from_items(
+            vec![
+                local("/media/previous.mkv"),
+                local("/media/current.mkv"),
+                local("/media/later.mkv"),
+                url("https://clips.example/C0001.MP4"),
+            ],
+            Some(&local("/media/current.mkv")),
+            false,
+        );
+
+        let count = playlist
+            .queue_insert(
+                Some(Path::new("/media/current.mkv")),
+                None,
+                vec![
+                    url("https://clips.example/C0001.MP4"),
+                    url("https://clips.example/C0002.MOV"),
+                ],
+                QueueInsertMode::PlayNext,
+            )
+            .expect("play next should insert urls");
+
+        assert_eq!(count, 2);
+        assert_eq!(
+            playlist.items(),
+            [
+                local("/media/previous.mkv"),
+                local("/media/current.mkv"),
+                url("https://clips.example/C0001.MP4"),
+                url("https://clips.example/C0002.MOV"),
+                local("/media/later.mkv"),
+            ]
+        );
+        assert_eq!(playlist.current_index(), Some(1));
+        assert_eq!(
+            playlist.auto_advance_target(),
+            Some(&url("https://clips.example/C0001.MP4"))
+        );
+    }
+
+    #[test]
+    fn queue_never_requeues_the_playing_url_in_either_mode() {
+        let stream = "https://clips.example/C0001.MP4";
+        let current = url(stream);
+        for mode in [QueueInsertMode::Append, QueueInsertMode::PlayNext] {
+            let mut playlist = Playlist::from_items(
+                vec![current.clone(), local("/media/queued.mkv")],
+                Some(&current),
+                false,
+            );
+
+            assert_eq!(
+                playlist.queue_insert(None, Some(stream), vec![url(stream)], mode),
+                None,
+                "{mode:?} must not queue the playing url again"
+            );
+            assert_eq!(playlist.items(), [url(stream), local("/media/queued.mkv")]);
+            assert_eq!(playlist.current_index(), Some(0));
+        }
+    }
+
+    #[test]
+    fn queue_play_next_after_a_url_current_mixes_urls_and_files() {
+        let stream = "https://clips.example/C0001.MP4";
+        let current = url(stream);
+        let mut playlist = Playlist::from_items(
+            vec![
+                current.clone(),
+                local("/media/queued.mkv"),
+                url("https://clips.example/C0003.MP4"),
+            ],
+            Some(&current),
+            false,
+        );
+
+        let count = playlist
+            .queue_insert(
+                None,
+                Some(stream),
+                vec![
+                    url(stream),
+                    url("https://clips.example/C0003.MP4"),
+                    local("/media/next.mkv"),
+                ],
+                QueueInsertMode::PlayNext,
+            )
+            .expect("play next should insert after the url");
+
+        assert_eq!(count, 2);
+        assert_eq!(
+            playlist.items(),
+            [
+                url(stream),
+                url("https://clips.example/C0003.MP4"),
+                local("/media/next.mkv"),
+                local("/media/queued.mkv"),
+            ]
+        );
+        assert_eq!(playlist.current(), Some(&url(stream)));
+    }
+
+    #[test]
+    fn queue_url_into_a_local_session_synthesizes_the_playing_file_first() {
+        // A single local file opened without a folder playlist: the queue builds around it.
+        let mut playlist = Playlist::default();
+
+        let count = playlist
+            .queue_insert(
+                Some(Path::new("/media/current.mkv")),
+                None,
+                vec![url("https://clips.example/C0001.MP4")],
+                QueueInsertMode::Append,
+            )
+            .expect("url should queue after the playing file");
+
+        assert_eq!(count, 1);
+        assert_eq!(
+            playlist.items(),
+            [
+                local("/media/current.mkv"),
+                url("https://clips.example/C0001.MP4"),
+            ]
+        );
+        assert_eq!(playlist.current_index(), Some(0));
+    }
+
+    #[test]
+    fn direct_media_url_labels_drop_query_and_decode_escapes() {
+        for (source, label) in [
+            ("http://clips.example/cam/C0001.MP4", "C0001.MP4"),
+            (
+                "http://clips.example/cam/C0001.MP4?token=abc#t=5",
+                "C0001.MP4",
+            ),
+            ("https://clips.example/My%20Clip.MOV", "My Clip.MOV"),
+            ("https://clips.example/caf%C3%A9.mkv?x=1", "café.mkv"),
+            // Undecodable escapes or control characters keep the raw segment.
+            ("https://clips.example/100%.mp4", "100%.mp4"),
+            ("https://clips.example/a%0Ab.mp4", "a%0Ab.mp4"),
+            ("https://clips.example/%FF.mp4", "%FF.mp4"),
+            // Not a direct media URL: the raw last segment, query included, as before.
+            ("https://video.example/watch?v=abc", "watch?v=abc"),
+            ("https://video.example/play?file=a.mp4", "play?file=a.mp4"),
+            (
+                "https://stream.example/live/channel-one.m3u8?t=1",
+                "channel-one.m3u8?t=1",
+            ),
+            ("https://video.example/", "https://video.example/"),
+        ] {
+            assert_eq!(url(source).display_name(), label, "label for {source}");
+            assert_eq!(url(source).display_location(), source);
+        }
     }
 
     #[test]

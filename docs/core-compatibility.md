@@ -50,7 +50,9 @@ behaves identically on both sides.
 ## Playlist → `okp_core::playlist`
 
 - **Item model.** C# `Playlist` holds path/URL strings; the Rust port holds `PlaylistItem` (a
-  typed local path or stream URL). Queue insertion modes, reorder/drop mapping, Play Next,
+  typed local path or stream URL), and queue insertion takes those items, so local files and
+  stream URLs queue under the same rules (C# `QueueInsert` takes strings, which already admit
+  both). Queue insertion modes, reorder/drop mapping, Play Next,
   removal, and clear-queue now have the same core-owned behavior on both sides: the current
   item is protected, clearing retains it, and every edit rebuilds shuffle order without moving
   the cursor off the playing item. Rust additionally owns wrap-always transport stepping and
