@@ -27,6 +27,7 @@ pub mod linux_renderer;
 pub mod lrc;
 pub mod lyrics;
 pub mod m3u;
+pub mod macos_document_types;
 pub mod media_download;
 pub mod media_formats;
 pub mod mpv_conf_text;
@@ -81,4 +82,4 @@ pub mod volume;
 pub mod window_fit;
 pub mod youtube_open;
 
-pub use app::AppIdentity;
+pub use app::{AppIdentity, Platform};

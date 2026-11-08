@@ -54,6 +54,8 @@ pub(crate) fn shortcut_modifiers_from_event(modifiers: gdk::ModifierType) -> Sho
         ctrl: modifiers.contains(gdk::ModifierType::CONTROL_MASK),
         alt: modifiers.contains(gdk::ModifierType::ALT_MASK),
         shift: modifiers.contains(gdk::ModifierType::SHIFT_MASK),
+        // Cmd is the macOS Command key; Super stays masked out on Linux.
+        cmd: false,
     }
 }
 

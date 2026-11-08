@@ -22,6 +22,8 @@
 //!
 //! Pure: no I/O, no mpv handle, no UI. Shells observe, call, and apply.
 
+use crate::app::Platform;
+
 /// Zero-copy hardware decoders offered to mpv on Linux, in preference order,
 /// terminated by `no`.
 ///
@@ -30,6 +32,23 @@
 /// copy-back backend. Every entry is checked by
 /// [`automatic_hwdec_is_copy_free`], which the test suite asserts.
 pub const LINUX_ZERO_COPY_HWDEC: &str = "vaapi,nvdec,vdpau,drm,no";
+
+/// Zero-copy hardware decoders offered to mpv on macOS, terminated by `no`.
+///
+/// VideoToolbox is the macOS hardware decoding API. The list names it
+/// explicitly instead of handing mpv an `auto*` selector, for the same reason
+/// as on Linux: its read-back variant, `videotoolbox-copy`, is never chosen
+/// automatically, and [`is_copy_back_hwdec`] recognises it so a session that
+/// lands on it anyway is demoted like any other copy-back backend.
+pub const MACOS_ZERO_COPY_HWDEC: &str = "videotoolbox,no";
+
+/// The automatic `hwdec` candidate list for a platform.
+pub const fn zero_copy_hwdec(platform: Platform) -> &'static str {
+    match platform {
+        Platform::Linux => LINUX_ZERO_COPY_HWDEC,
+        Platform::MacOs => MACOS_ZERO_COPY_HWDEC,
+    }
+}
 
 /// The mpv `hwdec` value meaning "decode on the CPU".
 pub const HWDEC_OFF: &str = "no";
@@ -85,7 +104,26 @@ pub struct HwdecPlan {
 /// * `hardware_decoding_enabled` — the Settings toggle.
 /// * `renderer_forced_hwdec` — a value renderer policy insists on, if any.
 /// * `raw_conf_hwdec` — the `hwdec` value found in the user's raw `mpv.conf`.
+///
+/// The automatic value is the Linux list, [`LINUX_ZERO_COPY_HWDEC`]; use
+/// [`plan_hwdec_for`] to plan for another platform.
 pub fn plan_hwdec(
+    hardware_decoding_enabled: bool,
+    renderer_forced_hwdec: Option<&str>,
+    raw_conf_hwdec: Option<&str>,
+) -> HwdecPlan {
+    plan_hwdec_for(
+        Platform::Linux,
+        hardware_decoding_enabled,
+        renderer_forced_hwdec,
+        raw_conf_hwdec,
+    )
+}
+
+/// [`plan_hwdec`] for a given platform: the same precedence, with the
+/// platform's automatic candidate list from [`zero_copy_hwdec`].
+pub fn plan_hwdec_for(
+    platform: Platform,
     hardware_decoding_enabled: bool,
     renderer_forced_hwdec: Option<&str>,
     raw_conf_hwdec: Option<&str>,
@@ -107,7 +145,7 @@ pub fn plan_hwdec(
     }
     if hardware_decoding_enabled {
         HwdecPlan {
-            value: LINUX_ZERO_COPY_HWDEC.to_owned(),
+            value: zero_copy_hwdec(platform).to_owned(),
             source: HwdecSource::Automatic,
         }
     } else {
@@ -824,6 +862,62 @@ mod tests {
             assert_eq!(guard.observe(sample(60, 10.2), Some("vaapi-copy")), None);
             assert!(!guard.has_demoted(), "{source:?} must be left alone");
         }
+    }
+
+    #[test]
+    fn linux_automatic_selection_is_unchanged() {
+        let plan = plan_hwdec(true, None, None);
+
+        assert_eq!(plan.value, "vaapi,nvdec,vdpau,drm,no");
+        assert_eq!(plan_hwdec_for(Platform::Linux, true, None, None), plan);
+        assert_eq!(
+            plan_hwdec_for(Platform::Linux, false, None, None),
+            plan_hwdec(false, None, None)
+        );
+    }
+
+    #[test]
+    fn macos_automatic_selection_is_videotoolbox_then_software() {
+        let plan = plan_hwdec_for(Platform::MacOs, true, None, None);
+        let candidates = plan.value.split(',').collect::<Vec<_>>();
+
+        assert_eq!(plan.source, HwdecSource::Automatic);
+        assert_eq!(candidates, ["videotoolbox", HWDEC_OFF]);
+        assert!(
+            automatic_hwdec_is_copy_free(&plan.value),
+            "automatic macOS hwdec {} may resolve to copy-back",
+            plan.value
+        );
+        assert!(plan.source.allows_runtime_demotion());
+    }
+
+    #[test]
+    fn macos_selection_keeps_the_shared_precedence() {
+        let off = plan_hwdec_for(Platform::MacOs, false, None, None);
+        assert_eq!(off.value, HWDEC_OFF);
+        assert_eq!(off.source, HwdecSource::UserDisabled);
+
+        let forced = plan_hwdec_for(Platform::MacOs, true, Some("no"), None);
+        assert_eq!(forced.value, HWDEC_OFF);
+        assert_eq!(forced.source, HwdecSource::RendererForced);
+
+        let overridden = plan_hwdec_for(Platform::MacOs, true, None, Some("videotoolbox-copy"));
+        assert_eq!(overridden.value, "videotoolbox-copy");
+        assert_eq!(overridden.source, HwdecSource::UserOverride);
+    }
+
+    #[test]
+    fn videotoolbox_copy_back_is_recognised_and_demoted() {
+        assert!(is_copy_back_hwdec("videotoolbox-copy"));
+        assert!(!is_copy_back_hwdec("videotoolbox"));
+
+        let mut guard = HwdecGuard::new(HwdecSource::Automatic);
+        assert_eq!(
+            guard.observe(sample(0, 0.0), Some("videotoolbox-copy")),
+            Some(HwdecDemotion::CopyBackSelected {
+                observed: "videotoolbox-copy".to_owned()
+            })
+        );
     }
 
     #[test]

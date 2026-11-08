@@ -6,16 +6,27 @@
 //! without moving native-key capture into either core (see `docs/core-compatibility.md`). Pure
 //! (no I/O, no UI, no GDK).
 //!
-//! A chord is one non-modifier key plus any of Ctrl/Alt/Shift. Keys are identified by their
-//! canonical, case-folded keysym name (`space`, `comma`, `Page_Up`, `c`, …). Config text is one
-//! `action-id=Chord` binding per line; blank lines and lines starting with `#` or `;` are
-//! ignored; an action may bind at most [`MAX_SHORTCUTS_PER_ACTION`] chords. Serialisation
-//! writes only bindings that differ from the action's default, in the same
-//! `Ctrl+Alt+Shift+Key` display form the parser accepts, so a round-trip is faithful. The
+//! A chord is one non-modifier key plus any of Ctrl/Alt/Shift, and Cmd on macOS. Keys are
+//! identified by their canonical, case-folded keysym name (`space`, `comma`, `Page_Up`, `c`, …).
+//! Config text is one `action-id=Chord` binding per line; blank lines and lines starting with
+//! `#` or `;` are ignored; an action may bind at most [`MAX_SHORTCUTS_PER_ACTION`] chords.
+//! Serialisation writes only bindings that differ from the action's default, in the same
+//! `Ctrl+Alt+Shift+Cmd+Key` display form the parser accepts, so a round-trip is faithful. The
 //! portable key namespace (the display aliases plus ASCII letters and digits) resolves here;
 //! any other token (function keys, locale-specific keysyms) is resolved by the shell through
 //! [`KeyNames`] against the real platform keyval tables, exactly as the pre-extraction parser
 //! did with `gdk::Key::from_name`.
+//!
+//! Defaults are per [`Platform`]. The unsuffixed functions use the Linux table, which the
+//! Windows projection mirrors; the `_on` variants take the platform. The macOS table keeps
+//! every in-window key and moves menu commands to Cmd chords (see
+//! [`ShortcutAction::default_shortcut_on`]). Cmd is rejected in Linux config text: the GTK
+//! shell masks Super out of key events, so a Cmd binding there could never fire.
+
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::app::Platform;
 
 /// Every player command that can be bound to a keyboard shortcut.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,6 +164,29 @@ impl ShortcutAction {
         }
     }
 
+    /// Built-in chord in config-text form for a platform.
+    ///
+    /// The macOS table differs from the Linux one in two ways. Every Linux Ctrl chord moves to
+    /// Cmd (`Cmd+,` for Settings, `Cmd+Left`/`Cmd+Right` for subtitle cues; Ctrl+arrows switch
+    /// Spaces on macOS). Menu commands that macOS users reach with a Command chord take one:
+    /// `Cmd+O` Open File, `Shift+Cmd+O` Open URL, `Cmd+I` Media Info (the inspector chord).
+    /// Every in-window key (Space, arrows, F, M, `,`/`.`, Z/Shift+Z, `[`/`]`, and the rest)
+    /// stays as it is on Linux.
+    pub fn default_shortcut_on(self, platform: Platform) -> &'static str {
+        match platform {
+            Platform::Linux => self.default_shortcut(),
+            Platform::MacOs => match self {
+                Self::OpenFile => "Cmd+O",
+                Self::OpenUrl => "Shift+Cmd+O",
+                Self::MediaInfo => "Cmd+I",
+                Self::SubtitlePreviousCue => "Cmd+Left",
+                Self::SubtitleNextCue => "Cmd+Right",
+                Self::OpenSettings => "Cmd+,",
+                _ => self.default_shortcut(),
+            },
+        }
+    }
+
     /// The action for a config identifier, or `None` for an unknown one.
     pub fn by_id(id: &str) -> Option<Self> {
         SHORTCUT_ACTIONS
@@ -197,14 +231,17 @@ pub const SHORTCUT_ACTIONS: &[ShortcutAction] = &[
 /// One primary plus at most one secondary chord per action.
 pub const MAX_SHORTCUTS_PER_ACTION: usize = 2;
 
-/// The modifier set of a chord. Only Ctrl, Alt, and Shift take part in shortcuts; the shell
-/// masks everything else (Caps Lock, Num Lock, Super, …) out of key events before they reach
-/// the model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// The modifier set of a chord. Ctrl, Alt (Option on macOS), Shift, and, on macOS, Cmd take
+/// part in shortcuts; the shell masks everything else (Caps Lock, Num Lock, Fn, Super on Linux,
+/// …) out of key events before they reach the model. Missing fields deserialise as `false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ShortcutModifiers {
     pub ctrl: bool,
     pub alt: bool,
     pub shift: bool,
+    /// The macOS Command key. Never set by the Linux shell.
+    pub cmd: bool,
 }
 
 /// One non-modifier key plus modifiers. The key is stored as its canonical, case-folded keysym
@@ -229,8 +266,9 @@ impl ShortcutChord {
         self.key == folded_key_name(key_name) && self.modifiers == modifiers
     }
 
-    /// Display label, which is also the config-text form: `Ctrl+Alt+Shift+Key` with the key in
-    /// its display spelling (`Space`, `,`, `PageUp`, `C`, …).
+    /// Display label, which is also the config-text form: `Ctrl+Alt+Shift+Cmd+Key` with the key
+    /// in its display spelling (`Space`, `,`, `PageUp`, `C`, …). The modifier order is the
+    /// macOS menu order (Control, Option, Shift, Command).
     pub fn label(&self) -> String {
         let mut parts = Vec::new();
         if self.modifiers.ctrl {
@@ -242,8 +280,38 @@ impl ShortcutChord {
         if self.modifiers.shift {
             parts.push("Shift".to_owned());
         }
+        if self.modifiers.cmd {
+            parts.push("Cmd".to_owned());
+        }
         parts.push(display_key_name(&self.key));
         parts.join("+")
+    }
+}
+
+/// A chord serialises as its config-text label (`"Shift+Cmd+O"`), the same text the config
+/// parser reads.
+impl Serialize for ShortcutChord {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.label())
+    }
+}
+
+/// Reads the label form back. A key token outside the portable set is taken as the canonical
+/// platform key name a serialised chord carries (`F1`, `Return`), so every chord this module
+/// serialises reads back equal.
+impl<'de> Deserialize<'de> for ShortcutChord {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        parse_chord(&text, 0, &SerializedKeyNames).map_err(|error| D::Error::custom(error.message))
+    }
+}
+
+/// Key namespace for serialised chords: their key names are already canonical.
+struct SerializedKeyNames;
+
+impl KeyNames for SerializedKeyNames {
+    fn canonicalize_extra(&self, token: &str) -> Option<String> {
+        Some(token.to_owned())
     }
 }
 
@@ -303,6 +371,7 @@ pub fn parse_chord(
             "ctrl" | "control" => modifiers.ctrl = true,
             "alt" | "option" => modifiers.alt = true,
             "shift" => modifiers.shift = true,
+            "cmd" | "command" => modifiers.cmd = true,
             _ if key.is_none() => {
                 key = Some(
                     key_name_from_token(token, key_names)
@@ -328,13 +397,23 @@ pub fn parse_chord(
 /// Resolve keybinding config text over the defaults: every action keeps its default chord
 /// unless the text overrides it (the first override replaces the default, a second line adds a
 /// secondary chord). Errors carry the offending 1-based line, or line 0 for cross-binding
-/// conflicts.
+/// conflicts. Uses the Linux defaults; see [`resolved_bindings_from_text_on`].
 pub fn resolved_bindings_from_text(
     text: &str,
     key_names: &dyn KeyNames,
 ) -> Result<Vec<ShortcutBinding>, ShortcutConfigError> {
-    let mut bindings = default_bindings();
-    let overrides = parse_config_overrides(text, key_names)?;
+    resolved_bindings_from_text_on(Platform::Linux, text, key_names)
+}
+
+/// [`resolved_bindings_from_text`] over a platform's defaults. A Cmd chord is an error on a
+/// platform without a Cmd key, at the line that names it.
+pub fn resolved_bindings_from_text_on(
+    platform: Platform,
+    text: &str,
+    key_names: &dyn KeyNames,
+) -> Result<Vec<ShortcutBinding>, ShortcutConfigError> {
+    let mut bindings = default_bindings_on(platform);
+    let overrides = parse_config_overrides(platform, text, key_names)?;
     let override_chords = overrides
         .iter()
         .map(|(_, chord)| chord.clone())
@@ -379,12 +458,18 @@ fn is_upgrade_shadowable_default(action: ShortcutAction) -> bool {
 
 /// Serialise bindings back to config text: only actions whose chords differ from the default
 /// are written, one `action-id=Chord` line each, in [`SHORTCUT_ACTIONS`] order. All-default
-/// bindings serialise to the empty string.
+/// bindings serialise to the empty string. Compares against the Linux defaults; see
+/// [`config_text_from_bindings_on`].
 pub fn config_text_from_bindings(bindings: &[ShortcutBinding]) -> String {
+    config_text_from_bindings_on(Platform::Linux, bindings)
+}
+
+/// [`config_text_from_bindings`] against a platform's defaults.
+pub fn config_text_from_bindings_on(platform: Platform, bindings: &[ShortcutBinding]) -> String {
     let mut lines = Vec::new();
     for action in SHORTCUT_ACTIONS {
-        let default_chord = default_chord_for_action(*action);
-        let chords = chords_for_action(bindings, *action);
+        let default_chord = default_chord_for_action_on(platform, *action);
+        let chords = chords_for_action_on(platform, bindings, *action);
         if chords.len() == 1 && chords[0] == default_chord {
             continue;
         }
@@ -397,8 +482,17 @@ pub fn config_text_from_bindings(bindings: &[ShortcutBinding]) -> String {
 }
 
 /// The chords bound to an action, primary first, capped at [`MAX_SHORTCUTS_PER_ACTION`]; an
-/// action absent from `bindings` falls back to its default chord.
+/// action absent from `bindings` falls back to its Linux default chord.
 pub fn chords_for_action(
+    bindings: &[ShortcutBinding],
+    action: ShortcutAction,
+) -> Vec<ShortcutChord> {
+    chords_for_action_on(Platform::Linux, bindings, action)
+}
+
+/// [`chords_for_action`], falling back to the platform's default chord.
+pub fn chords_for_action_on(
+    platform: Platform,
     bindings: &[ShortcutBinding],
     action: ShortcutAction,
 ) -> Vec<ShortcutChord> {
@@ -410,27 +504,37 @@ pub fn chords_for_action(
         .collect::<Vec<_>>();
 
     if chords.is_empty() {
-        vec![default_chord_for_action(action)]
+        vec![default_chord_for_action_on(platform, action)]
     } else {
         chords
     }
 }
 
-/// The built-in chord for an action. Defaults live in the portable namespace by construction,
-/// so no platform [`KeyNames`] is needed.
+/// The built-in Linux chord for an action. Defaults live in the portable namespace by
+/// construction, so no platform [`KeyNames`] is needed.
 pub fn default_chord_for_action(action: ShortcutAction) -> ShortcutChord {
-    parse_chord(action.default_shortcut(), 0, &PortableKeyNames)
+    default_chord_for_action_on(Platform::Linux, action)
+}
+
+/// The built-in chord for an action on a platform.
+pub fn default_chord_for_action_on(platform: Platform, action: ShortcutAction) -> ShortcutChord {
+    parse_chord(action.default_shortcut_on(platform), 0, &PortableKeyNames)
         .expect("default shortcuts should parse")
 }
 
-/// The full default binding table, one chord per action, in [`SHORTCUT_ACTIONS`] order.
+/// The full Linux default binding table, one chord per action, in [`SHORTCUT_ACTIONS`] order.
 pub fn default_bindings() -> Vec<ShortcutBinding> {
+    default_bindings_on(Platform::Linux)
+}
+
+/// A platform's full default binding table, in [`SHORTCUT_ACTIONS`] order.
+pub fn default_bindings_on(platform: Platform) -> Vec<ShortcutBinding> {
     SHORTCUT_ACTIONS
         .iter()
         .copied()
         .map(|action| ShortcutBinding {
             action,
-            chord: default_chord_for_action(action),
+            chord: default_chord_for_action_on(platform, action),
         })
         .collect()
 }
@@ -547,6 +651,7 @@ pub fn bindings_from_action_chords(rows: &[ActionChords]) -> Vec<ShortcutBinding
 
 /// Overrides in config order, one entry per parsed line.
 fn parse_config_overrides(
+    platform: Platform,
     text: &str,
     key_names: &dyn KeyNames,
 ) -> Result<Vec<(ShortcutAction, ShortcutChord)>, ShortcutConfigError> {
@@ -584,7 +689,14 @@ fn parse_config_overrides(
             ));
         }
 
-        overrides.push((action, parse_chord(shortcut, line_number, key_names)?));
+        let chord = parse_chord(shortcut, line_number, key_names)?;
+        if chord.modifiers.cmd && platform != Platform::MacOs {
+            return Err(config_error(
+                line_number,
+                "Cmd shortcuts are only available on macOS.",
+            ));
+        }
+        overrides.push((action, chord));
     }
 
     Ok(overrides)
@@ -1000,6 +1112,380 @@ play-pause=Ctrl+P
                     chord: portable_chord("F"),
                 },
             ]
+        );
+    }
+
+    fn cmd() -> ShortcutModifiers {
+        ShortcutModifiers {
+            cmd: true,
+            ..ShortcutModifiers::default()
+        }
+    }
+
+    fn mac_resolved(text: &str) -> Result<Vec<ShortcutBinding>, ShortcutConfigError> {
+        resolved_bindings_from_text_on(Platform::MacOs, text, &PortableKeyNames)
+    }
+
+    fn table_labels(bindings: &[ShortcutBinding]) -> Vec<(&'static str, String)> {
+        bindings
+            .iter()
+            .map(|binding| (binding.action.id(), binding.chord.label()))
+            .collect()
+    }
+
+    fn owned(table: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
+        table
+            .iter()
+            .map(|(id, label)| (*id, (*label).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn cmd_chord_round_trips_through_parse_format_and_serde() {
+        let chord = portable_chord("Cmd+O");
+        assert!(chord.matches("o", cmd()));
+        assert!(!chord.matches("o", no_mods()));
+        assert!(!chord.matches("o", ctrl()));
+        assert_eq!(chord.label(), "Cmd+O");
+        assert_eq!(portable_chord(&chord.label()), chord);
+        assert_eq!(portable_chord("command+o"), chord);
+
+        let json = serde_json::to_string(&chord).expect("chord serializes");
+        assert_eq!(json, r#""Cmd+O""#);
+        assert_eq!(
+            serde_json::from_str::<ShortcutChord>(&json).expect("chord parses"),
+            chord
+        );
+
+        // Modifier order in the text does not matter; the label uses the macOS menu order.
+        let all = portable_chord("Cmd+Shift+Alt+Ctrl+F");
+        assert_eq!(all.label(), "Ctrl+Alt+Shift+Cmd+F");
+        assert_eq!(portable_chord("Cmd+Shift+O").label(), "Shift+Cmd+O");
+        assert_eq!(
+            serde_json::from_str::<ShortcutChord>(r#""Ctrl+Alt+Shift+Cmd+F""#)
+                .expect("chord parses"),
+            all
+        );
+    }
+
+    #[test]
+    fn shortcut_modifiers_serde_carries_cmd_and_defaults_missing_fields() {
+        assert_eq!(
+            serde_json::to_value(cmd()).expect("modifiers serialize"),
+            serde_json::json!({ "ctrl": false, "alt": false, "shift": false, "cmd": true })
+        );
+        assert_eq!(
+            serde_json::from_str::<ShortcutModifiers>(r#"{"cmd":true}"#).expect("modifiers parse"),
+            cmd()
+        );
+        assert_eq!(
+            serde_json::from_str::<ShortcutModifiers>("{}").expect("modifiers parse"),
+            no_mods()
+        );
+    }
+
+    #[test]
+    fn serialized_chords_with_platform_key_names_read_back_equal() {
+        for (key, modifiers) in [
+            ("F1", cmd()),
+            ("Return", no_mods()),
+            ("Page_Up", ctrl()),
+            ("comma", cmd()),
+            ("space", shift()),
+        ] {
+            let chord = chord_from_captured_key(Some(key), modifiers).expect("chord captures");
+            let json = serde_json::to_string(&chord).expect("chord serializes");
+            assert_eq!(
+                serde_json::from_str::<ShortcutChord>(&json).expect("chord parses"),
+                chord,
+                "{json}"
+            );
+        }
+        assert!(serde_json::from_str::<ShortcutChord>(r#""Cmd+""#).is_err());
+    }
+
+    #[test]
+    fn linux_default_table_is_unchanged() {
+        let golden = owned(&[
+            ("play-pause", "Space"),
+            ("seek-back", "Left"),
+            ("seek-forward", "Right"),
+            ("frame-forward", "."),
+            ("frame-back", ","),
+            ("previous-item", "PageUp"),
+            ("next-item", "PageDown"),
+            ("volume-down", "Down"),
+            ("volume-up", "Up"),
+            ("mute", "M"),
+            ("open-file", "O"),
+            ("add-subtitle", "S"),
+            ("open-url", "U"),
+            ("close-media", "X"),
+            ("save-screenshot", "C"),
+            ("copy-frame", "Shift+C"),
+            ("media-info", "I"),
+            ("go-to-time", "J"),
+            ("ab-loop", "L"),
+            ("subtitle-delay-forward", "Z"),
+            ("subtitle-delay-back", "Shift+Z"),
+            ("subtitle-size-down", "["),
+            ("subtitle-size-up", "]"),
+            ("subtitle-previous-cue", "Ctrl+Left"),
+            ("subtitle-next-cue", "Ctrl+Right"),
+            ("fullscreen", "F"),
+            ("escape-fullscreen", "Escape"),
+            ("open-settings", "Ctrl+,"),
+        ]);
+
+        assert_eq!(table_labels(&default_bindings()), golden);
+        assert_eq!(default_bindings_on(Platform::Linux), default_bindings());
+        for action in SHORTCUT_ACTIONS {
+            assert_eq!(
+                action.default_shortcut_on(Platform::Linux),
+                action.default_shortcut()
+            );
+        }
+    }
+
+    #[test]
+    fn macos_default_table_uses_cmd_for_menu_commands() {
+        let golden = owned(&[
+            ("play-pause", "Space"),
+            ("seek-back", "Left"),
+            ("seek-forward", "Right"),
+            ("frame-forward", "."),
+            ("frame-back", ","),
+            ("previous-item", "PageUp"),
+            ("next-item", "PageDown"),
+            ("volume-down", "Down"),
+            ("volume-up", "Up"),
+            ("mute", "M"),
+            ("open-file", "Cmd+O"),
+            ("add-subtitle", "S"),
+            ("open-url", "Shift+Cmd+O"),
+            ("close-media", "X"),
+            ("save-screenshot", "C"),
+            ("copy-frame", "Shift+C"),
+            ("media-info", "Cmd+I"),
+            ("go-to-time", "J"),
+            ("ab-loop", "L"),
+            ("subtitle-delay-forward", "Z"),
+            ("subtitle-delay-back", "Shift+Z"),
+            ("subtitle-size-down", "["),
+            ("subtitle-size-up", "]"),
+            ("subtitle-previous-cue", "Cmd+Left"),
+            ("subtitle-next-cue", "Cmd+Right"),
+            ("fullscreen", "F"),
+            ("escape-fullscreen", "Escape"),
+            ("open-settings", "Cmd+,"),
+        ]);
+
+        assert_eq!(table_labels(&default_bindings_on(Platform::MacOs)), golden);
+    }
+
+    #[test]
+    fn macos_default_table_has_no_conflicts() {
+        let defaults = default_bindings_on(Platform::MacOs);
+
+        assert_eq!(validate_conflicts(&defaults), Ok(()));
+        assert_eq!(mac_resolved(""), Ok(defaults));
+    }
+
+    #[test]
+    fn macos_defaults_move_every_linux_ctrl_chord_to_cmd() {
+        for action in SHORTCUT_ACTIONS {
+            let linux = default_chord_for_action(*action);
+            let mac = default_chord_for_action_on(Platform::MacOs, *action);
+
+            assert!(!mac.modifiers.ctrl, "{} keeps Ctrl on macOS", action.id());
+            if linux.modifiers.ctrl {
+                assert_eq!(mac.key, linux.key, "{}", action.id());
+                assert_eq!(
+                    mac.modifiers,
+                    ShortcutModifiers {
+                        ctrl: false,
+                        cmd: true,
+                        ..linux.modifiers
+                    },
+                    "{}",
+                    action.id()
+                );
+            }
+            if !mac.modifiers.cmd {
+                assert_eq!(mac, linux, "{} is an in-window key", action.id());
+            }
+        }
+    }
+
+    #[test]
+    fn macos_defaults_keep_the_in_window_keys() {
+        let linux = default_bindings();
+        let mac = default_bindings_on(Platform::MacOs);
+        for (key, modifiers) in [
+            ("space", no_mods()),
+            ("Left", no_mods()),
+            ("Right", no_mods()),
+            ("Up", no_mods()),
+            ("Down", no_mods()),
+            ("f", no_mods()),
+            ("m", no_mods()),
+            ("comma", no_mods()),
+            ("period", no_mods()),
+            ("z", no_mods()),
+            ("z", shift()),
+            ("bracketleft", no_mods()),
+            ("bracketright", no_mods()),
+        ] {
+            let action = action_for_key(&linux, key, modifiers);
+            assert!(action.is_some(), "{key} is bound on Linux");
+            assert_eq!(action_for_key(&mac, key, modifiers), action, "{key}");
+        }
+    }
+
+    #[test]
+    fn macos_defaults_leave_system_chords_alone() {
+        let defaults = default_bindings_on(Platform::MacOs);
+        for reserved in [
+            "Cmd+Q",
+            "Cmd+H",
+            "Alt+Cmd+H",
+            "Cmd+M",
+            "Cmd+W",
+            "Cmd+Tab",
+            "Cmd+grave",
+            "Cmd+Space",
+            "Ctrl+Space",
+            "Ctrl+Cmd+F",
+            "Ctrl+Cmd+Q",
+            "Shift+Cmd+3",
+            "Shift+Cmd+4",
+            "Shift+Cmd+5",
+            "Ctrl+Left",
+            "Ctrl+Right",
+            "Ctrl+Up",
+            "Ctrl+Down",
+            "Cmd+A",
+            "Cmd+C",
+            "Cmd+V",
+            "Cmd+X",
+            "Cmd+Z",
+            "Shift+Cmd+Z",
+        ] {
+            let chord =
+                parse_chord(reserved, 0, &SerializedKeyNames).expect("reserved chord parses");
+            assert!(
+                !defaults.iter().any(|binding| binding.chord == chord),
+                "a macOS default takes the system chord {reserved}"
+            );
+        }
+    }
+
+    #[test]
+    fn macos_dispatch_tells_cmd_chords_from_plain_keys() {
+        let bindings = default_bindings_on(Platform::MacOs);
+
+        assert_eq!(
+            action_for_key(&bindings, "comma", cmd()),
+            Some(ShortcutAction::OpenSettings)
+        );
+        assert_eq!(
+            action_for_key(&bindings, "comma", no_mods()),
+            Some(ShortcutAction::FrameBack)
+        );
+        assert_eq!(
+            action_for_key(&bindings, "O", cmd()),
+            Some(ShortcutAction::OpenFile)
+        );
+        assert_eq!(
+            action_for_key(
+                &bindings,
+                "o",
+                ShortcutModifiers {
+                    shift: true,
+                    cmd: true,
+                    ..ShortcutModifiers::default()
+                }
+            ),
+            Some(ShortcutAction::OpenUrl)
+        );
+        assert_eq!(action_for_key(&bindings, "o", ctrl()), None);
+        assert_eq!(action_for_key(&bindings, "o", no_mods()), None);
+        assert_eq!(
+            chords_for_action_on(Platform::MacOs, &[], ShortcutAction::OpenFile),
+            vec![portable_chord("Cmd+O")]
+        );
+    }
+
+    #[test]
+    fn conflict_checks_include_cmd() {
+        // Cmd+O and plain O are different chords...
+        let bindings = mac_resolved("play-pause=O").expect("plain O is free on macOS");
+        assert_eq!(
+            action_for_key(&bindings, "o", no_mods()),
+            Some(ShortcutAction::PlayPause)
+        );
+        assert_eq!(
+            action_for_key(&bindings, "o", cmd()),
+            Some(ShortcutAction::OpenFile)
+        );
+
+        // ...but two actions on one Cmd chord conflict.
+        let error = mac_resolved("play-pause=Cmd+O").expect_err("Cmd+O is taken");
+        assert_eq!(error.line, 0);
+        assert_eq!(
+            error.message,
+            "play-pause conflicts with open-file on Cmd+O."
+        );
+
+        let rows = vec![ActionChords {
+            action: ShortcutAction::OpenFile,
+            primary: portable_chord("Cmd+O"),
+            secondary: None,
+        }];
+        assert_eq!(
+            slot_conflict(
+                &rows,
+                ShortcutAction::PlayPause,
+                ShortcutSlot::Primary,
+                &portable_chord("Cmd+O"),
+            ),
+            Some(ShortcutAction::OpenFile)
+        );
+        assert_eq!(
+            slot_conflict(
+                &rows,
+                ShortcutAction::PlayPause,
+                ShortcutSlot::Primary,
+                &portable_chord("O"),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn linux_config_rejects_cmd_chords() {
+        let error = resolved_bindings_from_text("# custom\nopen-file=Cmd+O", &PortableKeyNames)
+            .expect_err("Cmd cannot fire on Linux");
+
+        assert_eq!(error.line, 2);
+        assert!(error.message.contains("macOS"), "{}", error.message);
+    }
+
+    #[test]
+    fn macos_config_text_serializes_against_the_macos_defaults() {
+        let defaults = default_bindings_on(Platform::MacOs);
+        assert_eq!(config_text_from_bindings_on(Platform::MacOs, &defaults), "");
+
+        let custom = mac_resolved("open-file=O\nopen-url=Cmd+L").expect("custom chords resolve");
+        let text = config_text_from_bindings_on(Platform::MacOs, &custom);
+        assert_eq!(text, "open-file=O\nopen-url=Cmd+L");
+        assert_eq!(mac_resolved(&text), Ok(custom));
+
+        // The Linux table differs from the macOS one exactly where the platforms differ.
+        assert_eq!(
+            config_text_from_bindings_on(Platform::MacOs, &default_bindings()),
+            "open-file=O\nopen-url=U\nmedia-info=I\nsubtitle-previous-cue=Ctrl+Left\n\
+             subtitle-next-cue=Ctrl+Right\nopen-settings=Ctrl+,"
         );
     }
 }

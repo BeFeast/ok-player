@@ -355,6 +355,12 @@ directly unit-tested, and renders it in the GTK shell; cache and network are def
   the next parse. A name-based chord cannot represent such a key, so capture now rejects it
   with the same "Press a non-modifier key." message. This is the one intentional behavior
   change of the extraction.
+- **Per-platform defaults (#875).** The unsuffixed functions keep the Linux table, which the
+  Windows projection mirrors. The `_on(Platform)` variants add a macOS table and a `Cmd`
+  modifier (`Ctrl+Alt+Shift+Cmd+Key`): Linux Ctrl chords become Cmd chords, Open File, Open URL
+  and Media Info take `Cmd+O`, `Shift+Cmd+O` and `Cmd+I`, and every in-window key stays. Linux
+  config text rejects a Cmd chord, because the GTK shell masks Super out and the binding could
+  never fire.
 
 ## OSC clock → `okp_core::time_code::format_clock` / subtitle delay → `okp_core::subtitle_delay` (Linux shell extraction)
 
