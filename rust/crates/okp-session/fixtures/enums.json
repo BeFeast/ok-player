@@ -6,7 +6,9 @@
     "not_finite",
     "malformed",
     "unsupported_schema_version",
-    "invalid_argument"
+    "invalid_argument",
+    "unknown_command",
+    "unavailable"
   ],
   "error_kind": ["load_failed", "command_failed", "engine"],
   "track_kind": ["audio", "subtitle"],
@@ -17,5 +19,14 @@
     "ignore",
     "schedule_play_pause",
     "cancel_play_pause_and_toggle_fullscreen"
-  ]
+  ],
+  "command_group": [
+    "playback_navigation",
+    "tracks_subtitles",
+    "view_window",
+    "media_file",
+    "tools",
+    "settings"
+  ],
+  "command_menu": ["top_level", "video", "playback", "window", "tools_advanced"]
 }

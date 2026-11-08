@@ -7,14 +7,15 @@ use std::fmt::Debug;
 use std::fs;
 use std::path::PathBuf;
 
-use okp_core::app::AppIdentity;
-use okp_session::SCHEMA_VERSION;
+use okp_core::app::{AppIdentity, Platform};
 use okp_session::protocol::{
-    Chapter, Command, CommandEnvelope, DispatchReply, DispatchResult, EndReason, ErrorKind, Event,
-    EventBatch, MediaSource, MpvOption, Query, QueryEnvelope, QueryReply, QueryResult,
-    RejectReason, SeekMode, SeekPrecision, SessionConfig, SessionSnapshot, SnapshotChange,
-    SourceKind, Status, Track, TrackKind, VideoClickIntent, VideoGeometry, WindowRect, WindowSize,
+    Chapter, Command, CommandEnvelope, CommandGroup, CommandMenu, DispatchReply, DispatchResult,
+    EndReason, ErrorKind, Event, EventBatch, MediaSource, MpvOption, Query, QueryEnvelope,
+    QueryReply, QueryResult, RejectReason, SeekMode, SeekPrecision, SessionConfig, SessionSnapshot,
+    SnapshotChange, SourceKind, Status, Track, TrackKind, VideoClickIntent, VideoGeometry,
+    WindowRect, WindowSize,
 };
+use okp_session::{CommandRegistry, SCHEMA_VERSION, WindowState};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -45,10 +46,12 @@ const CHECKED: &[&str] = &[
     "command-select-track.json",
     "command-select-track-off.json",
     "command-set-subtitle-delay.json",
+    "command-invoke-command.json",
     "reply-accepted.json",
     "reply-no-op.json",
     "reply-rejected.json",
     "reply-failed.json",
+    "reply-perform.json",
     "query-snapshot.json",
     "query-reply-snapshot.json",
     "query-reply-rejected.json",
@@ -57,6 +60,10 @@ const CHECKED: &[&str] = &[
     "query-reply-window-fit.json",
     "query-video-click.json",
     "query-reply-video-click.json",
+    "query-command-registry.json",
+    "query-reply-command-registry.json",
+    "query-shortcut-table.json",
+    "query-reply-shortcut-table.json",
     "events-batch.json",
     "events-empty.json",
     "enums.json",
@@ -117,6 +124,7 @@ fn the_config_matches_its_fixture() {
                 name: "ao".to_owned(),
                 value: "coreaudio".to_owned(),
             }],
+            shell_commands: vec!["open-file".to_owned(), "fullscreen".to_owned()],
         },
     );
 }
@@ -199,6 +207,12 @@ fn every_command_matches_its_fixture() {
         "command-set-subtitle-delay.json",
         command(Command::SetSubtitleDelay { seconds: -0.25 }),
     );
+    golden(
+        "command-invoke-command.json",
+        command(Command::InvokeCommand {
+            id: "mute".to_owned(),
+        }),
+    );
 }
 
 #[test]
@@ -222,6 +236,7 @@ fn every_reply_matches_its_fixture() {
             message: "error running command".to_owned(),
         }),
     );
+    golden("reply-perform.json", reply(DispatchResult::Perform {}));
 }
 
 #[test]
@@ -388,6 +403,102 @@ fn the_window_queries_and_their_replies_match_their_fixtures() {
     );
 }
 
+/// The macOS shell of the registry fixtures: it opens files and folders and owns
+/// the window and the track and speed menus.
+fn macos_registry() -> CommandRegistry {
+    let shell_commands = [
+        "open-file",
+        "open-folder",
+        "fullscreen",
+        "escape-fullscreen",
+        "fit-window-to-media",
+        "subtitles",
+        "audio-track",
+        "playback-speed",
+    ]
+    .map(str::to_owned);
+    CommandRegistry::new(Platform::MacOs, &shell_commands).expect("known command ids")
+}
+
+#[test]
+fn the_command_registry_query_and_its_reply_match_their_fixtures() {
+    golden(
+        "query-command-registry.json",
+        QueryEnvelope {
+            schema_version: SCHEMA_VERSION,
+            query: Query::CommandRegistry {
+                fullscreen: true,
+                mini_player: false,
+            },
+        },
+    );
+    // A muted local film playing fullscreen: the whole registry as the session
+    // resolves it, with the macOS chords.
+    let snapshot = SessionSnapshot {
+        status: Status::Playing,
+        source: Some(local("/Users/example/Movies/film.mkv")),
+        time_pos: Some(12.5),
+        duration: Some(5400.0),
+        volume: Some(100.0),
+        mute: true,
+        speed: Some(1.0),
+        video: Some(VideoGeometry {
+            width: 1920,
+            height: 800,
+            display_aspect: 2.4,
+        }),
+        ..SessionSnapshot::default()
+    };
+    golden(
+        "query-reply-command-registry.json",
+        QueryReply {
+            schema_version: SCHEMA_VERSION,
+            result: QueryResult::CommandRegistry {
+                commands: macos_registry().resolve(
+                    &snapshot,
+                    WindowState {
+                        fullscreen: true,
+                        mini_player: false,
+                    },
+                ),
+            },
+        },
+    );
+}
+
+#[test]
+fn the_shortcut_table_query_and_its_reply_match_their_fixtures() {
+    golden(
+        "query-shortcut-table.json",
+        QueryEnvelope {
+            schema_version: SCHEMA_VERSION,
+            query: Query::ShortcutTable {},
+        },
+    );
+    golden(
+        "query-reply-shortcut-table.json",
+        QueryReply {
+            schema_version: SCHEMA_VERSION,
+            result: QueryResult::ShortcutTable {
+                shortcuts: macos_registry().shortcut_table(),
+            },
+        },
+    );
+}
+
+#[test]
+fn a_registry_query_without_window_state_decodes() {
+    let query: QueryEnvelope =
+        serde_json::from_str(r#"{"schema_version":1,"query":{"command_registry":{}}}"#).unwrap();
+    assert_eq!(
+        query.query,
+        Query::CommandRegistry {
+            fullscreen: false,
+            mini_player: false,
+        }
+    );
+}
+
 /// Exhaustive on purpose: a new change variant does not compile until the batch
 /// fixture covers it.
 fn change_name(change: &SnapshotChange) -> &'static str {
@@ -493,6 +604,8 @@ struct Enums {
     seek_mode: Vec<SeekMode>,
     seek_precision: Vec<SeekPrecision>,
     video_click_intent: Vec<VideoClickIntent>,
+    command_group: Vec<CommandGroup>,
+    command_menu: Vec<CommandMenu>,
 }
 
 #[test]
@@ -533,6 +646,8 @@ fn every_enum_value_matches_the_enums_fixture() {
         RejectReason::Malformed,
         RejectReason::UnsupportedSchemaVersion,
         RejectReason::InvalidArgument,
+        RejectReason::UnknownCommand,
+        RejectReason::Unavailable,
     ];
     for value in &reject_reason {
         match value {
@@ -540,7 +655,43 @@ fn every_enum_value_matches_the_enums_fixture() {
             | RejectReason::NotFinite
             | RejectReason::Malformed
             | RejectReason::UnsupportedSchemaVersion
-            | RejectReason::InvalidArgument => {}
+            | RejectReason::InvalidArgument
+            | RejectReason::UnknownCommand
+            | RejectReason::Unavailable => {}
+        }
+    }
+    let command_group = vec![
+        CommandGroup::PlaybackNavigation,
+        CommandGroup::TracksSubtitles,
+        CommandGroup::ViewWindow,
+        CommandGroup::MediaFile,
+        CommandGroup::Tools,
+        CommandGroup::Settings,
+    ];
+    for value in &command_group {
+        match value {
+            CommandGroup::PlaybackNavigation
+            | CommandGroup::TracksSubtitles
+            | CommandGroup::ViewWindow
+            | CommandGroup::MediaFile
+            | CommandGroup::Tools
+            | CommandGroup::Settings => {}
+        }
+    }
+    let command_menu = vec![
+        CommandMenu::TopLevel,
+        CommandMenu::Video,
+        CommandMenu::Playback,
+        CommandMenu::Window,
+        CommandMenu::ToolsAdvanced,
+    ];
+    for value in &command_menu {
+        match value {
+            CommandMenu::TopLevel
+            | CommandMenu::Video
+            | CommandMenu::Playback
+            | CommandMenu::Window
+            | CommandMenu::ToolsAdvanced => {}
         }
     }
     let error_kind = vec![
@@ -577,6 +728,8 @@ fn every_enum_value_matches_the_enums_fixture() {
             seek_mode: vec![SeekMode::Absolute, SeekMode::Relative],
             seek_precision: vec![SeekPrecision::Exact, SeekPrecision::Keyframe],
             video_click_intent,
+            command_group,
+            command_menu,
         },
     );
 }

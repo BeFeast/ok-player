@@ -50,6 +50,10 @@ struct SessionConfig: Codable, Equatable {
     var cacheDir: String
     var hwdec: String?
     var mpvOptions: [MpvOption] = []
+    /// The registry commands this shell carries out itself (dialogs, window and
+    /// clipboard actions). A command neither the session nor the shell carries out
+    /// is reported unavailable.
+    var shellCommands: [String] = []
 }
 
 enum SourceKind: String, Codable, CaseIterable {
@@ -86,6 +90,8 @@ enum Command: Codable, Equatable {
     /// `id: nil` turns that kind of track off.
     case selectTrack(kind: TrackKind, id: Int64?)
     case setSubtitleDelay(seconds: Double)
+    /// Run a command of the registry (`Query.commandRegistry`) by its id.
+    case invokeCommand(id: String)
 }
 
 struct CommandEnvelope: Codable, Equatable {
@@ -99,6 +105,8 @@ enum RejectReason: String, Codable, CaseIterable {
     case malformed
     case unsupportedSchemaVersion = "unsupported_schema_version"
     case invalidArgument = "invalid_argument"
+    case unknownCommand = "unknown_command"
+    case unavailable
 }
 
 enum DispatchResult: Codable, Equatable {
@@ -106,6 +114,9 @@ enum DispatchResult: Codable, Equatable {
     case noOp
     case rejected(reason: RejectReason, message: String)
     case failed(requestId: UInt64, message: String)
+    /// An invoked registry command the shell carries out itself; nothing reached
+    /// the engine.
+    case perform
 }
 
 struct DispatchReply: Codable, Equatable {
@@ -120,6 +131,11 @@ enum Query: Codable, Equatable {
                    chrome: WindowSize?)
     case initialWindowFit(backingScale: Double, visibleFrame: WindowRect, minSize: WindowSize?, chrome: WindowSize?)
     case videoClick(pressCount: Int32)
+    /// Every registry command, resolved against the session state and the window
+    /// state only the shell knows. Query it when a menu opens.
+    case commandRegistry(fullscreen: Bool = false, miniPlayer: Bool = false)
+    /// Every bindable action with its chords on the config's platform.
+    case shortcutTable
 }
 
 struct QueryEnvelope: Codable, Equatable {
@@ -131,12 +147,71 @@ enum QueryResult: Codable, Equatable {
     case snapshot(snapshot: SessionSnapshot)
     case windowFit(frame: WindowRect?)
     case videoClick(intent: VideoClickIntent)
+    case commandRegistry(commands: [RegistryCommand])
+    case shortcutTable(shortcuts: [ShortcutRow])
     case rejected(reason: RejectReason, message: String)
 }
 
 struct QueryReply: Codable, Equatable {
     var schemaVersion: Int
     var result: QueryResult
+}
+
+enum CommandGroup: String, Codable, CaseIterable {
+    case playbackNavigation = "playback_navigation"
+    case tracksSubtitles = "tracks_subtitles"
+    case viewWindow = "view_window"
+    case mediaFile = "media_file"
+    case tools, settings
+}
+
+/// A place in the player command menu: its first level or one of its pages.
+enum CommandMenu: String, Codable, CaseIterable {
+    case topLevel = "top_level"
+    case video, playback, window
+    case toolsAdvanced = "tools_advanced"
+}
+
+struct ShortcutModifiers: Codable, Equatable {
+    var ctrl = false
+    var alt = false
+    var shift = false
+    /// The Command key.
+    var cmd = false
+}
+
+/// One key plus modifiers.
+struct ShortcutChord: Codable, Equatable {
+    /// The canonical key name (`space`, `comma`, `Left`, `o`).
+    var key: String
+    var modifiers: ShortcutModifiers
+    /// The display text (`Shift+Cmd+O`).
+    var label: String
+}
+
+/// One registry command, resolved against the state at the time of the query.
+struct RegistryCommand: Codable, Equatable {
+    /// What `Command.invokeCommand` takes.
+    var id: String
+    var group: CommandGroup
+    /// `nil` for a keyboard-only command.
+    var menu: CommandMenu?
+    var label: String
+    /// Whether the session or this shell can run it at all; hide it when not.
+    var available: Bool
+    var enabled: Bool
+    var checked: Bool
+    /// The primary chord bound to it on this platform.
+    var shortcut: ShortcutChord?
+}
+
+/// One bindable action of the shortcut table.
+struct ShortcutRow: Codable, Equatable {
+    var action: String
+    /// The registry id to invoke.
+    var command: String
+    var primary: ShortcutChord
+    var secondary: ShortcutChord?
 }
 
 enum Status: String, Codable, CaseIterable {
