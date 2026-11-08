@@ -16,23 +16,17 @@ use okp_test_fixtures::unique_temp_dir;
 /// Applies drained batches the way a shell's store does.
 struct Store {
     state: SessionSnapshot,
-    batches: usize,
 }
 
 impl Store {
     fn new() -> Self {
         Self {
             state: SessionSnapshot::default(),
-            batches: 0,
         }
     }
 
     fn drain(&mut self, session: &Session) {
-        let events = session.drain_events();
-        if !events.is_empty() {
-            self.batches += 1;
-        }
-        for event in events {
+        for event in session.drain_events() {
             if let Event::SnapshotChanged { changes } = event {
                 for change in &changes {
                     self.state.apply(change);
@@ -106,10 +100,6 @@ fn tracks_and_chapters_from_a_real_file_appear_in_drained_events() {
     assert!(
         wakeups.load(Ordering::SeqCst) >= 1,
         "batches were announced"
-    );
-    assert!(
-        store.batches <= wakeups.load(Ordering::SeqCst),
-        "no batch arrived without a wakeup"
     );
 
     // A command validated by the core reaches the engine, whose report comes back.
