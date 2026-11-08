@@ -36,7 +36,8 @@ make_build() {
 PLIST
   printf '%s\n' "$app"
 }
-requirement() { codesign -d -r- "$1" 2>&1 | sed -n 's/^designated => //p'; }
+# An ad-hoc signature has only the implicit requirement, printed as "# designated => cdhash ...".
+requirement() { codesign -d -r- "$1" 2>&1 | sed -n 's/^#* *designated => //p'; }
 
 # Without a secret the build signs ad hoc, and says so.
 output="$(env -u OKP_MACOS_SIGNING_P12_BASE64 -u OKP_MACOS_SIGNING_P12_PASSWORD bash "$identity_script" import "$work/none")"

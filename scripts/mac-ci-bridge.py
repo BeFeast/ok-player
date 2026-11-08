@@ -449,6 +449,8 @@ def main(argv):
     run_parser.add_argument("--forgejo-api", help="Forgejo API base URL, ending in /api/v1")
     run_parser.add_argument("--forgejo-repo", default="BeFeast/ok-player")
     args = parser.parse_args(argv[1:])
+    # A CI log should show progress while the bridge waits, not only when it exits.
+    sys.stdout.reconfigure(line_buffering=True)
     if args.command == "scope":
         return scope(args)
     args.remote = args.remote or f"https://github.com/{args.github_repo}.git"
