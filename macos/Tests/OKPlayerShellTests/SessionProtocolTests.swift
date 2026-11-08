@@ -66,6 +66,24 @@ final class SessionProtocolTests: XCTestCase {
         "command-toggle-pause.json": .togglePause,
         "history/command-remove.json": .history(action: .remove(source: MediaSource(kind: .local, location: "/Users/example/Movies/film.mkv"))),
         "history/command-set-private.json": .history(action: .setPrivate(enabled: true)),
+        "playlist-command-open.json": .playlist(action: .open(sources: [
+            MediaSource(kind: .local, location: "/Users/example/Movies/Show/Episode 1.mkv"),
+            MediaSource(kind: .local, location: "/Users/example/Movies/Extras"),
+            MediaSource(kind: .local, location: "/Users/example/Music/queue.m3u8"),
+            MediaSource(kind: .url, location: "https://example.com/clip.mp4"),
+        ])),
+        "playlist-command-next.json": .playlist(action: .next),
+        "playlist-command-previous.json": .playlist(action: .previous),
+        "playlist-command-jump.json": .playlist(action: .jump(index: 3)),
+        "playlist-command-queue.json": .playlist(action: .queue(
+            sources: [MediaSource(kind: .local, location: "/Users/example/Movies/next.mkv")], mode: .playNext)),
+        "playlist-command-play-next.json": .playlist(action: .playNext(index: 4)),
+        "playlist-command-move.json": .playlist(action: .move(from: 2, to: 0)),
+        "playlist-command-remove.json": .playlist(action: .remove(index: 1)),
+        "playlist-command-clear-queue.json": .playlist(action: .clearQueue),
+        "playlist-command-set-repeat.json": .playlist(action: .setRepeat(mode: .one)),
+        "playlist-command-set-shuffle.json": .playlist(action: .setShuffle(enabled: true, seed: 42)),
+        "playlist-command-set-shuffle-unseeded.json": .playlist(action: .setShuffle(enabled: false)),
     ]
 
     static let replies: [String: DispatchResult] = [
@@ -77,6 +95,7 @@ final class SessionProtocolTests: XCTestCase {
         "history/reply-done.json": .history(result: .done),
         "history/reply-unchanged.json": .history(result: .unchanged),
         "history/reply-failed.json": .history(result: .failed(message: "the history could not be saved: Permission denied")),
+        "playlist-reply-applied.json": .applied,
     ]
 
     static let queries: [String: Query] = [
@@ -85,6 +104,7 @@ final class SessionProtocolTests: XCTestCase {
         "query-shortcut-table.json": .shortcutTable,
         "history/query-page.json": .history(query: .page(search: "severance", utcOffsetSeconds: -18000)),
         "history/query-welcome-shelf.json": .history(query: .welcomeShelf(limit: 8, utcOffsetSeconds: 7200)),
+        "playlist-query.json": .playlist,
     ]
 
     func testEveryFixtureIsCoveredHere() throws {
@@ -95,6 +115,7 @@ final class SessionProtocolTests: XCTestCase {
             "query-reply-command-registry.json", "query-reply-shortcut-table.json",
             "history/enums.json", "history/events.json",
             "history/query-reply-page.json", "history/query-reply-welcome-shelf.json",
+            "playlist-enums.json", "playlist-events.json", "playlist-query-reply.json", "playlist-query-reply-empty.json",
         ])
         XCTAssertFalse(names.isEmpty, "no fixtures found in \(GoldenFixtures.directory.path)")
         XCTAssertEqual(Set(names), covered, "a fixture was added or removed without a Swift test")
@@ -205,6 +226,40 @@ final class SessionProtocolTests: XCTestCase {
         XCTAssertFalse(store.shutDown)
     }
 
+    func testThePlaylistRepliesDecodeEveryField() throws {
+        let replies: [String: PlaylistState] = [
+            "playlist-query-reply.json": PlaylistState(
+                items: [
+                    PlaylistEntry(source: MediaSource(kind: .local, location: "/Users/example/Movies/Show/Episode 1.mkv"),
+                                  title: "Episode 1.mkv"),
+                    PlaylistEntry(source: MediaSource(kind: .local, location: "/Users/example/Movies/Show/Episode 2.mkv"),
+                                  title: "Episode 2.mkv"),
+                    PlaylistEntry(source: MediaSource(kind: .url, location: "https://example.com/clip.mp4?token=a"),
+                                  title: "clip.mp4"),
+                ],
+                currentIndex: 1, repeat: .all, shuffle: true, scanning: false),
+            "playlist-query-reply-empty.json": PlaylistState(),
+        ]
+        for (name, playlist) in replies {
+            let reply = try GoldenFixtures.decode(QueryReply.self, name)
+            XCTAssertEqual(reply.result, .playlist(playlist: playlist), name)
+            XCTAssertEqual(try GoldenFixtures.encodedObject(reply), try GoldenFixtures.object(name), name)
+        }
+    }
+
+    func testAPlaylistEventFollowsTheSnapshotChangesAndLeavesTheSnapshotAlone() throws {
+        let batch = try GoldenFixtures.decode(EventBatch.self, "playlist-events.json")
+        let playlist = PlaylistState(
+            items: [PlaylistEntry(source: MediaSource(kind: .local, location: "/Users/example/Movies/Show/Episode 2.mkv"),
+                                  title: "Episode 2.mkv")],
+            currentIndex: 0, repeat: .off, shuffle: false, scanning: true)
+        XCTAssertEqual(batch.events, [.snapshotChanged(changes: [.status(value: .opening)]),
+                                      .playlistChanged(playlist: playlist)])
+        let store = SessionStore()
+        store.apply(batch)
+        XCTAssertEqual(store.snapshot, SessionSnapshot(status: .opening))
+    }
+
     func testTheSnapshotReplyDecodesEveryField() throws {
         let reply = try GoldenFixtures.decode(QueryReply.self, "query-reply-snapshot.json")
         let expected = SessionSnapshot(
@@ -259,6 +314,28 @@ final class SessionProtocolTests: XCTestCase {
         XCTAssertTrue(store.shutDown)
     }
 
+    func testAnUnknownEventIsSkippedAndTheRestOfTheBatchKept() throws {
+        let json = #"""
+            {"schema_version": 1, "events": [
+              {"snapshot_changed": {"changes": [{"mute": {"value": true}}]}},
+              {"a_later_event": {"anything": [1, 2]}},
+              {"error": {"kind": "engine", "message": "gone", "request_id": null}},
+              {"shutdown": {}}
+            ]}
+            """#
+        let batch = try SessionJSON.makeDecoder().decode(EventBatch.self, from: Data(json.utf8))
+        XCTAssertEqual(batch.events, [
+            .snapshotChanged(changes: [.mute(value: true)]),
+            .error(kind: .engine, message: "gone", requestId: nil),
+            .shutdown,
+        ])
+    }
+
+    func testAKnownEventThatDoesNotDecodeFailsTheBatch() {
+        let json = #"{"schema_version": 1, "events": [{"shutdown": {}}, {"error": {"kind": "engine"}}]}"#
+        XCTAssertThrowsError(try SessionJSON.makeDecoder().decode(EventBatch.self, from: Data(json.utf8)))
+    }
+
     func testAnEmptyBatchChangesNothing() throws {
         let batch = try GoldenFixtures.decode(EventBatch.self, "events-empty.json")
         XCTAssertEqual(batch, EventBatch(schemaVersion: 1, events: []))
@@ -299,6 +376,14 @@ final class SessionProtocolTests: XCTestCase {
         XCTAssertEqual(lists, [
             "history_state": HistoryState.allCases.map(\.rawValue),
             "history_bucket": HistoryBucket.allCases.map(\.rawValue),
+        ])
+    }
+
+    func testEveryPlaylistEnumValueMatchesTheRustList() throws {
+        let lists = try XCTUnwrap(JSONSerialization.jsonObject(with: GoldenFixtures.data("playlist-enums.json")) as? [String: [String]])
+        XCTAssertEqual(lists, [
+            "repeat_mode": RepeatMode.allCases.map(\.rawValue),
+            "queue_mode": QueueMode.allCases.map(\.rawValue),
         ])
     }
 }
