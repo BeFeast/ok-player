@@ -39,7 +39,7 @@
                 <!-- Shared rail-item container style for BOTH the main nav list and the About footer list.
                      Replaces the stock WinUI selection visual with the design's treatment: an accent-soft
                      fill, a full-height 3px accent left bar, and accent SemiBold label/icon — all driven off
-                     the Ok* accent brushes (theme + System/teal accent aware), never the OS accent. -->
+                     the Ok* accent brushes (theme + System/app accent aware), never the OS accent. -->
                 <Style x:Key="OkRailItemStyle" TargetType="ListViewItem">
                     <Setter Property="Background" Value="Transparent" />
                     <Setter Property="Foreground" Value="{ThemeResource OkRailTextBrush}" />
@@ -229,11 +229,11 @@
                                     <TextBlock Text="System accent" FontSize="12.5" VerticalAlignment="Center" />
                                 </StackPanel>
                             </Button>
-                            <Button x:Name="AccentTealBtn" Click="OnAccentTeal" CornerRadius="8" Padding="10,12"
+                            <Button x:Name="AccentBrandBtn" Click="OnAccentBrand" CornerRadius="8" Padding="10,12"
                                     Background="Transparent" BorderThickness="1" BorderBrush="{ThemeResource OkStrokeBrush}">
                                 <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                                    <Border Width="18" Height="18" CornerRadius="5" Background="#FF10938A" />
-                                    <TextBlock Text="OK Player teal" FontSize="12.5" VerticalAlignment="Center" />
+                                    <Border x:Name="BrandAccentSwatch" Width="18" Height="18" CornerRadius="5" />
+                                    <TextBlock Text="OK Player blue" FontSize="12.5" VerticalAlignment="Center" />
                                 </StackPanel>
                             </Button>
                         </StackPanel>

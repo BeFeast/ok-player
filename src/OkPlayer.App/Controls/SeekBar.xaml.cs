@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using OkPlayer.App.Services;
 using Windows.UI;
 
 namespace OkPlayer.App.Controls;
@@ -156,7 +157,7 @@ public sealed partial class SeekBar : UserControl
     }
 
     private static readonly Color TickColor = Color.FromArgb(0x8C, 0xFF, 0xFF, 0xFF);   // rgba(255,255,255,.55)
-    private static readonly Color CurrentTickColor = Color.FromArgb(0xFF, 0x28, 0xB3, 0xAA); // over-video accent
+    private static readonly Color CurrentTickColor = AccentManager.ToColor(AccentPalette.Brand.OverVideo); // over-video accent
 
     private void RenderTicks()
     {

@@ -7,9 +7,10 @@ using Windows.UI.ViewManagement;
 
 namespace OkPlayer.App;
 
-/// <summary>Applies the chosen accent to the design-system brushes at runtime. When
-/// <c>AccentSource == "System"</c> the app follows the Windows personalization accent (and live-updates
-/// when the user changes it); otherwise it uses the shipped teal. Works by mutating the shared
+/// <summary>Applies the app palette and the chosen accent to the design-system brushes at runtime. The
+/// surface/text family always comes from <see cref="BrandPalette"/> (the embedded <c>brand/palette.json</c>).
+/// When <c>AccentSource == "System"</c> the accent follows the Windows personalization accent (and
+/// live-updates when the user changes it); otherwise it is <see cref="AccentPalette.Brand"/>. Works by mutating the shared
 /// <see cref="SolidColorBrush"/> instances in place — the <c>Ok*</c> accent brushes live in
 /// <c>ThemeDictionaries</c>, so changing each instance's <c>.Color</c> propagates to every
 /// <c>{ThemeResource}</c> consumer without rebinding. The colour derivation is the pure, unit-tested
@@ -19,14 +20,26 @@ internal static class AccentManager
     private static readonly UISettings _ui = new();
     private static DispatcherQueue? _dispatcher;
 
-    /// <summary>Wire the live-update path and apply the current accent once. Call on the UI thread at
-    /// startup, after the app resources exist.</summary>
+    /// <summary>Fill the palette brushes, wire the live-update path and apply the current accent once. Call
+    /// on the UI thread at startup, after the app resources exist and before the first window: the palette
+    /// brushes carry no Color in XAML.</summary>
     public static void Initialize()
     {
         _dispatcher = DispatcherQueue.GetForCurrentThread();
+        ApplyBrandSurfaces();
         // The OS accent can change while we run (Settings → Personalization). This fires off-thread.
         _ui.ColorValuesChanged += OnSystemColorsChanged;
         Apply();
+    }
+
+    /// <summary>The non-accent themed brushes (surfaces, text, strokes, error). They do not depend on the
+    /// accent source, so they are set once.</summary>
+    private static void ApplyBrandSurfaces()
+    {
+        foreach (var (key, color) in BrandPalette.Default.ThemedBrushes(dark: false))
+            if (FindThemed(key, "Light") is { } b) b.Color = ToColor(color);
+        foreach (var (key, color) in BrandPalette.Default.ThemedBrushes(dark: true))
+            if (FindThemed(key, "Dark") is { } b) b.Color = ToColor(color);
     }
 
     private static void OnSystemColorsChanged(UISettings sender, object args)
@@ -36,7 +49,7 @@ internal static class AccentManager
     /// safe to call on every <c>Settings.Changed</c>.</summary>
     public static void Apply()
     {
-        AccentPalette p = App.Settings.Current.AccentSource == "System" ? FromSystem() : AccentPalette.Teal;
+        AccentPalette p = App.Settings.Current.AccentSource == "System" ? FromSystem() : AccentPalette.Brand;
 
         SetThemed("OkAccentBrush", p.AccentLight, p.AccentDark);
         SetThemed("OkAccentTextBrush", p.TextLight, p.TextDark);
@@ -50,6 +63,9 @@ internal static class AccentManager
         SetFlat("OkSeekFillBrush", p.OverVideo);
         SetFlat("OkOverVideoAccentBrush", p.OverVideo);
         SetFlat("OkAbRegionBrush", p.AbRegion);
+        SetFlat("OkOverVideoAccentTintBrush", p.OverVideoTint);
+        SetFlat("OkAccentListSelectedBrush", p.ListSelected);
+        SetFlat("OkAccentListSelectedHoverBrush", p.ListSelectedHover);
     }
 
     private static AccentPalette FromSystem()
@@ -72,7 +88,7 @@ internal static class AccentManager
         if (FindFlat(Application.Current.Resources, key) is { } b) b.Color = ToColor(rgb);
     }
 
-    private static Color ToColor(AccentRgb c) => Color.FromArgb(c.A, c.R, c.G, c.B);
+    internal static Color ToColor(AccentRgb c) => Color.FromArgb(c.A, c.R, c.G, c.B);
 
     // ---- brush lookup (the Ok* accent brushes live in ThemeDictionaries; over-video ones are flat) ----
 

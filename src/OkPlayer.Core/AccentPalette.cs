@@ -11,32 +11,46 @@ public readonly record struct AccentRgb(byte A, byte R, byte G, byte B)
 }
 
 /// <summary>The full set of accent colours the app's brushes need, per theme — derived once here so the
-/// (visual, untestable) brush mutation in the App layer is a thin mapping. Mirrors the hand-tuned teal:
-/// the light theme leans on the base/darker shades for text contrast, the dark theme on a lighter shade
-/// that pops on dark surfaces, and a single "over video" accent for the seek bar / A–B region.</summary>
+/// (visual, untestable) brush mutation in the App layer is a thin mapping. Each theme has a fill accent, a
+/// readable accent-text colour, a secondary accent text, the glyph colour on a filled accent, and a single
+/// "over video" accent for the seek bar / A–B region.</summary>
 public sealed record AccentPalette(
     AccentRgb AccentLight, AccentRgb TextLight, AccentRgb SecondaryLight, AccentRgb OnAccentLight,
     AccentRgb AccentDark, AccentRgb TextDark, AccentRgb SecondaryDark, AccentRgb OnAccentDark,
     AccentRgb OverVideo)
 {
-    // Alpha bytes match Brushes.xaml: selection fill ~12–15%, tint ~10–12%, A–B region ~16%.
+    // Alpha bytes for the translucent accent brushes: selection fill ~12–15%, tint ~10–12%, A–B region ~16%.
     public AccentRgb SelectionFillLight => AccentLight.WithAlpha(0x1F);
     public AccentRgb TintLight => AccentLight.WithAlpha(0x1A);
     public AccentRgb SelectionFillDark => AccentDark.WithAlpha(0x26);
     public AccentRgb TintDark => AccentDark.WithAlpha(0x1F);
     public AccentRgb AbRegion => OverVideo.WithAlpha(0x29);
+    public AccentRgb OverVideoTint => OverVideo.WithAlpha(0x1F);
+    // List selection is theme-invariant (one brush for both themes), so it tints off the light accent.
+    public AccentRgb ListSelected => AccentLight.WithAlpha(0x1F);
+    public AccentRgb ListSelectedHover => AccentLight.WithAlpha(0x29);
 
     private static readonly AccentRgb White = new(0xFF, 0xFF, 0xFF, 0xFF);
     private static readonly AccentRgb NearBlack = new(0xFF, 0x1A, 0x1A, 0x1A);
 
-    /// <summary>The shipped teal palette (the defaults baked into Brushes.xaml), used whenever the
-    /// accent source is not "System".</summary>
-    public static AccentPalette Teal { get; } = new(
-        AccentLight: new(0xFF, 0x10, 0x93, 0x8A), TextLight: new(0xFF, 0x0A, 0x65, 0x5F),
-        SecondaryLight: new(0xFF, 0x0C, 0x7C, 0x75), OnAccentLight: White,
-        AccentDark: new(0xFF, 0x28, 0xB3, 0xAA), TextDark: new(0xFF, 0x28, 0xB3, 0xAA),
-        SecondaryDark: new(0xFF, 0x28, 0xB3, 0xAA), OnAccentDark: new(0xFF, 0x04, 0x20, 0x1E),
-        OverVideo: new(0xFF, 0x28, 0xB3, 0xAA));
+    /// <summary>The app's own accent, used whenever the accent source is not "System". Derived from the
+    /// embedded <c>brand/palette.json</c>: royal-blue fills with a white glyph in both themes, the palette's
+    /// link colour for accent text (cyan on dark surfaces, where royal-blue text would be too dim), and the
+    /// cyan focus colour over the dark video plane.</summary>
+    public static AccentPalette Brand { get; } = FromBrand(BrandPalette.Default);
+
+    /// <summary>Map a <see cref="BrandPalette"/> onto the accent slots.</summary>
+    public static AccentPalette FromBrand(BrandPalette brand)
+        => new(
+            AccentLight: brand.Light.Accent,
+            TextLight: brand.Light.Link,
+            SecondaryLight: brand.Light.Accent,
+            OnAccentLight: brand.Light.OnAccent,
+            AccentDark: brand.Dark.Accent,
+            TextDark: brand.Dark.Link,
+            SecondaryDark: brand.Dark.Link,
+            OnAccentDark: brand.Dark.OnAccent,
+            OverVideo: brand.Dark.Focus);
 
     /// <summary>Build a palette from the Windows system accent and its shade ramp (UISettings
     /// Accent + AccentDark1–3 / AccentLight1–3). Light theme: base accent, darker shades for readable

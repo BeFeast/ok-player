@@ -244,7 +244,7 @@
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="20" Padding="32" MaxWidth="560">
                 <Grid Width="220" Height="220" HorizontalAlignment="Center">
                     <!-- fallback tile shown until/unless cover art is available -->
-                    <Border x:Name="AudioArtFallback" CornerRadius="16" Background="#1F28B3AA"
+                    <Border x:Name="AudioArtFallback" CornerRadius="16" Background="{ThemeResource OkOverVideoAccentTintBrush}"
                             BorderThickness="1" BorderBrush="{ThemeResource OkOverVideoHairlineBrush}">
                         <FontIcon Glyph="&#xE8D6;" FontSize="72" Foreground="{ThemeResource OkOverVideoAccentBrush}"
                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -817,9 +817,9 @@
             <ListView x:Name="ChapterList" Grid.Row="2" SelectionMode="Single" Padding="8,0"
                       ItemsSource="{x:Bind Vm.Chapters, Mode=OneWay}" SelectionChanged="OnChapterSelectionChanged">
                 <ListView.Resources>
-                    <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="#1F10938A" />
-                    <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="#2910938A" />
-                    <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPressed" Color="#2910938A" />
+                    <StaticResource x:Key="ListViewItemBackgroundSelected" ResourceKey="OkAccentListSelectedBrush" />
+                    <StaticResource x:Key="ListViewItemBackgroundSelectedPointerOver" ResourceKey="OkAccentListSelectedHoverBrush" />
+                    <StaticResource x:Key="ListViewItemBackgroundSelectedPressed" ResourceKey="OkAccentListSelectedHoverBrush" />
                 </ListView.Resources>
                 <ListView.ItemTemplate>
                     <DataTemplate x:DataType="vm:ChapterInfo">
@@ -980,7 +980,7 @@
                             Foreground="{ThemeResource OkAccentTextBrush}" BorderThickness="0" />
                 </StackPanel>
 
-                <!-- footer: play-mode toggles (active = teal accent; SetPanelTab/RefreshModeButtons set colours) -->
+                <!-- footer: play-mode toggles (active = accent; SetPanelTab/RefreshModeButtons set colours) -->
                 <Border Grid.Row="3" BorderThickness="0,1,0,0" BorderBrush="{ThemeResource OkStrokeBrush}"
                         Padding="2,8,0,0" Margin="0,8,0,0">
                     <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4" VerticalAlignment="Center">

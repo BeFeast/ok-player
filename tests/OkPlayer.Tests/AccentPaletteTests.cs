@@ -15,34 +15,12 @@ public class AccentPaletteTests
     }
 
     [Theory]
-    [InlineData(0x10, 0x93, 0x8A, false)] // teal 500 — dark enough for a white glyph
+    [InlineData(0x25, 0x63, 0xEB, false)] // royal blue — dark enough for a white glyph
     [InlineData(0x00, 0x00, 0x00, false)] // black
     [InlineData(0xFF, 0xFF, 0xFF, true)]  // white
     [InlineData(0xF2, 0xE0, 0x00, true)]  // bright yellow accent — needs a dark glyph
     public void IsLight_FollowsLuma(byte r, byte g, byte b, bool expected)
         => Assert.Equal(expected, new AccentRgb(0xFF, r, g, b).IsLight);
-
-    [Fact]
-    public void Teal_MatchesShippedBrushDefaults()
-    {
-        var p = AccentPalette.Teal;
-        Assert.Equal(new AccentRgb(0xFF, 0x10, 0x93, 0x8A), p.AccentLight);
-        Assert.Equal(new AccentRgb(0xFF, 0x0A, 0x65, 0x5F), p.TextLight);
-        Assert.Equal(new AccentRgb(0xFF, 0x28, 0xB3, 0xAA), p.AccentDark);
-        Assert.Equal(new AccentRgb(0xFF, 0x04, 0x20, 0x1E), p.OnAccentDark);
-        Assert.Equal(White, p.OnAccentLight);
-    }
-
-    [Fact]
-    public void Teal_AlphaDerivations_MatchBrushesXaml()
-    {
-        var p = AccentPalette.Teal;
-        Assert.Equal(new AccentRgb(0x1F, 0x10, 0x93, 0x8A), p.SelectionFillLight);
-        Assert.Equal(new AccentRgb(0x1A, 0x10, 0x93, 0x8A), p.TintLight);
-        Assert.Equal(new AccentRgb(0x26, 0x28, 0xB3, 0xAA), p.SelectionFillDark);
-        Assert.Equal(new AccentRgb(0x1F, 0x28, 0xB3, 0xAA), p.TintDark);
-        Assert.Equal(new AccentRgb(0x29, 0x28, 0xB3, 0xAA), p.AbRegion);
-    }
 
     [Fact]
     public void FromSystem_MapsShadesToTheRightSlots()

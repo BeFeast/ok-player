@@ -606,7 +606,7 @@ public sealed partial class SettingsWindow : Window
             FontWeight = FontWeights.SemiBold,
             CharacterSpacing = 45,
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = Res("OkAccentTextBrush", new SolidColorBrush(Color.FromArgb(0xFF, 0x0A, 0x65, 0x5F))),
+            Foreground = Res("OkAccentTextBrush", AccentText),
             Visibility = Visibility.Collapsed,
         };
         Grid.SetColumn(badge, 1);
@@ -629,7 +629,7 @@ public sealed partial class SettingsWindow : Window
             BorderThickness = new Thickness(0),
             Padding = new Thickness(7, 5, 7, 5),
             FontSize = 11.5,
-            Foreground = Res("OkAccentTextBrush", new SolidColorBrush(Color.FromArgb(0xFF, 0x0A, 0x65, 0x5F))),
+            Foreground = Res("OkAccentTextBrush", AccentText),
             VerticalAlignment = VerticalAlignment.Center,
         };
         Grid.SetColumn(reset, 4);
@@ -688,7 +688,7 @@ public sealed partial class SettingsWindow : Window
         Button button = slot == OkPlayer.Core.ShortcutSlot.Primary ? row.PrimaryButton : row.SecondaryButton;
         TextBlock label = slot == OkPlayer.Core.ShortcutSlot.Primary ? row.PrimaryLabel : row.SecondaryLabel;
         label.Text = "Press keys";
-        button.BorderBrush = Res("OkAccentBrush", new SolidColorBrush(Color.FromArgb(0xFF, 0x10, 0x93, 0x8A)));
+        button.BorderBrush = Res("OkAccentBrush", Accent);
         button.BorderThickness = new Thickness(2);
         SetShortcutStatus($"Recording {row.Action.Label()}");
         button.Focus(FocusState.Keyboard);
@@ -759,7 +759,7 @@ public sealed partial class SettingsWindow : Window
 
         Brush fill = Res("OkSubtleFillBrush", new SolidColorBrush(Color.FromArgb(0x0D, 0, 0, 0)));
         Brush stroke = Res("OkStrokeBrush", new SolidColorBrush(Color.FromArgb(0x14, 0, 0, 0)));
-        Brush accent = Res("OkAccentBrush", new SolidColorBrush(Color.FromArgb(0xFF, 0x10, 0x93, 0x8A)));
+        Brush accent = Res("OkAccentBrush", Accent);
         row.PrimaryButton.Background = fill;
         row.PrimaryButton.BorderBrush = stroke;
         row.PrimaryButton.BorderThickness = new Thickness(1);
@@ -1364,11 +1364,13 @@ public sealed partial class SettingsWindow : Window
         StyleSegment(ThemeLightBtn, s.Theme == "Light");
         StyleSegment(ThemeDarkBtn, s.Theme == "Dark");
         StyleSegment(ThemeAutoBtn, s.Theme is not ("Light" or "Dark"));
-        bool teal = s.AccentSource == "OkTeal";
-        StyleCard(AccentTealBtn, teal);
-        StyleCard(AccentSystemBtn, !teal);
-        // Preview the real Windows accent on the System card (the teal card's swatch is a fixed teal in XAML),
-        // so the two options read as distinct choices instead of two identical swatches.
+        // Anything but "System" resolves to the app palette, exactly as AccentManager does.
+        bool brand = s.AccentSource != "System";
+        StyleCard(AccentBrandBtn, brand);
+        StyleCard(AccentSystemBtn, !brand);
+        // Preview the real Windows accent on the System card and the app accent on the other, so the two
+        // options read as distinct choices instead of two identical swatches.
+        BrandAccentSwatch.Background = Accent;
         SystemAccentSwatch.Background = new SolidColorBrush(_ui.GetColorValue(Windows.UI.ViewManagement.UIColorType.Accent));
     }
 
@@ -1376,7 +1378,7 @@ public sealed partial class SettingsWindow : Window
     {
         // The selected "pill" must lift off the track in both themes: a light card on light Mica, a
         // translucent-white pill on dark (the system card fill is too faint there). Pair it with the
-        // theme-aware accent text so the label stays readable (the light-mode dark teal is unreadable on dark).
+        // theme-aware accent text so the label stays readable (the light-theme accent text is too dark on dark).
         bool dark = b.ActualTheme == ElementTheme.Dark;
         b.Background = selected
             ? (dark ? new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF))
@@ -1390,8 +1392,8 @@ public sealed partial class SettingsWindow : Window
 
     private void StyleCard(Button b, bool selected)
     {
-        // Use the live accent brushes so the selected card previews the chosen accent (system or teal),
-        // not a hardcoded teal swatch.
+        // Use the live accent brushes so the selected card previews the chosen accent (system or app palette),
+        // not a hardcoded swatch.
         b.BorderBrush = selected ? Res("OkAccentBrush", Accent) : Res("OkStrokeBrush", new SolidColorBrush(Color.FromArgb(0x14, 0, 0, 0)));
         b.BorderThickness = new Thickness(selected ? 1.5 : 1);
         b.Background = selected ? Res("OkAccentTintBrush", AccentTint) : Transparent;
@@ -1409,7 +1411,7 @@ public sealed partial class SettingsWindow : Window
     }
 
     private void OnAccentSystem(object sender, RoutedEventArgs e) => SetAccent("System");
-    private void OnAccentTeal(object sender, RoutedEventArgs e) => SetAccent("OkTeal");
+    private void OnAccentBrand(object sender, RoutedEventArgs e) => SetAccent(AppSettings.BrandAccentSource);
 
     private void SetAccent(string source)
     {
@@ -1419,9 +1421,9 @@ public sealed partial class SettingsWindow : Window
     }
 
     private static readonly SolidColorBrush Transparent = new(Colors.Transparent);
-    private static readonly SolidColorBrush Accent = new(Color.FromArgb(0xFF, 0x10, 0x93, 0x8A));
-    private static readonly SolidColorBrush AccentText = new(Color.FromArgb(0xFF, 0x0A, 0x65, 0x5F));
-    private static readonly SolidColorBrush AccentTint = new(Color.FromArgb(0x1A, 0x10, 0x93, 0x8A));
+    private static readonly SolidColorBrush Accent = new(AccentManager.ToColor(AccentPalette.Brand.AccentLight));
+    private static readonly SolidColorBrush AccentText = new(AccentManager.ToColor(AccentPalette.Brand.TextLight));
+    private static readonly SolidColorBrush AccentTint = new(AccentManager.ToColor(AccentPalette.Brand.TintLight));
 
     /// <summary>Resolve a brush from the merged resources for the window's CURRENT theme. System brushes (e.g.
     /// CardBackgroundFillColorDefaultBrush) live flat and resolve directly; the design-system Ok* brushes live

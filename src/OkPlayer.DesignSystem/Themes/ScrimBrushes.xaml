@@ -19,16 +19,18 @@
     <SolidColorBrush x:Key="OkOverVideoTextBrush" Color="#F2FFFFFF" />
     <SolidColorBrush x:Key="OkOverVideoTextDimBrush" Color="#CCFFFFFF" />
     <SolidColorBrush x:Key="OkOverVideoTextFaintBrush" Color="#73FFFFFF" />
-    <!-- Accent over video is always teal-400 -->
-    <SolidColorBrush x:Key="OkOverVideoAccentBrush" Color="#FF28B3AA" />
+    <!-- Accent over video: AccentManager fills it (and the seek fill / A–B region below) from the accent
+         palette at startup, so it has no Color here. -->
+    <SolidColorBrush x:Key="OkOverVideoAccentBrush" />
+    <SolidColorBrush x:Key="OkOverVideoAccentTintBrush" />
 
     <!-- Seekbar (over video) -->
     <SolidColorBrush x:Key="OkSeekTrackBrush" Color="#40FFFFFF" />
     <SolidColorBrush x:Key="OkSeekBufferedBrush" Color="#66FFFFFF" />
-    <SolidColorBrush x:Key="OkSeekFillBrush" Color="#FF28B3AA" />
+    <SolidColorBrush x:Key="OkSeekFillBrush" />
     <SolidColorBrush x:Key="OkSeekThumbBrush" Color="#FFFFFFFF" />
     <SolidColorBrush x:Key="OkChapterTickBrush" Color="#8CFFFFFF" />
-    <SolidColorBrush x:Key="OkAbRegionBrush" Color="#2928B3AA" />
+    <SolidColorBrush x:Key="OkAbRegionBrush" />
 
     <!-- Bottom scrim behind the OSC: linear-gradient(to top, rgba(0,0,0,.42) -> 0) -->
     <LinearGradientBrush x:Key="OkBottomScrimBrush" StartPoint="0,1" EndPoint="0,0">

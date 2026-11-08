@@ -2902,9 +2902,9 @@ public sealed partial class PlayerView : UserControl
     /// <summary>Reflect the active play-modes on the footer toggle buttons (glyph + accent vs. dimmed).</summary>
     private void RefreshModeButtons()
     {
-        var accent = PanelBrush("OkAccentTextBrush", Windows.UI.Color.FromArgb(0xFF, 0x28, 0xB3, 0xAA));
+        var accent = PanelBrush("OkAccentTextBrush", AccentManager.ToColor(AccentPalette.Brand.TextDark));
         var dim = PanelBrush("OkTextSecondaryBrush", Windows.UI.Color.FromArgb(0xB3, 0xFF, 0xFF, 0xFF));
-        var tint = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(0x24, 0x10, 0x93, 0x8A));
+        var tint = new Microsoft.UI.Xaml.Media.SolidColorBrush(AccentManager.ToColor(AccentPalette.Brand.AccentLight.WithAlpha(0x24)));
 
         var rep = _playlist?.Repeat ?? _repeat;
         RepeatIcon.Glyph = rep == OkPlayer.Core.RepeatMode.One ? "" : ""; // RepeatOne vs RepeatAll
@@ -3046,7 +3046,7 @@ public sealed partial class PlayerView : UserControl
         ChapterList.Visibility = upNext ? Visibility.Collapsed : Visibility.Visible;
         ChaptersFooter.Visibility = upNext ? Visibility.Collapsed : Visibility.Visible;
 
-        var accent = PanelBrush("OkAccentTextBrush", Windows.UI.Color.FromArgb(0xFF, 0x28, 0xB3, 0xAA));
+        var accent = PanelBrush("OkAccentTextBrush", AccentManager.ToColor(AccentPalette.Brand.TextDark));
         var secondary = PanelBrush("OkTextSecondaryBrush", Windows.UI.Color.FromArgb(0xB3, 0xFF, 0xFF, 0xFF));
         var pill = PanelBrush("OkPopoverBrush", Windows.UI.Color.FromArgb(0xF7, 0x1F, 0x1F, 0x1F));
         ChaptersTab.Background = upNext ? null : pill;

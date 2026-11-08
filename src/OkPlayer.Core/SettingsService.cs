@@ -13,7 +13,11 @@ public sealed class AppSettings
 {
     // Appearance (design band 9 — fully rendered)
     public string Theme { get; set; } = "Auto";        // "Light" | "Dark" | "Auto"
-    public string AccentSource { get; set; } = "OkTeal"; // "System" | "OkTeal"
+    public string AccentSource { get; set; } = BrandAccentSource; // "System" | BrandAccentSource
+
+    /// <summary>The stored <see cref="AccentSource"/> value for the app's own palette. The id predates the
+    /// current palette; it is kept so existing settings files and the shared settings schema still read it.</summary>
+    public const string BrandAccentSource = "OkTeal";
 
     // Playback (design band 9)
     public bool ResumePlayback { get; set; } = true;     // resume from the last position on open

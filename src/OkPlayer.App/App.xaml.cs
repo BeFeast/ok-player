@@ -136,7 +136,7 @@ public partial class App : Application
         OkPlayer.Render.MpvVideoPanel.HardwareDecoding = Settings.Current.HardwareDecoding;
         Log.Step($"settings: hwdec={Settings.Current.HardwareDecoding}, theme={Settings.Current.Theme}");
         History.PruneOlderThan(Settings.Current.HistoryRetentionDays); // honour the retention window on launch
-        // Resolve the accent (teal or the live Windows system accent) into the brushes before first render.
+        // Fill the palette brushes and resolve the accent (app palette or the live Windows system accent) before first render.
         AccentManager.Initialize();
         Settings.Changed += AccentManager.Apply; // re-apply when the accent source is toggled in Settings
         Log.Step("GetLaunchTarget (File.Exists on argv)");

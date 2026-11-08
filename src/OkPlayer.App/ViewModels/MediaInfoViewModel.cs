@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
+using OkPlayer.App.Services;
 
 namespace OkPlayer.App.ViewModels;
 
@@ -13,10 +14,11 @@ internal static class MediaInfoTokens
     public static readonly FontFamily Mono = new("Cascadia Code, Consolas");
     public static readonly FontFamily Segoe = new("Segoe UI Variable Text, Segoe UI");
     public static readonly SolidColorBrush Value = new(Windows.UI.Color.FromArgb(0xFF, 0x1A, 0x1A, 0x1A));
-    public static readonly SolidColorBrush Accent = new(Windows.UI.Color.FromArgb(0xFF, 0x0C, 0x7C, 0x75));
+    // The card is always light-themed (RequestedTheme="Light"), so it uses the light accent slots.
+    public static readonly SolidColorBrush Accent = new(AccentManager.ToColor(AccentPalette.Brand.SecondaryLight));
     public static readonly SolidColorBrush Transparent = new(Colors.Transparent);
-    public static readonly SolidColorBrush TrackTint = new(Windows.UI.Color.FromArgb(0x12, 0x10, 0x93, 0x8A));
-    public static readonly SolidColorBrush TrackBorder = new(Windows.UI.Color.FromArgb(0x29, 0x10, 0x93, 0x8A));
+    public static readonly SolidColorBrush TrackTint = new(AccentManager.ToColor(AccentPalette.Brand.AccentLight.WithAlpha(0x12)));
+    public static readonly SolidColorBrush TrackBorder = new(AccentManager.ToColor(AccentPalette.Brand.AccentLight.WithAlpha(0x29)));
 }
 
 /// <summary>One label → value row in a Streams/Stats section.</summary>
@@ -65,7 +67,7 @@ public sealed class TrackRow
     public string IdChip { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string Detail { get; set; } = string.Empty;
-    public bool Highlight { get; set; } // default/active track → teal tint row + bold title
+    public bool Highlight { get; set; } // default/active track → accent tint row + bold title
     public string? Badge { get; set; }  // DEFAULT / ON / EXT
 
     public Windows.UI.Text.FontWeight TitleWeight => Highlight ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Medium;

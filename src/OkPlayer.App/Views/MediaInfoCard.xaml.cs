@@ -4,6 +4,7 @@ using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using OkPlayer.App.Services;
 using OkPlayer.App.ViewModels;
 
 namespace OkPlayer.App.Views;
@@ -30,7 +31,7 @@ public sealed partial class MediaInfoCard : UserControl
     private void OnCopyAll(object sender, RoutedEventArgs e) => CopyRequested?.Invoke(this, EventArgs.Empty);
 
     private static readonly SolidColorBrush ActivePill = new(Colors.White);
-    private static readonly SolidColorBrush ActiveText = new(Windows.UI.Color.FromArgb(0xFF, 0x0A, 0x65, 0x5F));
+    private static readonly SolidColorBrush ActiveText = new(AccentManager.ToColor(AccentPalette.Brand.TextLight)); // light-only card
     private static readonly SolidColorBrush InactiveText = new(Windows.UI.Color.FromArgb(0x80, 0, 0, 0));
     private static readonly SolidColorBrush Transparent = new(Colors.Transparent);
 

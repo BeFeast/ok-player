@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
+using OkPlayer.App.Services;
 using OkPlayer.App.ViewModels;
 using Windows.System;
 
@@ -63,15 +64,16 @@ public sealed partial class VolumeControl : UserControl
         double frac = v / Max;
 
         Wick.Width = Muted ? 0 : WickW * frac;
-        Wick.Background = SolidBrush(Boost ? 0xFFF0B840 : Muted ? 0x6628B3AA : 0xFF28B3AA);
+        Wick.Background = Boost ? SolidBrush(0xFFF0B840)
+            : new SolidColorBrush(AccentManager.ToColor(Muted ? AccentPalette.Brand.OverVideo.WithAlpha(0x66) : AccentPalette.Brand.OverVideo));
 
         SpeakerIcon.Glyph = (Muted || v < 1) ? "" : v < 50 ? "" : "";
         SpeakerIcon.Foreground = SolidBrush(Boost ? 0xFFF0B840 : Muted ? 0x73FFFFFF : 0xFFFFFFFF);
 
         double markerX = TrackW * MarkerFrac;
         double thumbX = TrackW * frac;
-        TealFill.Width = TrackW * Math.Min(v, Unity) / Max;
-        TealFill.Opacity = Muted ? 0.4 : 1;
+        AccentFill.Width = TrackW * Math.Min(v, Unity) / Max;
+        AccentFill.Opacity = Muted ? 0.4 : 1;
         if (v > Unity && !Muted)
         {
             AmberFill.Visibility = Visibility.Visible;

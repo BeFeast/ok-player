@@ -13,4 +13,9 @@
     <InternalsVisibleTo Include="OkPlayer.Tests" />
   </ItemGroup>
 
+  <!-- The colour family every shell shares; BrandPalette reads it back at runtime. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\brand\palette.json" LogicalName="OkPlayer.Core.Brand.palette.json" Link="Brand\palette.json" />
+  </ItemGroup>
+
 </Project>
