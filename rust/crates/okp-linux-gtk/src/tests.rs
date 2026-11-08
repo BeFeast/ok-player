@@ -2306,8 +2306,20 @@ fn reserved_uri_notice_intercepts_scheme_but_leaves_media_urls() {
         .expect("ok-player:// request should be reported");
     assert!(reserved.contains("reserved"));
     assert!(reserved.contains("open"));
+    // ...so is a v1 url= link and an action v1 does not have, until links execute (#849)...
+    let url_link = reserved_uri_notice("ok-player://add?url=https%3A%2F%2Fexample.test%2Fa.mp4")
+        .expect("a v1 link should be reported, not played");
+    assert!(url_link.contains("\"add\" is not available yet"));
+    assert!(
+        reserved_uri_notice("ok-player://pause")
+            .is_some_and(|notice| notice.contains("\"pause\" is not available yet"))
+    );
     // ...a malformed request is reported too, not silently accepted...
     assert!(reserved_uri_notice("ok-player://").is_some());
+    assert_eq!(
+        reserved_uri_notice("ok-player://open?url=%G1").as_deref(),
+        Some("Ignored a malformed ok-player:// request")
+    );
     // ...and ordinary media stays untouched so file/URL open behavior is unchanged.
     assert_eq!(reserved_uri_notice("https://example.test/a.mp4"), None);
     assert_eq!(reserved_uri_notice("/media/movie.mkv"), None);
