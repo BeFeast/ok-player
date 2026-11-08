@@ -15,7 +15,7 @@ use okp_test_fixtures::unique_temp_dir;
 use super::*;
 use crate::engine::{ChangeListener, Observation};
 use crate::machine::SessionMachine;
-use crate::protocol::{DispatchResult, Route, SourceKind};
+use crate::protocol::{DispatchResult, Route, SeekMode, SeekPrecision, SourceKind};
 use crate::session::Session;
 
 /// An engine the test scripts: it records what it is told and reports what the
@@ -59,20 +59,39 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 struct Harness {
     session: Session,
     script: Arc<Script>,
+    data_dir: PathBuf,
+    writer: writer::Probe,
 }
 
 impl Harness {
     fn new(data_dir: &Path) -> Self {
-        Self::with_store(HistoryStore::open(data_dir))
+        Self::with_store(HistoryStore::open(data_dir), data_dir)
     }
 
-    fn with_store(store: HistoryStore) -> Self {
+    fn with_store(store: HistoryStore, data_dir: &Path) -> Self {
         let script = Arc::new(Script::default());
-        let session = Session::start(
-            Box::new(ScriptedEngine(Arc::clone(&script))),
-            SessionHistory::with_store(store),
-        );
-        Self { session, script }
+        let history = SessionHistory::with_store(store);
+        let writer = history.probe().expect("the history is kept in a file");
+        let session = Session::start(Box::new(ScriptedEngine(Arc::clone(&script))), history);
+        Self {
+            session,
+            script,
+            data_dir: data_dir.to_owned(),
+            writer,
+        }
+    }
+
+    /// The entry for `key` in the history file, once every save handed to the
+    /// writer has been written.
+    fn saved(&self, key: &str) -> Option<FileEntry> {
+        self.writer.settle();
+        saved(&self.data_dir, key)
+    }
+
+    /// The history file's bytes, once every save has been written.
+    fn file(&self) -> Vec<u8> {
+        self.writer.settle();
+        fs::read(history_path(&self.data_dir)).expect("the history file")
     }
 
     fn dispatch(&self, command: Command) -> DispatchResult {
@@ -164,6 +183,27 @@ impl Harness {
                         ..
                     },
             } => (private_session, sections),
+            other => panic!("the page query answered {other:?}"),
+        }
+    }
+
+    /// What the History page says about reading the file: whether it failed,
+    /// and where the unreadable file was moved.
+    fn read_status(&self) -> (bool, Option<String>) {
+        match self.session.query(&crate::protocol::Query::History {
+            query: HistoryQuery::Page {
+                search: String::new(),
+                utc_offset_seconds: 0,
+            },
+        }) {
+            crate::protocol::QueryResult::History {
+                result:
+                    HistoryQueryResult::Page {
+                        read_failed,
+                        unreadable_copy,
+                        ..
+                    },
+            } => (read_failed, unreadable_copy),
             other => panic!("the page query answered {other:?}"),
         }
     }
@@ -312,7 +352,7 @@ fn playing(root: &Path, key: &str) -> Harness {
     harness.load(600.0, vec![]);
     harness.play_to(120.0);
     assert_eq!(
-        saved(root, key),
+        harness.saved(key),
         None,
         "nothing is saved before the cadence"
     );
@@ -325,7 +365,7 @@ fn pausing_saves_progress() {
     let harness = playing(root.path(), "/media/a.mkv");
     let _ = harness.dispatch(Command::SetPaused { paused: true });
     assert_eq!(
-        saved(root.path(), "/media/a.mkv").map(|entry| entry.position),
+        harness.saved("/media/a.mkv").map(|entry| entry.position),
         Some(120.0)
     );
 }
@@ -335,7 +375,9 @@ fn closing_saves_progress() {
     let root = unique_temp_dir("okp-session-history-close");
     let harness = playing(root.path(), "/media/a.mkv");
     let _ = harness.dispatch(Command::Close {});
-    let entry = saved(root.path(), "/media/a.mkv").expect("closing saved the entry");
+    let entry = harness
+        .saved("/media/a.mkv")
+        .expect("closing saved the entry");
     assert_eq!((entry.position, entry.duration), (120.0, 600.0));
 }
 
@@ -345,10 +387,10 @@ fn opening_the_next_media_saves_the_progress_of_the_one_it_replaces() {
     let harness = playing(root.path(), "/media/a.mkv");
     harness.open("/media/b.mkv");
     assert_eq!(
-        saved(root.path(), "/media/a.mkv").map(|entry| entry.position),
+        harness.saved("/media/a.mkv").map(|entry| entry.position),
         Some(120.0)
     );
-    assert_eq!(saved(root.path(), "/media/b.mkv"), None, "b has not loaded");
+    assert_eq!(harness.saved("/media/b.mkv"), None, "b has not loaded");
 }
 
 #[test]
@@ -368,7 +410,7 @@ fn the_engine_quitting_saves_progress() {
     let harness = playing(root.path(), "/media/a.mkv");
     harness.publish(|_| {}, vec![MpvEvent::Shutdown]);
     assert_eq!(
-        saved(root.path(), "/media/a.mkv").map(|entry| entry.position),
+        harness.saved("/media/a.mkv").map(|entry| entry.position),
         Some(120.0)
     );
 }
@@ -392,7 +434,7 @@ fn playing_to_the_end_marks_the_entry_finished() {
             last_duration: None,
         }],
     );
-    let entry = saved(root.path(), "/media/a.mkv").expect("the entry is kept");
+    let entry = harness.saved("/media/a.mkv").expect("the entry is kept");
     assert!(entry.finished);
     assert_eq!(entry.position, 0.0);
 
@@ -400,7 +442,302 @@ fn playing_to_the_end_marks_the_entry_finished() {
     let _ = harness.dispatch(Command::Close {});
     harness.open("/media/a.mkv");
     assert_eq!(resume_of(&harness.last_open()), None);
-    assert!(saved(root.path(), "/media/a.mkv").is_some_and(|entry| entry.finished));
+    assert!(
+        harness
+            .saved("/media/a.mkv")
+            .is_some_and(|entry| entry.finished)
+    );
+}
+
+/// An engine report with no title and no failed end of file.
+fn report(loaded: bool) -> Report<'static> {
+    Report {
+        loaded,
+        end_failed: false,
+        title: None,
+    }
+}
+
+/// The end of file the engine reports when media plays to its end, with the
+/// messages it logged on the way.
+fn end_of_file(diagnostic_messages: Vec<String>) -> MpvEvent {
+    MpvEvent::EndFile {
+        reason: EndFileReason::Eof,
+        path: None,
+        diagnostic_messages,
+        last_duration: None,
+    }
+}
+
+#[test]
+fn a_failed_command_before_a_clean_end_of_file_still_finishes_the_entry() {
+    let root = unique_temp_dir("okp-session-history-failed-reply");
+    let harness = playing(root.path(), "/media/a.mkv");
+    let _ = harness.dispatch(Command::SetPaused { paused: true });
+    let _ = harness.dispatch(Command::SetPaused { paused: false });
+    // The stream refuses a seek; the engine's reply fails long before the end.
+    let DispatchResult::Accepted { request_id } = harness.dispatch(Command::Seek {
+        seconds: 300.0,
+        mode: SeekMode::Absolute,
+        precision: SeekPrecision::Keyframe,
+    }) else {
+        panic!("the seek was not accepted")
+    };
+    harness.publish(
+        |_| {},
+        vec![MpvEvent::CommandReply {
+            request_id,
+            error: -12,
+        }],
+    );
+    harness.play_to(590.0);
+    harness.publish(
+        |observation| {
+            observation.playback.time_pos = None;
+            observation.playback.duration = None;
+        },
+        vec![end_of_file(vec![])],
+    );
+
+    let entry = harness.saved("/media/a.mkv").expect("the entry is kept");
+    assert!(entry.finished, "{entry:?}");
+    assert_eq!(entry.position, 0.0);
+}
+
+#[test]
+fn an_end_of_file_after_a_decoder_failure_keeps_the_progress_unfinished() {
+    let root = unique_temp_dir("okp-session-history-decoder-failure");
+    let harness = playing(root.path(), "/media/a.mkv");
+    harness.publish(
+        |_| {},
+        vec![end_of_file(vec![
+            "Failed to initialize a decoder for codec 'hevc'.".to_owned(),
+        ])],
+    );
+
+    let entry = harness.saved("/media/a.mkv").expect("the progress is kept");
+    assert!(!entry.finished, "{entry:?}");
+    assert_eq!(entry.position, 120.0);
+}
+
+#[test]
+fn many_preference_changes_are_written_once_with_the_next_save() {
+    let root = unique_temp_dir("okp-session-history-rapid-preferences");
+    let harness = playing(root.path(), "/media/a.mkv");
+    let _ = harness.dispatch(Command::SetPaused { paused: true });
+    let _ = harness.dispatch(Command::SetPaused { paused: false });
+    let before = harness.file();
+    let writes = harness.writer.writes();
+
+    // A dragged volume slider and a held subtitle-delay key.
+    for step in 1..=30 {
+        for command in [
+            Command::SetVolume {
+                volume: f64::from(step),
+            },
+            Command::SetSubtitleDelay {
+                seconds: f64::from(step) / 10.0,
+            },
+        ] {
+            assert!(matches!(
+                harness.dispatch(command),
+                DispatchResult::Accepted { .. }
+            ));
+        }
+    }
+    assert_eq!(
+        harness.file(),
+        before,
+        "nothing is written while the values change"
+    );
+    assert_eq!(harness.writer.writes(), writes);
+
+    let _ = harness.dispatch(Command::SetPaused { paused: true });
+    let entry = harness.saved("/media/a.mkv").expect("the entry is kept");
+    assert_eq!(
+        harness.writer.writes(),
+        writes + 1,
+        "one write for all of it"
+    );
+    assert_eq!(entry.preferences.volume, Some(30.0));
+    assert_eq!(entry.preferences.subtitle_delay, Some(3.0));
+}
+
+/// While the disk takes its time over a save, the session keeps answering: the
+/// file is written on the writer thread, not under the session lock.
+#[cfg(unix)]
+#[test]
+fn a_slow_disk_never_holds_up_the_session() {
+    let root = unique_temp_dir("okp-session-history-slow-disk");
+    let harness = playing(root.path(), "/media/a.mkv");
+    // The writer's temporary file is a pipe nobody reads yet, so the next
+    // write blocks until the test reads it.
+    let temporary = root.path().join("history.json.tmp");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&temporary)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success(), "mkfifo failed: {made}");
+
+    let (answered, document) = std::thread::scope(|scope| {
+        let (done, finished) = std::sync::mpsc::channel();
+        let harness = &harness;
+        scope.spawn(move || {
+            let _ = harness.dispatch(Command::SetPaused { paused: true });
+            let _ = harness.dispatch(Command::SetVolume { volume: 50.0 });
+            let _ = harness.session.snapshot();
+            let _ = harness.page("", 0);
+            let _ = harness.session.drain_events();
+            let _ = done.send(());
+        });
+        let answered = finished.recv_timeout(Duration::from_secs(10)).is_ok();
+        // Reading the pipe lets the stuck write through either way.
+        let document = fs::read(&temporary).expect("read what the writer wrote");
+        (answered, document)
+    });
+    assert!(answered, "the session waited for the disk");
+    assert!(
+        String::from_utf8_lossy(&document).contains("/media/a.mkv"),
+        "the pause handed its save to the writer"
+    );
+}
+
+#[test]
+fn the_event_thread_wakes_for_a_timed_save() {
+    let root = unique_temp_dir("okp-session-history-timed-wake");
+    let harness = playing(root.path(), "/media/a.mkv");
+    let _ = harness.dispatch(Command::SetPaused { paused: true });
+    assert_eq!(harness.session.next_wake(), None, "paused, nothing is due");
+
+    let before = Instant::now();
+    let _ = harness.dispatch(Command::SetVolume { volume: 40.0 });
+    let after = Instant::now();
+    let wake = harness
+        .session
+        .next_wake()
+        .expect("the waiting change wakes the event thread");
+    assert!(
+        wake >= before + PROGRESS_SAVE_INTERVAL && wake <= after + PROGRESS_SAVE_INTERVAL,
+        "woken {:?} after the change",
+        wake - before
+    );
+}
+
+#[test]
+fn a_failed_save_is_written_again_with_the_next_save() {
+    let root = unique_temp_dir("okp-session-history-save-retry");
+    let data = root.path().join("data");
+    fs::write(&data, b"not a directory").expect("blocking file");
+    let harness = Harness::new(&data);
+    harness.open("/media/a.mkv");
+    harness.load(600.0, vec![]);
+    harness.play_to(120.0);
+    let _ = harness.dispatch(Command::SetVolume { volume: 40.0 });
+    let _ = harness.dispatch(Command::Close {});
+    harness.writer.settle();
+    harness.publish(|_| {}, vec![]);
+
+    // Nothing changes after the failure; closing the session still writes it.
+    fs::remove_file(&data).expect("unblock the data directory");
+    drop(harness);
+    let entry = saved(&data, "/media/a.mkv").expect("the retried save wrote the entry");
+    assert_eq!(entry.position, 120.0);
+    assert_eq!(entry.preferences.volume, Some(40.0));
+}
+
+#[test]
+fn a_preference_change_while_paused_is_saved_after_the_interval() {
+    let root = unique_temp_dir("okp-session-history-paused-preference");
+    let script = Arc::new(Script::default());
+    let engine = ScriptedEngine(Arc::clone(&script));
+    let mut history = SessionHistory::open(root.path());
+    let writer = history.probe().expect("the history is kept in a file");
+    let mut machine = SessionMachine::new();
+    let mut queue = Coalescer::new();
+    let mut dispatch = |history: &mut SessionHistory, command: Command| {
+        let command = history.prepare(&command, &mut queue).into_owned();
+        let Route::Player(core) = command.route() else {
+            panic!("{command:?} goes to the player")
+        };
+        let _ = machine.dispatch(&core, |_, _| Ok(()));
+        history.dispatched(&command, true, machine.machine(), &engine, &mut queue);
+        if matches!(command, Command::Open { .. }) {
+            machine.apply_event(PlayerEvent::Loaded {
+                duration: Some(600.0),
+            });
+            history.refresh(
+                report(true),
+                machine.machine(),
+                &engine,
+                &mut queue,
+                Instant::now(),
+            );
+        }
+    };
+    dispatch(&mut history, open("/media/a.mkv", None));
+    dispatch(&mut history, Command::SetPaused { paused: true });
+    assert_eq!(history.next_save(), None, "nothing waits for a save");
+    dispatch(&mut history, Command::SetVolume { volume: 40.0 });
+    let due = history
+        .next_save()
+        .expect("the change waits for a timed save");
+
+    let mut refresh_at = |history: &mut SessionHistory, at: Instant| {
+        history.refresh(report(false), machine.machine(), &engine, &mut queue, at);
+        writer.settle();
+        saved(root.path(), "/media/a.mkv").and_then(|entry| entry.preferences.volume)
+    };
+    assert_eq!(
+        refresh_at(&mut history, due - Duration::from_millis(1)),
+        None
+    );
+    assert_eq!(refresh_at(&mut history, due), Some(40.0));
+    assert_eq!(history.next_save(), None);
+    assert_eq!(writer.writes(), 1);
+}
+
+#[test]
+fn an_unreadable_history_file_is_kept_when_the_first_save_writes_a_new_one() {
+    let root = unique_temp_dir("okp-session-history-unreadable");
+    let data = root.path().join("data");
+    fs::create_dir_all(&data).expect("data directory");
+    // A history from a newer build, which this one cannot read.
+    let original =
+        br#"{"version":3,"files":{"/media/keep.mkv":{"position":120.0,"duration":600.0}}}"#;
+    fs::write(history_path(&data), original).expect("unreadable history");
+    let harness = Harness::new(&data);
+    assert_eq!(harness.read_status(), (true, None));
+
+    harness.open("/media/a.mkv");
+    harness.load(600.0, vec![]);
+    harness.play_to(120.0);
+    let _ = harness.dispatch(Command::SetPaused { paused: true });
+
+    assert_eq!(
+        harness.saved("/media/a.mkv").map(|entry| entry.position),
+        Some(120.0)
+    );
+    let kept: Vec<PathBuf> = fs::read_dir(&data)
+        .expect("data directory")
+        .map(|entry| entry.expect("directory entry").path())
+        .filter(|path| {
+            path.file_name().is_some_and(|name| {
+                name.to_string_lossy()
+                    .starts_with("history.json.unreadable-")
+            })
+        })
+        .collect();
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(
+        fs::read(&kept[0]).expect("the kept file"),
+        original,
+        "the unreadable file survives byte for byte"
+    );
+    // The page keeps its warning and says where the file went.
+    assert_eq!(
+        harness.read_status(),
+        (true, Some(kept[0].to_string_lossy().into_owned()))
+    );
 }
 
 #[test]
@@ -424,20 +761,21 @@ fn progress_is_saved_every_ten_seconds_while_playing() {
         duration: Some(600.0),
     });
     let start = Instant::now();
-    history.refresh(true, machine.machine(), None, &engine, &mut queue, start);
+    history.refresh(report(true), machine.machine(), &engine, &mut queue, start);
+    let writer = history.probe().expect("the history is kept in a file");
 
     let mut at = |seconds: f64| {
         machine.apply_event(PlayerEvent::Property(PropertyChange::TimePos(Some(
             100.0 + seconds,
         ))));
         history.refresh(
-            false,
+            report(false),
             machine.machine(),
-            None,
             &engine,
             &mut queue,
             start + Duration::from_secs_f64(seconds),
         );
+        writer.settle();
         saved(root.path(), "/media/a.mkv").map(|entry| entry.position)
     };
     assert_eq!(at(9.9), None);
@@ -659,14 +997,14 @@ fn removing_an_entry_persists_and_stops_recording_the_playing_media() {
         HistoryActionResult::Done {}
     );
     assert_eq!(harness.history_events(), vec![HistoryEvent::Changed {}]);
-    assert_eq!(saved(root.path(), "/media/a.mkv"), None);
+    assert_eq!(harness.saved("/media/a.mkv"), None);
 
     // The removed media keeps playing without coming back into the history.
     let _ = harness.dispatch(Command::SetPaused { paused: false });
     harness.play_to(200.0);
     let _ = harness.dispatch(Command::SetVolume { volume: 50.0 });
     let _ = harness.dispatch(Command::SetPaused { paused: true });
-    assert_eq!(saved(root.path(), "/media/a.mkv"), None);
+    assert_eq!(harness.saved("/media/a.mkv"), None);
     assert_eq!(
         harness.act(HistoryAction::Remove { source }),
         HistoryActionResult::Unchanged {}
@@ -678,7 +1016,7 @@ fn removing_an_entry_persists_and_stops_recording_the_playing_media() {
     harness.play_to(90.0);
     let _ = harness.dispatch(Command::Close {});
     assert_eq!(
-        saved(root.path(), "/media/a.mkv").map(|entry| entry.position),
+        harness.saved("/media/a.mkv").map(|entry| entry.position),
         Some(90.0)
     );
 }
@@ -689,19 +1027,35 @@ fn a_failed_save_is_reported_once_until_one_succeeds() {
     // A file where the data directory should be makes every save fail.
     let data = root.path().join("data");
     fs::write(&data, b"not a directory").expect("blocking file");
-    let harness = Harness::with_store(HistoryStore::open(&data));
+    let harness = Harness::new(&data);
     harness.open("/media/a.mkv");
     harness.load(600.0, vec![]);
-    harness.play_to(120.0);
-    let _ = harness.dispatch(Command::SetPaused { paused: true });
-    let _ = harness.dispatch(Command::SetVolume { volume: 50.0 });
+    let save_at = |position: f64| {
+        let _ = harness.dispatch(Command::SetPaused { paused: false });
+        harness.play_to(position);
+        let _ = harness.dispatch(Command::SetPaused { paused: true });
+        harness.writer.settle();
+        // The session collects what the writer did with its next look.
+        harness.publish(|_| {}, vec![]);
+        harness
+            .history_events()
+            .into_iter()
+            .filter(|event| matches!(event, HistoryEvent::SaveFailed { .. }))
+            .count()
+    };
+    assert_eq!(save_at(120.0), 1);
+    assert_eq!(save_at(130.0), 0, "a failure is reported once");
 
-    let failures = harness
-        .history_events()
-        .into_iter()
-        .filter(|event| matches!(event, HistoryEvent::SaveFailed { .. }))
-        .count();
-    assert_eq!(failures, 1);
+    // Once a save succeeds, the next failure is news again.
+    fs::remove_file(&data).expect("unblock the data directory");
+    assert_eq!(save_at(140.0), 0);
+    assert_eq!(
+        saved(&data, "/media/a.mkv").map(|entry| entry.position),
+        Some(140.0)
+    );
+    fs::remove_dir_all(&data).expect("remove the data directory");
+    fs::write(&data, b"not a directory").expect("block it again");
+    assert_eq!(save_at(150.0), 1);
 }
 
 fn fixed_now() -> i64 {
@@ -745,10 +1099,10 @@ fn the_history_page_groups_entries_by_local_day_and_searches() {
         serde_json::to_vec_pretty(&history).expect("history serialises"),
     )
     .expect("history fixture");
-    let harness = Harness::with_store(HistoryStore::open_path_with_clock(
-        history_path(&data),
-        fixed_now,
-    ));
+    let harness = Harness::with_store(
+        HistoryStore::open_path_with_clock(history_path(&data), fixed_now),
+        &data,
+    );
 
     let (_, sections) = harness.page("", 3 * 3_600);
     let summary: Vec<_> = sections
@@ -901,7 +1255,7 @@ fn a_history_file_written_by_the_linux_build_loads_and_keeps_its_fields() {
 
     harness.play_to(1400.0);
     let _ = harness.dispatch(Command::SetPaused { paused: true });
-    let written = fs::read_to_string(history_path(&data)).expect("history file");
+    let written = String::from_utf8(harness.file()).expect("history file");
     let reloaded = History::load(&written).expect("the Linux store loads what we write");
     let entry = &reloaded.files[&episode_key];
     let original = &parsed.files["/home/example/Videos/Severance/Season 02/Severance S02E03.mkv"];

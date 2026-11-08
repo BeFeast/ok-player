@@ -69,9 +69,12 @@ pub enum HistoryQueryResult {
     },
     Page {
         private_session: bool,
-        /// The history file could not be read at startup; the page is empty
-        /// and the next recorded change replaces the file.
+        /// The history file was there when the session started but could not
+        /// be read, so the page lists only what was recorded since.
         read_failed: bool,
+        /// Where that file was moved before the first save wrote a new one, or
+        /// `null` while it is still in place. It is never overwritten.
+        unreadable_copy: Option<String>,
         /// The line under the page title, e.g. "Everything you’ve opened · kept forever".
         summary: String,
         /// The line after the last entry.

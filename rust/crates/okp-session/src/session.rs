@@ -16,7 +16,7 @@ use okp_mpv::{EndFileReason, EntryEvent, MpvEvent, error_description};
 
 use crate::coalesce::Coalescer;
 use crate::engine::{Engine, MpvEngine, Observation};
-use crate::history::{HistoryAction, HistoryActionResult, SessionHistory};
+use crate::history::{HistoryAction, HistoryActionResult, Report, SessionHistory};
 use crate::machine::SessionMachine;
 use crate::protocol::{
     Command, CommandEnvelope, DispatchReply, DispatchResult, ErrorKind, Event, EventBatch,
@@ -70,6 +70,8 @@ struct State {
     load: Option<i64>,
     /// Tracks the current open asked for, selected once its file has loaded.
     pending_tracks: Vec<(TrackKind, i64)>,
+    /// The end of file that ended the current media carried an error.
+    end_failed: bool,
     /// Resume, progress, per-file memory and the private session.
     history: SessionHistory,
 }
@@ -146,6 +148,8 @@ impl Session {
         let signal = Arc::new(Signal::default());
         let listener_signal = Arc::clone(&signal);
         engine.set_listener(Some(Arc::new(move || listener_signal.notify())));
+        let history_signal = Arc::clone(&signal);
+        history.set_waker(Arc::new(move || history_signal.notify()));
         let shared = Arc::new(Shared {
             engine,
             state: Mutex::new(State {
@@ -155,6 +159,7 @@ impl Session {
                 observed_paused: None,
                 load: None,
                 pending_tracks: Vec::new(),
+                end_failed: false,
                 history,
             }),
             signal,
@@ -270,6 +275,12 @@ impl Session {
             self.shared.signal.notify();
         }
         snapshot
+    }
+
+    /// When the event thread next wakes on its own, as of a refresh now.
+    #[cfg(test)]
+    pub(crate) fn next_wake(&self) -> Option<Instant> {
+        lock(&self.shared.state).refresh(&*self.shared.engine, Instant::now())
     }
 
     /// Take every queued event as one batch and re-arm the wakeup.
@@ -397,7 +408,7 @@ fn event_loop(shared: &Arc<Shared>) {
 
 impl State {
     /// Fold the engine's latest report into the machine and the queue. Returns
-    /// when a held playhead update falls due.
+    /// when a held playhead update or a timed history save falls due.
     fn refresh(&mut self, engine: &dyn Engine, now: Instant) -> Option<Instant> {
         // Events first: the engine publishes a pass's observations before its
         // events, so an observation read after the events is never older than
@@ -411,9 +422,12 @@ impl State {
         self.reconcile_observation(&observation);
         // Remembered per-file choices go first, so the open's own tracks win.
         self.history.refresh(
-            loaded,
+            Report {
+                loaded,
+                end_failed: self.end_failed,
+                title: observation.title.as_deref(),
+            },
             self.machine.machine(),
-            observation.title.as_deref(),
             engine,
             &mut self.queue,
             now,
@@ -422,7 +436,12 @@ impl State {
             self.select_pending_tracks(engine);
         }
         let current = self.project(&observation);
-        self.queue.observe(&current, now)
+        let held = self.queue.observe(&current, now);
+        // A history change waiting for its timed save wakes the thread too.
+        match (held, self.history.next_save()) {
+            (Some(held), Some(save)) => Some(held.min(save)),
+            (held, save) => held.or(save),
+        }
     }
 
     /// The command to dispatch for `command`, with the history's say in it.
@@ -548,6 +567,7 @@ impl State {
                 if !self.ends_current_media(entry, reason, error.is_some(), path.as_deref()) {
                     return false;
                 }
+                self.end_failed = error.is_some();
                 if let Some(message) = error {
                     self.machine.apply_event(PlayerEvent::Error(PlayerError {
                         kind: PlayerErrorKind::LoadFailed,

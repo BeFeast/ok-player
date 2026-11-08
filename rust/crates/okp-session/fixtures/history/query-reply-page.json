@@ -6,6 +6,7 @@
         "page": {
           "private_session": true,
           "read_failed": false,
+          "unreadable_copy": null,
           "summary": "Everything you’ve opened · kept forever",
           "end_cap": "End of history · kept forever",
           "sections": [

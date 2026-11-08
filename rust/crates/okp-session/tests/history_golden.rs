@@ -156,6 +156,7 @@ fn every_history_query_and_its_answer_match_their_fixtures() {
         query_reply(HistoryQueryResult::Page {
             private_session: true,
             read_failed: false,
+            unreadable_copy: None,
             summary: "Everything you’ve opened · kept forever".to_owned(),
             end_cap: "End of history · kept forever".to_owned(),
             sections: vec![HistorySection {

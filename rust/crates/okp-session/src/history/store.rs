@@ -5,7 +5,8 @@
 //! keeps the Linux schema (`okp_core::history::History`, pretty-printed), so a
 //! history written by either build loads in the other. Writes go to a temporary
 //! file that is flushed and then renamed over the real one, so an interrupted
-//! write leaves the previous file intact.
+//! write leaves the previous file intact. A file that was there but could not be
+//! read is moved aside before the first write, never overwritten.
 //!
 //! Bookmarks, clearing and retention pruning stay in the GTK store until their
 //! macOS issues lift them.
@@ -33,7 +34,7 @@ pub const HISTORY_FILE_NAME: &str = "history.json";
 #[derive(Debug)]
 pub struct HistoryStore {
     /// Where the document lives; `None` keeps it in memory only.
-    path: Option<PathBuf>,
+    file: Option<HistoryFile>,
     data: History,
     listable_paths: BTreeSet<String>,
     recording_session: HistoryRecordingSession,
@@ -46,7 +47,8 @@ pub struct HistoryStore {
 impl HistoryStore {
     /// Open the history in `data_dir`. A missing file is an empty history; an
     /// unreadable or unrecognised one is an empty history with
-    /// [`HistoryStore::read_failed`] set, and is replaced by the next save.
+    /// [`HistoryStore::read_failed`] set, and the first save moves it aside to
+    /// `history.json.unreadable-<unix seconds>` before writing.
     pub fn open(data_dir: &Path) -> Self {
         Self::open_path(data_dir.join(HISTORY_FILE_NAME))
     }
@@ -67,6 +69,9 @@ impl HistoryStore {
         };
         let mut store = Self::with_data(Some(path), data, clock);
         store.read_failed = read_failed;
+        if let Some(file) = store.file.as_mut() {
+            file.unread = read_failed;
+        }
         store
     }
 
@@ -83,7 +88,11 @@ impl HistoryStore {
             .cloned()
             .collect();
         Self {
-            path,
+            file: path.map(|path| HistoryFile {
+                path,
+                unread: false,
+                kept: None,
+            }),
             data,
             listable_paths,
             recording_session: HistoryRecordingSession::default(),
@@ -93,9 +102,16 @@ impl HistoryStore {
         }
     }
 
-    /// The file could not be read or parsed when the store was opened.
+    /// The file could not be read or parsed when the store was opened. It stays
+    /// set after saves: what the file held is not in this history.
     pub fn read_failed(&self) -> bool {
         self.read_failed
+    }
+
+    /// Where the file that could not be read was moved before the first save,
+    /// once that has happened.
+    pub fn unreadable_copy(&self) -> Option<&Path> {
+        self.file.as_ref().and_then(HistoryFile::kept)
     }
 
     /// Changes not yet written.
@@ -246,16 +262,9 @@ impl HistoryStore {
         source: &PlaylistItem,
         active: bool,
     ) -> io::Result<bool> {
-        let before = self.snapshot();
-        let key = source.history_key();
-        if !self.data.remove(&key) {
+        let Some(before) = self.remove_unsaved(source, active) else {
             return Ok(false);
-        }
-        self.listable_paths.remove(&key);
-        if active {
-            self.recording_session.suppress(source);
-        }
-        self.dirty = true;
+        };
         if let Err(error) = self.save() {
             self.restore(before);
             return Err(error);
@@ -263,18 +272,82 @@ impl HistoryStore {
         Ok(true)
     }
 
+    /// [`HistoryStore::remove_source_persisted`] that hands the resulting
+    /// document to `write` instead of writing the file itself.
+    pub(crate) fn remove_source_with(
+        &mut self,
+        source: &PlaylistItem,
+        active: bool,
+        write: impl FnOnce(Vec<u8>) -> io::Result<()>,
+    ) -> io::Result<bool> {
+        let Some(before) = self.remove_unsaved(source, active) else {
+            return Ok(false);
+        };
+        if let Err(error) = self.take_unsaved().and_then(|document| match document {
+            Some(document) => write(document),
+            None => Ok(()),
+        }) {
+            self.restore(before);
+            return Err(error);
+        }
+        Ok(true)
+    }
+
+    /// Remove `source` in memory; returns the state to restore if the removal
+    /// cannot be saved.
+    fn remove_unsaved(
+        &mut self,
+        source: &PlaylistItem,
+        active: bool,
+    ) -> Option<HistoryStoreSnapshot> {
+        let before = self.snapshot();
+        let key = source.history_key();
+        if !self.data.remove(&key) {
+            return None;
+        }
+        self.listable_paths.remove(&key);
+        if active {
+            self.recording_session.suppress(source);
+        }
+        self.dirty = true;
+        Some(before)
+    }
+
     /// Write the document if anything changed since the last save.
     pub fn save(&mut self) -> io::Result<()> {
-        if !self.dirty {
+        let Some(document) = self.take_unsaved()? else {
             return Ok(());
+        };
+        if let Some(file) = self.file.as_mut()
+            && let Err(error) = file.write(&document)
+        {
+            self.dirty = true;
+            return Err(error);
         }
-        if let Some(path) = &self.path {
-            let json = serde_json::to_vec_pretty(&self.data).map_err(io::Error::other)?;
-            write_atomically(path, &json, |file, bytes| file.write_all(bytes))?;
-        }
-        self.dirty = false;
-        self.read_failed = false;
         Ok(())
+    }
+
+    /// The document to write if anything changed since it was last taken; the
+    /// store counts as saved from then on.
+    pub(crate) fn take_unsaved(&mut self) -> io::Result<Option<Vec<u8>>> {
+        if !self.dirty {
+            return Ok(None);
+        }
+        let document = serde_json::to_vec_pretty(&self.data).map_err(io::Error::other)?;
+        self.dirty = false;
+        Ok(Some(document))
+    }
+
+    /// A document taken with [`HistoryStore::take_unsaved`] was not written:
+    /// the next save writes the history again.
+    pub(crate) fn mark_unsaved(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Hand the file over to whoever writes it from now on; the store then keeps
+    /// the history in memory only.
+    pub(crate) fn take_file(&mut self) -> Option<HistoryFile> {
+        self.file.take()
     }
 
     fn write_mode(&self, source: &PlaylistItem, private_session: bool) -> HistoryWriteMode {
@@ -306,6 +379,60 @@ struct HistoryStoreSnapshot {
     recording_session: HistoryRecordingSession,
     dirty: bool,
     read_failed: bool,
+}
+
+/// The history file on disk.
+#[derive(Debug)]
+pub(crate) struct HistoryFile {
+    path: PathBuf,
+    /// The file was there when the history was opened but could not be read:
+    /// move it aside before writing over it.
+    unread: bool,
+    /// Where it was moved.
+    kept: Option<PathBuf>,
+}
+
+impl HistoryFile {
+    /// Where the unreadable file was moved, once it has been.
+    pub(crate) fn kept(&self) -> Option<&Path> {
+        self.kept.as_deref()
+    }
+
+    /// Replace the file with `document`. A file that could not be read is moved
+    /// aside first; if that fails, nothing is written.
+    pub(crate) fn write(&mut self, document: &[u8]) -> io::Result<()> {
+        if self.unread {
+            self.kept = keep_aside(&self.path, unix_now())?;
+            self.unread = false;
+        }
+        write_atomically(&self.path, document, |file, bytes| file.write_all(bytes))
+    }
+}
+
+/// Rename `path` to `<name>.unreadable-<unix>` (with a counter if that is
+/// taken) and return the new path, or `None` if `path` is gone.
+fn keep_aside(path: &Path, unix: i64) -> io::Result<Option<PathBuf>> {
+    let name = path
+        .file_name()
+        .map_or_else(|| HISTORY_FILE_NAME.into(), |name| name.to_string_lossy());
+    let mut attempt = 0_u32;
+    let kept = loop {
+        let suffix = if attempt == 0 {
+            String::new()
+        } else {
+            format!("-{attempt}")
+        };
+        let candidate = path.with_file_name(format!("{name}.unreadable-{unix}{suffix}"));
+        if candidate.symlink_metadata().is_err() {
+            break candidate;
+        }
+        attempt += 1;
+    };
+    match fs::rename(path, &kept) {
+        Ok(()) => Ok(Some(kept)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// Replace `path` with `bytes` so that a reader sees either the old file or the
@@ -921,5 +1048,73 @@ mod tests {
         let history = HistoryStore::open_path(path);
         assert!(history.read_failed());
         assert!(history.search("").is_empty());
+    }
+
+    #[test]
+    fn saving_over_an_unreadable_file_moves_it_aside_first() {
+        let root = unique_temp_dir("okp-session-history-keep-unreadable");
+        let path = root.path().join("history.json");
+        let original = b"{\"version\":2,\"files\":{\"/media/keep.mkv\":{\"posi".to_vec();
+        fs::write(&path, &original).expect("corrupt fixture");
+
+        let mut history = HistoryStore::open_path(path.clone());
+        assert!(history.read_failed());
+        assert_eq!(
+            history.unreadable_copy(),
+            None,
+            "nothing moves before a save"
+        );
+        record(&mut history, "/media/movie.mkv", 120.0, 600.0, false);
+        history.save().expect("the save succeeds");
+
+        let kept = history
+            .unreadable_copy()
+            .expect("the unreadable file was kept")
+            .to_path_buf();
+        assert!(
+            kept.file_name().is_some_and(|name| name
+                .to_string_lossy()
+                .starts_with("history.json.unreadable-")),
+            "{kept:?}"
+        );
+        assert_eq!(fs::read(&kept).expect("the kept file"), original);
+        assert!(history.read_failed(), "what the file held is still missing");
+        assert_eq!(
+            HistoryStore::open_path(path.clone())
+                .resume_position_for_source(&local("/media/movie.mkv")),
+            Some(120.0)
+        );
+
+        // Later saves write the new file only.
+        record(&mut history, "/media/movie.mkv", 150.0, 600.0, false);
+        history.save().expect("a second save");
+        assert_eq!(fs::read(&kept).expect("the kept file"), original);
+        assert_eq!(
+            fs::read_dir(root.path()).expect("data directory").count(),
+            2,
+            "the new file and the kept one"
+        );
+    }
+
+    #[test]
+    fn a_kept_copy_never_replaces_an_earlier_one() {
+        let root = unique_temp_dir("okp-session-history-keep-twice");
+        let path = root.path().join("history.json");
+        let earlier = root.path().join("history.json.unreadable-5");
+        fs::write(&earlier, b"earlier").expect("an earlier kept file");
+        fs::write(&path, b"later").expect("the unreadable file");
+
+        let kept = keep_aside(&path, 5)
+            .expect("the rename succeeds")
+            .expect("the file was there");
+
+        assert_eq!(kept, root.path().join("history.json.unreadable-5-1"));
+        assert_eq!(fs::read(&earlier).expect("earlier"), b"earlier");
+        assert_eq!(fs::read(&kept).expect("kept"), b"later");
+        assert!(!path.exists());
+        assert_eq!(
+            keep_aside(&path, 5).expect("a missing file is nothing to keep"),
+            None
+        );
     }
 }

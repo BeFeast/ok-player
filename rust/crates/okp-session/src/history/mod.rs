@@ -14,14 +14,20 @@
 //!   pause, close, opening the next media, the session closing and the engine
 //!   quitting. Playing to the end marks the entry finished.
 //! - The audio and subtitle track, subtitle delay, volume and speed a shell sets
-//!   are remembered for that media and applied when it is opened again.
+//!   are remembered for that media and applied when it is opened again. They
+//!   are written with the next save, or [`PROGRESS_SAVE_INTERVAL`] after the
+//!   first unsaved one, so a slider sending many values writes once.
 //! - While the private session is on, nothing new is recorded and nothing
 //!   remembered is applied; the history stays readable.
+//!
+//! The file is written on a thread of its own (`writer.rs`); the session lock
+//! is held only to serialise the document.
 
 mod store;
 #[cfg(test)]
 mod tests;
 mod wire;
+mod writer;
 
 pub use store::{HISTORY_FILE_NAME, HistoryStore};
 pub use wire::{
@@ -30,7 +36,8 @@ pub use wire::{
 };
 
 use std::borrow::Cow;
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use okp_core::history::{HistoryOpenIntent, Preferences};
@@ -46,6 +53,8 @@ use okp_core::settings::HistoryRetention;
 use crate::coalesce::Coalescer;
 use crate::engine::Engine;
 use crate::protocol::{Command, ErrorKind, Event, MediaSource, TrackKind};
+pub(crate) use writer::Waker;
+use writer::Writer;
 
 /// How often progress is saved while media plays: the GTK shell's cadence.
 pub const PROGRESS_SAVE_INTERVAL: Duration = Duration::from_secs(10);
@@ -53,6 +62,8 @@ pub const PROGRESS_SAVE_INTERVAL: Duration = Duration::from_secs(10);
 /// The history side of one session.
 pub(crate) struct SessionHistory {
     store: HistoryStore,
+    /// Writes the history file; `None` keeps the history in memory only.
+    writer: Option<Writer>,
     private_session: bool,
     current: Option<Current>,
     /// The remembered position [`SessionHistory::prepare`] gave the open being
@@ -60,6 +71,18 @@ pub(crate) struct SessionHistory {
     prepared_resume: Option<f64>,
     /// The last save failed and has been reported.
     save_failing: bool,
+    /// When the oldest change still waiting for a save was recorded.
+    unsaved_since: Option<Instant>,
+}
+
+/// What the engine's latest report means for the media the history follows.
+pub(crate) struct Report<'a> {
+    /// The current media has just finished loading.
+    pub(crate) loaded: bool,
+    /// The end of file that ended the current media carried an error.
+    pub(crate) end_failed: bool,
+    /// The engine's title for the current media.
+    pub(crate) title: Option<&'a str>,
 }
 
 /// The media the history follows: the one the last accepted open named.
@@ -99,14 +122,31 @@ impl SessionHistory {
         Self::with_store(HistoryStore::open(data_dir))
     }
 
-    pub(crate) fn with_store(store: HistoryStore) -> Self {
+    pub(crate) fn with_store(mut store: HistoryStore) -> Self {
+        let writer = store.take_file().map(Writer::start);
         Self {
             store,
+            writer,
             private_session: false,
             current: None,
             prepared_resume: None,
             save_failing: false,
+            unsaved_since: None,
         }
+    }
+
+    /// Have `waker` called after each write of the history file, so the
+    /// session collects the outcome without waiting for other news.
+    pub(crate) fn set_waker(&self, waker: Waker) {
+        if let Some(writer) = &self.writer {
+            writer.set_waker(waker);
+        }
+    }
+
+    /// When the next timed save falls due, if a change is waiting for one.
+    pub(crate) fn next_save(&self) -> Option<Instant> {
+        self.unsaved_since
+            .map(|since| since + PROGRESS_SAVE_INTERVAL)
     }
 
     /// The command to validate and forward in place of `command`: an open that
@@ -211,11 +251,14 @@ impl SessionHistory {
             Command::Seek { .. } | Command::SetMute { .. } | Command::History { .. } => return,
         };
         // The value the shell just set, not the engine's next report of it,
-        // which may still hold the previous value.
+        // which may still hold the previous value. It is written with the next
+        // save, not now: a slider or a held key sends many.
         if forwarded && let Some(current) = &self.current {
             self.store
                 .record_source_preferences(&current.source, choice, self.private_session);
-            self.persist(queue);
+            if self.store.is_dirty() {
+                self.unsaved_since.get_or_insert(now);
+            }
         }
     }
 
@@ -256,17 +299,36 @@ impl SessionHistory {
         });
     }
 
-    /// Fold in the session state after the engine's latest report. `loaded`
-    /// says the current media has just finished loading.
+    /// Fold in the session state after the engine's latest report, collect
+    /// what the writer did, and save if a change has waited long enough.
     pub(crate) fn refresh(
         &mut self,
-        loaded: bool,
+        report: Report<'_>,
         machine: &PlayerMachine,
-        title: Option<&str>,
         engine: &dyn Engine,
         queue: &mut Coalescer,
         now: Instant,
     ) {
+        self.collect(queue);
+        self.follow_current(report, machine, engine, queue, now);
+        if self.next_save().is_some_and(|due| now >= due) {
+            self.flush(queue);
+        }
+    }
+
+    fn follow_current(
+        &mut self,
+        report: Report<'_>,
+        machine: &PlayerMachine,
+        engine: &dyn Engine,
+        queue: &mut Coalescer,
+        now: Instant,
+    ) {
+        let Report {
+            loaded,
+            end_failed,
+            title,
+        } = report;
         let private_session = self.private_session;
         let Some(current) = self.current.as_mut() else {
             return;
@@ -294,7 +356,7 @@ impl SessionHistory {
                     private_session,
                     update,
                 );
-                self.persist(queue);
+                self.flush(queue);
             }
             return;
         }
@@ -320,13 +382,14 @@ impl SessionHistory {
                 }
             }
             PlaybackStatus::Ended => {
-                let watched_to_the_end =
-                    snapshot.end_reason == Some(EndReason::Eof) && snapshot.last_error.is_none();
+                // Judged by the end of file itself: the machine's last error may
+                // be any earlier failure, such as a refused seek.
+                let watched_to_the_end = snapshot.end_reason == Some(EndReason::Eof) && !end_failed;
                 if watched_to_the_end {
                     current.ended = true;
                     let source = current.source.clone();
                     self.store.mark_source_finished(&source, private_session);
-                    self.persist(queue);
+                    self.flush(queue);
                 } else {
                     self.save_progress(queue, now);
                     if let Some(current) = self.current.as_mut() {
@@ -338,49 +401,84 @@ impl SessionHistory {
         }
     }
 
-    /// Save the current media's progress because the session is closing.
+    /// Save the current media's progress and everything else unsaved because
+    /// the session is closing, and wait until the file is written.
     pub(crate) fn quit(&mut self, queue: &mut Coalescer) {
         self.save_progress(queue, Instant::now());
+        if let Some(writer) = &self.writer {
+            writer.wait_idle();
+        }
     }
 
-    /// Record where the current media is, if it has loaded and has not ended.
+    /// Record where the current media is, if it has loaded and has not ended,
+    /// and save everything unsaved.
     fn save_progress(&mut self, queue: &mut Coalescer, now: Instant) {
-        let Some(current) = self.current.as_mut() else {
-            return;
-        };
-        current.last_saved = now;
-        if !current.loaded || current.ended {
-            return;
+        if let Some(current) = self.current.as_mut() {
+            current.last_saved = now;
+            if current.loaded && !current.ended {
+                let title = current.title_update();
+                match current.sample {
+                    Some((position, duration)) => self.store.record_source_with_title(
+                        &current.source,
+                        position.clamp(0.0, duration),
+                        duration,
+                        false,
+                        self.private_session,
+                        title,
+                    ),
+                    None if matches!(current.source, PlaylistItem::Url(_)) => self
+                        .store
+                        .record_source_opened(&current.source, None, self.private_session, title),
+                    None => {}
+                }
+            }
         }
-        let title = current.title_update();
-        match current.sample {
-            Some((position, duration)) => self.store.record_source_with_title(
-                &current.source,
-                position.clamp(0.0, duration),
-                duration,
-                false,
-                self.private_session,
-                title,
-            ),
-            None if matches!(current.source, PlaylistItem::Url(_)) => self
-                .store
-                .record_source_opened(&current.source, None, self.private_session, title),
-            None => {}
-        }
-        self.persist(queue);
+        self.flush(queue);
     }
 
-    /// Write what changed and tell the shell.
-    fn persist(&mut self, queue: &mut Coalescer) {
+    /// Hand what changed to the writer and tell the shell. Only the document is
+    /// made here; the writer thread writes it.
+    fn flush(&mut self, queue: &mut Coalescer) {
+        self.unsaved_since = None;
         if !self.store.is_dirty() {
             return;
         }
         queue.push_once(Event::History {
             event: HistoryEvent::Changed {},
         });
-        match self.store.save() {
+        match self.store.take_unsaved() {
+            Ok(Some(document)) => {
+                if let Some(writer) = &self.writer {
+                    writer.submit(document);
+                }
+            }
+            Ok(None) => {}
+            Err(error) => self.save_result(Err(error), queue),
+        }
+    }
+
+    /// Fold in what the writer has done since the last look.
+    fn collect(&mut self, queue: &mut Coalescer) {
+        let Some(outcome) = self.writer.as_ref().and_then(Writer::take_outcome) else {
+            return;
+        };
+        if outcome.moved_aside {
+            // The page reports where the unreadable file went.
+            queue.push_once(Event::History {
+                event: HistoryEvent::Changed {},
+            });
+        }
+        self.save_result(outcome.result, queue);
+    }
+
+    /// Report a failed save once until one succeeds. The history is kept, and
+    /// written again with the next save.
+    fn save_result(&mut self, result: io::Result<()>, queue: &mut Coalescer) {
+        match result {
             Ok(()) => self.save_failing = false,
             Err(error) => {
+                self.store.mark_unsaved();
+                self.unsaved_since.get_or_insert_with(Instant::now);
                 if !std::mem::replace(&mut self.save_failing, true) {
                     queue.push(Event::History {
                         event: HistoryEvent::SaveFailed {
@@ -390,6 +488,19 @@ impl SessionHistory {
                 }
             }
         }
+    }
+
+    /// Where the file that could not be read was moved, once it has been.
+    fn unreadable_copy(&self) -> Option<PathBuf> {
+        match &self.writer {
+            Some(writer) => writer.kept(),
+            None => self.store.unreadable_copy().map(Path::to_path_buf),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn probe(&self) -> Option<writer::Probe> {
+        self.writer.as_ref().map(Writer::probe)
     }
 
     /// Carry out a history action.
@@ -420,18 +531,31 @@ impl SessionHistory {
                     .current
                     .as_ref()
                     .is_some_and(|current| current.source == source);
-                match self.store.remove_source_persisted(&source, active) {
+                self.collect(queue);
+                // The shell is told whether the removal was saved, so this one
+                // write is waited for. It carries every unsaved change with it.
+                let writer = self.writer.as_ref();
+                let removed = self.store.remove_source_with(&source, active, |document| {
+                    writer.map_or(Ok(()), |writer| writer.write_now(document))
+                });
+                match removed {
                     Ok(true) => {
                         self.save_failing = false;
+                        self.unsaved_since = None;
                         queue.push_once(Event::History {
                             event: HistoryEvent::Changed {},
                         });
                         HistoryActionResult::Done {}
                     }
                     Ok(false) => HistoryActionResult::Unchanged {},
-                    Err(error) => HistoryActionResult::Failed {
-                        message: format!("the history could not be saved: {error}"),
-                    },
+                    Err(error) => {
+                        // Changes made before the removal may not be on disk.
+                        self.store.mark_unsaved();
+                        self.unsaved_since.get_or_insert_with(Instant::now);
+                        HistoryActionResult::Failed {
+                            message: format!("the history could not be saved: {error}"),
+                        }
+                    }
                 }
             }
         }
@@ -495,6 +619,9 @@ impl SessionHistory {
                 HistoryQueryResult::Page {
                     private_session: self.private_session,
                     read_failed: self.store.read_failed(),
+                    unreadable_copy: self
+                        .unreadable_copy()
+                        .map(|path| path.to_string_lossy().into_owned()),
                     summary: history_format::retention_summary(retention),
                     end_cap: history_format::retention_end_cap(retention),
                     sections,
