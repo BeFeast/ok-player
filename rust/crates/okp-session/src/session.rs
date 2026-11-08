@@ -16,11 +16,13 @@ use okp_mpv::{EndFileReason, EntryEvent, MpvEvent, error_description};
 
 use crate::coalesce::Coalescer;
 use crate::engine::{Engine, MpvEngine, Observation};
+use crate::history::{HistoryAction, HistoryActionResult, SessionHistory};
 use crate::machine::SessionMachine;
 use crate::protocol::{
     Command, CommandEnvelope, DispatchReply, DispatchResult, ErrorKind, Event, EventBatch,
-    MediaSource, Query, QueryEnvelope, QueryReply, QueryResult, RejectReason, SCHEMA_VERSION,
-    SessionConfig, SessionSnapshot, Track, TrackKind, VideoGeometry, parse_envelope, to_json,
+    MediaSource, Query, QueryEnvelope, QueryReply, QueryResult, RejectReason, Route,
+    SCHEMA_VERSION, SessionConfig, SessionSnapshot, Track, TrackKind, VideoGeometry,
+    parse_envelope, to_json,
 };
 use crate::reconcile::{core_end_reason, endfile_error, event_matches_source};
 
@@ -68,6 +70,8 @@ struct State {
     load: Option<i64>,
     /// Tracks the current open asked for, selected once its file has loaded.
     pending_tracks: Vec<(TrackKind, i64)>,
+    /// Resume, progress, per-file memory and the private session.
+    history: SessionHistory,
 }
 
 /// Wakes the event thread: set by the engine listener, by commands and by
@@ -116,7 +120,10 @@ impl Session {
     pub fn new(config: &SessionConfig) -> Result<Self, String> {
         validate_config(config)?;
         let engine = MpvEngine::new(config)?;
-        Ok(Self::with_engine(Box::new(engine)))
+        Ok(Self::start(
+            Box::new(engine),
+            SessionHistory::open(&config.data_dir),
+        ))
     }
 
     /// [`Session::new`] from a config document.
@@ -126,7 +133,16 @@ impl Session {
         Self::new(&config)
     }
 
+    /// A session whose history is kept in memory only.
+    #[cfg(test)]
     pub(crate) fn with_engine(engine: Box<dyn Engine>) -> Self {
+        Self::start(
+            engine,
+            SessionHistory::with_store(crate::history::HistoryStore::in_memory()),
+        )
+    }
+
+    pub(crate) fn start(engine: Box<dyn Engine>, history: SessionHistory) -> Self {
         let signal = Arc::new(Signal::default());
         let listener_signal = Arc::clone(&signal);
         engine.set_listener(Some(Arc::new(move || listener_signal.notify())));
@@ -139,6 +155,7 @@ impl Session {
                 observed_paused: None,
                 load: None,
                 pending_tracks: Vec::new(),
+                history,
             }),
             signal,
             wakeup: Mutex::new(None),
@@ -175,19 +192,32 @@ impl Session {
     }
 
     /// Validate `command` with the core state machine and, only if it accepts,
-    /// hand it to the engine.
+    /// hand it to the engine. A history action is carried out by the session
+    /// itself.
     pub fn dispatch(&self, command: &Command) -> DispatchResult {
-        let core = command.to_core();
         let engine = &*self.shared.engine;
         let mut state = lock(&self.shared.state);
+        let command = state.prepare(command);
+        let core = match command.route() {
+            Route::Player(core) => core,
+            Route::History(action) => {
+                let result = state.history_action(action);
+                drop(state);
+                self.shared.signal.notify();
+                return DispatchResult::History { result };
+            }
+        };
         let mut load = None;
         let (outcome, engine_result) = state.machine.dispatch(&core, |_, request_id| {
             engine
-                .forward(command, request_id)
+                .forward(&command, request_id)
                 .map(|entry| load = entry)
         });
         if engine_result.is_ok() {
-            state.track_load(command, outcome, load);
+            state.track_load(&command, outcome, load);
+        }
+        if matches!(outcome, CommandOutcome::Accepted { .. }) {
+            state.history_dispatched(&command, engine_result.is_ok(), engine);
         }
         let result = match (outcome, engine_result) {
             (CommandOutcome::Accepted { request_id }, Ok(())) => {
@@ -220,6 +250,9 @@ impl Session {
         match query {
             Query::Snapshot {} => QueryResult::Snapshot {
                 snapshot: self.snapshot(),
+            },
+            Query::History { query } => QueryResult::History {
+                result: lock(&self.shared.state).history.query(query),
             },
         }
     }
@@ -323,6 +356,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        lock(&self.shared.state).quit(&*self.shared.engine);
         self.shared.running.store(false, Ordering::Release);
         self.shared.engine.set_listener(None);
         self.shared.signal.notify();
@@ -375,11 +409,46 @@ impl State {
             loaded |= self.reconcile_event(event, &observation);
         }
         self.reconcile_observation(&observation);
+        // Remembered per-file choices go first, so the open's own tracks win.
+        self.history.refresh(
+            loaded,
+            self.machine.machine(),
+            observation.title.as_deref(),
+            engine,
+            &mut self.queue,
+            now,
+        );
         if loaded {
             self.select_pending_tracks(engine);
         }
         let current = self.project(&observation);
         self.queue.observe(&current, now)
+    }
+
+    /// The command to dispatch for `command`, with the history's say in it.
+    fn prepare<'c>(&mut self, command: &'c Command) -> std::borrow::Cow<'c, Command> {
+        self.history.prepare(command, &mut self.queue)
+    }
+
+    fn history_action(&mut self, action: &HistoryAction) -> HistoryActionResult {
+        self.history.act(action, &mut self.queue)
+    }
+
+    fn history_dispatched(&mut self, command: &Command, forwarded: bool, engine: &dyn Engine) {
+        self.history.dispatched(
+            command,
+            forwarded,
+            self.machine.machine(),
+            engine,
+            &mut self.queue,
+        );
+    }
+
+    /// Fold in the engine's last report and save the history: the session is
+    /// closing.
+    fn quit(&mut self, engine: &dyn Engine) {
+        self.refresh(engine, Instant::now());
+        self.history.quit(&mut self.queue);
     }
 
     /// Remember what a forwarded command means for the current load.

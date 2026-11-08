@@ -11,6 +11,7 @@
 
 mod coalesce;
 mod engine;
+pub mod history;
 pub mod machine;
 pub mod protocol;
 pub mod reconcile;

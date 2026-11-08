@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "result": {
+    "history": {
+      "result": {
+        "page": {
+          "private_session": true,
+          "read_failed": false,
+          "summary": "Everything you’ve opened · kept forever",
+          "end_cap": "End of history · kept forever",
+          "sections": [
+            {
+              "bucket": "earlier",
+              "header": "EARLIER",
+              "entries": [
+                {
+                  "source": { "kind": "url", "location": "https://example.com/watch?v=abc123" },
+                  "title": "Example talk",
+                  "location": "https://example.com/watch?v=abc123",
+                  "position": 0.0,
+                  "duration": 900.0,
+                  "progress": 0.0,
+                  "state": "finished",
+                  "state_label": "Finished",
+                  "when_label": "12 Jun",
+                  "updated_at_unix": 1686528000,
+                  "resume_from": null
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -16,6 +16,11 @@ use okp_core::player as core;
 use okp_core::playlist::PlaylistItem;
 use serde::{Deserialize, Serialize};
 
+pub use crate::history::{
+    HistoryAction, HistoryActionResult, HistoryBucket, HistoryEntry, HistoryEvent, HistoryQuery,
+    HistoryQueryResult, HistorySection, HistoryState,
+};
+
 /// Version of every envelope below. Bump on any change a shell built against
 /// the previous version could not decode or would misread.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -122,6 +127,10 @@ pub enum Command {
     SetSubtitleDelay {
         seconds: f64,
     },
+    /// A watch-history action; see [`HistoryAction`].
+    History {
+        action: HistoryAction,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +180,8 @@ pub enum DispatchResult {
     /// Validated, but the engine refused it immediately. The session state has
     /// already absorbed the failure.
     Failed { request_id: u64, message: String },
+    /// The answer to a `history` command.
+    History { result: HistoryActionResult },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,6 +212,8 @@ pub struct QueryEnvelope {
 pub enum Query {
     /// The full session state, as the event stream has reported it so far.
     Snapshot {},
+    /// A watch-history query; see [`HistoryQuery`].
+    History { query: HistoryQuery },
 }
 
 /// `{"schema_version":1,"result":{...}}`, the answer to a query.
@@ -216,6 +229,10 @@ pub struct QueryReply {
 pub enum QueryResult {
     Snapshot {
         snapshot: SessionSnapshot,
+    },
+    /// The answer to a `history` query.
+    History {
+        result: HistoryQueryResult,
     },
     Rejected {
         reason: RejectReason,
@@ -249,6 +266,10 @@ pub enum Event {
     },
     /// The engine has quit; the session accepts no further playback.
     Shutdown {},
+    /// A watch-history event; see [`HistoryEvent`].
+    History {
+        event: HistoryEvent,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -425,10 +446,19 @@ impl MediaSource {
     }
 }
 
+/// Where the session sends a command.
+pub(crate) enum Route<'a> {
+    /// The core command `PlayerMachine` validates before the engine sees it.
+    Player(core::PlayerCommand),
+    /// A history action, which the session carries out itself.
+    History(&'a HistoryAction),
+}
+
 impl Command {
-    /// The core command `PlayerMachine` validates for this intent.
-    pub(crate) fn to_core(&self) -> core::PlayerCommand {
-        match self {
+    /// Where this command goes: a player command becomes the core command the
+    /// state machine validates.
+    pub(crate) fn route(&self) -> Route<'_> {
+        Route::Player(match self {
             Self::Open {
                 source,
                 resume_from,
@@ -461,7 +491,8 @@ impl Command {
                 id: *id,
             },
             Self::SetSubtitleDelay { seconds } => core::PlayerCommand::SetSubtitleDelay(*seconds),
-        }
+            Self::History { action } => return Route::History(action),
+        })
     }
 }
 

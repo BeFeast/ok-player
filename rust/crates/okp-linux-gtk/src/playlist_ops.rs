@@ -1416,6 +1416,9 @@ pub(crate) fn read_current_playback_preferences(mpv: &Mpv) -> history::PlaybackP
         subtitle_scale: finite_option(mpv.observed_subtitle_scale()),
         audio_delay: finite_option(mpv.observed_audio_delay()),
         speed: finite_option(mpv.observed_speed()),
+        // Volume stays global on Linux; a per-file volume another shell recorded is
+        // left as it is by the merge.
+        volume: None,
         video_geometry: None,
     }
 }

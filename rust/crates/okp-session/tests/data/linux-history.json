@@ -1,0 +1,55 @@
+{
+  "version": 2,
+  "files": {
+    "/home/example/Videos/Severance/Season 02/Severance S02E03.mkv": {
+      "position": 1325.5,
+      "duration": 3120.0,
+      "finished": false,
+      "updated_at_unix": 1699990000,
+      "title": "Severance — Who Is Alive?",
+      "bookmarks": [
+        600.0,
+        1200.25
+      ],
+      "preferences": {
+        "audio_enabled": true,
+        "audio_track_id": 2,
+        "subtitle_enabled": false,
+        "secondary_subtitle_enabled": true,
+        "secondary_subtitle_track_id": 3,
+        "subtitle_delay": -0.35,
+        "subtitle_scale": 1.1,
+        "audio_delay": 0.12,
+        "speed": 1.25,
+        "video_geometry": {
+          "aspect": "2.35:1",
+          "zoom": 1.5,
+          "pan_x": -0.2,
+          "pan_y": 0.1,
+          "rotation_degrees": 0,
+          "fill_screen": false,
+          "deinterlace": false
+        }
+      }
+    },
+    "/home/example/Videos/barely.webm": {
+      "position": 20.0,
+      "duration": 1800.0,
+      "finished": false,
+      "updated_at_unix": 1699800000
+    },
+    "/home/example/Videos/finished.mp4": {
+      "position": 0.0,
+      "duration": 5400.0,
+      "finished": true,
+      "updated_at_unix": 1699900000
+    },
+    "https://example.com/watch?v=abc123": {
+      "position": 300.0,
+      "duration": 900.0,
+      "finished": false,
+      "updated_at_unix": 1699950000,
+      "title": "Example talk"
+    }
+  }
+}
