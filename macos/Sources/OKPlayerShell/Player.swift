@@ -171,6 +171,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return view
         }
         video.onTogglePause = { [weak self] in self?.togglePause() }
+        osc.focusReturn = video
         video.videoLayer.onError = { [weak self] message in self?.fail(message) }
         if let handle = client.handle { video.videoLayer.attach(session: handle) }
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
@@ -289,7 +290,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 /// 6. presented: every frame drawn reported a swap that reached libmpv (the swap
 ///    count the session returns equals the frames drawn);
 /// 7. transport controls: they stay up through the paused seconds, hide after the
-///    session's idle timeout once playback resumes without activity, come back on
+///    session's idle timeout once playback resumes without activity, hand the
+///    scrubber's keyboard focus back to the video as they hide, come back on
 ///    activity with the session's time readout, and are in the snapshots;
 /// 8. closed while playing: teardown runs in order and the app exits.
 ///
@@ -400,24 +402,28 @@ final class SmokeRun {
             fail("\(counts.swaps) swaps reached libmpv for \(counts.renders) frames drawn"); return
         }
         phase = .hiding
-        // Playing without pointer activity since the resume: the controls hide once
-        // the idle timeout has passed.
+        // Playing without pointer activity: the controls hide once the idle timeout
+        // has passed. The scrubber holds keyboard focus first, as after a click;
+        // hidden, it has to give it back to the video, which handles Space.
+        app.osc.noteActivity()
+        guard app.window.makeFirstResponder(app.osc.scrubber) else {
+            fail("The scrubber did not take keyboard focus during playback"); return
+        }
         let hideAfter = app.osc.transport?.osc.hideAfter ?? 2.5
-        if app.osc.isRevealed {
-            app.osc.onRevealChange = { [weak self] revealed in
-                if !revealed { self?.controlsHid() }
-            }
-            after(hideAfter + 1.5) { [self] in
-                if phase == .hiding { fail("The transport controls did not hide during playback") }
-            }
-        } else {
-            controlsHid()
+        app.osc.onRevealChange = { [weak self] revealed in
+            if !revealed { self?.controlsHid() }
+        }
+        after(hideAfter + 1.5) { [self] in
+            if phase == .hiding { fail("The transport controls did not hide during playback") }
         }
     }
 
     private func controlsHid() {
         guard phase == .hiding, let app, let client = app.client, let layer = app.video?.videoLayer, !cancelled else { return }
         app.osc.onRevealChange = nil
+        guard app.window.firstResponder === app.video else {
+            fail("The hidden scrubber kept keyboard focus"); return
+        }
         app.osc.noteActivity()
         let elapsed = app.osc.elapsedLabel.stringValue, trailing = app.osc.trailingLabel.stringValue
         guard app.osc.isRevealed, !app.osc.panel.isHidden, elapsed.contains(":"), elapsed != "00:00" else {
@@ -432,7 +438,7 @@ final class SmokeRun {
               + "before_resize=\(resizeRenders) ca_contexts_held=\(use.held) ca_context_copies=\(use.copies) "
               + "draw_contexts=\(use.drawnInto.count) pixel_format=\(pixelFormat) "
               + "volume=\(Int(snapshot.volume ?? -1)) tracks=\(snapshot.tracks.count) "
-              + "osc_paused_shown=true osc_auto_hidden=true osc_elapsed=\(elapsed) osc_trailing=\(trailing)")
+              + "osc_paused_shown=true osc_auto_hidden=true osc_focus_returned=true osc_elapsed=\(elapsed) osc_trailing=\(trailing)")
         if let directory = app.snapshotDirectory { app.captureAppearances(to: directory) }
         // Closing the window during playback runs the real teardown path; the app
         // reports it once teardown has returned.

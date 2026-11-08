@@ -76,6 +76,17 @@ final class ScrubStateTests: XCTestCase {
         XCTAssertNil(scrub.end(at: 0.5, duration: 100))
     }
 
+    func testACancelledDragLeavesNoPositionAndIgnoresTheRestOfThePress() {
+        var scrub = ScrubState()
+        XCTAssertNotNil(scrub.begin(at: 0.5, duration: 100))
+        scrub.cancel()
+        XCTAssertFalse(scrub.isDragging)
+        XCTAssertNil(scrub.dragPosition(duration: 600), "the next file shows its own playhead")
+        XCTAssertNil(scrub.move(to: 0.7, duration: 600), "the pointer still moving after the drag ended")
+        XCTAssertFalse(scrub.isDragging)
+        XCTAssertNil(scrub.end(at: 0.7, duration: 600))
+    }
+
     func testTheTrackFractionIgnoresTheInsetEnds() {
         XCTAssertEqual(TrackGeometry.fraction(atX: 7, width: 214, inset: 7), 0)
         XCTAssertEqual(TrackGeometry.fraction(atX: 107, width: 214, inset: 7), 0.5)

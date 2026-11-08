@@ -49,12 +49,32 @@ struct ScrubState {
 
     /// The pointer went down on the track. Nil when the media cannot be sought.
     mutating func begin(at fraction: Double, duration: Double?) -> Command? {
-        lastLiveTarget = nil
-        return move(to: fraction, duration: duration)
+        cancel()
+        return track(fraction, duration: duration)
     }
 
-    /// The pointer moved during the drag.
+    /// The pointer moved during the drag. Nothing once the drag has ended.
     mutating func move(to fraction: Double, duration: Double?) -> Command? {
+        guard isDragging else { return nil }
+        return track(fraction, duration: duration)
+    }
+
+    /// The pointer was released: an exact seek to where it is.
+    mutating func end(at fraction: Double, duration: Double?) -> Command? {
+        defer { cancel() }
+        guard isDragging, let duration = Self.seekable(duration) else { return nil }
+        return .seek(seconds: Self.clamped(fraction) * duration, mode: .absolute, precision: .exact)
+    }
+
+    /// The drag is over without a release, because the media can no longer be
+    /// sought (it ended under the pointer): no seek, and no drag position left
+    /// behind for the next file.
+    mutating func cancel() {
+        dragFraction = nil
+        lastLiveTarget = nil
+    }
+
+    private mutating func track(_ fraction: Double, duration: Double?) -> Command? {
         guard let duration = Self.seekable(duration) else {
             dragFraction = nil
             return nil
@@ -65,16 +85,6 @@ struct ScrubState {
         if let last = lastLiveTarget, abs(target - last) < Self.minimumLiveStep { return nil }
         lastLiveTarget = target
         return .seek(seconds: target, mode: .absolute, precision: .keyframe)
-    }
-
-    /// The pointer was released: an exact seek to where it is.
-    mutating func end(at fraction: Double, duration: Double?) -> Command? {
-        defer {
-            dragFraction = nil
-            lastLiveTarget = nil
-        }
-        guard isDragging, let duration = Self.seekable(duration) else { return nil }
-        return .seek(seconds: Self.clamped(fraction) * duration, mode: .absolute, precision: .exact)
     }
 
     private static func seekable(_ duration: Double?) -> Double? {

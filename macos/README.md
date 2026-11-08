@@ -312,14 +312,21 @@ Swift side only turns input into commands and keeps the hide timer.
 
 - **Scrubber:** a click or drag sends keyframe seeks while the pointer moves and
   one exact seek where it is released; the readout follows the drag position. It
-  shows the buffered range and chapter ticks, and Left/Right step five seconds
-  while it has keyboard focus.
+  shows the buffered range and chapter ticks. While it has keyboard focus,
+  Left/Right step five seconds and Space toggles pause. It gives keyboard focus
+  back to the video as soon as the controls hide or the media can no longer be
+  sought, so Space always reaches the player. If the file ends under a held
+  press, the drag ends there: nothing seeks on release, and the next file shows
+  its own playhead.
 - **Time:** elapsed time and a trailing label that switches between remaining and
   total time on a click, in tabular digits.
-- **Volume:** 0-130 % with mute. Scrolling anywhere over the video sends
-  `nudge_volume` steps: a wheel notch is one step however fast the wheel spins,
-  trackpad points add up to steps (at most three per event), and the inertia after
-  lifting the fingers changes nothing.
+- **Volume:** 0-130 % with mute. Mute follows the core and the Linux player: the
+  button sends `toggle_mute`, which sets the level to 0 and, from 0, back to the
+  last level above it, so a slider dragged to 0 % is unmuted by the same button,
+  and scrolling or dragging up from 0 brings the sound back. Scrolling anywhere
+  over the video sends `nudge_volume` steps: a wheel notch is one step however
+  fast the wheel spins, trackpad points add up to steps (at most three per event),
+  and the inertia after lifting the fingers changes nothing.
 - **Speed:** 0.5, 0.75, 1, 1.25, 1.5 and 2×, with the current speed checked.
 - **Previous/next item:** disabled until the session has a playlist to step through.
 - **Auto-hide:** while media plays, the controls and the cursor hide after the
@@ -343,8 +350,9 @@ window and checks, from the session's events and the video layer's counters:
 - every frame drawn reported a swap that reached libmpv: the count
   `okp_session_render_report_swap` returns equals the frames drawn;
 - the transport controls stay up through the paused seconds, hide after the idle
-  timeout once playback resumes without pointer activity, and come back on
-  activity with the session's time readout, so both window snapshots show them;
+  timeout once playback resumes without pointer activity, hand the scrubber's
+  keyboard focus back to the video as they hide, and come back on activity with
+  the session's time readout, so both window snapshots show them;
 - closing the window during playback tears down in order (close, destroy the
   render context, free the session).
 

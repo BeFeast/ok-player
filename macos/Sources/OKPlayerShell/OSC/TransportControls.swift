@@ -1,8 +1,9 @@
 import AppKit
 
 /// The seek bar: track, buffered range, progress, chapter ticks and a knob, in
-/// palette colours. A click or drag reports the fraction under the pointer;
-/// Left and Right report a five-second step while it has keyboard focus.
+/// palette colours. A click or drag reports the fraction under the pointer, and a
+/// press it accepted always reports its release. While it has keyboard focus, Left
+/// and Right report a five-second step and Space toggles pause, as over the video.
 final class ScrubberView: NSView {
     enum Phase { case began, moved, ended }
 
@@ -16,6 +17,9 @@ final class ScrubberView: NSView {
     var allowsFocus = true
     var onScrub: ((Phase, Double) -> Void)?
     var onStep: ((Double) -> Void)?
+    var onTogglePause: (() -> Void)?
+    /// A press on the enabled bar that has not been released yet.
+    private(set) var isPressed = false
 
     init() {
         super.init(frame: .zero)
@@ -71,20 +75,28 @@ final class ScrubberView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }
+        isPressed = true
         onScrub?(.began, fraction(of: event))
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard isEnabled else { return }
+        guard isPressed, isEnabled else { return }
         onScrub?(.moved, fraction(of: event))
     }
 
+    /// Reported even when the bar was disabled during the press (the file ended
+    /// under the pointer), so whatever the press started is let go.
     override func mouseUp(with event: NSEvent) {
-        guard isEnabled else { return }
+        guard isPressed else { return }
+        isPressed = false
         onScrub?(.ended, fraction(of: event))
     }
 
     override func keyDown(with event: NSEvent) {
+        if event.charactersIgnoringModifiers == " " {
+            onTogglePause?()
+            return
+        }
         switch event.keyCode {
         case 123: onStep?(-5)  // Left
         case 124: onStep?(5)   // Right

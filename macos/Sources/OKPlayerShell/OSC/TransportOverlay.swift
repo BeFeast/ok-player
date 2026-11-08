@@ -10,6 +10,8 @@ import AppKit
 /// session's transport view (`query`), and every control sends a session command
 /// (`dispatch`); nothing here changes playback state itself. The controls hide
 /// with the cursor after the session's idle timeout while media plays (`AutoHide`).
+/// The scrubber gives keyboard focus back to `focusReturn` whenever it may no
+/// longer hold it, so Space keeps toggling pause.
 final class TransportOverlay: NSView {
     /// Sends a command to the session.
     var dispatch: ((Command) -> Void)?
@@ -20,8 +22,11 @@ final class TransportOverlay: NSView {
     var onNext: (() -> Void)? { didSet { nextButton.isEnabled = onNext != nil } }
     /// Called whenever the controls show or hide.
     var onRevealChange: ((Bool) -> Void)?
+    /// Where keyboard focus goes when the scrubber may no longer hold it (the
+    /// controls hid, or the media cannot be sought): the video, which handles Space.
+    weak var focusReturn: NSView?
 
-    let autoHide = AutoHide()
+    let autoHide: AutoHide
     let panel = NSVisualEffectView()
     let scrubber = ScrubberView()
     let elapsedLabel = NSTextField(labelWithString: "00:00")
@@ -40,6 +45,8 @@ final class TransportOverlay: NSView {
     private(set) var transport: TransportView?
     private var snapshot = SessionSnapshot()
     private var scrub = ScrubState()
+    /// A scrubber drag holds the controls up.
+    private var scrubPinned = false
     private var trailing = TrailingTime.remaining
     private var scrollSteps = VolumeScrollAccumulator()
     private var surface: OscSurface?
@@ -47,7 +54,8 @@ final class TransportOverlay: NSView {
     private var scrollMonitor: Any?
     private var windowObservers: [NSObjectProtocol] = []
 
-    init() {
+    init(hideTimer: HideTimer = MainQueueHideTimer()) {
+        autoHide = AutoHide(timer: hideTimer)
         super.init(frame: .zero)
         autoHide.onChange = { [weak self] revealed in self?.revealChanged(revealed) }
         buildPanel()
@@ -60,7 +68,7 @@ final class TransportOverlay: NSView {
         panel.isHidden = true
     }
 
-    required init?(coder: NSCoder) { fatalError("Use init()") }
+    required init?(coder: NSCoder) { fatalError("Use init(hideTimer:)") }
 
     // MARK: Session
 
@@ -77,7 +85,14 @@ final class TransportOverlay: NSView {
     func noteActivity() { autoHide.activity() }
 
     private func refresh() {
-        guard let view = query?(scrub.dragPosition(duration: snapshot.duration)) else { return }
+        let at = scrub.dragPosition(duration: snapshot.duration)
+        guard var view = query?(at) else { return }
+        if !view.seekable && scrub.isDragging {
+            // The media stopped being seekable under the drag (the file ended): the
+            // drag is over, and the next file shows its own playhead.
+            endScrub()
+            if at != nil, let current = query?(nil) { view = current }
+        }
         transport = view
         elapsedLabel.stringValue = view.elapsed
         trailingLabel.stringValue = trailing.text(in: view)
@@ -101,11 +116,22 @@ final class TransportOverlay: NSView {
     private func applySurface() {
         guard let view = transport else { return }
         let next = view.osc.surface(revealed: autoHide.revealed)
-        if !next.visible && surface?.visible == true { autoHide.unpinAll() }
+        if !next.visible && surface?.visible == true {
+            endScrub()
+            autoHide.unpinAll()
+        }
         surface = next
         panel.isHidden = !next.visible
         panel.alphaValue = autoHide.revealed ? 1 : 0
         scrubber.allowsFocus = next.focusable
+        if !next.focusable || !scrubber.isEnabled { returnFocus() }
+    }
+
+    /// Hidden or disabled, the scrubber lets go of keyboard focus: Space then
+    /// reaches the video, and Left/Right no longer seek through hidden controls.
+    private func returnFocus() {
+        guard let window, window.firstResponder === scrubber else { return }
+        _ = window.makeFirstResponder(focusReturn)
     }
 
     private func revealChanged(_ revealed: Bool) {
@@ -178,7 +204,7 @@ final class TransportOverlay: NSView {
     @objc private func togglePause() { dispatch?(.togglePause) }
     @objc private func previousItem() { onPrevious?() }
     @objc private func nextItem() { onNext?() }
-    @objc private func toggleMute() { dispatch?(.setMute(muted: !snapshot.mute)) }
+    @objc private func toggleMute() { dispatch?(.toggleMute) }
     @objc private func toggleFullscreen() { window?.toggleFullScreen(nil) }
 
     @objc private func toggleTrailing() {
@@ -212,16 +238,31 @@ final class TransportOverlay: NSView {
         let command: Command?
         switch phase {
         case .began:
-            autoHide.pin()
             command = scrub.begin(at: fraction, duration: duration)
+            if scrub.isDragging && !scrubPinned {
+                scrubPinned = true
+                autoHide.pin()
+            }
         case .moved:
             command = scrub.move(to: fraction, duration: duration)
         case .ended:
             command = scrub.end(at: fraction, duration: duration)
-            autoHide.unpin()
+            releaseScrubPin()
         }
         if let command { dispatch?(command) }
         refresh()
+    }
+
+    /// The drag ended without a release.
+    private func endScrub() {
+        scrub.cancel()
+        releaseScrubPin()
+    }
+
+    private func releaseScrubPin() {
+        guard scrubPinned else { return }
+        scrubPinned = false
+        autoHide.unpin()
     }
 
     private func volumeDragged(to fraction: Double) {
@@ -279,6 +320,7 @@ final class TransportOverlay: NSView {
         scrubber.onStep = { [weak self] seconds in
             self?.dispatch?(.seek(seconds: seconds, mode: .relative, precision: .keyframe))
         }
+        scrubber.onTogglePause = { [weak self] in self?.togglePause() }
         volumeSlider.onFraction = { [weak self] fraction in self?.volumeDragged(to: fraction) }
 
         let leading = NSStackView(views: [previousButton, playButton, nextButton, elapsedLabel, trailingLabel])
