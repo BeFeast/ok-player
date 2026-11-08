@@ -258,7 +258,7 @@ mod tests {
             schema_version: crate::protocol::SCHEMA_VERSION,
             app: AppIdentity {
                 name: "OK Player".to_owned(),
-                platform: "macos".to_owned(),
+                platform: okp_core::app::Platform::MacOs,
             },
             data_dir: "/data".into(),
             config_dir: "/config".into(),

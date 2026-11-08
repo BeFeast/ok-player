@@ -102,7 +102,7 @@ fn the_config_matches_its_fixture() {
             schema_version: 1,
             app: AppIdentity {
                 name: "OK Player".to_owned(),
-                platform: "macos".to_owned(),
+                platform: okp_core::app::Platform::MacOs,
             },
             data_dir: "/Users/example/Library/Application Support/OK Player".into(),
             config_dir: "/Users/example/Library/Preferences/OK Player".into(),

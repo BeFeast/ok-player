@@ -1324,7 +1324,7 @@ mod tests {
             schema_version: SCHEMA_VERSION,
             app: okp_core::app::AppIdentity {
                 name: "OK Player".to_owned(),
-                platform: "macos".to_owned(),
+                platform: okp_core::app::Platform::MacOs,
             },
             data_dir: "/data".into(),
             config_dir: "relative/config".into(),

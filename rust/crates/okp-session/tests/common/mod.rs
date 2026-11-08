@@ -29,7 +29,7 @@ pub fn headless_config(dir: &Path) -> SessionConfig {
         schema_version: SCHEMA_VERSION,
         app: AppIdentity {
             name: "OK Player".to_owned(),
-            platform: "test".to_owned(),
+            platform: okp_core::app::Platform::Linux,
         },
         data_dir: dir.join("data"),
         config_dir: dir.join("config"),
