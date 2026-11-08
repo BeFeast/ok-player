@@ -44,6 +44,7 @@ enum GoldenFixtures {
 final class SessionProtocolTests: XCTestCase {
     static let commands: [String: Command] = [
         "command-close.json": .close,
+        "command-invoke-command.json": .invokeCommand(id: "mute"),
         "command-open-local.json": .open(source: MediaSource(kind: .local, location: "/Users/example/Movies/film.mkv"),
                                          resumeFrom: 754.5, audioTrack: 2, subtitleTrack: 3),
         "command-open-url.json": .open(source: MediaSource(kind: .url, location: "https://example.com/stream.m3u8")),
@@ -63,6 +64,7 @@ final class SessionProtocolTests: XCTestCase {
         "reply-accepted.json": .accepted(requestId: 7),
         "reply-failed.json": .failed(requestId: 8, message: "error running command"),
         "reply-no-op.json": .noOp,
+        "reply-perform.json": .perform,
         "reply-rejected.json": .rejected(reason: .noActiveMedia, message: "the command needs loaded media"),
     ]
 
@@ -72,6 +74,8 @@ final class SessionProtocolTests: XCTestCase {
         let covered = Set(Self.commands.keys).union(Self.replies.keys).union([
             "config.json", "enums.json", "events-batch.json", "events-empty.json",
             "query-snapshot.json", "query-reply-snapshot.json", "query-reply-rejected.json",
+            "query-command-registry.json", "query-reply-command-registry.json",
+            "query-shortcut-table.json", "query-reply-shortcut-table.json",
         ])
         XCTAssertFalse(names.isEmpty, "no fixtures found in \(GoldenFixtures.directory.path)")
         XCTAssertEqual(Set(names), covered, "a fixture was added or removed without a Swift test")
@@ -97,6 +101,57 @@ final class SessionProtocolTests: XCTestCase {
         let query = QueryEnvelope(query: .snapshot)
         XCTAssertEqual(try GoldenFixtures.decode(QueryEnvelope.self, "query-snapshot.json"), query)
         XCTAssertEqual(try GoldenFixtures.encodedObject(query), try GoldenFixtures.object("query-snapshot.json"))
+    }
+
+    func testTheRegistryQueriesRoundTrip() throws {
+        let queries: [String: Query] = [
+            "query-command-registry.json": .commandRegistry(fullscreen: true, miniPlayer: false),
+            "query-shortcut-table.json": .shortcutTable,
+        ]
+        for (name, query) in queries {
+            let envelope = QueryEnvelope(query: query)
+            XCTAssertEqual(try GoldenFixtures.decode(QueryEnvelope.self, name), envelope, name)
+            XCTAssertEqual(try GoldenFixtures.encodedObject(envelope), try GoldenFixtures.object(name), name)
+        }
+    }
+
+    func testTheCommandRegistryReplyDecodesEveryRow() throws {
+        let reply = try GoldenFixtures.decode(QueryReply.self, "query-reply-command-registry.json")
+        guard case .commandRegistry(let commands) = reply.result else {
+            return XCTFail("not a registry reply: \(reply.result)")
+        }
+        XCTAssertEqual(commands.count, 65)
+        let none = ShortcutModifiers()
+        XCTAssertEqual(commands.first, RegistryCommand(
+            id: "play-pause", group: .playbackNavigation, menu: .topLevel, label: "Play / Pause",
+            available: true, enabled: true, checked: false,
+            shortcut: ShortcutChord(key: "space", modifiers: none, label: "Space")))
+        XCTAssertEqual(commands.first { $0.id == "fullscreen" }, RegistryCommand(
+            id: "fullscreen", group: .viewWindow, menu: .topLevel, label: "Exit fullscreen",
+            available: true, enabled: true, checked: true,
+            shortcut: ShortcutChord(key: "f", modifiers: none, label: "F")))
+        XCTAssertEqual(commands.first { $0.id == "open-url" }, RegistryCommand(
+            id: "open-url", group: .mediaFile, menu: .toolsAdvanced, label: "Open URL...",
+            available: false, enabled: true, checked: false,
+            shortcut: ShortcutChord(key: "o", modifiers: ShortcutModifiers(shift: true, cmd: true), label: "Shift+Cmd+O")))
+        XCTAssertNil(try XCTUnwrap(commands.first { $0.id == "seek-back" }).menu, "a keyboard-only command has no menu")
+        XCTAssertNil(try XCTUnwrap(commands.first { $0.id == "zoom-out" }).shortcut)
+        // Written back, the rows are the fixture: no field was dropped on the way in.
+        XCTAssertEqual(try GoldenFixtures.encodedObject(reply), try GoldenFixtures.object("query-reply-command-registry.json"))
+    }
+
+    func testTheShortcutTableReplyDecodesEveryRow() throws {
+        let reply = try GoldenFixtures.decode(QueryReply.self, "query-reply-shortcut-table.json")
+        guard case .shortcutTable(let shortcuts) = reply.result else {
+            return XCTFail("not a shortcut table reply: \(reply.result)")
+        }
+        XCTAssertEqual(shortcuts.count, 28)
+        XCTAssertEqual(shortcuts.first { $0.action == "save-screenshot" }, ShortcutRow(
+            action: "save-screenshot", command: "save-frame",
+            primary: ShortcutChord(key: "c", modifiers: ShortcutModifiers(), label: "C"), secondary: nil))
+        XCTAssertEqual(shortcuts.first { $0.action == "open-settings" }?.primary,
+                       ShortcutChord(key: "comma", modifiers: ShortcutModifiers(cmd: true), label: "Cmd+,"))
+        XCTAssertEqual(try GoldenFixtures.encodedObject(reply), try GoldenFixtures.object("query-reply-shortcut-table.json"))
     }
 
     func testTheSnapshotReplyDecodesEveryField() throws {
@@ -165,7 +220,8 @@ final class SessionProtocolTests: XCTestCase {
             configDir: "/Users/example/Library/Preferences/OK Player",
             cacheDir: "/Users/example/Library/Caches/OK Player",
             hwdec: "videotoolbox",
-            mpvOptions: [MpvOption(name: "ao", value: "coreaudio")])
+            mpvOptions: [MpvOption(name: "ao", value: "coreaudio")],
+            shellCommands: ["open-file", "fullscreen"])
         XCTAssertEqual(try GoldenFixtures.decode(SessionConfig.self, "config.json"), config)
         XCTAssertEqual(try GoldenFixtures.encodedObject(config), try GoldenFixtures.object("config.json"))
     }
@@ -181,6 +237,8 @@ final class SessionProtocolTests: XCTestCase {
             "source_kind": SourceKind.allCases.map(\.rawValue),
             "seek_mode": SeekMode.allCases.map(\.rawValue),
             "seek_precision": SeekPrecision.allCases.map(\.rawValue),
+            "command_group": CommandGroup.allCases.map(\.rawValue),
+            "command_menu": CommandMenu.allCases.map(\.rawValue),
         ]
         XCTAssertEqual(swift, lists)
     }
