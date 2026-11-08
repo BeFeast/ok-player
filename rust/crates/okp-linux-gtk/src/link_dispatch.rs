@@ -67,6 +67,9 @@ pub(crate) struct LinkLaunch {
     pub(crate) origin: LinkOrigin,
     /// The desktop's startup-notification id the launching process handed over.
     pub(crate) startup_id: Option<String>,
+    /// `PlayerState::window_open_serial` when the link arrived. Should the user open something
+    /// in the window after that, the link never replaces it.
+    pub(crate) window_opens_seen: u64,
 }
 
 impl LinkLaunch {
@@ -87,6 +90,7 @@ impl LinkLaunch {
             parsed,
             origin,
             startup_id,
+            window_opens_seen: 0,
         })
     }
 
@@ -96,6 +100,7 @@ impl LinkLaunch {
             parsed: Err((None, reason)),
             origin: LinkOrigin::CommandLine,
             startup_id,
+            window_opens_seen: 0,
         }
     }
 
@@ -104,6 +109,12 @@ impl LinkLaunch {
             startup_id: None,
             ..self
         }
+    }
+
+    /// Note the moment the link reaches the launch queue: the opens the user has made in the
+    /// window so far are older than the link, every later one is newer.
+    pub(crate) fn arrive(&mut self, state: &PlayerState) {
+        self.window_opens_seen = state.window_open_serial;
     }
 
     fn action(&self) -> Option<Action> {
@@ -398,7 +409,15 @@ fn complete_link_request(
     let dispatch = state.borrow().link_dispatch.clone();
     if let Some(dispatch) = dispatch {
         match verdict {
-            Ok(validated) => execute_link(&dispatch, state, link.origin, &validated),
+            Ok(validated) => while_applying_launch(state, || {
+                execute_link(
+                    &dispatch,
+                    state,
+                    link.origin,
+                    link.window_opens_seen,
+                    &validated,
+                );
+            }),
             Err(reason) => reject_link(
                 &dispatch,
                 link.origin,
@@ -412,14 +431,29 @@ fn complete_link_request(
 }
 
 /// Plan a validated link against what plays now and carry the plan out.
+///
+/// The user's later choice wins: when they opened something in the window after the link
+/// arrived (`window_opens_seen` is older than the count now), a link that would replace or seek
+/// what plays stands down. A queue plan still runs: it only adds to Up Next.
 fn execute_link(
     dispatch: &LinkDispatch,
     state: &Rc<RefCell<PlayerState>>,
     origin: LinkOrigin,
+    window_opens_seen: u64,
     validated: &Validated,
 ) {
     let playback = link_playback_summary(&state.borrow());
     let plan = ok_player_uri::plan(validated, &playback);
+    let opened_since = state.borrow().window_open_serial != window_opens_seen;
+    if opened_since && matches!(plan, Plan::Open { .. } | Plan::Seek { .. }) {
+        log_link(
+            origin,
+            Some(validated.action()),
+            "dropped: something was opened in the window after it arrived",
+            validated.ignored_keys(),
+        );
+        return;
+    }
     let (ran, toast) = match plan {
         Plan::Open { target, start } => {
             open_link_target(state, target, start);
@@ -1162,6 +1196,142 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn an_open_made_in_the_window_during_a_link_check_is_not_replaced_by_the_link() {
+        main_context!(context);
+        type UserOpen = fn(&Player, &Path, &Path) -> PlaylistItem;
+        let user_opens: [(&str, UserOpen); 5] = [
+            ("a drop or the file chooser", |player, _, film| {
+                assert!(load_selected_local_paths(
+                    &player.state,
+                    vec![film.to_path_buf()]
+                ));
+                local(film)
+            }),
+            ("Open URL", |player, _, _| {
+                let stream = "http://127.0.0.1:9/clips/film.mp4";
+                assert_eq!(
+                    route_open_url_text(&player.state, stream.to_owned(), false),
+                    None
+                );
+                url(stream)
+            }),
+            ("History", |player, _, film| {
+                assert!(load_history_source(&player.state, local(film)));
+                local(film)
+            }),
+            ("Up Next", |player, sibling, _| {
+                assert!(jump_playlist_index(&player.state, 1));
+                local(sibling)
+            }),
+            ("the next-item key", |player, sibling, _| {
+                assert!(navigate_playlist(&player.state, 1));
+                local(sibling)
+            }),
+        ];
+        for (how, user_open) in user_opens {
+            for link_extra in ["", "&t=42"] {
+                let probe = GatedProbe::new(false);
+                let player = Player::running(probe);
+                let x = player.clip("show", "X.mkv");
+                let sibling = player.clip("show", "Y.mkv");
+                let film = player.clip("films", "film.mkv");
+                let abandoned = player.clip("nas", "clip.mkv");
+                load_media_path(&player.state, x.clone());
+
+                // A link to a disk that is spinning up; the user gives up and opens something.
+                player.forward_link(&path_link("open", &abandoned, link_extra));
+                run_for(&context, Duration::from_millis(20));
+                let chosen = user_open(&player, &sibling, &film);
+                assert_eq!(current_item(&player), Some(chosen.clone()), "{how}");
+                let generation = player.generation();
+
+                probe.open();
+                settle(&context, &player.delivery);
+                assert_eq!(
+                    current_item(&player),
+                    Some(chosen),
+                    "{how}: the user's later open stays"
+                );
+                assert_eq!(player.generation(), generation, "{how}: nothing reloaded");
+                assert_eq!(
+                    player.surface.take(),
+                    [Effect::Present(Some(STARTUP_ID.to_owned()))],
+                    "{how}: raised by its action when released, nothing else"
+                );
+            }
+        }
+
+        // The same link seeking in what the user just opened stands down too.
+        let probe = GatedProbe::new(false);
+        let player = Player::running(probe);
+        let film = player.clip("films", "film.mkv");
+        let other = player.clip("show", "X.mkv");
+        load_media_path(&player.state, other);
+        player.forward_link(&path_link("open", &film, "&t=42"));
+        run_for(&context, Duration::from_millis(20));
+        assert!(load_selected_local_paths(&player.state, vec![film.clone()]));
+        player.state.borrow_mut().pending_resume = None;
+        probe.open();
+        settle(&context, &player.delivery);
+        assert_eq!(player.current_file(), Some(film));
+        assert_eq!(player.state.borrow().pending_resume, None, "no seek stored");
+    }
+
+    #[test]
+    fn an_add_link_still_queues_behind_what_the_user_opened_during_its_check() {
+        main_context!(context);
+        let probe = GatedProbe::new(false);
+        let player = Player::running(probe);
+        let x = player.clip("show", "X.mkv");
+        let target = player.clip("queue", "T.mkv");
+        let film = player.clip("films", "film.mkv");
+        load_media_path(&player.state, x);
+
+        player.forward_link(&path_link("add", &target, ""));
+        run_for(&context, Duration::from_millis(20));
+        assert!(load_selected_local_paths(&player.state, vec![film.clone()]));
+        probe.open();
+        settle(&context, &player.delivery);
+
+        assert_eq!(player.current_file(), Some(film.clone()));
+        assert_eq!(player.playlist(), [local(&film), local(&target)]);
+        assert_eq!(
+            player.surface.take(),
+            [
+                Effect::FinishStartup(Some(STARTUP_ID.to_owned())),
+                toast(ADDED_TO_UP_NEXT_MESSAGE),
+            ]
+        );
+    }
+
+    #[test]
+    fn opens_the_launch_queue_applies_never_make_a_later_link_stand_down() {
+        main_context!(context);
+        let player = Player::new(GatedProbe::new(true), false);
+        let x = player.clip("one", "X.mkv");
+        let a = player.clip("two", "A.mkv");
+        let b = player.clip("three", "B.mkv");
+        let c = player.clip("four", "C.mkv");
+        // While the engine starts: a file-manager launch, a link, an MPRIS file, a link.
+        mark_startup_window_mapped(&player.delivery, &player.state);
+        player.forward(&[x.to_str().unwrap()]);
+        player.forward_link(&path_link("open", &a, ""));
+        route_mpris_open_uri(&player.state, file_uri(&b));
+        player.forward_link(&path_link("open", &c, ""));
+
+        player.state.borrow_mut().mpv =
+            Some(Mpv::new().expect("libmpv is required by the existing GTK suite"));
+        mark_startup_player_ready(&player.delivery, &player.state);
+        settle(&context, &player.delivery);
+        assert_eq!(
+            player.current_file(),
+            Some(c),
+            "each ran in turn; the last one stays"
+        );
+        assert_eq!(player.state.borrow().window_open_serial, 0);
     }
 
     #[test]

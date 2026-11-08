@@ -150,6 +150,13 @@ how to test a link that a browser would rewrite first, as the browser notes expl
 - "Playing" means the player is loading or playing an item. An item whose load failed, or
   that ended, counts as idle even while the window still shows its name: `open` of it with
   `t=` opens it again instead of seeking, and `add` or `next` act as `open`, window included.
+- What you open in the player window yourself wins over an earlier link. A link waits for
+  its turn and for its file check, which can take up to 10 seconds on a sleeping disk. If you
+  open something in the meantime (file chooser, drag and drop, Open URL, History, Up Next,
+  next or previous item), a link that arrived before that never replaces or seeks what you
+  opened. When its turn comes it is dropped and logged. An `add` or `next` from such a link
+  still queues behind what you opened, because queueing replaces nothing. Whether the window
+  came forward was already decided when the link's turn came.
 - History is recorded as for any other open. A private session suppresses it.
 - A direct media URL (its last path segment has a known media extension) streams from the
   server and never starts a background Replay cache download, whether it is opened or

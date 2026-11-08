@@ -1325,8 +1325,11 @@ pub(crate) fn deliver_command_line_launch(
 pub(crate) fn deliver_launch_request(
     delivery: &LaunchDeliveryGate,
     state: &Rc<RefCell<PlayerState>>,
-    request: LaunchRequest,
+    mut request: LaunchRequest,
 ) {
+    if let LaunchRequest::Link(link) = &mut request {
+        link.arrive(&state.borrow());
+    }
     let released = {
         let mut delivery = delivery.borrow_mut();
         // Closing the window detaches the engine before the process quits. A launch forwarded
@@ -1367,15 +1370,15 @@ fn apply_launch_request(
     let launch_args::ReleasedLaunch { ticket, request } = released;
     match request {
         LaunchRequest::Args(launch_args) => {
-            apply_launch_args(state, &launch_args);
+            while_applying_launch(state, || apply_launch_args(state, &launch_args));
             LaunchApply::Applied
         }
         LaunchRequest::Open(PlaylistItem::Local(path)) => {
-            load_media_path(state, path);
+            while_applying_launch(state, || load_media_path(state, path));
             LaunchApply::Applied
         }
         LaunchRequest::Open(PlaylistItem::Url(url)) => {
-            load_media_url(state, url);
+            while_applying_launch(state, || load_media_url(state, url));
             LaunchApply::Applied
         }
         LaunchRequest::Link(link) => start_link_request(delivery, state, ticket, link),

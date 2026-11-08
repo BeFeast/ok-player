@@ -284,6 +284,14 @@ struct PlayerState {
     /// Executes `ok-player:` links: the launch queue they share with every other launch and
     /// the window they present. `None` until the window is built.
     link_dispatch: Option<LinkDispatch>,
+    /// Counts the opens the user makes in the window itself (file chooser, drop, Open URL,
+    /// History, Up Next and playlist navigation, Retry). Requests from the launch queue and
+    /// automatic advances do not count. A link that arrived before the latest such open never
+    /// replaces what plays (#849): the user's later choice wins.
+    window_open_serial: u64,
+    /// Set while the launch queue applies a request, so the opens it makes are not counted
+    /// as the user's own (see `window_open_serial`).
+    applying_launch: bool,
     pending_subtitles: Vec<PathBuf>,
     pending_resume: Option<PendingResume>,
     pending_launch_tracks: Option<PendingLaunchTracks>,

@@ -209,6 +209,9 @@ pub(crate) fn load_media_path(state: &Rc<RefCell<PlayerState>>, path: PathBuf) {
 }
 
 pub(crate) fn load_media_url(state: &Rc<RefCell<PlayerState>>, url: String) {
+    if is_media_url(&url) {
+        note_window_open(state);
+    }
     load_media_url_with_intent(
         state,
         url,
@@ -286,6 +289,7 @@ pub(crate) fn load_history_url(state: &Rc<RefCell<PlayerState>>, url: String) ->
     if !is_media_url(&url) {
         return false;
     }
+    note_window_open(state);
 
     if state.borrow().private_session || !state.borrow().settings.replay_cache_enabled() {
         load_media_url(state, url);
@@ -342,6 +346,7 @@ pub(crate) fn load_media_path_internal(
         return;
     }
     if save_previous {
+        note_window_open(state);
         save_current_progress(state, false);
     }
 
@@ -641,6 +646,28 @@ pub(crate) fn remember_loaded_url_with_playlist(
     state.last_load_diagnostic = None;
 }
 
+/// Count an open the user made in the window: the file chooser, a drop, Open URL, History, Up
+/// Next and playlist navigation, Retry. An `ok-player:` link that arrived before it never
+/// replaces what plays (#849). Opens the launch queue applies are not counted.
+pub(crate) fn note_window_open(state: &Rc<RefCell<PlayerState>>) {
+    let mut state = state.borrow_mut();
+    if !state.applying_launch {
+        state.window_open_serial = state.window_open_serial.wrapping_add(1);
+    }
+}
+
+/// Run `apply` as the launch queue applying a request: the opens it makes are not the user's
+/// own, so they never make a waiting link stand down.
+pub(crate) fn while_applying_launch<R>(
+    state: &Rc<RefCell<PlayerState>>,
+    apply: impl FnOnce() -> R,
+) -> R {
+    let previous = std::mem::replace(&mut state.borrow_mut().applying_launch, true);
+    let result = apply();
+    state.borrow_mut().applying_launch = previous;
+    result
+}
+
 /// A URL stays marked to arm the replay cache when reached only while it is still in Up Next.
 fn forget_replay_on_reach_outside(marked: &mut HashSet<String>, playlist: &[PlaylistItem]) {
     if !marked.is_empty() {
@@ -671,6 +698,15 @@ pub(crate) fn load_playlist_item_with_playlist(
     playlist: Vec<PlaylistItem>,
     save_previous: bool,
 ) -> bool {
+    // Saving the previous item marks a user-driven selection (see below), or a launch the queue
+    // applies, which `note_window_open` does not count. EOF auto-advance passes `false`.
+    let playable = match &item {
+        PlaylistItem::Local(path) => is_media_path(path),
+        PlaylistItem::Url(url) => is_media_url(url),
+    };
+    if save_previous && playable {
+        note_window_open(state);
+    }
     let source = item.clone();
     let loaded = match item {
         PlaylistItem::Local(path) => {
