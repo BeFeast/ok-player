@@ -200,6 +200,10 @@ impl Engine for MpvEngine {
                 TrackKind::Subtitle => engine.select_subtitle(*id),
             },
             Command::SetSubtitleDelay { seconds } => engine.set_subtitle_delay(*seconds),
+            // The session carries history actions out itself.
+            Command::History { .. } => {
+                return Err("a history action is not an engine command".to_owned());
+            }
             // The session resolves an invoked registry command to the command it
             // stands for before anything reaches the engine.
             Command::InvokeCommand { id } => {

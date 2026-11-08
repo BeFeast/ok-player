@@ -567,6 +567,11 @@ geometry remains a separate history preference and is not conflated with these g
   `→ (Some(false), None)` ("keep it off"), and any other id `→ (Some(true), Some(id))`. This is
   a best-effort reconciliation of the two per-file models; the secondary-subtitle, subtitle
   delay/scale, and speed preferences have no Windows counterpart and stay absent.
+- **Per-file volume is a macOS-led canonical preference.** `preferences.volume` holds the
+  output volume in percent (boost above 100 included) that the macOS session remembers per
+  file (PRD §12.2). The GTK shell keeps volume global for now; its preference merges never set
+  the field, so a value another shell recorded survives Linux saves. Windows `FileRecord` has
+  no volume, so a Windows-dialect migration leaves it absent.
 - **Video geometry is a Linux-led canonical preference.** `preferences.video_geometry` stores
   the normalized aspect preset, linear zoom multiplier, pan offsets, quarter-turn rotation,
   fill-screen crop choice, and deinterlace toggle in the app index. The pure

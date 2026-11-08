@@ -204,7 +204,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let client else { return }
         errorShown = false
         switch client.dispatch(.open(source: MediaSource(kind: .local, location: path))) {
-        case .accepted, .noOp, .perform: break
+        case .accepted, .noOp, .perform, .history: break
         case .rejected(_, let message), .failed(_, let message): fail(message); return
         }
         window.title = "\((path as NSString).lastPathComponent) — OK Player"

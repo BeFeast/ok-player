@@ -17,11 +17,13 @@ use okp_mpv::{EndFileReason, EntryEvent, MpvEvent, error_description};
 use crate::coalesce::Coalescer;
 use crate::commands::{CommandRegistry, Invocation, WindowState};
 use crate::engine::{Engine, MpvEngine, Observation};
+use crate::history::{HistoryAction, HistoryActionResult, Report, SessionHistory};
 use crate::machine::SessionMachine;
 use crate::protocol::{
     Command, CommandEnvelope, DispatchReply, DispatchResult, ErrorKind, Event, EventBatch,
-    MediaSource, Query, QueryEnvelope, QueryReply, QueryResult, RejectReason, SCHEMA_VERSION,
-    SessionConfig, SessionSnapshot, Track, TrackKind, VideoGeometry, parse_envelope, to_json,
+    MediaSource, Query, QueryEnvelope, QueryReply, QueryResult, RejectReason, Route,
+    SCHEMA_VERSION, SessionConfig, SessionSnapshot, Track, TrackKind, VideoGeometry,
+    parse_envelope, to_json,
 };
 use crate::reconcile::{core_end_reason, endfile_error, event_matches_source};
 use crate::window;
@@ -73,6 +75,10 @@ struct State {
     pending_tracks: Vec<(TrackKind, i64)>,
     /// The initial window fit the current source is owed.
     fit: window::SourceFit,
+    /// The end of file that ended the current media carried an error.
+    end_failed: bool,
+    /// Resume, progress, per-file memory and the private session.
+    history: SessionHistory,
 }
 
 /// Wakes the event thread: set by the engine listener, by commands and by
@@ -122,7 +128,7 @@ impl Session {
         validate_config(config)?;
         let commands = CommandRegistry::new(config.app.platform, &config.shell_commands)?;
         let engine = MpvEngine::new(config)?;
-        let mut session = Self::with_engine(Box::new(engine));
+        let mut session = Self::start(Box::new(engine), SessionHistory::open(&config.data_dir));
         session.commands = commands;
         Ok(session)
     }
@@ -134,10 +140,21 @@ impl Session {
         Self::new(&config)
     }
 
+    /// A session whose history is kept in memory only.
+    #[cfg(test)]
     pub(crate) fn with_engine(engine: Box<dyn Engine>) -> Self {
+        Self::start(
+            engine,
+            SessionHistory::with_store(crate::history::HistoryStore::in_memory()),
+        )
+    }
+
+    pub(crate) fn start(engine: Box<dyn Engine>, history: SessionHistory) -> Self {
         let signal = Arc::new(Signal::default());
         let listener_signal = Arc::clone(&signal);
         engine.set_listener(Some(Arc::new(move || listener_signal.notify())));
+        let history_signal = Arc::clone(&signal);
+        history.set_waker(Arc::new(move || history_signal.notify()));
         let shared = Arc::new(Shared {
             engine,
             state: Mutex::new(State {
@@ -148,6 +165,8 @@ impl Session {
                 load: None,
                 pending_tracks: Vec::new(),
                 fit: window::SourceFit::default(),
+                end_failed: false,
+                history,
             }),
             signal,
             wakeup: Mutex::new(None),
@@ -185,27 +204,40 @@ impl Session {
     }
 
     /// Validate `command` with the core state machine and, only if it accepts,
-    /// hand it to the engine.
+    /// hand it to the engine. A history action is carried out by the session
+    /// itself.
     pub fn dispatch(&self, command: &Command) -> DispatchResult {
         if let Command::InvokeCommand { id } = command {
             return self.invoke_command(id);
         }
-        let Some(core) = command.to_core() else {
-            return rejected(RejectReason::Malformed);
-        };
         let engine = &*self.shared.engine;
         let mut state = lock(&self.shared.state);
+        let command = state.prepare(command);
+        let core = match command.route() {
+            Route::Player(core) => core,
+            Route::History(action) => {
+                let result = state.history_action(action);
+                drop(state);
+                self.shared.signal.notify();
+                return DispatchResult::History { result };
+            }
+            // Handled above, before the state is locked.
+            Route::Registry => return rejected(RejectReason::Malformed),
+        };
         let mut load = None;
         let (outcome, engine_result) = state.machine.dispatch(&core, |_, request_id| {
             engine
-                .forward(command, request_id)
+                .forward(&command, request_id)
                 .map(|entry| load = entry)
         });
         if engine_result.is_ok() {
-            state.track_load(command, outcome, load);
+            state.track_load(&command, outcome, load);
+        }
+        if matches!(outcome, CommandOutcome::Accepted { .. }) {
+            state.history_dispatched(&command, engine_result.is_ok(), engine);
         }
         if matches!(outcome, CommandOutcome::Accepted { .. })
-            && matches!(command, Command::Open { .. } | Command::Close {})
+            && matches!(*command, Command::Open { .. } | Command::Close {})
         {
             // Whatever the engine makes of it, the previous source is gone, and
             // with it any fit still owed to it.
@@ -273,6 +305,9 @@ impl Session {
             Query::VideoClick { press_count } => QueryResult::VideoClick {
                 intent: window::video_click_intent(*press_count),
             },
+            Query::History { query } => QueryResult::History {
+                result: lock(&self.shared.state).history.query(query),
+            },
             Query::CommandRegistry {
                 fullscreen,
                 mini_player,
@@ -315,6 +350,12 @@ impl Session {
             self.shared.signal.notify();
         }
         snapshot
+    }
+
+    /// When the event thread next wakes on its own, as of a refresh now.
+    #[cfg(test)]
+    pub(crate) fn next_wake(&self) -> Option<Instant> {
+        lock(&self.shared.state).refresh(&*self.shared.engine, Instant::now())
     }
 
     /// Take every queued event as one batch and re-arm the wakeup.
@@ -401,6 +442,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        lock(&self.shared.state).quit(&*self.shared.engine);
         self.shared.running.store(false, Ordering::Release);
         self.shared.engine.set_listener(None);
         self.shared.signal.notify();
@@ -441,7 +483,7 @@ fn event_loop(shared: &Arc<Shared>) {
 
 impl State {
     /// Fold the engine's latest report into the machine and the queue. Returns
-    /// when a held playhead update falls due.
+    /// when a held playhead update or a timed history save falls due.
     fn refresh(&mut self, engine: &dyn Engine, now: Instant) -> Option<Instant> {
         // Events first: the engine publishes a pass's observations before its
         // events, so an observation read after the events is never older than
@@ -453,12 +495,55 @@ impl State {
             loaded |= self.reconcile_event(event, &observation);
         }
         self.reconcile_observation(&observation);
+        // Remembered per-file choices go first, so the open's own tracks win.
+        self.history.refresh(
+            Report {
+                loaded,
+                end_failed: self.end_failed,
+                title: observation.title.as_deref(),
+            },
+            self.machine.machine(),
+            engine,
+            &mut self.queue,
+            now,
+        );
         if loaded {
             self.select_pending_tracks(engine);
         }
         let current = self.project(&observation);
         self.fit.observe(current.video.as_ref());
-        self.queue.observe(&current, now)
+        let held = self.queue.observe(&current, now);
+        // A history change waiting for its timed save wakes the thread too.
+        match (held, self.history.next_save()) {
+            (Some(held), Some(save)) => Some(held.min(save)),
+            (held, save) => held.or(save),
+        }
+    }
+
+    /// The command to dispatch for `command`, with the history's say in it.
+    fn prepare<'c>(&mut self, command: &'c Command) -> std::borrow::Cow<'c, Command> {
+        self.history.prepare(command, &mut self.queue)
+    }
+
+    fn history_action(&mut self, action: &HistoryAction) -> HistoryActionResult {
+        self.history.act(action, &mut self.queue)
+    }
+
+    fn history_dispatched(&mut self, command: &Command, forwarded: bool, engine: &dyn Engine) {
+        self.history.dispatched(
+            command,
+            forwarded,
+            self.machine.machine(),
+            engine,
+            &mut self.queue,
+        );
+    }
+
+    /// Fold in the engine's last report and save the history: the session is
+    /// closing.
+    fn quit(&mut self, engine: &dyn Engine) {
+        self.refresh(engine, Instant::now());
+        self.history.quit(&mut self.queue);
     }
 
     /// Remember what a forwarded command means for the current load.
@@ -558,6 +643,7 @@ impl State {
                 if !self.ends_current_media(entry, reason, error.is_some(), path.as_deref()) {
                     return false;
                 }
+                self.end_failed = error.is_some();
                 if let Some(message) = error {
                     self.machine.apply_event(PlayerEvent::Error(PlayerError {
                         kind: PlayerErrorKind::LoadFailed,
