@@ -1551,4 +1551,52 @@ mod tests {
         assert_eq!(session.snapshot().status, Status::Paused);
         assert_eq!(engine.forwarded().last(), Some(&Command::TogglePause {}));
     }
+
+    #[test]
+    fn the_registry_enables_a_session_command_exactly_when_invoking_it_is_accepted() {
+        fn play(session: &Session, engine: &FakeState) {
+            let _ = session.dispatch(&open("/media/a.mkv"));
+            loaded(engine, 10.0);
+            assert!(wait_for(|| session.snapshot().status == Status::Playing));
+        }
+        /// Bring a fresh session to one state.
+        type Reach = fn(&Session, &FakeState);
+        // Each state the session can be in. The source stays set while opening
+        // and after either kind of end.
+        let states: [(&str, Reach); 6] = [
+            ("idle", |_, _| {}),
+            ("opening", |session, _| {
+                let _ = session.dispatch(&open("/media/a.mkv"));
+            }),
+            ("playing", play),
+            ("paused", |session, engine| {
+                play(session, engine);
+                let _ = session.dispatch(&Command::SetPaused { paused: true });
+                assert_eq!(session.snapshot().status, Status::Paused);
+            }),
+            ("ended", |session, engine| {
+                play(session, engine);
+                engine.publish(|_| {}, vec![ended(EndFileReason::Eof)]);
+                assert!(wait_for(|| session.snapshot().status == Status::Ended));
+            }),
+            ("failed to load", |session, engine| {
+                *lock(&engine.refuse_with) = Some("loadfile refused".to_owned());
+                let _ = session.dispatch(&open("/media/a.mkv"));
+                assert_eq!(session.snapshot().status, Status::Ended);
+            }),
+        ];
+        for (state, reach) in states {
+            for &id in crate::commands::SESSION_COMMANDS {
+                let (session, engine) = fake_session();
+                reach(&session, &engine);
+                let enabled = registry_row(&session, id).enabled;
+                let reply = session.dispatch(&invoke(id));
+                assert_eq!(
+                    enabled,
+                    matches!(reply, DispatchResult::Accepted { .. }),
+                    "{id} while {state}: {reply:?}"
+                );
+            }
+        }
+    }
 }

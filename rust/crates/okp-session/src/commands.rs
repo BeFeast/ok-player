@@ -29,7 +29,7 @@ use okp_core::volume::{UNITY_VOLUME, VolumeState};
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::{
-    Command, RejectReason, SeekMode, SeekPrecision, SessionSnapshot, SourceKind,
+    Command, RejectReason, SeekMode, SeekPrecision, SessionSnapshot, SourceKind, Status,
 };
 
 /// Seconds the seek keys jump, as in the GTK shell.
@@ -150,7 +150,7 @@ const KEYBOARD_COMMANDS: &[(ShortcutAction, CommandGroup)] = &[
 ];
 
 /// The commands the session runs itself; see [`session_command`].
-const SESSION_COMMANDS: &[&str] = &[
+pub(crate) const SESSION_COMMANDS: &[&str] = &[
     "play-pause",
     "close-media",
     "seek-back",
@@ -214,7 +214,8 @@ impl CommandRegistry {
                     menu: menu_of(command.id),
                     label: command.label,
                     available: self.is_available(id),
-                    enabled: command.enabled,
+                    enabled: session_command_enabled(id, snapshot.status)
+                        .unwrap_or(command.enabled),
                     checked: command.checked,
                     shortcut: shortcut
                         .map(|action| primary_chord(self.platform, &bindings, action)),
@@ -317,6 +318,26 @@ fn session_command(id: &str, snapshot: &SessionSnapshot) -> Option<Command> {
     })
 }
 
+/// Whether the core state machine accepts the session command `id` stands for
+/// in `status`; `None` for a command the shell carries out. A media source alone
+/// is not enough: the source stays set while a file opens, after it ends and
+/// after a load error, and the machine refuses pausing, seeking and subtitle
+/// timing in all three.
+fn session_command_enabled(id: &str, status: Status) -> Option<bool> {
+    let active = matches!(status, Status::Playing | Status::Paused);
+    Some(match id {
+        "play-pause"
+        | "seek-back"
+        | "seek-forward"
+        | "subtitle-delay-forward"
+        | "subtitle-delay-back" => active,
+        "close-media" => status != Status::Idle,
+        // Volume and mute are engine-global and apply without media.
+        "volume-down" | "volume-up" | "mute" => true,
+        _ => return None,
+    })
+}
+
 /// The core command context for the session's state. The session plays one
 /// item and does not advance, repeat or shuffle; the playlist it reports is
 /// the open media alone.
@@ -341,14 +362,12 @@ fn keyboard_state(
     context: &PlayerCommandContext,
     snapshot: &SessionSnapshot,
 ) -> (bool, bool) {
-    let enabled = match action {
+    let enabled = session_command_enabled(action.id(), snapshot.status).unwrap_or(match action {
         ShortcutAction::PreviousItem | ShortcutAction::NextItem => context.playlist_count > 1,
-        // Volume and mute are engine-global and apply without media.
-        ShortcutAction::VolumeDown | ShortcutAction::VolumeUp | ShortcutAction::Mute => true,
         ShortcutAction::EscapeFullscreen => context.fullscreen || context.compact_mode,
         // Every other keyboard command acts on the open media.
         _ => context.has_media,
-    };
+    });
     (enabled, action == ShortcutAction::Mute && snapshot.mute)
 }
 
@@ -415,7 +434,7 @@ impl From<PlayerCommandGroup> for CommandGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{MediaSource, Status, VideoGeometry};
+    use crate::protocol::{EndReason, MediaSource, VideoGeometry};
     use std::collections::HashSet;
 
     fn registry(platform: Platform, shell_commands: &[&str]) -> CommandRegistry {
@@ -499,6 +518,48 @@ mod tests {
         );
         assert_eq!(state(&stream, "save-video"), (true, false));
         assert_eq!(state(&stream, "add-to-queue"), (false, false));
+    }
+
+    #[test]
+    fn media_that_is_opening_or_has_ended_cannot_be_paused_seeked_or_retimed() {
+        let registry = registry(Platform::MacOs, &[]);
+        let refused_without_active_media = [
+            "play-pause",
+            "seek-back",
+            "seek-forward",
+            "subtitle-delay-forward",
+            "subtitle-delay-back",
+        ];
+        let always_open = ["close-media", "volume-down", "volume-up", "mute"];
+
+        for (status, end_reason) in [
+            (Status::Opening, None),
+            (Status::Ended, Some(EndReason::Eof)),
+            (Status::Ended, Some(EndReason::Error)),
+        ] {
+            // The source stays set in all three.
+            let snapshot = SessionSnapshot {
+                status,
+                end_reason,
+                ..playing(SourceKind::Local, "/media/film.mkv")
+            };
+            let commands = registry.resolve(&snapshot, WindowState::default());
+            for id in refused_without_active_media {
+                assert!(!row(&commands, id).enabled, "{id} while {status:?}");
+            }
+            for id in always_open {
+                assert!(row(&commands, id).enabled, "{id} while {status:?}");
+            }
+        }
+
+        let paused = SessionSnapshot {
+            status: Status::Paused,
+            ..playing(SourceKind::Local, "/media/film.mkv")
+        };
+        let commands = registry.resolve(&paused, WindowState::default());
+        for id in refused_without_active_media.into_iter().chain(always_open) {
+            assert!(row(&commands, id).enabled, "{id} while paused");
+        }
     }
 
     #[test]

@@ -218,6 +218,80 @@ fn a_macos_shell_reads_the_registry_and_runs_commands_through_the_session() {
     root.close().expect("fixture directory is removed");
 }
 
+/// Registry rows that need playing or paused media, and the ones that do not.
+const NEED_ACTIVE_MEDIA: [&str; 5] = [
+    "play-pause",
+    "seek-back",
+    "seek-forward",
+    "subtitle-delay-forward",
+    "subtitle-delay-back",
+];
+const WORK_AFTER_THE_END: [&str; 4] = ["close-media", "volume-down", "volume-up", "mute"];
+
+fn assert_ended_rows(shell: &Shell, after: &str) {
+    for id in NEED_ACTIVE_MEDIA {
+        assert!(!shell.command(id).enabled, "{id} is enabled {after}");
+        assert_eq!(
+            refusal(&shell.invoke(id)),
+            Some(RejectReason::NoActiveMedia),
+            "{id} {after}"
+        );
+    }
+    for id in WORK_AFTER_THE_END {
+        assert!(shell.command(id).enabled, "{id} is disabled {after}");
+    }
+}
+
+#[test]
+fn after_a_file_ends_or_fails_to_load_only_the_commands_that_still_work_are_enabled() {
+    let _engine = engine_lock();
+    let root = unique_temp_dir("okp-session-registry-ended");
+    let media = write_media_fixture(root.path());
+    let shell = Shell::new(&macos_config(root.path(), &[])).expect("session starts");
+
+    let open = shell.dispatch(json!({"open": {"source": {"kind": "local", "location": media}}}));
+    assert!(matches!(open, DispatchResult::Accepted { .. }), "{open:?}");
+    assert!(
+        wait_for(|| matches!(shell.snapshot().status, Status::Playing | Status::Paused)),
+        "the fixture never loaded"
+    );
+    for id in NEED_ACTIVE_MEDIA.into_iter().chain(WORK_AFTER_THE_END) {
+        assert!(shell.command(id).enabled, "{id} is disabled while loaded");
+    }
+    // Play out the last half second of the two-second fixture.
+    let seek =
+        shell.dispatch(json!({"seek": {"seconds": 1.5, "mode": "absolute", "precision": "exact"}}));
+    assert!(matches!(seek, DispatchResult::Accepted { .. }), "{seek:?}");
+    let play = shell.dispatch(json!({"set_paused": {"paused": false}}));
+    assert!(matches!(play, DispatchResult::Accepted { .. }), "{play:?}");
+    assert!(
+        wait_for(|| shell.snapshot().status == Status::Ended),
+        "the fixture never reached its end: {:?}",
+        shell.snapshot()
+    );
+    assert!(shell.snapshot().source.is_some(), "the source stays set");
+    assert_ended_rows(&shell, "after the end of the file");
+
+    let missing = root.path().join("missing.mkv");
+    let open = shell.dispatch(json!({"open": {"source": {"kind": "local", "location": missing}}}));
+    assert!(matches!(open, DispatchResult::Accepted { .. }), "{open:?}");
+    assert!(
+        wait_for(|| shell.snapshot().status == Status::Ended),
+        "a missing file never ended: {:?}",
+        shell.snapshot()
+    );
+    assert_ended_rows(&shell, "after a failed load");
+
+    assert!(matches!(
+        shell.invoke("close-media"),
+        DispatchResult::Accepted { .. }
+    ));
+    assert!(!shell.command("close-media").enabled);
+
+    drop(shell);
+    root.close().expect("fixture directory is removed");
+}
+
 #[test]
 fn a_config_naming_an_unknown_shell_command_is_refused() {
     let _engine = engine_lock();

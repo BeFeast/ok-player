@@ -120,12 +120,16 @@ change.
 
 The session runs some commands itself: `play-pause`, `close-media`,
 `seek-back`/`seek-forward` (5 s), `volume-down`/`volume-up` (5 points, within
-0-130), `mute`, `subtitle-delay-back`/`subtitle-delay-forward` (0.05 s). The
-rest are carried out by the shell (dialogs, window, clipboard). A shell lists
-the ones it implements in the config's `shell_commands`; a command that
-neither the session nor the shell carries out is `available: false`, and the
-shell should hide it. An id in `shell_commands` that is not in the registry
-fails `okp_session_new`.
+0-130), `mute`, `subtitle-delay-back`/`subtitle-delay-forward` (0.05 s). For
+these, `enabled` is exactly when the session accepts the command:
+`play-pause`, the seeks and the subtitle nudges while the status is `playing`
+or `paused` (not while a file opens, after it ends or after a load error,
+although the source stays set), `close-media` while the status is not `idle`,
+and volume and mute always. The rest are carried out by the shell (dialogs,
+window, clipboard). A shell lists the ones it implements in the config's
+`shell_commands`; a command that neither the session nor the shell carries
+out is `available: false`, and the shell should hide it. An id in
+`shell_commands` that is not in the registry fails `okp_session_new`.
 
 `invoke_command {id}` answers `rejected` with `unknown_command` for an id
 outside the registry and `unavailable` for an unavailable command. A command
