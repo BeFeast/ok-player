@@ -125,6 +125,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         .map { String($0.dropFirst("--snapshot-dir=".count)) }
     var smokeRun: SmokeRun?
     var shuttingDown = false
+    var closing = false
     var errorShown = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -274,6 +275,9 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         client = nil
     }
     func windowWillClose(_ notification: Notification) {
+        // Terminating closes the window again; the first close does the work.
+        guard !closing else { return }
+        closing = true
         shutdown()
         if smokeRun?.finished == true { print("OKP_SMOKE teardown=clean"); fflush(stdout) }
         NSApp.terminate(nil)
@@ -302,6 +306,7 @@ final class SmokeRun {
     private var phase = Phase.idle
     private var cancelled = false
     private var pausePosition = 0.0
+    private var playingRenders = 0
     private var pausedRenders = 0
     private var resizeRenders = 0
 
@@ -336,6 +341,7 @@ final class SmokeRun {
         switch phase {
         case .playing where snapshot.status == .playing && position > 0.7 && renders > 10:
             phase = .pausing
+            playingRenders = renders
             app?.client?.dispatch(.setPaused(paused: true))
         case .pausing where snapshot.status == .paused:
             phase = .holding
@@ -389,7 +395,8 @@ final class SmokeRun {
         let counts = app.video?.videoLayer.counts ?? (renders: 0, swaps: 0)
         let pixelFormat = app.video?.videoLayer.surface.floatColor == true ? "float16" : "rgba8"
         print("OKP_SMOKE loaded=true progressed=true pause=true resume=true idle_render_calls=0 paused_render_calls=0 "
-              + "render_calls=\(counts.renders) swaps=\(counts.swaps) gl_contexts=\(GLSurface.contextsCreated) "
+              + "render_calls=\(counts.renders) swaps=\(counts.swaps) before_pause=\(playingRenders) "
+              + "before_resize=\(resizeRenders) gl_contexts=\(GLSurface.contextsCreated) "
               + "pixel_format=\(pixelFormat) volume=\(Int(snapshot.volume ?? -1)) tracks=\(snapshot.tracks.count)")
         if let directory = app.snapshotDirectory { app.captureAppearances(to: directory) }
         // Closing the window during playback runs the real teardown path; the app
