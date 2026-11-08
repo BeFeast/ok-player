@@ -227,6 +227,14 @@ jobs:
           PYTHON
           cat "$OKP_MACOS_OUTPUT/smoke.log"
           ls -l "$OKP_MACOS_OUTPUT/snapshots"
+          # The app skips a capture it cannot make and still exits 0, so a passing smoke
+          # does not prove the snapshots exist. They are the visual evidence: require both.
+          for name in light dark; do
+            if ! test -s "$OKP_MACOS_OUTPUT/snapshots/window-$name.png"; then
+              echo "::error::Smoke did not produce snapshots/window-$name.png"
+              status=1
+            fi
+          done
           exit "$status"
 
       - name: Record the app checksum
