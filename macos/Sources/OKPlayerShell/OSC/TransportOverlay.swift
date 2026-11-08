@@ -29,7 +29,9 @@ final class TransportOverlay: NSView {
     let previousButton = TransportOverlay.iconButton("backward.end.fill", "Previous item")
     let playButton = TransportOverlay.iconButton("play.fill", "Play")
     let nextButton = TransportOverlay.iconButton("forward.end.fill", "Next item")
-    let speedButton = NSButton(title: "1.00×", target: nil, action: nil)
+    /// A label rather than a button: a button keeps the colour of its attributed
+    /// title from when it was set, so it would not follow the appearance.
+    let speedLabel = NSTextField(labelWithString: "1.00×")
     let muteButton = TransportOverlay.iconButton("speaker.wave.2.fill", "Mute")
     let volumeSlider = VolumeSliderView()
     let fullscreenButton = TransportOverlay.iconButton("arrow.up.left.and.arrow.down.right", "Enter Full Screen")
@@ -185,7 +187,7 @@ final class TransportOverlay: NSView {
         if let transport { trailingLabel.stringValue = trailing.text(in: transport) }
     }
 
-    @objc private func showSpeedMenu(_ sender: NSButton) {
+    @objc private func showSpeedMenu() {
         guard let transport else { return }
         let menu = NSMenu()
         for choice in transport.speeds {
@@ -196,7 +198,7 @@ final class TransportOverlay: NSView {
             menu.addItem(item)
         }
         autoHide.pin()
-        _ = menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+        _ = menu.popUp(positioning: nil, at: NSPoint(x: 0, y: speedLabel.bounds.height + 4), in: speedLabel)
         autoHide.unpin()
     }
 
@@ -235,11 +237,7 @@ final class TransportOverlay: NSView {
     }
 
     private func setSpeedTitle(_ title: String) {
-        guard speedButton.title != title else { return }
-        speedButton.attributedTitle = NSAttributedString(string: title, attributes: [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
-            .foregroundColor: PaletteRole.text.color,
-        ])
+        if speedLabel.stringValue != title { speedLabel.stringValue = title }
     }
 
     // MARK: Layout
@@ -254,20 +252,21 @@ final class TransportOverlay: NSView {
         panel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(panel)
 
-        for label in [elapsedLabel, trailingLabel] {
+        for label in [elapsedLabel, trailingLabel, speedLabel] {
             label.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
             label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         }
         elapsedLabel.textColor = PaletteRole.text.color
+        speedLabel.textColor = PaletteRole.text.color
         trailingLabel.textColor = PaletteRole.textMuted.color
         trailingLabel.toolTip = trailing.toolTip
         trailingLabel.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(toggleTrailing)))
 
-        speedButton.isBordered = false
-        speedButton.toolTip = "Playback speed"
-        speedButton.target = self
-        speedButton.action = #selector(showSpeedMenu(_:))
-        setSpeedTitle("1.00×")
+        speedLabel.toolTip = "Playback speed"
+        speedLabel.setAccessibilityRole(.popUpButton)
+        speedLabel.setAccessibilityLabel("Playback speed")
+        speedLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+        speedLabel.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(showSpeedMenu)))
         for (button, action) in [(previousButton, #selector(previousItem)), (playButton, #selector(togglePause)),
                                  (nextButton, #selector(nextItem)), (muteButton, #selector(toggleMute)),
                                  (fullscreenButton, #selector(toggleFullscreen))] {
@@ -285,7 +284,7 @@ final class TransportOverlay: NSView {
         let leading = NSStackView(views: [previousButton, playButton, nextButton, elapsedLabel, trailingLabel])
         leading.spacing = 6
         leading.setCustomSpacing(12, after: nextButton)
-        let trailingControls = NSStackView(views: [speedButton, muteButton, volumeSlider, fullscreenButton])
+        let trailingControls = NSStackView(views: [speedLabel, muteButton, volumeSlider, fullscreenButton])
         trailingControls.spacing = 6
         for stack in [leading, trailingControls] {
             stack.orientation = .horizontal
