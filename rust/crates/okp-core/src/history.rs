@@ -1106,6 +1106,19 @@ mod tests {
         let key = "/media/movie.mkv";
         assert_eq!(history.files[key].preferences.volume, Some(135.0));
 
+        // A new volume replaces the recorded one.
+        history.record_preferences(
+            key,
+            Preferences {
+                volume: Some(80.0),
+                ..Preferences::default()
+            },
+            1_700_000_050,
+            HistoryWriteMode::Record,
+        );
+        assert_eq!(history.files[key].preferences.volume, Some(80.0));
+        assert_eq!(history.files[key].preferences.speed, Some(1.25));
+
         // A shell that does not remember volume merges without it.
         history.record_preferences(
             key,
@@ -1118,7 +1131,7 @@ mod tests {
         );
         let saved = serde_json::to_string(&history).expect("history serialises");
         let reloaded = History::load(&saved).expect("the saved document loads");
-        assert_eq!(reloaded.files[key].preferences.volume, Some(135.0));
+        assert_eq!(reloaded.files[key].preferences.volume, Some(80.0));
         assert_eq!(reloaded.files[key].preferences.speed, Some(1.5));
 
         // Only a volume is still a recorded preference, and none is omitted.
