@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "result": {
+    "history": {
+      "result": {
+        "welcome_shelf": {
+          "private_session": false,
+          "entries": [
+            {
+              "source": { "kind": "local", "location": "/Users/example/Movies/Severance/Season 02/Severance S02E03.mkv" },
+              "title": "Severance S02E03",
+              "location": "Severance › Season 02",
+              "position": 1325.5,
+              "duration": 3120.0,
+              "progress": 0.42,
+              "state": "progress",
+              "state_label": "30m left",
+              "when_label": "Today 21:14",
+              "updated_at_unix": 1699990000,
+              "resume_from": 1325.5
+            }
+          ]
+        }
+      }
+    }
+  }
+}

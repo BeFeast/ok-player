@@ -15,13 +15,15 @@ use okp_core::playlist::PlaylistItem;
 use okp_mpv::{EndFileReason, EntryEvent, MpvEvent, error_description};
 
 use crate::coalesce::Coalescer;
+use crate::commands::{CommandRegistry, Invocation, WindowState};
 use crate::engine::{Engine, MpvEngine, Observation};
+use crate::history::{HistoryAction, HistoryActionResult, Report, SessionHistory};
 use crate::machine::SessionMachine;
 use crate::playlist::{Background, PlannedOpen, SessionPlaylist, Step};
 use crate::protocol::{
     Command, CommandEnvelope, DispatchReply, DispatchResult, ErrorKind, Event, EventBatch,
     MediaSource, PlaylistAction, Query, QueryEnvelope, QueryReply, QueryResult, RejectReason,
-    SCHEMA_VERSION, SessionConfig, SessionSnapshot, Track, TrackKind, VideoGeometry,
+    Route, SCHEMA_VERSION, SessionConfig, SessionSnapshot, Track, TrackKind, VideoGeometry,
     parse_envelope, to_json,
 };
 use crate::reconcile::{core_end_reason, endfile_error, event_matches_source};
@@ -47,6 +49,7 @@ pub type RenderUpdate = Box<dyn Fn() + Send + Sync>;
 pub struct Session {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
+    commands: CommandRegistry,
 }
 
 struct Shared {
@@ -71,6 +74,10 @@ struct State {
     /// Tracks the current open asked for, selected once its file has loaded.
     pending_tracks: Vec<(TrackKind, i64)>,
     playlist: SessionPlaylist,
+    /// The end of file that ended the current media carried an error.
+    end_failed: bool,
+    /// Resume, progress, per-file memory and the private session.
+    history: SessionHistory,
 }
 
 /// Wakes the event thread: set by the engine listener, by commands and by
@@ -118,8 +125,11 @@ impl Session {
     /// Start libmpv with `config` and the session's event thread.
     pub fn new(config: &SessionConfig) -> Result<Self, String> {
         validate_config(config)?;
+        let commands = CommandRegistry::new(config.app.platform, &config.shell_commands)?;
         let engine = MpvEngine::new(config)?;
-        Ok(Self::with_engine(Box::new(engine)))
+        let mut session = Self::start(Box::new(engine), SessionHistory::open(&config.data_dir));
+        session.commands = commands;
+        Ok(session)
     }
 
     /// [`Session::new`] from a config document.
@@ -129,11 +139,22 @@ impl Session {
         Self::new(&config)
     }
 
+    /// A session whose history is kept in memory only.
+    #[cfg(test)]
     pub(crate) fn with_engine(engine: Box<dyn Engine>) -> Self {
+        Self::start(
+            engine,
+            SessionHistory::with_store(crate::history::HistoryStore::in_memory()),
+        )
+    }
+
+    pub(crate) fn start(engine: Box<dyn Engine>, history: SessionHistory) -> Self {
         let signal = Arc::new(Signal::default());
         let listener_signal = Arc::clone(&signal);
         engine.set_listener(Some(Arc::new(move || listener_signal.notify())));
         let playlist_signal = Arc::clone(&signal);
+        let history_signal = Arc::clone(&signal);
+        history.set_waker(Arc::new(move || history_signal.notify()));
         let shared = Arc::new(Shared {
             engine,
             state: Mutex::new(State {
@@ -144,6 +165,8 @@ impl Session {
                 load: None,
                 pending_tracks: Vec::new(),
                 playlist: SessionPlaylist::new(Arc::new(move || playlist_signal.notify())),
+                end_failed: false,
+                history,
             }),
             signal,
             wakeup: Mutex::new(None),
@@ -160,6 +183,7 @@ impl Session {
         Self {
             shared,
             thread: Some(thread),
+            commands: CommandRegistry::default(),
         }
     }
 
@@ -181,13 +205,22 @@ impl Session {
 
     /// Validate `command` with the core state machine and, only if it accepts,
     /// hand it to the engine. A playlist command is decided by the session's
-    /// playlist, and an item it plays is opened the same way.
+    /// playlist, and an item it plays is opened the same way. A history action
+    /// is carried out by the session itself.
     pub fn dispatch(&self, command: &Command) -> DispatchResult {
+        if let Command::InvokeCommand { id } = command {
+            return self.invoke_command(id);
+        }
         let engine = &*self.shared.engine;
         let mut state = lock(&self.shared.state);
-        let result = match command {
-            Command::Playlist { action } => state.dispatch_playlist(engine, action),
-            _ => {
+        let result = match command.route() {
+            Route::Playlist(action) => state.dispatch_playlist(engine, action),
+            Route::History(action) => DispatchResult::History {
+                result: state.history_action(action),
+            },
+            // Handled above, before the state is locked.
+            Route::Registry => rejected(RejectReason::Malformed),
+            Route::Player(_) => {
                 let result = state.forward(engine, command);
                 state.playlist.follow(command, &result);
                 result
@@ -206,6 +239,35 @@ impl Session {
             Query::Playlist {} => QueryResult::Playlist {
                 playlist: lock(&self.shared.state).playlist.state(),
             },
+            Query::History { query } => QueryResult::History {
+                result: lock(&self.shared.state).history.query(query),
+            },
+            Query::CommandRegistry {
+                fullscreen,
+                mini_player,
+            } => QueryResult::CommandRegistry {
+                commands: self.commands.resolve(
+                    &self.snapshot(),
+                    WindowState {
+                        fullscreen: *fullscreen,
+                        mini_player: *mini_player,
+                    },
+                ),
+            },
+            Query::ShortcutTable {} => QueryResult::ShortcutTable {
+                shortcuts: self.commands.shortcut_table(),
+            },
+        }
+    }
+
+    /// Run a registry command: forward the session command it stands for, or
+    /// tell the shell to carry it out. An unknown or unavailable command is
+    /// refused.
+    fn invoke_command(&self, id: &str) -> DispatchResult {
+        match self.commands.invocation(id, &self.snapshot()) {
+            Invocation::Run(command) => self.dispatch(&command),
+            Invocation::Perform => DispatchResult::Perform {},
+            Invocation::Refuse(reason, message) => DispatchResult::Rejected { reason, message },
         }
     }
 
@@ -222,6 +284,12 @@ impl Session {
             self.shared.signal.notify();
         }
         snapshot
+    }
+
+    /// When the event thread next wakes on its own, as of a refresh now.
+    #[cfg(test)]
+    pub(crate) fn next_wake(&self) -> Option<Instant> {
+        lock(&self.shared.state).refresh(&*self.shared.engine, Instant::now())
     }
 
     /// Take every queued event as one batch and re-arm the wakeup.
@@ -308,6 +376,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        lock(&self.shared.state).quit(&*self.shared.engine);
         self.shared.running.store(false, Ordering::Release);
         self.shared.engine.set_listener(None);
         self.shared.signal.notify();
@@ -348,7 +417,7 @@ fn event_loop(shared: &Arc<Shared>) {
 
 impl State {
     /// Fold the engine's latest report into the machine and the queue. Returns
-    /// when a held playhead update falls due.
+    /// when a held playhead update or a timed history save falls due.
     fn refresh(&mut self, engine: &dyn Engine, now: Instant) -> Option<Instant> {
         // Events first: the engine publishes a pass's observations before its
         // events, so an observation read after the events is never older than
@@ -360,26 +429,78 @@ impl State {
             loaded |= self.reconcile_event(event, &observation);
         }
         self.reconcile_observation(&observation);
+        // Remembered per-file choices go first, so the open's own tracks win.
+        self.history.refresh(
+            Report {
+                loaded,
+                end_failed: self.end_failed,
+                title: observation.title.as_deref(),
+            },
+            self.machine.machine(),
+            engine,
+            &mut self.queue,
+            now,
+        );
         if loaded {
             self.select_pending_tracks(engine);
         }
         self.advance_playlist(engine);
         let current = self.project(&observation);
-        self.queue.observe(&current, now)
+        let held = self.queue.observe(&current, now);
+        // A history change waiting for its timed save wakes the thread too.
+        match (held, self.history.next_save()) {
+            (Some(held), Some(save)) => Some(held.min(save)),
+            (held, save) => held.or(save),
+        }
+    }
+
+    /// The command to dispatch for `command`, with the history's say in it.
+    fn prepare<'c>(&mut self, command: &'c Command) -> std::borrow::Cow<'c, Command> {
+        self.history.prepare(command, &mut self.queue)
+    }
+
+    fn history_action(&mut self, action: &HistoryAction) -> HistoryActionResult {
+        self.history.act(action, &mut self.queue)
+    }
+
+    fn history_dispatched(&mut self, command: &Command, forwarded: bool, engine: &dyn Engine) {
+        self.history.dispatched(
+            command,
+            forwarded,
+            self.machine.machine(),
+            engine,
+            &mut self.queue,
+        );
+    }
+
+    /// Fold in the engine's last report and save the history: the session is
+    /// closing.
+    fn quit(&mut self, engine: &dyn Engine) {
+        self.refresh(engine, Instant::now());
+        self.history.quit(&mut self.queue);
     }
 
     /// Validate `command` with the core state machine and, only if it accepts,
     /// hand it to the engine.
+    /// The history has its say first: an open may resume where the media was
+    /// left.
     fn forward(&mut self, engine: &dyn Engine, command: &Command) -> DispatchResult {
-        let core = command.to_core();
+        let command = self.prepare(command);
+        let Route::Player(core) = command.route() else {
+            // Playlist, history and registry commands never reach here.
+            return rejected(RejectReason::Malformed);
+        };
         let mut load = None;
         let (outcome, engine_result) = self.machine.dispatch(&core, |_, request_id| {
             engine
-                .forward(command, request_id)
+                .forward(&command, request_id)
                 .map(|entry| load = entry)
         });
         if engine_result.is_ok() {
-            self.track_load(command, outcome, load);
+            self.track_load(&command, outcome, load);
+        }
+        if matches!(outcome, CommandOutcome::Accepted { .. }) {
+            self.history_dispatched(&command, engine_result.is_ok(), engine);
         }
         match (outcome, engine_result) {
             (CommandOutcome::Accepted { request_id }, Ok(())) => {
@@ -546,6 +667,7 @@ impl State {
                 if !self.ends_current_media(entry, reason, error.is_some(), path.as_deref()) {
                     return false;
                 }
+                self.end_failed = error.is_some();
                 if reason == EndFileReason::Eof && error.is_none() {
                     self.playlist.end_of_file();
                 }
@@ -1489,6 +1611,7 @@ mod tests {
             cache_dir: "/cache".into(),
             hwdec: None,
             mpv_options: Vec::new(),
+            shell_commands: Vec::new(),
         };
         assert_eq!(
             validate_config(&config),
@@ -1498,6 +1621,138 @@ mod tests {
         assert_eq!(validate_config(&config), Ok(()));
         config.schema_version = 2;
         assert!(validate_config(&config).is_err());
+    }
+
+    fn invoke(id: &str) -> Command {
+        Command::InvokeCommand { id: id.to_owned() }
+    }
+
+    fn registry_row(session: &Session, id: &str) -> crate::protocol::RegistryCommand {
+        let QueryResult::CommandRegistry { commands } = session.query(&Query::CommandRegistry {
+            fullscreen: false,
+            mini_player: false,
+        }) else {
+            panic!("the registry query answers with the registry");
+        };
+        commands
+            .into_iter()
+            .find(|command| command.id == id)
+            .expect("the command is in the registry")
+    }
+
+    #[test]
+    fn invoked_registry_commands_run_through_the_session_or_go_back_to_the_shell() {
+        let (mut session, engine) = fake_session();
+        session.commands =
+            CommandRegistry::new(okp_core::app::Platform::MacOs, &["open-file".to_owned()])
+                .expect("open-file is a registry command");
+
+        // Refused invocations reach nothing.
+        for (id, expected) in [
+            ("open-url", RejectReason::Unavailable),
+            ("eject", RejectReason::UnknownCommand),
+        ] {
+            let reply = session.dispatch(&invoke(id));
+            assert!(
+                matches!(reply, DispatchResult::Rejected { reason, .. } if reason == expected),
+                "{id}: {reply:?}"
+            );
+        }
+        // A command the shell carries out goes back to it.
+        assert_eq!(
+            session.dispatch(&invoke("open-file")),
+            DispatchResult::Perform {}
+        );
+        // A session command is validated like any other: nothing to pause yet.
+        assert_eq!(
+            session.dispatch(&invoke("play-pause")),
+            rejected(RejectReason::NoActiveMedia)
+        );
+        assert!(engine.forwarded().is_empty(), "{:?}", engine.forwarded());
+
+        assert!(!registry_row(&session, "mute").checked);
+        assert!(matches!(
+            session.dispatch(&invoke("mute")),
+            DispatchResult::Accepted { .. }
+        ));
+        assert!(registry_row(&session, "mute").checked);
+        let reply = session
+            .dispatch_json(r#"{"schema_version":1,"command":{"invoke_command":{"id":"mute"}}}"#);
+        assert!(reply.contains(r#""accepted""#), "{reply}");
+        assert!(!registry_row(&session, "mute").checked);
+        assert!(matches!(
+            session.dispatch(&invoke("volume-up")),
+            DispatchResult::Accepted { .. }
+        ));
+        assert_eq!(
+            engine.forwarded(),
+            vec![
+                Command::SetMute { muted: true },
+                Command::SetMute { muted: false },
+                Command::SetVolume { volume: 105.0 },
+            ]
+        );
+
+        // Once media plays, play-pause is enabled and pauses it.
+        assert!(!registry_row(&session, "play-pause").enabled);
+        let _ = session.dispatch(&open("/media/a.mkv"));
+        loaded(&engine, 10.0);
+        assert!(wait_for(|| session.snapshot().status == Status::Playing));
+        assert!(registry_row(&session, "play-pause").enabled);
+        assert!(matches!(
+            session.dispatch(&invoke("play-pause")),
+            DispatchResult::Accepted { .. }
+        ));
+        assert_eq!(session.snapshot().status, Status::Paused);
+        assert_eq!(engine.forwarded().last(), Some(&Command::TogglePause {}));
+    }
+
+    #[test]
+    fn the_registry_enables_a_session_command_exactly_when_invoking_it_is_accepted() {
+        fn play(session: &Session, engine: &FakeState) {
+            let _ = session.dispatch(&open("/media/a.mkv"));
+            loaded(engine, 10.0);
+            assert!(wait_for(|| session.snapshot().status == Status::Playing));
+        }
+        /// Bring a fresh session to one state.
+        type Reach = fn(&Session, &FakeState);
+        // Each state the session can be in. The source stays set while opening
+        // and after either kind of end.
+        let states: [(&str, Reach); 6] = [
+            ("idle", |_, _| {}),
+            ("opening", |session, _| {
+                let _ = session.dispatch(&open("/media/a.mkv"));
+            }),
+            ("playing", play),
+            ("paused", |session, engine| {
+                play(session, engine);
+                let _ = session.dispatch(&Command::SetPaused { paused: true });
+                assert_eq!(session.snapshot().status, Status::Paused);
+            }),
+            ("ended", |session, engine| {
+                play(session, engine);
+                engine.publish(|_| {}, vec![ended(EndFileReason::Eof)]);
+                assert!(wait_for(|| session.snapshot().status == Status::Ended));
+            }),
+            ("failed to load", |session, engine| {
+                *lock(&engine.refuse_with) = Some("loadfile refused".to_owned());
+                let _ = session.dispatch(&open("/media/a.mkv"));
+                assert_eq!(session.snapshot().status, Status::Ended);
+            }),
+        ];
+        for (state, reach) in states {
+            for &id in crate::commands::SESSION_COMMANDS {
+                let (session, engine) = fake_session();
+                reach(&session, &engine);
+                let enabled = registry_row(&session, id).enabled;
+                let reply = session.dispatch(&invoke(id));
+                assert_eq!(
+                    enabled,
+                    matches!(reply, DispatchResult::Accepted { .. }),
+                    "{id} while {state}: {reply:?}"
+                );
+            }
+        }
     }
 
     /// The playlist through the session: folder scans, auto-advance, commands.

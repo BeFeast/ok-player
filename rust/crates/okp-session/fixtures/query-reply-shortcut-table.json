@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "result": {
+    "shortcut_table": {
+      "shortcuts": [
+        { "action": "play-pause", "command": "play-pause", "primary": { "key": "space", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "Space" }, "secondary": null },
+        { "action": "seek-back", "command": "seek-back", "primary": { "key": "Left", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "Left" }, "secondary": null },
+        { "action": "seek-forward", "command": "seek-forward", "primary": { "key": "Right", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "Right" }, "secondary": null },
+        { "action": "frame-forward", "command": "frame-forward", "primary": { "key": "period", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "." }, "secondary": null },
+        { "action": "frame-back", "command": "frame-back", "primary": { "key": "comma", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "," }, "secondary": null },
+        { "action": "previous-item", "command": "previous-item", "primary": { "key": "Page_Up", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "PageUp" }, "secondary": null },
+        { "action": "next-item", "command": "next-item", "primary": { "key": "Page_Down", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "PageDown" }, "secondary": null },
+        { "action": "volume-down", "command": "volume-down", "primary": { "key": "Down", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "Down" }, "secondary": null },
+        { "action": "volume-up", "command": "volume-up", "primary": { "key": "Up", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "Up" }, "secondary": null },
+        { "action": "mute", "command": "mute", "primary": { "key": "m", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "M" }, "secondary": null },
+        { "action": "open-file", "command": "open-file", "primary": { "key": "o", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": true }, "label": "Cmd+O" }, "secondary": null },
+        { "action": "add-subtitle", "command": "add-subtitle", "primary": { "key": "s", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "S" }, "secondary": null },
+        { "action": "open-url", "command": "open-url", "primary": { "key": "o", "modifiers": { "ctrl": false, "alt": false, "shift": true, "cmd": true }, "label": "Shift+Cmd+O" }, "secondary": null },
+        { "action": "close-media", "command": "close-media", "primary": { "key": "x", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "X" }, "secondary": null },
+        { "action": "save-screenshot", "command": "save-frame", "primary": { "key": "c", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "C" }, "secondary": null },
+        { "action": "copy-frame", "command": "copy-frame", "primary": { "key": "c", "modifiers": { "ctrl": false, "alt": false, "shift": true, "cmd": false }, "label": "Shift+C" }, "secondary": null },
+        { "action": "media-info", "command": "media-info", "primary": { "key": "i", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": true }, "label": "Cmd+I" }, "secondary": null },
+        { "action": "go-to-time", "command": "go-to-time", "primary": { "key": "j", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "J" }, "secondary": null },
+        { "action": "ab-loop", "command": "ab-loop", "primary": { "key": "l", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "L" }, "secondary": null },
+        { "action": "subtitle-delay-forward", "command": "subtitle-delay-forward", "primary": { "key": "z", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "Z" }, "secondary": null },
+        { "action": "subtitle-delay-back", "command": "subtitle-delay-back", "primary": { "key": "z", "modifiers": { "ctrl": false, "alt": false, "shift": true, "cmd": false }, "label": "Shift+Z" }, "secondary": null },
+        { "action": "subtitle-size-down", "command": "subtitle-size-down", "primary": { "key": "bracketleft", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "[" }, "secondary": null },
+        { "action": "subtitle-size-up", "command": "subtitle-size-up", "primary": { "key": "bracketright", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "]" }, "secondary": null },
+        { "action": "subtitle-previous-cue", "command": "subtitle-previous-cue", "primary": { "key": "Left", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": true }, "label": "Cmd+Left" }, "secondary": null },
+        { "action": "subtitle-next-cue", "command": "subtitle-next-cue", "primary": { "key": "Right", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": true }, "label": "Cmd+Right" }, "secondary": null },
+        { "action": "fullscreen", "command": "fullscreen", "primary": { "key": "f", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "F" }, "secondary": null },
+        { "action": "escape-fullscreen", "command": "escape-fullscreen", "primary": { "key": "Escape", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "Escape" }, "secondary": null },
+        { "action": "open-settings", "command": "open-settings", "primary": { "key": "comma", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": true }, "label": "Cmd+," }, "secondary": null }
+      ]
+    }
+  }
+}

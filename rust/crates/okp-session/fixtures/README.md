@@ -11,5 +11,6 @@ and anything else bumps it.
 
 The playlist's documents are the `playlist-*.json` files, checked the same way
 by `tests/golden_playlist.rs`; `playlist-enums.json` lists the playlist's
-enums. They stay in this directory, not a subdirectory, so that a shell test
-listing this directory notices them.
+enums. The watch history's documents are in `history/` (see its README). The
+macOS shell's coverage test walks this directory and its subdirectories, so it
+notices a new document wherever it is added.

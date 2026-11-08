@@ -78,10 +78,10 @@ written as `null` and may be left out on input.
 
 | Document | Shape |
 |---|---|
-| Config (`okp_session_new`) | `schema_version`, `app` (`name`, `platform`), absolute `data_dir`, `config_dir`, `cache_dir`, optional `hwdec`, ordered `mpv_options` (`name`, `value`) applied after the session defaults |
-| Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay`, `playlist` (see Playlist) |
-| Reply | `{"schema_version":1,"result":{...}}`: `accepted {request_id}`, `no_op {}`, `rejected {reason, message}`, `failed {request_id, message}` when the engine refused an accepted command at once, or `applied {}` when the session carried the command out itself and nothing reached libmpv yet |
-| Query (`okp_session_query`) | `{"schema_version":1,"query":{"snapshot":{}}}`, answered with `result.snapshot.snapshot` (the full state) or `result.rejected`; `{"playlist":{}}`, answered with `result.playlist.playlist` |
+| Config (`okp_session_new`) | `schema_version`, `app` (`name`, `platform`), absolute `data_dir`, `config_dir`, `cache_dir`, optional `hwdec`, ordered `mpv_options` (`name`, `value`) applied after the session defaults, optional `shell_commands` (see Command registry) |
+| Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay`, `invoke_command {id}`, `playlist` (see Playlist) |
+| Reply | `{"schema_version":1,"result":{...}}`: `accepted {request_id}`, `no_op {}`, `rejected {reason, message}`, `failed {request_id, message}` when the engine refused an accepted command at once, `perform {}` (`invoke_command` only), or `applied {}` when the session carried the command out itself and nothing reached libmpv yet |
+| Query (`okp_session_query`) | `{"schema_version":1,"query":{...}}`: `snapshot {}`, answered with `result.snapshot.snapshot` (the full state); `command_registry {fullscreen, mini_player}` (both optional), answered with `result.command_registry.commands`; `shortcut_table {}`, answered with `result.shortcut_table.shortcuts`; `playlist {}`, answered with `result.playlist.playlist`; or `result.rejected`; `history` queries are below |
 | Event batch (`okp_session_drain_events`) | `{"schema_version":1,"events":[...]}` |
 
 An open source is `{"kind":"local"|"url","location":"..."}`. A URL is handed
@@ -101,8 +101,9 @@ The snapshot carries `status`, `source`, `time_pos`, `duration`, `volume`,
 
 The golden documents in `rust/crates/okp-session/fixtures/` (the playlist's
 are the `playlist-*.json` ones) pin every shape and every enum value. Change
-them only together with the protocol. They all sit in that one directory, so a
-shell test that checks it covers every fixture there notices a new document.
+them only together with the protocol. The watch history's are in its
+`history/` subdirectory; a shell test that checks it covers every fixture in
+the directory and below notices a new document.
 
 ## Compatibility within a version
 
@@ -125,6 +126,50 @@ Everything else bumps `schema_version`: a new, renamed or removed field or enum
 value in an existing document, a new snapshot field, or a changed meaning. A
 session refuses documents of another version, so a shell and a session with
 different versions do not talk at all.
+
+## Command registry
+
+The registry is everything a menu or a key can run: the core player command
+registry (the commands of the Linux command menu, with their ids and labels)
+followed by the bindable keyboard actions no registry command covers
+(`seek-back`, `volume-up`, `mute`, `next-item`, the subtitle nudges, ...),
+under their shortcut action ids. Each `command_registry` row carries `id`,
+`group`, `menu` (the place in the Linux command menu, `null` for a
+keyboard-only command), `label`, `available`, `enabled`, `checked` and
+`shortcut`, the primary chord bound to it on the config's platform.
+`enabled`, `checked` and the state-dependent labels ("Mute" checked while
+muted, "Exit fullscreen") are resolved against the session state at the time
+of the query. The window state is the shell's, so it passes `fullscreen` and
+`mini_player` in the query. Query when a menu opens; no event announces a
+change.
+
+The session runs some commands itself: `play-pause`, `close-media`,
+`seek-back`/`seek-forward` (5 s), `volume-down`/`volume-up` (5 points, within
+0-130), `mute`, `subtitle-delay-back`/`subtitle-delay-forward` (0.05 s). For
+these, `enabled` is exactly when the session accepts the command:
+`play-pause`, the seeks and the subtitle nudges while the status is `playing`
+or `paused` (not while a file opens, after it ends or after a load error,
+although the source stays set), `close-media` while the status is not `idle`,
+and volume and mute always. The rest are carried out by the shell (dialogs,
+window, clipboard). A shell lists the ones it implements in the config's
+`shell_commands`; a command that neither the session nor the shell carries
+out is `available: false`, and the shell should hide it. An id in
+`shell_commands` that is not in the registry fails `okp_session_new`.
+
+`invoke_command {id}` answers `rejected` with `unknown_command` for an id
+outside the registry and `unavailable` for an unavailable command. A command
+the session runs is dispatched as the session command it stands for and
+answered like one (`accepted`, `no_op`, `rejected`, `failed`). A command the
+shell carries out is answered `perform {}`: the shell runs it, gating it on
+the `enabled` state it queried.
+
+`shortcut_table` rows carry `action`, `command` (the registry id to invoke),
+`primary` and `secondary`. The session has no user bindings yet, so these are
+the platform defaults and `secondary` is `null`. A chord is
+`{"key", "modifiers": {"ctrl", "alt", "shift", "cmd"}, "label"}`: `key` is
+the canonical key name (`space`, `comma`, `Left`, `o`) and `label` the display
+text (`Shift+Cmd+O`). On macOS menu commands use Cmd chords and in-window keys
+stay single keys.
 
 ## Events
 
@@ -201,6 +246,60 @@ playlist files belong in a playlist `open`); `close` empties it.
 The query `{"schema_version":1,"query":{"playlist":{}}}` answers
 `result.playlist.playlist`: `items` (`source`, `title`), `current_index`,
 `repeat`, `shuffle`, and `scanning` (a folder or playlist file is being read).
+
+## Watch history
+
+The session keeps the watch history in `history.json` under `data_dir`, in the
+same document the Linux build writes (`okp_core::history::History`), so the
+file moves between the two. Writes go to a temporary file that is flushed and
+renamed over the old one; a shell never touches the file. The session writes
+it on a thread of its own, so `dispatch`, `query` and `drain_events` never
+wait for the disk. Two calls do: `okp_session_free`, which waits for the last
+save, and `history.remove`, which waits for its own write to answer.
+
+What the session does on its own:
+
+- An `open` without `resume_from` starts at the remembered position when the
+  core resume rule allows it: past the first 5%, before the last 30 s (the last
+  5% for media under 10 minutes), and not finished. Once that media has loaded,
+  a `resumed` event reports the position. A `resume_from` in the open wins.
+- Progress is saved every 10 s while playing, and on pause, `close`, the next
+  `open`, `okp_session_free` and the engine quitting. Playing to the end marks
+  the entry finished, so it opens from the start next time.
+- `select_track`, `set_subtitle_delay`, `set_volume` and `set_speed` are
+  remembered for the current media and written with the next save, or 10 s
+  after the first unsaved one, so a dragged slider writes once. Reopening it
+  sets the volume and speed with the open, and selects the tracks (only those
+  the file has) and sets the subtitle delay once it has loaded; tracks named in
+  the open win.
+- While the private session is on, nothing new is recorded and nothing
+  remembered is applied. The history stays readable and entries can still be
+  removed. It starts off with every session.
+- A `history.json` that is there but cannot be read (damaged, written by a
+  newer build, or unreadable when the session starts) is never written over.
+  The first save renames it to `history.json.unreadable-<unix seconds>` and
+  then writes a new file; if the rename fails, nothing is written and
+  `save_failed` follows. The page reports `read_failed` and, once the file has
+  been moved, its new path in `unreadable_copy`.
+
+| Document | Shape |
+|---|---|
+| Command | `{"command":{"history":{"action":{...}}}}`: `set_private {enabled}`, `remove {source}` (the media is untouched; removing the media that plays stops recording it until it is opened again) |
+| Reply | `{"result":{"history":{"result":{...}}}}`: `done {}`, `unchanged {}` or `failed {message}` (the file could not be written; nothing changed) |
+| Query | `{"query":{"history":{"query":{...}}}}`: `welcome_shelf {limit, utc_offset_seconds}`, `page {search, utc_offset_seconds}` (`search` may be left out) |
+| Query reply | `{"result":{"history":{"result":{...}}}}`: `welcome_shelf {private_session, entries}` or `page {private_session, read_failed, unreadable_copy, summary, end_cap, sections}`; a section is `{bucket, header, entries}`, newest first |
+| Event | `{"history":{"event":{...}}}`: `resumed {position}`, `changed {}` (query again), `private_session {enabled}`, `save_failed {message}` (once until a save succeeds) |
+
+An entry carries `source`, `title`, `location` (the folder breadcrumb),
+`position`, `duration`, `progress` (0 to 1), `state` (`finished`, `progress`,
+`barely`), `state_label`, `when_label`, `updated_at_unix` and `resume_from`
+(where opening it starts, `null` for the start). Days and `when` labels are
+local to the `utc_offset_seconds` the shell passes: its current offset, applied
+to every entry. Entries for local files that no longer exist are left out.
+
+History events are discrete: they keep their order among the `error` events.
+The golden documents for this group are in
+`rust/crates/okp-session/fixtures/history/`.
 
 ## Threading and ownership
 

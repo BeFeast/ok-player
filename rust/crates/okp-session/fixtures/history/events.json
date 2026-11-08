@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "events": [
+    { "history": { "event": { "resumed": { "position": 754.5 } } } },
+    { "history": { "event": { "changed": {} } } },
+    { "history": { "event": { "private_session": { "enabled": true } } } },
+    {
+      "history": {
+        "event": {
+          "save_failed": { "message": "the history could not be saved: No space left on device" }
+        }
+      }
+    }
+  ]
+}

@@ -378,9 +378,12 @@ impl SessionPlaylist {
         let accepted = match result {
             DispatchResult::Accepted { .. } => true,
             DispatchResult::Failed { .. } => false,
+            // An open is answered with none of the others.
             DispatchResult::NoOp {}
             | DispatchResult::Rejected { .. }
-            | DispatchResult::Applied {} => return,
+            | DispatchResult::Applied {}
+            | DispatchResult::Perform {}
+            | DispatchResult::History { .. } => return,
         };
         self.advance_due = false;
         match open.effect {
