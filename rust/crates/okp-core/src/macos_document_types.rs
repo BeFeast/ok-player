@@ -1,8 +1,10 @@
 //! macOS document types for the app bundle's `Info.plist`, generated from
 //! [`crate::media_formats`] so Finder offers OK Player for every audio and video file the player
 //! opens. The `okp-macos-document-types` binary writes them as a standalone property list
-//! holding `CFBundleDocumentTypes` and `UTImportedTypeDeclarations`, for the bundle build to put
-//! into `Info.plist` in place of a hand-written list.
+//! holding `CFBundleDocumentTypes` and `UTImportedTypeDeclarations`. The bundle build replaces
+//! both keys of `Info.plist` with these values (for example `PlistBuddy -c "Delete
+//! :CFBundleDocumentTypes"` before a `Merge`). A plain merge would keep the template's old
+//! entries next to the generated ones, so the template should carry neither key.
 //!
 //! Every extension resolves to one content type:
 //!

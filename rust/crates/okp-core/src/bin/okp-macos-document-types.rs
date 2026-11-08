@@ -1,6 +1,7 @@
 //! Write the macOS document types generated from `okp_core::media_formats` as a standalone
-//! property list (`CFBundleDocumentTypes` and `UTImportedTypeDeclarations`), for the app
-//! bundle build to put into `Info.plist`.
+//! property list (`CFBundleDocumentTypes` and `UTImportedTypeDeclarations`). The app bundle
+//! build replaces both keys of `Info.plist` with these values; merging would keep any old
+//! entries the template still carries.
 //!
 //! Usage: `okp-macos-document-types [OUTPUT_PLIST]`. Without an argument the property list goes
 //! to standard output.
