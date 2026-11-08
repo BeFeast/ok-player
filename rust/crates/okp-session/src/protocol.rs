@@ -16,6 +16,8 @@ use okp_core::player as core;
 use okp_core::playlist::PlaylistItem;
 use serde::{Deserialize, Serialize};
 
+pub use crate::transport::{OscSurface, OscView, SpeedChoice, TransportView, VolumeView};
+
 /// Version of every envelope below. Bump on any change a shell built against
 /// the previous version could not decode or would misread.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -122,6 +124,11 @@ pub enum Command {
     SetSubtitleDelay {
         seconds: f64,
     },
+    /// Change the volume by `delta` percent from the level asked for last, or
+    /// the reported one, clamped to 0-130 %. Forwarded as a `set_volume`.
+    NudgeVolume {
+        delta: f64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,11 +203,17 @@ pub struct QueryEnvelope {
     pub query: Query,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Query {
     /// The full session state, as the event stream has reported it so far.
     Snapshot {},
+    /// What the transport controls show for that state; with `at`, the time
+    /// readout at that position instead of the playhead (a scrubber drag).
+    Transport {
+        #[serde(default)]
+        at: Option<f64>,
+    },
 }
 
 /// `{"schema_version":1,"result":{...}}`, the answer to a query.
@@ -216,6 +229,9 @@ pub struct QueryReply {
 pub enum QueryResult {
     Snapshot {
         snapshot: SessionSnapshot,
+    },
+    Transport {
+        transport: TransportView,
     },
     Rejected {
         reason: RejectReason,
@@ -451,6 +467,9 @@ impl Command {
                 seconds: seek_seconds(*seconds, *mode),
             }),
             Self::SetVolume { volume } => core::PlayerCommand::SetVolume(*volume),
+            // The session turns a nudge into a `set_volume` before validation
+            // (`transport::VolumeTarget`); validated on its own, it is a level.
+            Self::NudgeVolume { delta } => core::PlayerCommand::SetVolume(*delta),
             Self::SetMute { muted } => core::PlayerCommand::SetMute(*muted),
             Self::SetSpeed { speed } => core::PlayerCommand::SetSpeed(*speed),
             Self::SelectTrack { kind, id } => core::PlayerCommand::SelectTrack {

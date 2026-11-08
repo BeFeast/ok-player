@@ -15,6 +15,7 @@ pub mod machine;
 pub mod protocol;
 pub mod reconcile;
 mod session;
+mod transport;
 
 pub use coalesce::TIMELINE_INTERVAL;
 pub use machine::SessionMachine;

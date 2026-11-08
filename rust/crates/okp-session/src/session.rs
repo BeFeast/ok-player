@@ -23,6 +23,7 @@ use crate::protocol::{
     SessionConfig, SessionSnapshot, Track, TrackKind, VideoGeometry, parse_envelope, to_json,
 };
 use crate::reconcile::{core_end_reason, endfile_error, event_matches_source};
+use crate::transport::{TransportView, VolumeTarget};
 
 /// Called from the session's event thread when a new batch of events is ready.
 /// It should only schedule a drain on the shell's own thread.
@@ -68,6 +69,8 @@ struct State {
     load: Option<i64>,
     /// Tracks the current open asked for, selected once its file has loaded.
     pending_tracks: Vec<(TrackKind, i64)>,
+    /// The volume asked for and not yet reported, which volume nudges build on.
+    volume: VolumeTarget,
 }
 
 /// Wakes the event thread: set by the engine listener, by commands and by
@@ -139,6 +142,7 @@ impl Session {
                 observed_paused: None,
                 load: None,
                 pending_tracks: Vec::new(),
+                volume: VolumeTarget::default(),
             }),
             signal,
             wakeup: Mutex::new(None),
@@ -177,9 +181,12 @@ impl Session {
     /// Validate `command` with the core state machine and, only if it accepts,
     /// hand it to the engine.
     pub fn dispatch(&self, command: &Command) -> DispatchResult {
-        let core = command.to_core();
         let engine = &*self.shared.engine;
         let mut state = lock(&self.shared.state);
+        let observed_volume = state.machine.machine().snapshot().volume;
+        let resolved = state.volume.resolve(command, observed_volume);
+        let command: &Command = &resolved;
+        let core = command.to_core();
         let mut load = None;
         let (outcome, engine_result) = state.machine.dispatch(&core, |_, request_id| {
             engine
@@ -188,6 +195,8 @@ impl Session {
         });
         if engine_result.is_ok() {
             state.track_load(command, outcome, load);
+        } else if matches!(command, Command::SetVolume { .. }) {
+            state.volume.forget();
         }
         let result = match (outcome, engine_result) {
             (CommandOutcome::Accepted { request_id }, Ok(())) => {
@@ -220,6 +229,9 @@ impl Session {
         match query {
             Query::Snapshot {} => QueryResult::Snapshot {
                 snapshot: self.snapshot(),
+            },
+            Query::Transport { at } => QueryResult::Transport {
+                transport: TransportView::project(&self.snapshot(), *at),
             },
         }
     }
@@ -552,6 +564,7 @@ impl State {
 
     fn reconcile_observation(&mut self, observation: &Observation) {
         let playback = observation.playback;
+        self.volume.observe(playback.volume);
         // Volume and speed are engine-global and hold without media.
         self.machine
             .apply_event(PlayerEvent::Property(PropertyChange::Volume(
@@ -977,6 +990,88 @@ mod tests {
         assert_eq!(
             engine.forwarded(),
             vec![open("/media/a.mkv"), Command::TogglePause {}]
+        );
+    }
+
+    #[test]
+    fn volume_nudges_reach_the_engine_as_levels_built_on_the_level_asked_for() {
+        let (session, engine) = fake_session();
+        assert!(wait_for(|| session.snapshot().volume == Some(100.0)));
+        let nudge = |delta| session.dispatch(&Command::NudgeVolume { delta });
+
+        // The engine has not reported either change yet: the second nudge still
+        // builds on the first, so no step is lost.
+        assert!(matches!(nudge(1.0), DispatchResult::Accepted { .. }));
+        assert!(matches!(nudge(1.0), DispatchResult::Accepted { .. }));
+        publish_and_settle(&engine, |observation| {
+            observation.playback.volume = Some(102.0);
+        });
+        assert!(matches!(nudge(-5.0), DispatchResult::Accepted { .. }));
+        assert!(matches!(nudge(40.0), DispatchResult::Accepted { .. }));
+        assert_eq!(
+            engine.forwarded(),
+            [101.0, 102.0, 97.0, 130.0].map(|volume| Command::SetVolume { volume }),
+            "nudges are clamped to the core's 0-130 % range"
+        );
+
+        assert_eq!(
+            nudge(f64::INFINITY),
+            DispatchResult::Rejected {
+                reason: RejectReason::NotFinite,
+                message: RejectReason::NotFinite.describe().to_owned(),
+            }
+        );
+        assert_eq!(
+            engine.forwarded().len(),
+            4,
+            "a refused nudge reaches nothing"
+        );
+    }
+
+    #[test]
+    fn the_transport_query_projects_the_current_state() {
+        let (session, engine) = fake_session();
+        let transport = |query: &str| -> TransportView {
+            let reply: crate::protocol::QueryReply =
+                serde_json::from_str(&session.query_json(query)).expect("a query reply");
+            match reply.result {
+                QueryResult::Transport { transport } => transport,
+                other => panic!("not a transport reply: {other:?}"),
+            }
+        };
+        let idle = transport(r#"{"schema_version":1,"query":{"transport":{}}}"#);
+        assert!(!idle.osc.revealed.visible, "no media, no controls");
+        assert!(!idle.seekable);
+
+        assert!(matches!(
+            session.dispatch(&open("/media/a.mkv")),
+            DispatchResult::Accepted { .. }
+        ));
+        loaded(&engine, 120.0);
+        publish_and_settle(&engine, |observation| {
+            observation.playback.time_pos = Some(45.5);
+            observation.playback.cache_duration = Some(15.0);
+        });
+        assert!(wait_for(|| session.snapshot().time_pos == Some(45.5)));
+
+        let now = transport(r#"{"schema_version":1,"query":{"transport":{"at":null}}}"#);
+        assert_eq!(
+            now,
+            TransportView::project(&session.snapshot(), None),
+            "the reply is the projection of the snapshot"
+        );
+        assert_eq!(
+            (now.elapsed.as_str(), now.remaining.as_str()),
+            ("00:45", "-01:14")
+        );
+        assert!(now.seekable);
+        assert!(now.osc.auto_hide);
+        assert_eq!(now.buffered, 60.5 / 120.0);
+
+        let dragged = transport(r#"{"schema_version":1,"query":{"transport":{"at":90}}}"#);
+        assert_eq!(
+            (dragged.elapsed.as_str(), dragged.progress),
+            ("01:30", 0.75)
         );
     }
 
