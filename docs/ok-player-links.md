@@ -86,6 +86,8 @@ argument. A command line that contains an `ok-player:` argument must contain exa
 one positional argument. Otherwise the whole launch is rejected and no other switch on it
 is honoured. `ok-player 'ok-player://open?path=%2Fmedia%2Fa.mkv'` works;
 `ok-player --resume 10 'ok-player://open?…'` and `ok-player a.mkv 'ok-player://…'` do not.
+Starting the player this way from a terminal delivers a link exactly as typed, which is
+how to test a link that a browser would rewrite first, as the browser notes explain.
 
 ## Behaviour
 
@@ -104,6 +106,10 @@ is honoured. `ok-player 'ok-player://open?path=%2Fmedia%2Fa.mkv'` works;
   link was accepted. Otherwise a page could learn whether a path exists by watching its
   own `blur` or `visibilitychange` events. When the player does not present itself it
   still completes the desktop's startup notification.
+- So in the "rejected" row the window does exactly what an accepted request with the same
+  action would do in the same state. A rejected `open` always comes forward. A rejected
+  `add` or `next` comes forward when the player is not running or idle, because an accepted
+  one acts as `open` there. It stays behind while something plays.
 - Requests run in arrival order. Whether a request opens or queues is decided when it is
   taken off the queue, once the player is ready, so a cold `open A` followed by `add B`
   yields `[A, B]`.
@@ -115,8 +121,9 @@ is honoured. `ok-player 'ok-player://open?path=%2Fmedia%2Fa.mkv'` works;
 ### Rejections
 
 A rejected link shows a fixed-text toast and writes one log line. The full path is kept out
-of Copy Diagnostics. Nothing is sent back to the page: there is no response channel, so a
-page cannot tell a played link from a rejected one.
+of Copy Diagnostics. Nothing is sent back to the page: there is no response channel, and
+the window comes forward or stays behind the same way for a played link and a rejected one,
+so a page cannot tell them apart.
 
 ## Writing links
 
@@ -234,6 +241,12 @@ decodes back to a space, so their output works as well.
   with one click; each `add` needs its own click.
 - **Firefox** asks which application should open the link and remembers the answer per
   site.
+- **Write valid percent-encoding; do not count on the browser to repair it.** Before
+  Chromium hands a link to the desktop it re-escapes it, and every `%` that is not
+  followed by two hex digits becomes `%25`. Firefox leaves every `%` as it is. A sloppy
+  link such as `path=/media/100%.mp4` therefore reaches the player from Chromium as
+  `100%25.mp4` and plays `/media/100%.mp4`, but reaches it from Firefox still malformed
+  and is rejected (rule 3). `encodeURIComponent` never produces such a link.
 
 ## Why base64 is not accepted
 
@@ -280,3 +293,12 @@ acceptance. Open it from disk (`file://`) in the browser under test. It lists va
 `add`, `next`) and hostile ones (`edl://`, `//host/x`, a UNC path, `.m3u`, malformed `%`,
 an unencoded `#`, userinfo), each with the expected result, and explains how to create the
 test clips.
+
+- Queued clips live in a `queue/` subfolder, so they are never folder siblings of the
+  playing clip and each `add` or `next` visibly changes Up Next.
+- Each hostile link whose rule could be skipped points at a solid red clip under `trap/`
+  that would play if the rule were missing, so a missing rule shows up as a red picture
+  rather than a rejection for a missing file.
+- The malformed-`%` rows show a terminal command, because Chromium repairs those links
+  before the player sees them.
+- Rejected `add` and `next` are tested while playing, idle and not running.

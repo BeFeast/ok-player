@@ -11,7 +11,8 @@
     th, td { border: 1px solid color-mix(in srgb, currentColor 25%, transparent); padding: .4rem .6rem; text-align: left; vertical-align: top; }
     tbody th { white-space: nowrap; }
     td:nth-child(2) { width: 45%; }
-    code.href { display: block; font-size: .8em; opacity: .75; word-break: break-all; margin-top: .25rem; }
+    code.href, code.cli { display: block; font-size: .8em; opacity: .75; word-break: break-all; margin-top: .25rem; }
+    code.cli { opacity: 1; }
     label { display: block; margin: .5rem 0; }
     input { width: 100%; max-width: 40rem; font: inherit; }
     pre { overflow-x: auto; padding: .75rem; background: color-mix(in srgb, currentColor 8%, transparent); }
@@ -30,27 +31,46 @@
 
   <section id="setup">
     <h2>Setup</h2>
-    <p>Create the test clips (60 s each) and the two files that must be refused:</p>
+    <p>
+      Create the test clips (60 s each, with a tone). The clips in the folder itself show a
+      moving test pattern. The clips under <code>queue/</code> show colour bars; they are
+      never folder siblings of a playing clip, so queueing them always changes Up Next. The
+      clips under <code>trap/</code> are solid red: only a link handler that skips a rule
+      ever plays one. <code>list.m3u</code> and <code>notes.srt</code> exist and must still
+      be refused. Keep the folder under your home folder; H11 relies on it.
+    </p>
     <pre><code>dir="$HOME/Videos/ok-player links"
-mkdir -p "$dir"
+mkdir -p "$dir/queue" "$dir/trap/a"
+clip() {  # clip OUTPUT SOURCE: 60 s of a lavfi video source with a tone
+  ffmpeg -hide_banner -loglevel error -y -f lavfi -i "$2" \
+    -f lavfi -i "sine=frequency=440:duration=60" -t 60 \
+    -c:v libx264 -pix_fmt yuv420p -c:a aac -movflags +faststart -f mp4 "$1"
+}
 for name in "a clip" "Café 東京" "take #3"; do
-  ffmpeg -hide_banner -loglevel error -y \
-    -f lavfi -i "testsrc2=duration=60:size=640x360:rate=30" \
-    -f lavfi -i "sine=frequency=440:duration=60" \
-    -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest -movflags +faststart \
-    "$dir/$name.mp4"
+  clip "$dir/$name.mp4" "testsrc2=size=640x360:rate=30"
+done
+for name in b c d e; do
+  clip "$dir/queue/$name clip.mp4" "smptebars=size=640x360:rate=30"
+done
+for name in red.mp4 "a%G1.mp4" "a clip.mp4%2" a/clip.mp4; do
+  clip "$dir/trap/$name" "color=c=red:size=640x360:rate=30"
 done
 printf '#EXTM3U\na clip.mp4\n' &gt; "$dir/list.m3u"
 printf '1\n00:00:01,000 --&gt; 00:00:05,000\nHello\n\n' &gt; "$dir/notes.srt"</code></pre>
     <p>
-      For the HTTP rows, serve the same folder on the base URL below. Python's built-in server
-      is enough for U1, U3 and Q3, but it ignores Range requests, so U2 cannot seek over it.
-      For U2 use a server that answers Range with <code>206 Partial Content</code>; check
-      with the second command.
+      Serve the same folder on the base URL below for the HTTP rows (U1 to U3, Q3) and for
+      H18, H19 and H22. Python's built-in server is enough for all of them except U2: it
+      ignores Range requests, so U2 cannot seek over it. For U2 use a server that answers
+      Range with <code>206 Partial Content</code>; check with the second command.
     </p>
     <pre><code>python3 -m http.server --bind 127.0.0.1 --directory "$HOME/Videos/ok-player links" 8000
 curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1:8000/a%20clip.mp4'</code></pre>
-    <p>Enter where the clips are; the fixture links below follow. The page keeps both values.</p>
+    <p>
+      Enter where the clips are; the fixture links below follow. The page keeps both values.
+      Under some rows the page also shows the same link as a terminal command. The desktop
+      entry starts the player the same way (<code>ok-player %U</code>), so the command
+      delivers the link exactly as written, with no browser in between.
+    </p>
     <label>Clip folder (absolute path)
       <input id="folder" value="/home/alice/Videos/ok-player links" spellcheck="false">
     </label>
@@ -68,7 +88,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
       <tr id="O1">
         <th scope="row">O1</th>
         <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fa%20clip.mp4" data-kind="path" data-file="a clip.mp4">open, spaces in folder and file name</a><code class="href"></code></td>
-        <td>OK Player starts and plays <code>a clip.mp4</code>; Up Next lists the other clips in the folder.</td>
+        <td>OK Player starts and plays <code>a clip.mp4</code>; Up Next lists the three clips of the folder, <code>a clip.mp4</code> first.</td>
       </tr>
       <tr id="O2">
         <th scope="row">O2</th>
@@ -166,44 +186,55 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
 
   <section id="queue">
     <h2>Queue</h2>
-    <p>Play a clip first and move another window in front of OK Player. <code>add</code> and <code>next</code> must not bring it forward while it plays.</p>
+    <p>
+      Before Q1, click O1 so that <code>a clip.mp4</code> plays and Up Next reads
+      <code>a clip.mp4</code> (current), <code>Café 東京.mp4</code>, <code>take #3.mp4</code>.
+      Move another window in front of OK Player, then run Q1 to Q5 in order without touching
+      the player. <code>add</code> and <code>next</code> must not bring it forward while it
+      plays. Each expected result lists the whole of Up Next.
+    </p>
     <table>
       <thead><tr><th>ID</th><th>Link</th><th>Expected</th></tr></thead>
       <tbody>
       <tr id="Q1">
         <th scope="row">Q1</th>
-        <td><a class="fx" href="ok-player://add?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2FCaf%C3%A9%20%E6%9D%B1%E4%BA%AC.mp4" data-kind="path" data-action="add" data-file="Café 東京.mp4">add while playing</a><code class="href"></code></td>
-        <td>Appended to the end of Up Next with a toast; the window stays behind; playback continues.</td>
+        <td><a class="fx" href="ok-player://add?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fqueue%2Fb%20clip.mp4" data-kind="path" data-action="add" data-file="queue/b clip.mp4">add while playing</a><code class="href"></code></td>
+        <td>Toast; the window stays behind and playback continues. Up Next: <code>a clip.mp4</code> (current), <code>Café 東京.mp4</code>, <code>take #3.mp4</code>, <code>b clip.mp4</code>.</td>
       </tr>
       <tr id="Q2">
         <th scope="row">Q2</th>
-        <td><a class="fx" href="ok-player://next?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftake%20%233.mp4" data-kind="path" data-action="next" data-file="take #3.mp4">next while playing</a><code class="href"></code></td>
-        <td>Inserted right after the current item with a toast; the window stays behind.</td>
+        <td><a class="fx" href="ok-player://next?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fqueue%2Fc%20clip.mp4" data-kind="path" data-action="next" data-file="queue/c clip.mp4">next while playing</a><code class="href"></code></td>
+        <td>Toast; the window stays behind. Up Next: <code>a clip.mp4</code> (current), <code>c clip.mp4</code>, <code>Café 東京.mp4</code>, <code>take #3.mp4</code>, <code>b clip.mp4</code>.</td>
       </tr>
       <tr id="Q3">
         <th scope="row">Q3</th>
-        <td><a class="fx" href="ok-player://add?url=http%3A%2F%2F127.0.0.1%3A8000%2Fa%2520clip.mp4" data-kind="url" data-action="add" data-ref="a%20clip.mp4">add an http URL while playing</a><code class="href"></code></td>
-        <td>The HTTP clip is appended to Up Next with a toast.</td>
+        <td><a class="fx" href="ok-player://add?url=http%3A%2F%2F127.0.0.1%3A8000%2Fqueue%2Fd%2520clip.mp4" data-kind="url" data-action="add" data-ref="queue/d%20clip.mp4">add an http URL while playing</a><code class="href"></code></td>
+        <td>Toast. Up Next: <code>a clip.mp4</code> (current), <code>c clip.mp4</code>, <code>Café 東京.mp4</code>, <code>take #3.mp4</code>, <code>b clip.mp4</code>, then the HTTP item <code>d clip.mp4</code>.</td>
       </tr>
       <tr id="Q4">
         <th scope="row">Q4</th>
-        <td><a class="fx" href="ok-player://add?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fa%20clip.mp4&amp;t=10" data-kind="path" data-action="add" data-file="a clip.mp4" data-extra="&amp;t=10">add with <code>t=10</code></a><code class="href"></code></td>
-        <td>Queued; a notice says the start time is ignored for queued items.</td>
+        <td><a class="fx" href="ok-player://add?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fqueue%2Fe%20clip.mp4&amp;t=10" data-kind="path" data-action="add" data-file="queue/e clip.mp4" data-extra="&amp;t=10">add with <code>t=10</code></a><code class="href"></code></td>
+        <td>A notice says the start time is ignored for queued items. Up Next: as after Q3, then <code>e clip.mp4</code>.</td>
       </tr>
       <tr id="Q5">
         <th scope="row">Q5</th>
-        <td><a class="fx" href="ok-player://add?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2FCaf%C3%A9%20%E6%9D%B1%E4%BA%AC.mp4" data-kind="path" data-action="add" data-file="Café 東京.mp4">add while idle (close the current file first)</a><code class="href"></code></td>
-        <td>Behaves like <code>open</code>: plays <code>Café 東京.mp4</code> and brings the window forward.</td>
+        <td><a class="fx" href="ok-player://add?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fqueue%2Fb%20clip.mp4" data-kind="path" data-action="add" data-file="queue/b clip.mp4">add a file that is already queued</a><code class="href"></code></td>
+        <td>A toast says it is already in the queue; Up Next does not change.</td>
       </tr>
-      <tr id="Q6a">
-        <th scope="row">Q6a</th>
-        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fa%20clip.mp4" data-kind="path" data-file="a clip.mp4">cold <code>open</code> then <code>add</code>: quit OK Player, click Q6a then Q6b quickly</a><code class="href"></code></td>
-        <td>Q6a: plays <code>a clip.mp4</code>.</td>
+      <tr id="Q6">
+        <th scope="row">Q6</th>
+        <td><a class="fx" href="ok-player://add?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2FCaf%C3%A9%20%E6%9D%B1%E4%BA%AC.mp4" data-kind="path" data-action="add" data-file="Café 東京.mp4">add while idle. Close the current media or start OK Player with no file, then move another window in front</a><code class="href"></code></td>
+        <td>Behaves like <code>open</code>: the window comes forward and plays <code>Café 東京.mp4</code>; Up Next: <code>a clip.mp4</code>, <code>Café 東京.mp4</code> (current), <code>take #3.mp4</code>.</td>
       </tr>
-      <tr id="Q6b">
-        <th scope="row">Q6b</th>
-        <td><a class="fx" href="ok-player://add?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftake%20%233.mp4" data-kind="path" data-action="add" data-file="take #3.mp4">(second click of Q6)</a><code class="href"></code></td>
-        <td>Up Next holds <code>a clip.mp4</code> then <code>take #3.mp4</code>, in that order.</td>
+      <tr id="Q7a">
+        <th scope="row">Q7a</th>
+        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fa%20clip.mp4" data-kind="path" data-file="a clip.mp4">cold <code>open</code> then <code>add</code>. First stop the browser from asking. Click any row and tick Chromium's "Always allow" (offered on this <code>file:</code> page) or Firefox's option to remember the choice. Then quit OK Player and click Q7a and Q7b one right after the other, while the player is still starting</a><code class="href"></code></td>
+        <td>Q7a: plays <code>a clip.mp4</code>.</td>
+      </tr>
+      <tr id="Q7b">
+        <th scope="row">Q7b</th>
+        <td><a class="fx" href="ok-player://add?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fqueue%2Fb%20clip.mp4" data-kind="path" data-action="add" data-file="queue/b clip.mp4">(second click of Q7)</a><code class="href"></code></td>
+        <td><code>a clip.mp4</code> plays; Up Next: <code>a clip.mp4</code> (current), <code>Café 東京.mp4</code>, <code>take #3.mp4</code>, <code>b clip.mp4</code>. No <code>b clip.mp4</code>, or <code>b clip.mp4</code> playing, means the <code>add</code> was lost or ran before the <code>open</code>.</td>
       </tr>
       </tbody>
     </table>
@@ -230,28 +261,44 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
 
   <section id="hostile">
     <h2>Hostile links</h2>
-    <p>Every row must show a rejection toast and leave playback untouched; nothing reaches the engine. A rejected <code>open</code> still brings the window forward (raise depends only on the action).</p>
+    <p>
+      Unless a row says otherwise, run it with a clip playing. Every row must show a rejection
+      toast and leave playback untouched; nothing reaches the engine.
+    </p>
+    <p>
+      Every row whose rule could be skipped points at a solid red clip under
+      <code>trap/</code>; H2 asks mpv to draw a red picture instead. If the rule is missing,
+      the link plays red instead of failing on a missing file, so a red picture in this section
+      is always a failure. The only exceptions are H12 and H13 clicked in Chromium; see those rows.
+    </p>
+    <p>
+      Whether the window comes forward depends on the action and the player state, never on
+      the rejection. A rejected <code>open</code> always comes forward. A rejected
+      <code>add</code> or <code>next</code> comes forward when the player is idle or not
+      running and stays behind while something plays, exactly as an accepted one would
+      (H26 to H28).
+    </p>
     <table>
       <thead><tr><th>ID</th><th>Link</th><th>Expected</th></tr></thead>
       <tbody>
       <tr id="H1">
         <th scope="row">H1</th>
-        <td><a href="ok-player://open?url=edl%3A%2F%2F%2Fhome%2Falice%2Fa.mkv%2C0%2C5"><code>edl://</code> target</a><code class="href"></code></td>
+        <td><a class="fx" href="ok-player://open?url=edl%3A%2F%2F%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftrap%2Fred.mp4%2C0%2C5" data-kind="value" data-value="edl://{file:trap/red.mp4},0,5"><code>edl://</code> target</a><code class="href"></code></td>
         <td>Rejected: only http and https URLs are accepted.</td>
       </tr>
       <tr id="H2">
         <th scope="row">H2</th>
-        <td><a href="ok-player://open?url=av%3A%2F%2Flavfi%3Atestsrc">mpv-internal <code>av://lavfi</code></a><code class="href"></code></td>
+        <td><a href="ok-player://open?url=av%3A%2F%2Flavfi%3Acolor%3Dc%3Dred">mpv-internal <code>av://lavfi</code></a><code class="href"></code></td>
         <td>Rejected: mpv-internal protocol.</td>
       </tr>
       <tr id="H3">
         <th scope="row">H3</th>
-        <td><a href="ok-player://open?path=%2F%2Fhost%2Fshare%2Fx.mp4"><code>//host/x</code> path</a><code class="href"></code></td>
+        <td><a class="fx" href="ok-player://open?path=%2F%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftrap%2Fred.mp4" data-kind="path" data-lead="/" data-file="trap/red.mp4"><code>//host/…</code> path, here <code>//home/…</code>, which Linux reads as <code>/home/…</code></a><code class="href"></code></td>
         <td>Rejected: a path must start with exactly one <code>/</code>.</td>
       </tr>
       <tr id="H4">
         <th scope="row">H4</th>
-        <td><a href="ok-player://open//host/share/x.mp4"><code>//host/x</code> in the path form</a><code class="href"></code></td>
+        <td><a class="fx" href="ok-player://open//home/alice/Videos/ok-player%20links/trap/red.mp4" data-kind="pathform" data-lead="/" data-file="trap/red.mp4"><code>//host/…</code> in the path form</a><code class="href"></code></td>
         <td>Rejected: a path must start with exactly one <code>/</code>.</td>
       </tr>
       <tr id="H5">
@@ -286,67 +333,67 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
       </tr>
       <tr id="H11">
         <th scope="row">H11</th>
-        <td><a href="ok-player://open?path=a%20clip.mp4">relative path</a><code class="href"></code></td>
-        <td>Rejected: not an absolute path.</td>
+        <td><a class="fx" href="ok-player://open?path=Videos%2Fok-player%20links%2Ftrap%2Fred.mp4" data-kind="relhome" data-file="trap/red.mp4">path relative to your home folder</a><code class="href"></code></td>
+        <td>Rejected: not an absolute path. A link's path is never joined to the player's working directory, which is usually your home folder.</td>
       </tr>
       <tr id="H12">
         <th scope="row">H12</th>
-        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fa%G1.mp4" data-kind="raw" data-raw="%2Fa%G1.mp4">malformed <code>%G1</code></a><code class="href"></code></td>
-        <td>Rejected: <code>%</code> not followed by two hex digits.</td>
+        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftrap%2Fa%G1.mp4" data-kind="raw" data-raw="%2Ftrap%2Fa%G1.mp4">malformed <code>%G1</code>, run from a terminal or Firefox</a><code class="href"></code><code class="cli"></code></td>
+        <td>Rejected: <code>%</code> not followed by two hex digits. In Chromium this row proves nothing. Chromium rewrites <code>%G1</code> to <code>%25G1</code> before launching, so the player correctly plays the red <code>trap/a%G1.mp4</code>.</td>
       </tr>
       <tr id="H13">
         <th scope="row">H13</th>
-        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fa%20clip.mp4%2" data-kind="raw" data-raw="%2Fa%20clip.mp4%2">truncated <code>%2</code></a><code class="href"></code></td>
-        <td>Rejected: <code>%</code> not followed by two hex digits.</td>
+        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftrap%2Fa%20clip.mp4%2" data-kind="raw" data-raw="%2Ftrap%2Fa%20clip.mp4%2">truncated <code>%2</code>, run from a terminal or Firefox</a><code class="href"></code><code class="cli"></code></td>
+        <td>Rejected: <code>%</code> not followed by two hex digits. In Chromium this row proves nothing. Chromium rewrites the trailing <code>%2</code> to <code>%252</code>, so the player correctly plays the red <code>trap/a clip.mp4%2</code>.</td>
       </tr>
       <tr id="H14">
         <th scope="row">H14</th>
-        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fa%252Fclip.mp4" data-kind="raw" data-raw="%2Fa%252Fclip.mp4">decoded once: <code>%252F</code></a><code class="href"></code></td>
-        <td>Rejected: it names a file literally called <code>a%2Fclip.mp4</code>, which does not exist.</td>
+        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftrap%2Fa%252Fclip.mp4" data-kind="raw" data-raw="%2Ftrap%2Fa%252Fclip.mp4">decoded once: <code>%252F</code></a><code class="href"></code></td>
+        <td>Rejected: decoded once, it names <code>trap/a%2Fclip.mp4</code>, which does not exist. The red <code>trap/a/clip.mp4</code> plays only if the value is decoded twice.</td>
       </tr>
       <tr id="H15">
         <th scope="row">H15</th>
-        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftake%20#3.mp4" data-kind="raw" data-raw="%2Ftake%20#3.mp4">unencoded <code>#</code></a><code class="href"></code></td>
+        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftrap%2Fred.mp4#x" data-kind="path" data-file="trap/red.mp4" data-extra="#x">unencoded <code>#</code></a><code class="href"></code></td>
         <td>Rejected: the link has a fragment.</td>
       </tr>
       <tr id="H16">
         <th scope="row">H16</th>
-        <td><a href="ok-player://user@open?url=https%3A%2F%2Fmedia.example%2Fa.mp4">userinfo in the authority</a><code class="href"></code></td>
+        <td><a class="fx" href="ok-player://user@open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftrap%2Fred.mp4" data-kind="path" data-action="user@open" data-file="trap/red.mp4">userinfo in the authority</a><code class="href"></code></td>
         <td>Rejected: the authority must be exactly the action.</td>
       </tr>
       <tr id="H17">
         <th scope="row">H17</th>
-        <td><a href="ok-player://open:8080?url=https%3A%2F%2Fmedia.example%2Fa.mp4">port in the authority</a><code class="href"></code></td>
+        <td><a class="fx" href="ok-player://open:8080?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftrap%2Fred.mp4" data-kind="path" data-action="open:8080" data-file="trap/red.mp4">port in the authority</a><code class="href"></code></td>
         <td>Rejected: the authority must be exactly the action.</td>
       </tr>
       <tr id="H18">
         <th scope="row">H18</th>
-        <td><a href="ok-player://open?url=https%3A%2F%2Fuser%40media.example%2Fa.mp4">userinfo in the target URL</a><code class="href"></code></td>
+        <td><a class="fx" href="ok-player://open?url=http%3A%2F%2Fuser%40127.0.0.1%3A8000%2Ftrap%2Fred.mp4" data-kind="url" data-user="user" data-ref="trap/red.mp4">userinfo in the target URL</a><code class="href"></code></td>
         <td>Rejected: <code>@</code> is not allowed in the URL.</td>
       </tr>
       <tr id="H19">
         <th scope="row">H19</th>
-        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fa%20clip.mp4&amp;url=https%3A%2F%2Fmedia.example%2Fa.mp4" data-kind="path" data-file="a clip.mp4" data-extra="&amp;url=https%3A%2F%2Fmedia.example%2Fa.mp4">two targets</a><code class="href"></code></td>
+        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftrap%2Fred.mp4&amp;url=http%3A%2F%2F127.0.0.1%3A8000%2Ftrap%2Fred.mp4" data-kind="path" data-file="trap/red.mp4" data-extra="&amp;url={httppct:trap/red.mp4}">two targets</a><code class="href"></code></td>
         <td>Rejected: exactly one target.</td>
       </tr>
       <tr id="H20">
         <th scope="row">H20</th>
-        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fa%20clip.mp4&amp;t=5&amp;t=10" data-kind="path" data-file="a clip.mp4" data-extra="&amp;t=5&amp;t=10">repeated key</a><code class="href"></code></td>
+        <td><a class="fx" href="ok-player://open?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftrap%2Fred.mp4&amp;t=5&amp;t=10" data-kind="path" data-file="trap/red.mp4" data-extra="&amp;t=5&amp;t=10">repeated key</a><code class="href"></code></td>
         <td>Rejected: each key at most once.</td>
       </tr>
       <tr id="H21">
         <th scope="row">H21</th>
-        <td><a href="ok-player://open?url=ok-player%3A%2F%2Fopen%3Furl%3Dhttps%253A%252F%252Fmedia.example%252Fa.mp4">nested <code>ok-player:</code></a><code class="href"></code></td>
+        <td><a class="fx" href="ok-player://open?url=ok-player%3A%2F%2Fopen%3Fpath%3D%252Fhome%252Falice%252FVideos%252Fok-player%2520links%252Ftrap%252Fred.mp4" data-kind="value" data-value="ok-player://open?path={pct:trap/red.mp4}">nested <code>ok-player:</code></a><code class="href"></code></td>
         <td>Rejected: only http and https URLs are accepted.</td>
       </tr>
       <tr id="H22">
         <th scope="row">H22</th>
-        <td><a href="ok-player://open/https://media.example/a.mp4">URL nested in the path form</a><code class="href"></code></td>
+        <td><a class="fx" href="ok-player://open/http://127.0.0.1:8000/trap/red.mp4" data-kind="pathurl" data-ref="trap/red.mp4">URL nested in the path form</a><code class="href"></code></td>
         <td>Rejected: the path form carries local paths only.</td>
       </tr>
       <tr id="H23">
         <th scope="row">H23</th>
-        <td><a href="ok-player://open?url=file%3A%2F%2Fhost%2Fshare%2Fa.mp4"><code>file://host/</code></a><code class="href"></code></td>
+        <td><a class="fx" href="ok-player://open?url=file%3A%2F%2Fhost%2Fhome%2Falice%2FVideos%2Fok-player%2520links%2Ftrap%2Fred.mp4" data-kind="fileurl" data-host="host" data-file="trap/red.mp4"><code>file://host/</code></a><code class="href"></code></td>
         <td>Rejected: a file URL must have an empty host or <code>localhost</code>.</td>
       </tr>
       <tr id="H24">
@@ -356,13 +403,23 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
       </tr>
       <tr id="H25">
         <th scope="row">H25</th>
-        <td><a class="fx" href="ok-player://play?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fa%20clip.mp4" data-kind="path" data-action="play" data-file="a clip.mp4">unknown action</a><code class="href"></code></td>
+        <td><a class="fx" href="ok-player://play?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Ftrap%2Fred.mp4" data-kind="path" data-action="play" data-file="trap/red.mp4">unknown action</a><code class="href"></code></td>
         <td>Rejected: the action must be <code>open</code>, <code>add</code> or <code>next</code>.</td>
       </tr>
       <tr id="H26">
         <th scope="row">H26</th>
-        <td><a href="ok-player://add?path=%2F%2Fhost%2Fshare%2Fx.mp4">rejected <code>add</code> while playing</a><code class="href"></code></td>
-        <td>Rejection toast; the window stays behind and playback continues.</td>
+        <td><a class="fx" href="ok-player://add?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fmissing.mp4" data-kind="path" data-action="add" data-file="missing.mp4">rejected <code>add</code> while playing, another window in front</a><code class="href"></code></td>
+        <td>Rejection toast; the window stays behind and playback continues, as for an accepted <code>add</code> (Q1).</td>
+      </tr>
+      <tr id="H27">
+        <th scope="row">H27</th>
+        <td><a class="fx" href="ok-player://add?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fmissing.mp4" data-kind="path" data-action="add" data-file="missing.mp4">rejected <code>add</code> while idle. Close the current media, then move another window in front</a><code class="href"></code></td>
+        <td>The window comes forward with a rejection toast, exactly as for an accepted <code>add</code> while idle (Q6). Staying behind would tell a page that the file does not exist.</td>
+      </tr>
+      <tr id="H28">
+        <th scope="row">H28</th>
+        <td><a class="fx" href="ok-player://next?path=%2Fhome%2Falice%2FVideos%2Fok-player%20links%2Fmissing.mp4" data-kind="path" data-action="next" data-file="missing.mp4">rejected <code>next</code> with OK Player not running</a><code class="href"></code></td>
+        <td>OK Player starts; its window opens idle with a rejection toast.</td>
       </tr>
       </tbody>
     </table>
@@ -386,21 +443,50 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
       return path.split("/").map(enc).join("/");
     }
 
+    function httpUrl(ref, user) {
+      const url = new URL(ref, baseInput.value.trim());
+      if (user) url.username = user;
+      return url.href;
+    }
+
+    // The same path without the home folder prefix, so that it is relative to the home folder.
+    function homeRelative(path) {
+      return path.replace(/^\/(?:home\/[^/]+|root)\//, "").replace(/^\/+/, "");
+    }
+
+    // {file:NAME} is a fixture path, {pct:NAME} the same path percent-encoded, and
+    // {httppct:REF} a percent-encoded URL on the HTTP base.
+    function expand(template) {
+      return (template || "").replace(/\{(file|pct|httppct):([^}]*)\}/g, (match, kind, name) => {
+        if (kind === "file") return filePath(name);
+        if (kind === "pct") return enc(filePath(name));
+        return enc(httpUrl(name));
+      });
+    }
+
     // Same rules as the static hrefs: values encoded with encodeURIComponent.
     function build(d) {
       const action = d.action || "open";
-      const extra = d.extra || "";
+      const extra = expand(d.extra);
+      const lead = d.lead || "";
       switch (d.kind) {
-        case "path": return `ok-player://${action}?path=${enc(filePath(d.file))}${extra}`;
+        case "path": return `ok-player://${action}?path=${enc(lead + filePath(d.file))}${extra}`;
         case "plus": return `ok-player://${action}?path=${enc(filePath(d.file)).replace(/%20/g, "+")}${extra}`;
-        case "pathform": return `ok-player://${action}${segments(filePath(d.file))}`;
+        case "pathform": return `ok-player://${action}${segments(lead + filePath(d.file))}`;
         case "opaque": return `ok-player:${action}?path=${enc(filePath(d.file))}${extra}`;
-        case "fileurl": return `ok-player://${action}?url=${enc("file://" + segments(filePath(d.file)))}${extra}`;
-        case "url": return `ok-player://${action}${d.sep || "?"}url=${enc(new URL(d.ref, baseInput.value.trim()).href)}${extra}`;
+        case "fileurl": return `ok-player://${action}?url=${enc("file://" + (d.host || "") + segments(filePath(d.file)))}${extra}`;
+        case "url": return `ok-player://${action}${d.sep || "?"}url=${enc(httpUrl(d.ref, d.user))}${extra}`;
+        case "pathurl": return `ok-player://${action}/${httpUrl(d.ref)}`;
+        case "value": return `ok-player://${action}?url=${enc(expand(d.value))}${extra}`;
+        case "relhome": return `ok-player://${action}?path=${enc(homeRelative(filePath(d.file)))}${extra}`;
         case "raw": return `ok-player://${action}?path=${enc(folder())}${d.raw}${extra}`;
         case "folder": return `ok-player://${action}?path=${enc(folder())}${extra}`;
         default: throw new Error(`unknown kind ${d.kind}`);
       }
+    }
+
+    function shellQuote(text) {
+      return `'${text.replace(/'/g, "'\\''")}'`;
     }
 
     function refresh() {
@@ -412,7 +498,10 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Range: bytes=0-1' 'http://127.0.0.1
         }
       }
       for (const link of document.querySelectorAll("td > a[href^='ok-player:']")) {
-        link.nextElementSibling.textContent = link.getAttribute("href");
+        const href = link.getAttribute("href");
+        link.parentElement.querySelector("code.href").textContent = href;
+        const cli = link.parentElement.querySelector("code.cli");
+        if (cli) cli.textContent = `ok-player ${shellQuote(href)}`;
       }
     }
 
