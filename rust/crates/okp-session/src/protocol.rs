@@ -80,13 +80,14 @@ pub enum Command {
     /// Load a source, replacing the current one.
     Open {
         source: MediaSource,
-        /// Seek here once loaded (seconds).
+        /// Start playing here (seconds from the start; a negative value means
+        /// the start).
         #[serde(default)]
         resume_from: Option<f64>,
-        /// Audio track id to select on load.
+        /// Audio track id to select once loaded, if the file has that track.
         #[serde(default)]
         audio_track: Option<i64>,
-        /// Subtitle track id to select on load.
+        /// Subtitle track id to select once loaded, if the file has that track.
         #[serde(default)]
         subtitle_track: Option<i64>,
     },
@@ -435,7 +436,7 @@ impl Command {
                 subtitle_track,
             } => core::PlayerCommand::Open(core::OpenRequest {
                 source: source.to_item(),
-                resume_from: *resume_from,
+                resume_from: resume_from.map(media_position),
                 initial_audio: *audio_track,
                 initial_subtitle: *subtitle_track,
             }),
@@ -447,7 +448,7 @@ impl Command {
                     SeekMode::Absolute => core::SeekMode::Absolute,
                     SeekMode::Relative => core::SeekMode::Relative,
                 },
-                seconds: *seconds,
+                seconds: seek_seconds(*seconds, *mode),
             }),
             Self::SetVolume { volume } => core::PlayerCommand::SetVolume(*volume),
             Self::SetMute { muted } => core::PlayerCommand::SetMute(*muted),
@@ -461,6 +462,25 @@ impl Command {
             },
             Self::SetSubtitleDelay { seconds } => core::PlayerCommand::SetSubtitleDelay(*seconds),
         }
+    }
+}
+
+/// A position in the media. libmpv counts a negative position from the end, so
+/// one before the start is the start. Non-finite values pass through for the core
+/// state machine to reject.
+pub(crate) fn media_position(seconds: f64) -> f64 {
+    if seconds.is_finite() && seconds <= 0.0 {
+        0.0
+    } else {
+        seconds
+    }
+}
+
+/// The seek amount libmpv is given: an absolute target is a media position.
+pub(crate) fn seek_seconds(seconds: f64, mode: SeekMode) -> f64 {
+    match mode {
+        SeekMode::Absolute => media_position(seconds),
+        SeekMode::Relative => seconds,
     }
 }
 

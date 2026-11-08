@@ -1,11 +1,14 @@
 //! The engine seam: what the session needs from libmpv, and the libmpv adapter.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use okp_core::playlist::PlaylistItem;
-use okp_mpv::{Chapter, Mpv, MpvEvent, PlaybackState, Track, VideoDimensions};
+use okp_mpv::{Chapter, EntryEvent, Mpv, OpenGlRenderer, PlaybackState, Track, VideoDimensions};
 
-use crate::protocol::{Command, SeekMode, SeekPrecision, SessionConfig, TrackKind};
+use crate::protocol::{
+    Command, MediaSource, SeekMode, SeekPrecision, SessionConfig, TrackKind, media_position,
+    seek_seconds,
+};
 
 /// Called by the engine, on an engine thread, whenever its observed state or
 /// lifecycle queue may have changed.
@@ -24,24 +27,48 @@ pub(crate) struct Observation {
 }
 
 pub(crate) trait Engine: Send + Sync {
-    /// Carry out a command the core state machine has already accepted.
-    fn forward(&self, command: &Command, request_id: u64) -> Result<(), String>;
+    /// Carry out a command the core state machine has already accepted. For an
+    /// open, returns the engine's id for the new load when it reports one; the
+    /// load's events carry the same id.
+    ///
+    /// An open's track choices are not applied here: the session selects them
+    /// once the file has loaded and shows it has those tracks.
+    fn forward(&self, command: &Command, request_id: u64) -> Result<Option<i64>, String>;
     fn observe(&self) -> Observation;
     /// Lifecycle events since the previous call, oldest first.
-    fn take_events(&self) -> Vec<MpvEvent>;
+    fn take_events(&self) -> Vec<EntryEvent>;
     fn set_listener(&self, listener: Option<ChangeListener>);
+
+    /// Create the OpenGL render context; the caller's OpenGL context is current.
+    fn render_create(&self) -> Result<(), String> {
+        Err(NO_RENDERING.to_owned())
+    }
+    /// Draw the current frame into the bound framebuffer.
+    fn render(&self, _width: i32, _height: i32) -> Result<(), String> {
+        Err(NO_RENDERING.to_owned())
+    }
+    /// Free the render context, if there is one.
+    fn render_destroy(&self) {}
 }
 
-/// libmpv through `okp-mpv`. Rendering is not part of this adapter yet.
+const NO_RENDERING: &str = "this engine does not render";
+
+/// libmpv through `okp-mpv`.
 pub(crate) struct MpvEngine {
+    /// The render context, behind its own lock so render calls never overlap.
+    /// Declared before `mpv` so it is dropped first, as libmpv requires.
+    renderer: Mutex<Option<OpenGlRenderer>>,
     mpv: Mpv,
 }
 
 // SAFETY: the libmpv client API is thread-safe, and `Mpv` serialises its own
-// shared state (the event pump publishes behind mutexes). The session only uses
-// the `&self` command and `observed_*` methods across threads; the methods that
-// need `&mut Mpv` (render context management) are not reachable through this
-// adapter, and the handle is destroyed by `Drop` once no thread can use it.
+// shared state (the event pump publishes behind mutexes). Across threads the
+// session uses only `&self` methods: commands and `observed_*` reads, which
+// libmpv allows from any thread, and the render context, which lives in
+// `renderer` behind its own mutex so its calls never overlap and which libmpv
+// lets run alongside client API calls. The `&mut Mpv` render methods are not
+// reachable through this adapter. The render context is freed before the handle,
+// and the handle is destroyed by `Drop` once no thread can use it.
 unsafe impl Send for MpvEngine {}
 unsafe impl Sync for MpvEngine {}
 
@@ -55,7 +82,36 @@ impl MpvEngine {
         // Audio-device discovery is not part of the session contract yet, and
         // enumerating devices can stall on hosts without a desktop audio service.
         mpv.start_event_pump_without_audio_devices();
-        Ok(Self { mpv })
+        Ok(Self {
+            renderer: Mutex::new(None),
+            mpv,
+        })
+    }
+
+    fn open(&self, source: &MediaSource, resume_from: Option<f64>) -> Result<Option<i64>, String> {
+        // The start position is file-local, so libmpv applies it as this file
+        // loads, not to whatever is loaded when a later seek would arrive.
+        let options: Vec<(&str, String)> = resume_from
+            .map(|seconds| ("start", media_position(seconds).to_string()))
+            .into_iter()
+            .collect();
+        let target = match source.to_item() {
+            PlaylistItem::Local(path) => {
+                self.mpv.set_media_source(Some(path.clone()));
+                path.to_string_lossy().into_owned()
+            }
+            PlaylistItem::Url(url) => {
+                self.mpv.set_media_source(None);
+                url
+            }
+        };
+        self.mpv
+            .load_with_file_options(&target, &options)
+            .map_err(|error| error.to_string())
+    }
+
+    fn renderer(&self) -> std::sync::MutexGuard<'_, Option<OpenGlRenderer>> {
+        self.renderer.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -71,6 +127,13 @@ fn engine_options(config: &SessionConfig) -> Vec<(String, String)> {
         // The shell owns every key and mouse binding.
         ("input-default-bindings".to_owned(), "no".to_owned()),
         ("input-vo-keyboard".to_owned(), "no".to_owned()),
+        // Track and subtitle-delay choices belong to one file. libmpv keeps them
+        // as engine options, so without this a track turned off, or a delay set,
+        // would carry into the next file (which may then have nothing to play).
+        (
+            "reset-on-next-file".to_owned(),
+            "aid,sid,sub-delay".to_owned(),
+        ),
         // The pinned macOS runtime has no Lua, so it exposes no osc option.
         #[cfg(not(target_os = "macos"))]
         ("osc".to_owned(), "no".to_owned()),
@@ -85,38 +148,14 @@ fn engine_options(config: &SessionConfig) -> Vec<(String, String)> {
 }
 
 impl Engine for MpvEngine {
-    fn forward(&self, command: &Command, request_id: u64) -> Result<(), String> {
+    fn forward(&self, command: &Command, request_id: u64) -> Result<Option<i64>, String> {
         let engine = &self.mpv;
         let result = match command {
             Command::Open {
                 source,
                 resume_from,
-                audio_track,
-                subtitle_track,
-            } => {
-                let loaded = match source.to_item() {
-                    PlaylistItem::Local(path) => {
-                        engine.set_media_source(Some(path.clone()));
-                        engine.load_file(&path)
-                    }
-                    PlaylistItem::Url(url) => {
-                        engine.set_media_source(None);
-                        engine.load_url(&url)
-                    }
-                };
-                loaded.and_then(|()| {
-                    if let Some(seconds) = resume_from {
-                        engine.seek_absolute(*seconds)?;
-                    }
-                    if let Some(id) = audio_track {
-                        engine.select_audio(Some(*id))?;
-                    }
-                    if let Some(id) = subtitle_track {
-                        engine.select_subtitle(Some(*id))?;
-                    }
-                    Ok(())
-                })
-            }
+                ..
+            } => return self.open(source, *resume_from),
             Command::Close {} => engine.command_async_with_userdata(&["stop"], request_id),
             Command::SetPaused { paused } => engine.command_async_with_userdata(
                 &["set", "pause", if *paused { "yes" } else { "no" }],
@@ -130,7 +169,11 @@ impl Engine for MpvEngine {
                 mode,
                 precision,
             } => engine.command_async_with_userdata(
-                &["seek", &seconds.to_string(), seek_flags(*mode, *precision)],
+                &[
+                    "seek",
+                    &seek_seconds(*seconds, *mode).to_string(),
+                    seek_flags(*mode, *precision),
+                ],
                 request_id,
             ),
             Command::SetVolume { volume } => engine.set_volume(*volume),
@@ -145,7 +188,7 @@ impl Engine for MpvEngine {
             },
             Command::SetSubtitleDelay { seconds } => engine.set_subtitle_delay(*seconds),
         };
-        result.map_err(|error| error.to_string())
+        result.map(|()| None).map_err(|error| error.to_string())
     }
 
     fn observe(&self) -> Observation {
@@ -161,12 +204,36 @@ impl Engine for MpvEngine {
         }
     }
 
-    fn take_events(&self) -> Vec<MpvEvent> {
-        self.mpv.take_lifecycle_events()
+    fn take_events(&self) -> Vec<EntryEvent> {
+        self.mpv.take_lifecycle_events_with_entries()
     }
 
     fn set_listener(&self, listener: Option<ChangeListener>) {
         self.mpv.set_observation_listener(listener);
+    }
+
+    fn render_create(&self) -> Result<(), String> {
+        let mut renderer = self.renderer();
+        if renderer.is_none() {
+            // SAFETY: the renderer lives in `self.renderer`, which is dropped
+            // before `self.mpv`.
+            let created = unsafe { self.mpv.create_opengl_renderer() };
+            *renderer = Some(created.map_err(|error| error.to_string())?);
+        }
+        Ok(())
+    }
+
+    fn render(&self, width: i32, height: i32) -> Result<(), String> {
+        match self.renderer().as_mut() {
+            Some(renderer) => renderer
+                .render(width, height)
+                .map_err(|error| error.to_string()),
+            None => Err("the render context has not been created".to_owned()),
+        }
+    }
+
+    fn render_destroy(&self) {
+        self.renderer().take();
     }
 }
 

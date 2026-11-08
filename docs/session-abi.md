@@ -19,11 +19,16 @@ char       *okp_session_query(const OkpSession *session, const char *query_json)
 void        okp_session_set_wakeup(const OkpSession *session, OkpSessionWakeup callback, void *ctx);
 char       *okp_session_drain_events(const OkpSession *session);
 void        okp_string_free(char *text);
+
+bool        okp_session_render_create(const OkpSession *session, char *error_buffer, uintptr_t error_capacity);
+bool        okp_session_render(const OkpSession *session, int32_t width, int32_t height);
+void        okp_session_render_destroy(const OkpSession *session);
 ```
 
-Rendering is not part of this surface yet; it is added under session names
-later. The older `okp_live_session_*` functions are still exported unchanged
-until the macOS shell has moved onto this ABI.
+The render calls draw the current video frame into the framebuffer bound in
+the shell's OpenGL context; see Threading below. The older
+`okp_live_session_*` functions are still exported unchanged until the macOS
+shell has moved onto this ABI.
 
 ## Documents
 
@@ -53,7 +58,15 @@ written as `null` and may be left out on input.
 | Event batch (`okp_session_drain_events`) | `{"schema_version":1,"events":[...]}` |
 
 An open source is `{"kind":"local"|"url","location":"..."}`. A URL is handed
-to libmpv as it is; nothing resolves it yet.
+to libmpv as it is; nothing resolves it yet. `resume_from` is where playback of
+that file starts. `audio_track` and `subtitle_track` are selected once the file
+has loaded, and only if it has a track of that kind and id; otherwise libmpv's
+own choice stands. Track choices and the subtitle delay belong to one file:
+the next open starts from libmpv's defaults again, whatever was selected or set
+while the previous file played.
+
+A position before the start of the media (a negative `resume_from` or absolute
+`seek`) means the start.
 
 The snapshot carries `status`, `source`, `time_pos`, `duration`, `volume`,
 `mute`, `speed`, `subtitle_delay`, `tracks`, `chapters`, `end_reason`, `title`,
@@ -91,6 +104,13 @@ are published with it at once.
   from the event thread while it is installed.
 - `okp_session_dispatch`, `okp_session_query` and `okp_session_drain_events`
   may be called from any thread.
+- The render calls belong to the shell's render thread, with the OpenGL
+  context they draw into current: `okp_session_render_create` once that
+  context exists (a repeated call does nothing), `okp_session_render` per
+  frame, and `okp_session_render_destroy` before the context goes away and
+  before `okp_session_free`. They may run while other threads dispatch, query
+  and drain. `okp_session_render` returns false when there is no render
+  context or libmpv failed to draw.
 - `okp_session_free` discards undrained events, stops the event thread and
   shuts libmpv down. When it returns the wakeup is not running and never runs
   again. It must not race any other call on the same session.

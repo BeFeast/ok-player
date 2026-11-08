@@ -42,6 +42,11 @@ pub struct mpv_event {
 }
 
 #[repr(C)]
+pub struct mpv_event_start_file {
+    pub playlist_entry_id: i64,
+}
+
+#[repr(C)]
 pub struct mpv_event_end_file {
     pub reason: c_int,
     pub error: c_int,
@@ -92,6 +97,7 @@ pub const MPV_EVENT_NONE: c_int = 0;
 pub const MPV_EVENT_SHUTDOWN: c_int = 1;
 pub const MPV_EVENT_LOG_MESSAGE: c_int = 2;
 pub const MPV_EVENT_COMMAND_REPLY: c_int = 5;
+pub const MPV_EVENT_START_FILE: c_int = 6;
 pub const MPV_EVENT_END_FILE: c_int = 7;
 pub const MPV_EVENT_FILE_LOADED: c_int = 8;
 pub const MPV_EVENT_VIDEO_RECONFIG: c_int = 17;
@@ -161,6 +167,12 @@ unsafe extern "C" {
     pub fn mpv_get_property_string(ctx: *mut mpv_handle, name: *const c_char) -> *mut c_char;
     pub fn mpv_free(data: *mut c_void);
     pub fn mpv_command(ctx: *mut mpv_handle, args: *const *const c_char) -> c_int;
+    pub fn mpv_command_ret(
+        ctx: *mut mpv_handle,
+        args: *const *const c_char,
+        result: *mut mpv_node,
+    ) -> c_int;
+    pub fn mpv_free_node_contents(node: *mut mpv_node);
     pub fn mpv_command_async(
         ctx: *mut mpv_handle,
         reply_userdata: u64,
