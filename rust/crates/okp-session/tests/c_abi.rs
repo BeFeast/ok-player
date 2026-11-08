@@ -11,7 +11,9 @@ use std::time::Duration;
 use common::{CHAPTER_TITLES, engine_lock, headless_config, wait_for, write_media_fixture};
 use okp_ffi::{
     okp_session_dispatch, okp_session_drain_events, okp_session_free, okp_session_new,
-    okp_session_query, okp_session_set_wakeup, okp_string_free,
+    okp_session_query, okp_session_render, okp_session_render_create, okp_session_render_destroy,
+    okp_session_render_report_swap, okp_session_render_update, okp_session_set_wakeup,
+    okp_string_free,
 };
 use okp_session::protocol::{
     DispatchReply, DispatchResult, Event, EventBatch, QueryReply, QueryResult, RejectReason,
@@ -201,4 +203,40 @@ fn malformed_and_future_documents_are_refused() {
     ));
     unsafe { okp_session_free(session) };
     root.close().expect("fixture directory is removed");
+}
+
+#[test]
+fn a_render_context_is_refused_without_an_update_callback() {
+    // Advanced control deadlocks libmpv unless the render thread is woken by the
+    // update callback, so the session refuses to create a context without one.
+    let _engine = engine_lock();
+    let root = unique_temp_dir("okp-session-c-abi-render");
+    let config = c_json(&serde_json::to_value(headless_config(root.path())).unwrap());
+    let session = unsafe { okp_session_new(config.as_ptr(), ptr::null_mut(), 0) };
+    assert!(!session.is_null());
+
+    let mut error = [0 as c_char; 128];
+    let created = unsafe {
+        okp_session_render_create(
+            session,
+            None,
+            ptr::null_mut(),
+            error.as_mut_ptr(),
+            error.len(),
+        )
+    };
+    assert!(!created);
+    let message = unsafe { CStr::from_ptr(error.as_ptr()) }.to_str().unwrap();
+    assert_eq!(message, "the render update callback is required");
+
+    // Without a render context the render calls do nothing and report so.
+    assert!(!unsafe { okp_session_render_update(session) });
+    assert!(!unsafe { okp_session_render(session, 64, 36) });
+    unsafe {
+        okp_session_render_report_swap(session);
+        okp_session_render_destroy(session);
+        okp_session_free(session);
+    }
+    root.close()
+        .expect("the temporary directory should be removed");
 }

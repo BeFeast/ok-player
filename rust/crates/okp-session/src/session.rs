@@ -28,6 +28,10 @@ use crate::reconcile::{core_end_reason, endfile_error, event_matches_source};
 /// It should only schedule a drain on the shell's own thread.
 pub type Wakeup = Box<dyn Fn() + Send + Sync>;
 
+/// Called from an engine thread when the render context has work for the
+/// shell's render thread; see [`Session::render_create`].
+pub type RenderUpdate = Box<dyn Fn() + Send + Sync>;
+
 /// One playback session. Create it with [`Session::new`] or
 /// [`Session::from_config_json`]; dropping it stops the event thread, discards
 /// undrained events and shuts the engine down.
@@ -242,19 +246,38 @@ impl Session {
         state.queue.drain()
     }
 
-    /// Create the engine's OpenGL render context. Call it on the shell's render
-    /// thread with the shell's OpenGL context current; a second call while the
-    /// context exists does nothing. Free it with [`Session::render_destroy`]
-    /// under the same OpenGL context before dropping the session.
-    pub fn render_create(&self) -> Result<(), String> {
-        self.shared.engine.render_create()
+    /// Create the engine's OpenGL render context, with libmpv's advanced control
+    /// and `on_update` installed before this returns. Call it on the shell's
+    /// render thread with the shell's OpenGL context current; a second call while
+    /// the context exists does nothing and drops its `on_update`. Free it with
+    /// [`Session::render_destroy`] under the same OpenGL context before dropping
+    /// the session.
+    ///
+    /// `on_update` runs on an engine thread and must only wake the render thread,
+    /// which then calls [`Session::render_update`]. The render thread must never
+    /// wait for a thread that is dispatching, querying or dropping the session.
+    pub fn render_create(&self, on_update: RenderUpdate) -> Result<(), String> {
+        self.shared.engine.render_create(on_update)
     }
 
-    /// Draw the current video frame into the bound framebuffer of `width` by
-    /// `height` pixels, on the thread and OpenGL context of
-    /// [`Session::render_create`]. Fails if there is no render context.
+    /// Serve the engine's pending render-thread work after `on_update` fired, and
+    /// say whether a new frame is due. Call it every time `on_update` fires, even
+    /// when nothing will be drawn. False without a render context.
+    pub fn render_update(&self) -> bool {
+        self.shared.engine.render_update()
+    }
+
+    /// Draw the due video frame, or redraw the current one, into the bound
+    /// framebuffer of `width` by `height` pixels, on the thread and OpenGL context
+    /// of [`Session::render_create`]. Fails if there is no render context.
     pub fn render(&self, width: i32, height: i32) -> Result<(), String> {
         self.shared.engine.render(width, height)
+    }
+
+    /// Tell the engine that the frame drawn last has been presented (after the
+    /// shell's flush), so it can time the next one.
+    pub fn render_report_swap(&self) {
+        self.shared.engine.render_report_swap();
     }
 
     /// Free the render context, if there is one, with its OpenGL context
@@ -700,6 +723,11 @@ mod tests {
         refuse_with: Mutex<Option<String>>,
         observations: AtomicUsize,
         dropped: AtomicBool,
+        /// The render side: the installed update callback, whether a frame is
+        /// due, and the swaps reported.
+        render_update: Mutex<Option<RenderUpdate>>,
+        frame_due: AtomicBool,
+        swaps: AtomicUsize,
     }
 
     impl FakeState {
@@ -763,6 +791,23 @@ mod tests {
 
         fn set_listener(&self, listener: Option<ChangeListener>) {
             *lock(&self.0.listener) = listener;
+        }
+
+        fn render_create(&self, on_update: RenderUpdate) -> Result<(), String> {
+            lock(&self.0.render_update).get_or_insert(on_update);
+            Ok(())
+        }
+
+        fn render_update(&self) -> bool {
+            self.0.frame_due.swap(false, Ordering::SeqCst)
+        }
+
+        fn render_report_swap(&self) {
+            self.0.swaps.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn render_destroy(&self) {
+            lock(&self.0.render_update).take();
         }
     }
 
@@ -841,6 +886,42 @@ mod tests {
             })
             .flatten()
             .collect()
+    }
+
+    #[test]
+    fn the_engines_render_updates_reach_the_shell_until_the_context_is_destroyed() {
+        let (session, engine) = fake_session();
+        let fired = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&fired);
+        session
+            .render_create(Box::new(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }))
+            .expect("the fake engine renders");
+        let fire = || {
+            if let Some(on_update) = lock(&engine.render_update).as_ref() {
+                on_update();
+            }
+        };
+
+        fire();
+        assert_eq!(fired.load(Ordering::SeqCst), 1);
+        assert!(!session.render_update(), "no frame is due yet");
+        engine.frame_due.store(true, Ordering::SeqCst);
+        assert!(
+            session.render_update(),
+            "the engine's due frame is reported"
+        );
+        session.render_report_swap();
+        assert_eq!(engine.swaps.load(Ordering::SeqCst), 1);
+
+        session.render_destroy();
+        fire();
+        assert_eq!(
+            fired.load(Ordering::SeqCst),
+            1,
+            "a destroyed render context no longer wakes the shell"
+        );
     }
 
     #[test]

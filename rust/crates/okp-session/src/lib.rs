@@ -19,4 +19,4 @@ mod session;
 pub use coalesce::TIMELINE_INTERVAL;
 pub use machine::SessionMachine;
 pub use protocol::SCHEMA_VERSION;
-pub use session::{Session, Wakeup};
+pub use session::{RenderUpdate, Session, Wakeup};

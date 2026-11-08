@@ -118,7 +118,7 @@ pub unsafe extern "C" fn okp_session_set_wakeup(
     let Some(session) = (unsafe { session.as_ref() }) else {
         return;
     };
-    let wakeup = callback.map(|callback| CWakeup { callback, ctx });
+    let wakeup = callback.map(|callback| CCallback { callback, ctx });
     session.inner.set_wakeup(
         wakeup.map(|wakeup| Box::new(move || wakeup.call()) as Box<dyn Fn() + Send + Sync>),
     );
@@ -137,25 +137,47 @@ pub unsafe extern "C" fn okp_session_drain_events(session: *const OkpSession) ->
     into_c_string(batch)
 }
 
-/// Create the session's OpenGL render context. Call it on the shell's render
-/// thread with the shell's OpenGL context current; a second call while the
-/// context exists does nothing. Returns false on failure and, when
-/// `error_buffer` is non-null and `error_capacity` nonzero, copies a
+/// Called from an engine thread when the render context has work for the
+/// shell's render thread. `ctx` is the pointer given to
+/// [`okp_session_render_create`]. It must only wake the render thread, which then
+/// calls [`okp_session_render_update`]; it must not call any `okp_session_*`
+/// function itself.
+pub type OkpSessionRenderUpdate = Option<unsafe extern "C" fn(ctx: *mut c_void)>;
+
+/// Create the session's OpenGL render context, with libmpv's advanced control,
+/// and install `update` before returning. Call it on the shell's render thread
+/// with the shell's OpenGL context current; a second call while the context
+/// exists does nothing. Returns false on failure (a null `update` is refused) and,
+/// when `error_buffer` is non-null and `error_capacity` nonzero, copies a
 /// nul-terminated message into it. Free the context with
 /// [`okp_session_render_destroy`] before [`okp_session_free`].
 ///
+/// Advanced control binds the render thread: it must call
+/// [`okp_session_render_update`] promptly whenever `update` fires, and it must
+/// never wait for a thread that is inside another `okp_session_*` call.
+///
 /// # Safety
-/// `session` must be null or live. `error_buffer`, when non-null, must identify
-/// writable storage of at least `error_capacity` bytes.
+/// `session` must be null or live. `update_ctx` must stay valid for use from
+/// another thread until [`okp_session_render_destroy`] returns. `error_buffer`, when non-null, must identify writable storage of at
+/// least `error_capacity` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn okp_session_render_create(
     session: *const OkpSession,
+    update: OkpSessionRenderUpdate,
+    update_ctx: *mut c_void,
     error_buffer: *mut c_char,
     error_capacity: usize,
 ) -> bool {
-    let result = match unsafe { session.as_ref() } {
-        Some(session) => session.inner.render_create(),
-        None => Err("the session is null".to_owned()),
+    let result = match (unsafe { session.as_ref() }, update) {
+        (None, _) => Err("the session is null".to_owned()),
+        (Some(_), None) => Err("the render update callback is required".to_owned()),
+        (Some(session), Some(callback)) => {
+            let update = CCallback {
+                callback,
+                ctx: update_ctx,
+            };
+            session.inner.render_create(Box::new(move || update.call()))
+        }
     };
     match result {
         Ok(()) => true,
@@ -166,8 +188,22 @@ pub unsafe extern "C" fn okp_session_render_create(
     }
 }
 
-/// Draw the current video frame into the bound framebuffer of `width` by `height`
-/// pixels. Returns false if there is no render context or libmpv failed to draw.
+/// Serve libmpv's pending render-thread work after the update callback fired,
+/// and return true when a new frame is due. Call it every time the callback
+/// fires, even when nothing will be drawn. False without a render context.
+///
+/// # Safety
+/// `session` must be null or live. The OpenGL context the render context was
+/// created under must be current on the calling thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn okp_session_render_update(session: *const OkpSession) -> bool {
+    unsafe { session.as_ref() }.is_some_and(|session| session.inner.render_update())
+}
+
+/// Draw the due video frame, or redraw the current one, into the bound
+/// framebuffer of `width` by `height` pixels. It does not report the swap: call
+/// [`okp_session_render_report_swap`] after the shell has flushed the frame.
+/// Returns false if there is no render context or libmpv failed to draw.
 ///
 /// # Safety
 /// `session` must be null or live. The OpenGL context the render context was
@@ -181,7 +217,21 @@ pub unsafe extern "C" fn okp_session_render(
     unsafe { session.as_ref() }.is_some_and(|session| session.inner.render(width, height).is_ok())
 }
 
-/// Free the render context, if there is one.
+/// Tell libmpv that the frame drawn last has been presented, after the shell's
+/// flush, so it can time the next one. Does nothing without a render context.
+///
+/// # Safety
+/// `session` must be null or live. The OpenGL context the render context was
+/// created under must be current on the calling thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn okp_session_render_report_swap(session: *const OkpSession) {
+    if let Some(session) = unsafe { session.as_ref() } {
+        session.inner.render_report_swap();
+    }
+}
+
+/// Free the render context, if there is one. When this returns, the update
+/// callback is not running and is never called again.
 ///
 /// # Safety
 /// `session` must be null or live. The OpenGL context the render context was
@@ -205,17 +255,19 @@ pub unsafe extern "C" fn okp_string_free(text: *mut c_char) {
     }
 }
 
-struct CWakeup {
+/// A C callback and its context: the wakeup or the render update callback.
+struct CCallback {
     callback: unsafe extern "C" fn(*mut c_void),
     ctx: *mut c_void,
 }
 
-// SAFETY: the caller of `okp_session_set_wakeup` guarantees that `ctx` may be used
-// from the session's event thread for as long as the wakeup is installed.
-unsafe impl Send for CWakeup {}
-unsafe impl Sync for CWakeup {}
+// SAFETY: the callers of `okp_session_set_wakeup` and `okp_session_render_create`
+// guarantee that `ctx` may be used from the session's threads for as long as the
+// callback is installed.
+unsafe impl Send for CCallback {}
+unsafe impl Sync for CCallback {}
 
-impl CWakeup {
+impl CCallback {
     fn call(&self) {
         unsafe { (self.callback)(self.ctx) }
     }
@@ -243,6 +295,8 @@ fn into_c_string(text: String) -> *mut c_char {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    unsafe extern "C" fn ignore_update(_ctx: *mut c_void) {}
 
     fn take(text: *mut c_char) -> String {
         assert!(!text.is_null());
@@ -274,11 +328,23 @@ mod tests {
         }
 
         let mut buffer = [0 as c_char; 64];
-        assert!(!unsafe { okp_session_render_create(ptr::null(), buffer.as_mut_ptr(), 64) });
+        assert!(!unsafe {
+            okp_session_render_create(
+                ptr::null(),
+                Some(ignore_update),
+                ptr::null_mut(),
+                buffer.as_mut_ptr(),
+                64,
+            )
+        });
         let message = unsafe { CStr::from_ptr(buffer.as_ptr()) }.to_str().unwrap();
         assert_eq!(message, "the session is null");
+        assert!(!unsafe { okp_session_render_update(ptr::null()) });
         assert!(!unsafe { okp_session_render(ptr::null(), 16, 16) });
-        unsafe { okp_session_render_destroy(ptr::null()) };
+        unsafe {
+            okp_session_render_report_swap(ptr::null());
+            okp_session_render_destroy(ptr::null());
+        }
     }
 
     #[test]

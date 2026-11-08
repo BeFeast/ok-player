@@ -20,15 +20,38 @@ void        okp_session_set_wakeup(const OkpSession *session, OkpSessionWakeup c
 char       *okp_session_drain_events(const OkpSession *session);
 void        okp_string_free(char *text);
 
-bool        okp_session_render_create(const OkpSession *session, char *error_buffer, uintptr_t error_capacity);
+bool        okp_session_render_create(const OkpSession *session, OkpSessionRenderUpdate update, void *update_ctx,
+                                      char *error_buffer, uintptr_t error_capacity);
+bool        okp_session_render_update(const OkpSession *session);
 bool        okp_session_render(const OkpSession *session, int32_t width, int32_t height);
+void        okp_session_render_report_swap(const OkpSession *session);
 void        okp_session_render_destroy(const OkpSession *session);
 ```
 
-The render calls draw the current video frame into the framebuffer bound in
-the shell's OpenGL context; see Threading below. The older
-`okp_live_session_*` functions are still exported unchanged until the macOS
-shell has moved onto this ABI.
+The render calls draw video frames into the framebuffer bound in the shell's
+OpenGL context; see Rendering and Threading below.
+
+## Rendering
+
+The render context is created with libmpv's advanced control, and the shell's
+`update` callback is installed before `okp_session_render_create` returns
+(a null callback is refused). One frame goes:
+
+1. `update(update_ctx)` fires on an engine thread. It only wakes the shell's
+   render thread.
+2. The render thread calls `okp_session_render_update`. That also serves the
+   work libmpv queues for the render thread, so it is called after every
+   callback, even when nothing will be drawn. It returns true when a new frame
+   is due; otherwise nothing is drawn.
+3. When the shell is ready to present (macOS paces this with the display
+   link), `okp_session_render` draws the frame into the bound framebuffer.
+4. After the shell's flush, `okp_session_render_report_swap` tells libmpv the
+   frame was presented, so it can time the next one.
+
+A shell may also redraw the current frame without a callback, after a resize
+for instance: `okp_session_render`, flush, `okp_session_render_report_swap`.
+While paused or idle libmpv announces no frames, so a shell that draws only
+due frames draws nothing.
 
 ## Documents
 
@@ -106,11 +129,20 @@ are published with it at once.
   may be called from any thread.
 - The render calls belong to the shell's render thread, with the OpenGL
   context they draw into current: `okp_session_render_create` once that
-  context exists (a repeated call does nothing), `okp_session_render` per
-  frame, and `okp_session_render_destroy` before the context goes away and
-  before `okp_session_free`. They may run while other threads dispatch, query
-  and drain. `okp_session_render` returns false when there is no render
-  context or libmpv failed to draw.
+  context exists (a repeated call does nothing), `okp_session_render_update`,
+  `okp_session_render` and `okp_session_render_report_swap` per frame, and
+  `okp_session_render_destroy` before the context goes away and before
+  `okp_session_free`. They may run while other threads dispatch, query and
+  drain. `okp_session_render` returns false when there is no render context or
+  libmpv failed to draw.
+- Advanced control binds the render thread: it must never wait for a thread
+  that is inside another `okp_session_*` call (libmpv may be waiting for the
+  render thread at that moment), and it must call `okp_session_render_update`
+  promptly after every `update` callback. The callback itself must not call
+  any `okp_session_*` function.
+- `update_ctx` must be usable from an engine thread until
+  `okp_session_render_destroy` returns; after that the callback never runs
+  again.
 - `okp_session_free` discards undrained events, stops the event thread and
   shuts libmpv down. When it returns the wakeup is not running and never runs
   again. It must not race any other call on the same session.

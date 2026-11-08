@@ -1089,38 +1089,141 @@ fn create_opengl_render_context(
     Ok(NonNull::new(context))
 }
 
+/// Called by libmpv, on one of its own threads, whenever a caller-owned render
+/// context has something for the render thread: a new frame, or (with advanced
+/// control) a request only the render thread can serve. It must only wake the
+/// render thread, which then calls [`OpenGlRenderer::update`]; calling libmpv
+/// from the callback itself deadlocks.
+pub type RenderUpdate = Box<dyn Fn() + Send + Sync>;
+
+/// The render API of a caller-owned render context. The software API exists so
+/// tests can drive the same update-callback and advanced-control path without
+/// an OpenGL context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientRenderApi {
+    OpenGl,
+    #[cfg(test)]
+    Software,
+}
+
 /// An OpenGL render context its creator owns (see
-/// [`Mpv::create_opengl_renderer`]). Dropping it frees the context; the OpenGL
-/// context it was created under must be current then.
-#[derive(Debug)]
+/// [`Mpv::create_opengl_renderer`]), created with libmpv's advanced control and
+/// an update callback. Dropping it removes the callback and frees the context;
+/// the OpenGL context it was created under must be current then.
+///
+/// One frame is: the update callback fires; the render thread calls
+/// [`Self::update`], which also serves libmpv's queued render-thread requests;
+/// when it reports a frame, [`Self::draw`] draws it; once the shell has
+/// presented the result, [`Self::report_swap`] tells libmpv.
 pub struct OpenGlRenderer {
     context: NonNull<ffi::mpv_render_context>,
+    /// Boxed again so libmpv holds a thin pointer to it. libmpv may call it
+    /// until `Drop` has removed it, and only then is it released.
+    on_update: Box<RenderUpdate>,
+}
+
+impl fmt::Debug for OpenGlRenderer {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OpenGlRenderer")
+            .field("context", &self.context)
+            .finish_non_exhaustive()
+    }
 }
 
 // SAFETY: libmpv lets a render context be used from any thread, provided its
-// calls never overlap; `render` takes `&mut self` and `Drop` owns the value, so
-// they cannot.
+// calls never overlap; every method takes `&mut self` and `Drop` owns the value,
+// so they cannot. The update callback is `Send + Sync`.
 unsafe impl Send for OpenGlRenderer {}
 
 impl OpenGlRenderer {
-    /// Draw the current frame into the bound framebuffer and report the swap,
-    /// in the same order as [`Mpv::render`]. A non-positive size draws nothing.
-    pub fn render(&mut self, width: i32, height: i32) -> Result<(), MpvError> {
-        if width <= 0 || height <= 0 {
-            return Ok(());
+    /// Create a caller-owned render context with advanced control and install
+    /// `on_update` before returning, as advanced control requires.
+    fn create(
+        handle: NonNull<ffi::mpv_handle>,
+        api: ClientRenderApi,
+        on_update: RenderUpdate,
+    ) -> Result<Self, MpvError> {
+        let context = match api {
+            ClientRenderApi::OpenGl => create_opengl_render_context(handle, None, true)?,
+            #[cfg(test)]
+            ClientRenderApi::Software => {
+                let mut advanced_control: c_int = 1;
+                let mut params = [
+                    ffi::mpv_render_param {
+                        param_type: ffi::MPV_RENDER_PARAM_API_TYPE,
+                        data: c"sw".as_ptr().cast_mut().cast(),
+                    },
+                    ffi::mpv_render_param {
+                        param_type: ffi::MPV_RENDER_PARAM_ADVANCED_CONTROL,
+                        data: ptr::from_mut(&mut advanced_control).cast(),
+                    },
+                    ffi::mpv_render_param {
+                        param_type: ffi::MPV_RENDER_PARAM_INVALID,
+                        data: ptr::null_mut(),
+                    },
+                ];
+                let mut context = ptr::null_mut();
+                check(unsafe {
+                    ffi::mpv_render_context_create(
+                        &mut context,
+                        handle.as_ptr(),
+                        params.as_mut_ptr(),
+                    )
+                })?;
+                NonNull::new(context)
+            }
         }
-        let handle = RenderUpdateHandle {
-            context: self.context,
+        .ok_or(MpvError::MissingRenderContext)?;
+        let renderer = Self {
+            context,
+            on_update: Box::new(on_update),
         };
-        let _ = handle.update_has_frame();
-        handle.render_current_frame(width, height)?;
-        handle.report_swap();
-        Ok(())
+        let callback_ctx = ptr::from_ref::<RenderUpdate>(&renderer.on_update)
+            .cast_mut()
+            .cast::<c_void>();
+        unsafe {
+            ffi::mpv_render_context_set_update_callback(
+                context.as_ptr(),
+                Some(render_update_trampoline),
+                callback_ctx,
+            );
+        }
+        Ok(renderer)
+    }
+
+    /// Serve libmpv's queued render-thread requests and report whether a new
+    /// frame is due. Call it every time the update callback has fired, even when
+    /// nothing will be drawn: with advanced control libmpv may be waiting for it.
+    pub fn update(&mut self) -> bool {
+        RenderUpdateHandle {
+            context: self.context,
+        }
+        .update_has_frame()
+    }
+
+    /// Draw the due frame, or redraw the current one, into the bound framebuffer
+    /// of `width` by `height` pixels. It does not report the swap: call
+    /// [`Self::report_swap`] once the result has been presented. A non-positive
+    /// size draws nothing.
+    pub fn draw(&mut self, width: i32, height: i32) -> Result<(), MpvError> {
+        render_context_frame(self.context, width, height)
+    }
+
+    /// Tell libmpv that the frame drawn last has been presented, so it can time
+    /// the next one.
+    pub fn report_swap(&mut self) {
+        RenderUpdateHandle {
+            context: self.context,
+        }
+        .report_swap();
     }
 }
 
 impl Drop for OpenGlRenderer {
     fn drop(&mut self) {
+        // The callback is removed before the context is freed, and `on_update`
+        // is released only after this returns.
         unsafe {
             ffi::mpv_render_context_set_update_callback(
                 self.context.as_ptr(),
@@ -1130,6 +1233,13 @@ impl Drop for OpenGlRenderer {
             ffi::mpv_render_context_free(self.context.as_ptr());
         }
     }
+}
+
+/// libmpv's update callback for an [`OpenGlRenderer`]: `ctx` is its
+/// `on_update`.
+unsafe extern "C" fn render_update_trampoline(ctx: *mut c_void) {
+    let on_update = unsafe { &*ctx.cast::<RenderUpdate>() };
+    on_update();
 }
 
 fn render_context_parameters(
@@ -1559,13 +1669,20 @@ impl Mpv {
     /// allows one render context per engine: this fails while the one from
     /// [`Self::create_render_context`] exists, and vice versa.
     ///
+    /// The context is created with libmpv's advanced control, and `on_update` is
+    /// installed before this returns (see [`RenderUpdate`]). Advanced control
+    /// binds the render thread: it must never wait for a thread that is calling
+    /// other libmpv functions, and it must call [`OpenGlRenderer::update`]
+    /// promptly whenever `on_update` fires.
+    ///
     /// # Safety
     /// The renderer must be dropped before this `Mpv`, with the OpenGL context it
     /// was created under current.
-    pub unsafe fn create_opengl_renderer(&self) -> Result<OpenGlRenderer, MpvError> {
-        create_opengl_render_context(self.handle, None, false)?
-            .map(|context| OpenGlRenderer { context })
-            .ok_or(MpvError::MissingRenderContext)
+    pub unsafe fn create_opengl_renderer(
+        &self,
+        on_update: RenderUpdate,
+    ) -> Result<OpenGlRenderer, MpvError> {
+        OpenGlRenderer::create(self.handle, ClientRenderApi::OpenGl, on_update)
     }
 
     /// Create libmpv's CPU-only render context. This is the no-device fallback
@@ -2930,6 +3047,7 @@ mod tests {
     use std::fs;
     use std::process::{Command, Stdio};
     use std::rc::Rc;
+    use std::sync::atomic::AtomicUsize;
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
@@ -3123,6 +3241,164 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// The render thread of a caller-owned renderer, the way a shell runs it:
+    /// it waits for the update callback, serves it with `update`, and draws and
+    /// reports a swap only when `update` says a frame is due. It counts the
+    /// frames it drew.
+    struct RenderThread {
+        frames: Arc<AtomicUsize>,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        wake: Arc<(Mutex<bool>, std::sync::Condvar)>,
+        join: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl RenderThread {
+        fn start(
+            mut renderer: OpenGlRenderer,
+            wake: Arc<(Mutex<bool>, std::sync::Condvar)>,
+        ) -> Self {
+            let frames = Arc::new(AtomicUsize::new(0));
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (thread_frames, thread_stop, thread_wake) =
+                (Arc::clone(&frames), Arc::clone(&stop), Arc::clone(&wake));
+            let join = std::thread::spawn(move || {
+                let (width, height) = (64, 36);
+                let stride = 64 * 4;
+                let mut pixels = vec![0_u8; stride * 36];
+                while !thread_stop.load(Ordering::SeqCst) {
+                    let (pending, condvar) = &*thread_wake;
+                    let mut woken = pending.lock().unwrap();
+                    while !*woken && !thread_stop.load(Ordering::SeqCst) {
+                        woken = condvar
+                            .wait_timeout(woken, Duration::from_millis(50))
+                            .unwrap()
+                            .0;
+                    }
+                    let fired = std::mem::take(&mut *woken);
+                    drop(woken);
+                    if fired && renderer.update() {
+                        render_software_frame(renderer.context, width, height, stride, &mut pixels)
+                            .expect("the due frame should draw");
+                        renderer.report_swap();
+                        thread_frames.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+                // The context is freed here, on the render thread, before the
+                // engine goes away.
+                drop(renderer);
+            });
+            Self {
+                frames,
+                stop,
+                wake,
+                join: Some(join),
+            }
+        }
+
+        fn frames(&self) -> usize {
+            self.frames.load(Ordering::SeqCst)
+        }
+
+        fn finish(mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+            self.wake.1.notify_all();
+            self.join
+                .take()
+                .unwrap()
+                .join()
+                .expect("the render thread should exit");
+        }
+    }
+
+    #[test]
+    fn client_renderer_announces_frames_by_callback_and_goes_quiet_while_paused() {
+        if !enter_real_mpv_case(
+            "client-renderer-updates",
+            "player::tests::client_renderer_announces_frames_by_callback_and_goes_quiet_while_paused",
+        ) {
+            return;
+        }
+        // Three seconds of 30 fps video as an mpv image sequence: no codec
+        // beyond the PPM decoder, so it plays wherever libmpv does.
+        let root = unique_temp_dir("okp-mpv-client-renderer");
+        let mut list = String::new();
+        for index in 0..90 {
+            let frame = root.path().join(format!("frame-{index:03}.ppm"));
+            let mut ppm = b"P6\n64 36\n255\n".to_vec();
+            ppm.resize(ppm.len() + 64 * 36 * 3, (index * 2) as u8);
+            fs::write(&frame, ppm).expect("frame should be written");
+            list.push_str(frame.to_str().expect("temporary paths are UTF-8"));
+            list.push('\n');
+        }
+        let list_path = root.path().join("frames.txt");
+        fs::write(&list_path, list).expect("frame list should be written");
+
+        let options = [
+            ("ao".to_owned(), "null".to_owned()),
+            ("mf-fps".to_owned(), "30".to_owned()),
+            // No OSD, so nothing but video can ask for a redraw.
+            ("osd-level".to_owned(), "0".to_owned()),
+        ];
+        let mut mpv = Mpv::new_with_options("no", &options)
+            .expect("libmpv must be loadable for okp-mpv tests");
+        mpv.start_event_pump_without_audio_devices();
+
+        let wake = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let callbacks = Arc::new(AtomicUsize::new(0));
+        let (callback_wake, callback_count) = (Arc::clone(&wake), Arc::clone(&callbacks));
+        let renderer = OpenGlRenderer::create(
+            mpv.handle,
+            ClientRenderApi::Software,
+            Box::new(move || {
+                callback_count.fetch_add(1, Ordering::SeqCst);
+                *callback_wake.0.lock().unwrap() = true;
+                callback_wake.1.notify_one();
+            }),
+        )
+        .expect("an advanced-control render context should be created");
+        let render = RenderThread::start(renderer, wake);
+
+        // Commands run on this thread, never on the render thread: advanced
+        // control forbids the render thread to wait for the core.
+        mpv.command(&["loadfile", &format!("mf://@{}", list_path.display())])
+            .expect("the image sequence should load");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while render.frames() < 5 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            render.frames() >= 5,
+            "frames should arrive while playing; drew {} after {} callbacks",
+            render.frames(),
+            callbacks.load(Ordering::SeqCst)
+        );
+
+        mpv.command(&["set", "pause", "yes"]).expect("pause");
+        std::thread::sleep(Duration::from_millis(500));
+        let paused_at = render.frames();
+        std::thread::sleep(Duration::from_secs(1));
+        assert_eq!(
+            render.frames(),
+            paused_at,
+            "nothing should be drawn while paused"
+        );
+
+        mpv.command(&["set", "pause", "no"]).expect("resume");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while render.frames() < paused_at + 3 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            render.frames() >= paused_at + 3,
+            "frames should arrive again after resuming; drew {}",
+            render.frames() - paused_at
+        );
+
+        render.finish();
+        drop(mpv);
+        root.close().expect("frame directory should be removed");
     }
 
     fn test_mpv() -> Mpv {

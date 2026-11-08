@@ -3,7 +3,9 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use okp_core::playlist::PlaylistItem;
-use okp_mpv::{Chapter, EntryEvent, Mpv, OpenGlRenderer, PlaybackState, Track, VideoDimensions};
+use okp_mpv::{
+    Chapter, EntryEvent, Mpv, OpenGlRenderer, PlaybackState, RenderUpdate, Track, VideoDimensions,
+};
 
 use crate::protocol::{
     Command, MediaSource, SeekMode, SeekPrecision, SessionConfig, TrackKind, media_position,
@@ -39,14 +41,22 @@ pub(crate) trait Engine: Send + Sync {
     fn take_events(&self) -> Vec<EntryEvent>;
     fn set_listener(&self, listener: Option<ChangeListener>);
 
-    /// Create the OpenGL render context; the caller's OpenGL context is current.
-    fn render_create(&self) -> Result<(), String> {
+    /// Create the OpenGL render context with advanced control and `on_update`
+    /// installed; the caller's OpenGL context is current.
+    fn render_create(&self, _on_update: RenderUpdate) -> Result<(), String> {
         Err(NO_RENDERING.to_owned())
     }
-    /// Draw the current frame into the bound framebuffer.
+    /// Serve the render thread's share of the engine's work after `on_update`
+    /// fired; true when a new frame is due.
+    fn render_update(&self) -> bool {
+        false
+    }
+    /// Draw the due (or current) frame into the bound framebuffer.
     fn render(&self, _width: i32, _height: i32) -> Result<(), String> {
         Err(NO_RENDERING.to_owned())
     }
+    /// The frame drawn last has been presented.
+    fn render_report_swap(&self) {}
     /// Free the render context, if there is one.
     fn render_destroy(&self) {}
 }
@@ -212,23 +222,33 @@ impl Engine for MpvEngine {
         self.mpv.set_observation_listener(listener);
     }
 
-    fn render_create(&self) -> Result<(), String> {
+    fn render_create(&self, on_update: RenderUpdate) -> Result<(), String> {
         let mut renderer = self.renderer();
         if renderer.is_none() {
             // SAFETY: the renderer lives in `self.renderer`, which is dropped
             // before `self.mpv`.
-            let created = unsafe { self.mpv.create_opengl_renderer() };
+            let created = unsafe { self.mpv.create_opengl_renderer(on_update) };
             *renderer = Some(created.map_err(|error| error.to_string())?);
         }
         Ok(())
     }
 
+    fn render_update(&self) -> bool {
+        self.renderer().as_mut().is_some_and(OpenGlRenderer::update)
+    }
+
     fn render(&self, width: i32, height: i32) -> Result<(), String> {
         match self.renderer().as_mut() {
             Some(renderer) => renderer
-                .render(width, height)
+                .draw(width, height)
                 .map_err(|error| error.to_string()),
             None => Err("the render context has not been created".to_owned()),
+        }
+    }
+
+    fn render_report_swap(&self) {
+        if let Some(renderer) = self.renderer().as_mut() {
+            renderer.report_swap();
         }
     }
 
