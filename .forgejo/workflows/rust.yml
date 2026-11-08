@@ -129,6 +129,11 @@ jobs:
       - name: Forgejo declaration reader tests
         run: python3 scripts/tests/read-forgejo-pr-declaration.Tests.py
 
+      - name: macOS shell palette generation tests
+        env:
+          PYTHONDONTWRITEBYTECODE: 1
+        run: python3 scripts/tests/macos-palette.Tests.py
+
       - name: Candidate gate split tests
         run: ./scripts/tests/candidate-gate-split.Tests.sh
       - name: Narrow-width seam aiming tests

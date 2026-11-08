@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "name": "BeFeast",
+  "light": {
+    "canvas": "#F2F6FC", "surface": "#FFFFFF", "surfaceRaised": "#E9F0FC",
+    "text": "#102344", "textMuted": "#4D6384", "border": "#6C80A0", "borderSubtle": "#CDD9EA",
+    "accent": "#2563EB", "onAccent": "#FFFFFF", "selected": "#DCEBFC",
+    "focus": "#086C97", "link": "#1753BF",
+    "success": "#197446", "warning": "#855700", "danger": "#B52D48", "info": "#086C97"
+  },
+  "dark": {
+    "canvas": "#060F25", "surface": "#091633", "surfaceRaised": "#0E2148",
+    "text": "#E9F0FC", "textMuted": "#98AECF", "border": "#607FA8", "borderSubtle": "#21395C",
+    "accent": "#2563EB", "onAccent": "#FFFFFF", "selected": "#163065",
+    "focus": "#38BDF8", "link": "#38BDF8",
+    "success": "#4ADE80", "warning": "#FBBF24", "danger": "#FB7185", "info": "#38BDF8"
+  }
+}

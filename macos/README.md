@@ -8,8 +8,9 @@ window stops playback and releases the renderer before destroying its GL context
 Errors stay visible until another explicit open attempt.
 
 This preview is for local testing. It does not yet contain the Linux shell's URL
-resolver, History, saving/cache UI, subtitle controls, update service or full product
-styling. The app is ad-hoc signed; Developer ID signing and notarization remain
+resolver, History, saving/cache UI, subtitle controls or update service. Its chrome
+uses the shared BeFeast palette in light and dark, following the system appearance;
+the full macOS UI redesign is still ahead. The app is ad-hoc signed; Developer ID signing and notarization remain
 separate distribution work. No global libmpv or package-manager installation is
 needed to run the packaged app.
 
@@ -23,8 +24,33 @@ system tools. `scripts/build-macos-preview.sh` builds the opt-in `live-mpv` FFI,
 compiles this shell against the generated header, bundles the entire dylib closure,
 rewrites library locations, and signs the app ad hoc.
 
+## Colours
+
+The window chrome takes every colour from `brand/palette.json` at the repository
+root, the palette all three shells share. Before compiling, the build script runs
+`scripts/generate-macos-palette.py`, which turns each semantic role into a case of a
+generated Swift `PaletteRole` with its light and dark sRGB value; `Player.swift` keeps
+no colour values of its own. Each role becomes a dynamic `NSColor`, so the window
+follows the system light/dark switch while it is open:
+
+| Element | Role |
+|---|---|
+| Window background | `canvas` |
+| Control bar and its top edge | `surface`, `borderSubtle` |
+| Open and transport buttons | `accent` fill, `onAccent` label |
+| Keyboard focus ring on the buttons | `focus` |
+| Playback progress line on the control bar | `accent` |
+| Status text: hint, time, error | `textMuted`, `text`, `danger` |
+
+The video surface gets no tint. A malformed palette or a role missing from one
+appearance fails the build. `scripts/tests/macos-palette.Tests.py` checks that the
+generated table carries the JSON values.
+
 The workflow uploads `ok-player-macos-arm64.zip`, source identity, SHA-256, compiler
-logs, dylib/rpath/signature inspection and smoke output. Extract the ZIP and open
+logs, dylib/rpath/signature inspection and smoke output. With smoke enabled it also
+uploads `snapshots/window-light.png` and `window-dark.png`: after the playback check
+the app renders its own window content in each appearance, overriding only that
+window's appearance. The OpenGL video area is not part of that render and stays empty. Extract the ZIP and open
 **OK Player.app** from the extracted directory. The app does not require
 `DYLD_LIBRARY_PATH` or a fixed installation path.
 

@@ -64,14 +64,15 @@ jobs:
           if test "$RUN_SMOKE" = true; then
             curl --fail --silent --show-error "$FORGEJO_ENDPOINT/api/packages/BeFeast/generic/ok-player-macos-fixtures/v1/h264-aac-smoke.mp4" -o "$stage/smoke.mp4"
             printf '6e885d08198409e63ea80e28f0353d094949c66a8d3d121d32d382629810c0b0  %s\n' "$stage/smoke.mp4" | shasum -a 256 -c -
-            mkdir "$stage/relocated"
+            mkdir "$stage/relocated" "$receipt/snapshots"
             ditto "$receipt/OK Player.app" "$stage/relocated/OK Player.app"
-            python3 - "$stage/relocated/OK Player.app/Contents/MacOS/ok-player" "$stage/smoke.mp4" "$receipt/smoke.log" <<'PYTHON'
+            python3 - "$stage/relocated/OK Player.app/Contents/MacOS/ok-player" "$stage/smoke.mp4" "$receipt/smoke.log" "$receipt/snapshots" <<'PYTHON'
           import os, subprocess, sys
           env = os.environ.copy()
           env.pop("DYLD_LIBRARY_PATH", None)
           with open(sys.argv[3], "w") as log:
-              result = subprocess.run([sys.argv[1], "--smoke-test", sys.argv[2]], env=env, stdout=log, stderr=subprocess.STDOUT, timeout=40)
+              # The app renders its own window in light and dark into the snapshot directory.
+              result = subprocess.run([sys.argv[1], "--smoke-test", "--snapshot-dir=" + sys.argv[4], sys.argv[2]], env=env, stdout=log, stderr=subprocess.STDOUT, timeout=40)
           raise SystemExit(result.returncode)
           PYTHON
           fi
@@ -86,5 +87,6 @@ jobs:
             ${{ env.OKP_MACOS_RECEIPT }}/ok-player-macos-arm64.zip
             ${{ env.OKP_MACOS_RECEIPT }}/*.log
             ${{ env.OKP_MACOS_RECEIPT }}/*.txt
+            ${{ env.OKP_MACOS_RECEIPT }}/snapshots/*.png
           if-no-files-found: error
           retention-days: 30
