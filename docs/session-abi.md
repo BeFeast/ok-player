@@ -180,8 +180,9 @@ Opening:
 - While an open's folders and playlist files are read, the playlist it
   replaces stays. `jump`, `next` and `previous` play from it and drop the
   read. Sources queued meanwhile show in it at once and follow the opened
-  items when the read finishes; the other edits change only the playlist being
-  replaced.
+  items when the read finishes, unless they were removed again. `play_next`,
+  `move`, `remove` and `clear_queue` change only the playlist being replaced;
+  repeat and shuffle carry over.
 - A newer open or a `close` supersedes a read in flight: it is cancelled, and
   whatever it reports is dropped. A listing reads at most 20,000 directory
   entries; a bigger folder is not listed.
