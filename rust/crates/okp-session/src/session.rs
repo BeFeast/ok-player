@@ -15,6 +15,7 @@ use okp_core::playlist::PlaylistItem;
 use okp_mpv::{EndFileReason, EntryEvent, MpvEvent, error_description};
 
 use crate::coalesce::Coalescer;
+use crate::commands::{CommandRegistry, Invocation, WindowState};
 use crate::engine::{Engine, MpvEngine, Observation};
 use crate::machine::SessionMachine;
 use crate::protocol::{
@@ -45,6 +46,7 @@ pub type RenderUpdate = Box<dyn Fn() + Send + Sync>;
 pub struct Session {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
+    commands: CommandRegistry,
 }
 
 struct Shared {
@@ -115,8 +117,11 @@ impl Session {
     /// Start libmpv with `config` and the session's event thread.
     pub fn new(config: &SessionConfig) -> Result<Self, String> {
         validate_config(config)?;
+        let commands = CommandRegistry::new(config.app.platform, &config.shell_commands)?;
         let engine = MpvEngine::new(config)?;
-        Ok(Self::with_engine(Box::new(engine)))
+        let mut session = Self::with_engine(Box::new(engine));
+        session.commands = commands;
+        Ok(session)
     }
 
     /// [`Session::new`] from a config document.
@@ -155,6 +160,7 @@ impl Session {
         Self {
             shared,
             thread: Some(thread),
+            commands: CommandRegistry::default(),
         }
     }
 
@@ -177,7 +183,12 @@ impl Session {
     /// Validate `command` with the core state machine and, only if it accepts,
     /// hand it to the engine.
     pub fn dispatch(&self, command: &Command) -> DispatchResult {
-        let core = command.to_core();
+        if let Command::InvokeCommand { id } = command {
+            return self.invoke_command(id);
+        }
+        let Some(core) = command.to_core() else {
+            return rejected(RejectReason::Malformed);
+        };
         let engine = &*self.shared.engine;
         let mut state = lock(&self.shared.state);
         let mut load = None;
@@ -221,6 +232,32 @@ impl Session {
             Query::Snapshot {} => QueryResult::Snapshot {
                 snapshot: self.snapshot(),
             },
+            Query::CommandRegistry {
+                fullscreen,
+                mini_player,
+            } => QueryResult::CommandRegistry {
+                commands: self.commands.resolve(
+                    &self.snapshot(),
+                    WindowState {
+                        fullscreen: *fullscreen,
+                        mini_player: *mini_player,
+                    },
+                ),
+            },
+            Query::ShortcutTable {} => QueryResult::ShortcutTable {
+                shortcuts: self.commands.shortcut_table(),
+            },
+        }
+    }
+
+    /// Run a registry command: forward the session command it stands for, or
+    /// tell the shell to carry it out. An unknown or unavailable command is
+    /// refused.
+    fn invoke_command(&self, id: &str) -> DispatchResult {
+        match self.commands.invocation(id, &self.snapshot()) {
+            Invocation::Run(command) => self.dispatch(&command),
+            Invocation::Perform => DispatchResult::Perform {},
+            Invocation::Refuse(reason, message) => DispatchResult::Rejected { reason, message },
         }
     }
 
@@ -1419,6 +1456,7 @@ mod tests {
             cache_dir: "/cache".into(),
             hwdec: None,
             mpv_options: Vec::new(),
+            shell_commands: Vec::new(),
         };
         assert_eq!(
             validate_config(&config),
@@ -1428,5 +1466,137 @@ mod tests {
         assert_eq!(validate_config(&config), Ok(()));
         config.schema_version = 2;
         assert!(validate_config(&config).is_err());
+    }
+
+    fn invoke(id: &str) -> Command {
+        Command::InvokeCommand { id: id.to_owned() }
+    }
+
+    fn registry_row(session: &Session, id: &str) -> crate::protocol::RegistryCommand {
+        let QueryResult::CommandRegistry { commands } = session.query(&Query::CommandRegistry {
+            fullscreen: false,
+            mini_player: false,
+        }) else {
+            panic!("the registry query answers with the registry");
+        };
+        commands
+            .into_iter()
+            .find(|command| command.id == id)
+            .expect("the command is in the registry")
+    }
+
+    #[test]
+    fn invoked_registry_commands_run_through_the_session_or_go_back_to_the_shell() {
+        let (mut session, engine) = fake_session();
+        session.commands =
+            CommandRegistry::new(okp_core::app::Platform::MacOs, &["open-file".to_owned()])
+                .expect("open-file is a registry command");
+
+        // Refused invocations reach nothing.
+        for (id, expected) in [
+            ("open-url", RejectReason::Unavailable),
+            ("eject", RejectReason::UnknownCommand),
+        ] {
+            let reply = session.dispatch(&invoke(id));
+            assert!(
+                matches!(reply, DispatchResult::Rejected { reason, .. } if reason == expected),
+                "{id}: {reply:?}"
+            );
+        }
+        // A command the shell carries out goes back to it.
+        assert_eq!(
+            session.dispatch(&invoke("open-file")),
+            DispatchResult::Perform {}
+        );
+        // A session command is validated like any other: nothing to pause yet.
+        assert_eq!(
+            session.dispatch(&invoke("play-pause")),
+            rejected(RejectReason::NoActiveMedia)
+        );
+        assert!(engine.forwarded().is_empty(), "{:?}", engine.forwarded());
+
+        assert!(!registry_row(&session, "mute").checked);
+        assert!(matches!(
+            session.dispatch(&invoke("mute")),
+            DispatchResult::Accepted { .. }
+        ));
+        assert!(registry_row(&session, "mute").checked);
+        let reply = session
+            .dispatch_json(r#"{"schema_version":1,"command":{"invoke_command":{"id":"mute"}}}"#);
+        assert!(reply.contains(r#""accepted""#), "{reply}");
+        assert!(!registry_row(&session, "mute").checked);
+        assert!(matches!(
+            session.dispatch(&invoke("volume-up")),
+            DispatchResult::Accepted { .. }
+        ));
+        assert_eq!(
+            engine.forwarded(),
+            vec![
+                Command::SetMute { muted: true },
+                Command::SetMute { muted: false },
+                Command::SetVolume { volume: 105.0 },
+            ]
+        );
+
+        // Once media plays, play-pause is enabled and pauses it.
+        assert!(!registry_row(&session, "play-pause").enabled);
+        let _ = session.dispatch(&open("/media/a.mkv"));
+        loaded(&engine, 10.0);
+        assert!(wait_for(|| session.snapshot().status == Status::Playing));
+        assert!(registry_row(&session, "play-pause").enabled);
+        assert!(matches!(
+            session.dispatch(&invoke("play-pause")),
+            DispatchResult::Accepted { .. }
+        ));
+        assert_eq!(session.snapshot().status, Status::Paused);
+        assert_eq!(engine.forwarded().last(), Some(&Command::TogglePause {}));
+    }
+
+    #[test]
+    fn the_registry_enables_a_session_command_exactly_when_invoking_it_is_accepted() {
+        fn play(session: &Session, engine: &FakeState) {
+            let _ = session.dispatch(&open("/media/a.mkv"));
+            loaded(engine, 10.0);
+            assert!(wait_for(|| session.snapshot().status == Status::Playing));
+        }
+        /// Bring a fresh session to one state.
+        type Reach = fn(&Session, &FakeState);
+        // Each state the session can be in. The source stays set while opening
+        // and after either kind of end.
+        let states: [(&str, Reach); 6] = [
+            ("idle", |_, _| {}),
+            ("opening", |session, _| {
+                let _ = session.dispatch(&open("/media/a.mkv"));
+            }),
+            ("playing", play),
+            ("paused", |session, engine| {
+                play(session, engine);
+                let _ = session.dispatch(&Command::SetPaused { paused: true });
+                assert_eq!(session.snapshot().status, Status::Paused);
+            }),
+            ("ended", |session, engine| {
+                play(session, engine);
+                engine.publish(|_| {}, vec![ended(EndFileReason::Eof)]);
+                assert!(wait_for(|| session.snapshot().status == Status::Ended));
+            }),
+            ("failed to load", |session, engine| {
+                *lock(&engine.refuse_with) = Some("loadfile refused".to_owned());
+                let _ = session.dispatch(&open("/media/a.mkv"));
+                assert_eq!(session.snapshot().status, Status::Ended);
+            }),
+        ];
+        for (state, reach) in states {
+            for &id in crate::commands::SESSION_COMMANDS {
+                let (session, engine) = fake_session();
+                reach(&session, &engine);
+                let enabled = registry_row(&session, id).enabled;
+                let reply = session.dispatch(&invoke(id));
+                assert_eq!(
+                    enabled,
+                    matches!(reply, DispatchResult::Accepted { .. }),
+                    "{id} while {state}: {reply:?}"
+                );
+            }
+        }
     }
 }

@@ -17,7 +17,8 @@ final class SessionClientTests: XCTestCase {
             configDir: root.appendingPathComponent("config").path,
             cacheDir: root.appendingPathComponent("cache").path,
             hwdec: "no",
-            mpvOptions: [MpvOption(name: "ao", value: "null"), MpvOption(name: "vo", value: "null")])
+            mpvOptions: [MpvOption(name: "ao", value: "null"), MpvOption(name: "vo", value: "null")],
+            shellCommands: ["open-file"])
         client = try SessionClient(config: config)
     }
 
@@ -63,6 +64,37 @@ final class SessionClientTests: XCTestCase {
             default:
                 break
             }
+        }
+    }
+
+    func testTheSessionAnswersTheRegistryQueriesAndInvokesItsCommands() throws {
+        guard case .commandRegistry(let commands)? = client.query(.commandRegistry(fullscreen: true, miniPlayer: false)) else {
+            return XCTFail("the registry query was not answered with the registry")
+        }
+        let fullscreen = try XCTUnwrap(commands.first { $0.id == "fullscreen" })
+        XCTAssertEqual(fullscreen.label, "Exit fullscreen", "the window state passed in the query is honoured")
+        XCTAssertTrue(fullscreen.checked)
+        XCTAssertFalse(fullscreen.available, "a shell command this shell did not list is unavailable")
+        let openFile = try XCTUnwrap(commands.first { $0.id == "open-file" })
+        XCTAssertTrue(openFile.available, "the config's shell_commands reached the session")
+        XCTAssertEqual(openFile.shortcut?.label, "Cmd+O")
+
+        guard case .shortcutTable(let shortcuts)? = client.query(.shortcutTable) else {
+            return XCTFail("the shortcut table query was not answered with the table")
+        }
+        XCTAssertEqual(shortcuts.first { $0.action == "save-screenshot" }?.command, "save-frame")
+
+        guard case .accepted = client.dispatch(.invokeCommand(id: "volume-up")) else {
+            return XCTFail("a command the session runs must be dispatched")
+        }
+        guard case .perform = client.dispatch(.invokeCommand(id: "open-file")) else {
+            return XCTFail("a command this shell carries out must come back as perform")
+        }
+        guard case .rejected(.unavailable, _) = client.dispatch(.invokeCommand(id: "open-url")) else {
+            return XCTFail("a command nobody carries out must be refused as unavailable")
+        }
+        guard case .rejected(.unknownCommand, _) = client.dispatch(.invokeCommand(id: "no-such-command")) else {
+            return XCTFail("an id outside the registry must be refused as unknown")
         }
     }
 

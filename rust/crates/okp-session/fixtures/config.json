@@ -7,5 +7,6 @@
   "hwdec": "videotoolbox",
   "mpv_options": [
     { "name": "ao", "value": "coreaudio" }
-  ]
+  ],
+  "shell_commands": ["open-file", "fullscreen"]
 }
