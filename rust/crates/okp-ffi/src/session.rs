@@ -3,7 +3,8 @@
 //! Every function exchanges UTF-8, nul-terminated JSON documents (see
 //! `docs/session-abi.md` for the envelope, `schema_version`, threading and
 //! ownership rules). Strings returned here are owned by the caller and must be
-//! released with [`okp_string_free`]. Render calls are not part of this surface yet.
+//! released with [`okp_string_free`]. The render calls draw video frames into the
+//! shell's OpenGL framebuffer; frames never travel as JSON.
 
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr;
@@ -136,6 +137,62 @@ pub unsafe extern "C" fn okp_session_drain_events(session: *const OkpSession) ->
     into_c_string(batch)
 }
 
+/// Create the session's OpenGL render context. Call it on the shell's render
+/// thread with the shell's OpenGL context current; a second call while the
+/// context exists does nothing. Returns false on failure and, when
+/// `error_buffer` is non-null and `error_capacity` nonzero, copies a
+/// nul-terminated message into it. Free the context with
+/// [`okp_session_render_destroy`] before [`okp_session_free`].
+///
+/// # Safety
+/// `session` must be null or live. `error_buffer`, when non-null, must identify
+/// writable storage of at least `error_capacity` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn okp_session_render_create(
+    session: *const OkpSession,
+    error_buffer: *mut c_char,
+    error_capacity: usize,
+) -> bool {
+    let result = match unsafe { session.as_ref() } {
+        Some(session) => session.inner.render_create(),
+        None => Err("the session is null".to_owned()),
+    };
+    match result {
+        Ok(()) => true,
+        Err(message) => {
+            unsafe { copy_text(&message, error_buffer, error_capacity) };
+            false
+        }
+    }
+}
+
+/// Draw the current video frame into the bound framebuffer of `width` by `height`
+/// pixels. Returns false if there is no render context or libmpv failed to draw.
+///
+/// # Safety
+/// `session` must be null or live. The OpenGL context the render context was
+/// created under must be current on the calling thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn okp_session_render(
+    session: *const OkpSession,
+    width: i32,
+    height: i32,
+) -> bool {
+    unsafe { session.as_ref() }.is_some_and(|session| session.inner.render(width, height).is_ok())
+}
+
+/// Free the render context, if there is one.
+///
+/// # Safety
+/// `session` must be null or live. The OpenGL context the render context was
+/// created under must be current on the calling thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn okp_session_render_destroy(session: *const OkpSession) {
+    if let Some(session) = unsafe { session.as_ref() } {
+        session.inner.render_destroy();
+    }
+}
+
 /// Release a string returned by an `okp_session_*` function. Null is ignored.
 ///
 /// # Safety
@@ -215,6 +272,13 @@ mod tests {
             okp_string_free(ptr::null_mut());
             okp_session_free(ptr::null_mut());
         }
+
+        let mut buffer = [0 as c_char; 64];
+        assert!(!unsafe { okp_session_render_create(ptr::null(), buffer.as_mut_ptr(), 64) });
+        let message = unsafe { CStr::from_ptr(buffer.as_ptr()) }.to_str().unwrap();
+        assert_eq!(message, "the session is null");
+        assert!(!unsafe { okp_session_render(ptr::null(), 16, 16) });
+        unsafe { okp_session_render_destroy(ptr::null()) };
     }
 
     #[test]

@@ -62,6 +62,30 @@ pub fn write_media_fixture(dir: &Path) -> PathBuf {
     media
 }
 
+/// A real file with two audio tracks and no chapters: an mpv EDL that plays two
+/// generated WAV tones as parallel streams (`!new_stream`), so libmpv numbers
+/// them audio 1 and audio 2.
+pub fn write_two_audio_fixture(dir: &Path) -> PathBuf {
+    let mut edl = String::from("# mpv EDL v0\n");
+    for (index, name) in ["first.wav", "second.wav"].iter().enumerate() {
+        let tone = dir.join(name);
+        write_tone(&tone, 2);
+        let tone = tone.to_str().expect("temporary paths are UTF-8");
+        if index > 0 {
+            edl.push_str("!new_stream\n");
+        }
+        edl.push_str(&format!("%{}%{tone},0,2\n", tone.len()));
+    }
+    let media = dir.join("two-audio.edl");
+    fs::write(&media, edl).expect("the EDL fixture should be written");
+    media
+}
+
+/// The WAV tone a media fixture plays: a second real file with one audio track.
+pub fn tone_fixture(dir: &Path) -> PathBuf {
+    dir.join("tone.wav")
+}
+
 /// 16-bit mono PCM at 8 kHz: a quiet 440 Hz tone.
 fn write_tone(path: &Path, seconds: u32) {
     const RATE: u32 = 8_000;

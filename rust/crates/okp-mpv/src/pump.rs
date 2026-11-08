@@ -26,9 +26,10 @@ use libc::{c_char, c_void};
 
 use crate::ffi;
 use crate::player::{
-    AbLoopState, AudioDevice, Chapter, EndFileReason, MediaInfo, MpvEvent, PlaybackDiagnostics,
-    PlaybackState, RawReader, Track, VideoDimensions, WaylandPresentationFeedback,
-    audio_device_selected, audio_devices_from_entries, end_file_reason, media_info_with_source,
+    AbLoopState, AudioDevice, Chapter, EndFileReason, EntryEvent, MediaInfo, MpvEvent,
+    PlaybackDiagnostics, PlaybackState, RawReader, Track, VideoDimensions,
+    WaylandPresentationFeedback, audio_device_selected, audio_devices_from_entries,
+    end_file_reason, media_info_with_source,
 };
 
 /// Properties the pump observes so mpv wakes it (and refreshes the snapshot)
@@ -148,7 +149,7 @@ struct PumpShared {
     presentation_log: bool,
     reader: RawReader,
     snapshot: Mutex<Snapshot>,
-    events: Mutex<Vec<MpvEvent>>,
+    events: Mutex<Vec<EntryEvent>>,
     wayland_presentation_feedback: Mutex<Vec<WaylandPresentationFeedback>>,
     diagnostic_messages: Mutex<VecDeque<String>>,
     media_source: Mutex<Option<PathBuf>>,
@@ -310,6 +311,14 @@ impl EventPump {
 
     /// Drain the lifecycle events queued since the last call, oldest first.
     pub(crate) fn take_lifecycle_events(&self) -> Vec<MpvEvent> {
+        self.take_lifecycle_events_with_entries()
+            .into_iter()
+            .map(|entry| entry.event)
+            .collect()
+    }
+
+    /// [`Self::take_lifecycle_events`] with the playlist entry of each event.
+    pub(crate) fn take_lifecycle_events_with_entries(&self) -> Vec<EntryEvent> {
         std::mem::take(&mut *lock(&self.shared.events))
     }
 
@@ -379,6 +388,9 @@ fn pump_loop(shared: &Arc<PumpShared>) {
     // Populate the snapshot once so observed reads return real data promptly.
     recompute(shared, RecomputeFlags::all());
 
+    // The playlist entry libmpv started most recently. Its `FileLoaded` can
+    // arrive in a later pass than its `StartFile`.
+    let mut started = None;
     while shared.running.load(Ordering::Acquire) {
         {
             let mut pending = lock(&shared.wake);
@@ -394,12 +406,13 @@ fn pump_loop(shared: &Arc<PumpShared>) {
             break;
         }
 
-        let (lifecycle, flags) = drain_events(shared);
+        let (lifecycle, flags) = drain_events(shared, started);
+        started = lifecycle.started;
         // Refresh the snapshot *before* the lifecycle events become visible, so
         // a shell handler that reacts to `FileLoaded` already sees fresh tracks.
         recompute(shared, flags);
-        if !lifecycle.is_empty() {
-            lock(&shared.events).extend(lifecycle);
+        if !lifecycle.events.is_empty() {
+            lock(&shared.events).extend(lifecycle.events);
         }
         // Clone out of the lock so a listener that reads the pump snapshot (or
         // replaces itself) cannot deadlock against this thread.
@@ -410,8 +423,36 @@ fn pump_loop(shared: &Arc<PumpShared>) {
     }
 }
 
-fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
-    let mut lifecycle = Vec::new();
+/// The lifecycle events of one pass, each stamped with its playlist entry.
+struct Lifecycle {
+    events: Vec<EntryEvent>,
+    started: Option<i64>,
+}
+
+impl Lifecycle {
+    /// An event about the entry started most recently.
+    fn push(&mut self, event: MpvEvent) {
+        self.push_for(event, self.started);
+    }
+
+    fn push_for(&mut self, event: MpvEvent, playlist_entry_id: Option<i64>) {
+        self.events.push(EntryEvent {
+            event,
+            playlist_entry_id,
+        });
+    }
+}
+
+/// libmpv numbers playlist entries from 1; 0 means it reported none.
+fn entry_id(id: i64) -> Option<i64> {
+    (id > 0).then_some(id)
+}
+
+fn drain_events(shared: &Arc<PumpShared>, started: Option<i64>) -> (Lifecycle, RecomputeFlags) {
+    let mut lifecycle = Lifecycle {
+        events: Vec::new(),
+        started,
+    };
     let mut flags = RecomputeFlags::default();
     let handle = shared.reader.handle().as_ptr();
 
@@ -459,6 +500,13 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                     }
                 }
             }
+            ffi::MPV_EVENT_START_FILE => {
+                if let Some(start_file) =
+                    unsafe { event.data.cast::<ffi::mpv_event_start_file>().as_ref() }
+                {
+                    lifecycle.started = entry_id(start_file.playlist_entry_id);
+                }
+            }
             ffi::MPV_EVENT_FILE_LOADED => {
                 let video_dimensions = shared.reader.video_dimensions().ok().flatten();
                 lock(&shared.snapshot).video_dimensions = video_dimensions;
@@ -497,13 +545,12 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                 flags.media_info = true;
             }
             ffi::MPV_EVENT_END_FILE => {
-                let reason = if let Some(end_file) =
-                    unsafe { event.data.cast::<ffi::mpv_event_end_file>().as_ref() }
-                {
+                let end_file = unsafe { event.data.cast::<ffi::mpv_event_end_file>().as_ref() };
+                let reason = end_file.map_or(EndFileReason::Unknown(event.error), |end_file| {
                     end_file_reason(end_file.reason, end_file.error)
-                } else {
-                    EndFileReason::Unknown(event.error)
-                };
+                });
+                let ended_entry =
+                    end_file.and_then(|end_file| entry_id(end_file.playlist_entry_id));
                 // Snapshot the ended source's path/URL while the pump is on the reader
                 // thread (a blocking mpv read here is allowed). The shell compares it to
                 // the current source when draining, so a stale `EndFile::Error` whose
@@ -522,12 +569,15 @@ fn drain_events(shared: &Arc<PumpShared>) -> (Vec<MpvEvent>, RecomputeFlags) {
                     .and_then(|playback| playback.duration)
                     .filter(|duration| duration.is_finite() && *duration > 0.0)
                     .or_else(|| lock(&shared.last_duration).take());
-                lifecycle.push(MpvEvent::EndFile {
-                    reason,
-                    path,
-                    diagnostic_messages,
-                    last_duration,
-                });
+                lifecycle.push_for(
+                    MpvEvent::EndFile {
+                        reason,
+                        path,
+                        diagnostic_messages,
+                        last_duration,
+                    },
+                    ended_entry,
+                );
             }
             ffi::MPV_EVENT_PROPERTY_CHANGE => {
                 if let Some(property) =

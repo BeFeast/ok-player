@@ -374,6 +374,20 @@ pub enum MpvEvent {
     Shutdown,
 }
 
+/// A lifecycle event and the playlist entry it is about, drained via
+/// [`Mpv::take_lifecycle_events_with_entries`]. An owner that replaces media
+/// compares the id with the one [`Mpv::load_with_file_options`] returned, so a
+/// late event of the replaced entry is never taken for the new one: unlike the
+/// `path` fields, which the pump reads after the fact, the id comes with the
+/// event itself.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EntryEvent {
+    pub event: MpvEvent,
+    /// The ended entry for `EndFile`; for every other event, the entry libmpv
+    /// started most recently. `None` until libmpv has reported an entry.
+    pub playlist_entry_id: Option<i64>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EndFileReason {
     Eof,
@@ -1039,6 +1053,85 @@ impl RawReader {
     }
 }
 
+/// The OpenGL render context [`Mpv::create_render_context`] and
+/// [`Mpv::create_opengl_renderer`] share.
+fn create_opengl_render_context(
+    handle: NonNull<ffi::mpv_handle>,
+    native_wayland_display: Option<NonNull<c_void>>,
+    advanced_control: bool,
+) -> Result<Option<NonNull<ffi::mpv_render_context>>, MpvError> {
+    let api = CString::new("opengl")?;
+    #[cfg(target_os = "macos")]
+    let get_proc_address =
+        get_proc_address as unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void;
+    #[cfg(not(target_os = "macos"))]
+    let get_proc_address = if native_wayland_display.is_some() {
+        get_egl_proc_address as unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void
+    } else {
+        get_proc_address as unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void
+    };
+    let mut init_params = ffi::mpv_opengl_init_params {
+        get_proc_address: Some(get_proc_address),
+        get_proc_address_ctx: ptr::null_mut(),
+    };
+    let mut advanced_control_value = c_int::from(advanced_control);
+    let mut params = render_context_parameters(
+        &api,
+        &mut init_params,
+        native_wayland_display,
+        advanced_control.then_some(&mut advanced_control_value),
+    );
+
+    let mut context = ptr::null_mut();
+    check(unsafe {
+        ffi::mpv_render_context_create(&mut context, handle.as_ptr(), params.as_mut_ptr())
+    })?;
+    Ok(NonNull::new(context))
+}
+
+/// An OpenGL render context its creator owns (see
+/// [`Mpv::create_opengl_renderer`]). Dropping it frees the context; the OpenGL
+/// context it was created under must be current then.
+#[derive(Debug)]
+pub struct OpenGlRenderer {
+    context: NonNull<ffi::mpv_render_context>,
+}
+
+// SAFETY: libmpv lets a render context be used from any thread, provided its
+// calls never overlap; `render` takes `&mut self` and `Drop` owns the value, so
+// they cannot.
+unsafe impl Send for OpenGlRenderer {}
+
+impl OpenGlRenderer {
+    /// Draw the current frame into the bound framebuffer and report the swap,
+    /// in the same order as [`Mpv::render`]. A non-positive size draws nothing.
+    pub fn render(&mut self, width: i32, height: i32) -> Result<(), MpvError> {
+        if width <= 0 || height <= 0 {
+            return Ok(());
+        }
+        let handle = RenderUpdateHandle {
+            context: self.context,
+        };
+        let _ = handle.update_has_frame();
+        handle.render_current_frame(width, height)?;
+        handle.report_swap();
+        Ok(())
+    }
+}
+
+impl Drop for OpenGlRenderer {
+    fn drop(&mut self) {
+        unsafe {
+            ffi::mpv_render_context_set_update_callback(
+                self.context.as_ptr(),
+                None,
+                ptr::null_mut(),
+            );
+            ffi::mpv_render_context_free(self.context.as_ptr());
+        }
+    }
+}
+
 fn render_context_parameters(
     api: &CStr,
     init_params: &mut ffi::mpv_opengl_init_params,
@@ -1402,6 +1495,15 @@ impl Mpv {
             .unwrap_or_default()
     }
 
+    /// [`Self::take_lifecycle_events`] with the playlist entry of each event.
+    /// Both drain the same queue, so an owner uses one or the other.
+    pub fn take_lifecycle_events_with_entries(&self) -> Vec<EntryEvent> {
+        self.pump
+            .as_ref()
+            .map(EventPump::take_lifecycle_events_with_entries)
+            .unwrap_or_default()
+    }
+
     /// Register a callback the event pump invokes on its own thread after every
     /// pass that refreshed the observed state, once that pass's lifecycle events
     /// are queued. It lets an owner react to engine changes instead of polling
@@ -1437,40 +1539,33 @@ impl Mpv {
             return Ok(());
         }
 
-        let api = CString::new("opengl")?;
-        #[cfg(target_os = "macos")]
-        let get_proc_address =
-            get_proc_address as unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void;
-        #[cfg(not(target_os = "macos"))]
-        let get_proc_address = if native_wayland_display.is_some() {
-            get_egl_proc_address as unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void
-        } else {
-            get_proc_address as unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void
-        };
-        let mut init_params = ffi::mpv_opengl_init_params {
-            get_proc_address: Some(get_proc_address),
-            get_proc_address_ctx: ptr::null_mut(),
-        };
-        let mut advanced_control_value = c_int::from(advanced_control);
-        let mut params = render_context_parameters(
-            &api,
-            &mut init_params,
+        self.render_context = create_opengl_render_context(
+            self.handle,
             native_wayland_display
                 .as_ref()
                 .map(NativeWaylandDisplay::pointer),
-            advanced_control.then_some(&mut advanced_control_value),
-        );
-
-        let mut context = ptr::null_mut();
-        check(unsafe {
-            ffi::mpv_render_context_create(&mut context, self.handle.as_ptr(), params.as_mut_ptr())
-        })?;
-        self.render_context = NonNull::new(context);
+            advanced_control,
+        )?;
         if self.render_context.is_some() {
             self.render_context_native_wayland_display = native_wayland_display;
         }
 
         Ok(())
+    }
+
+    /// Create an OpenGL render context owned by the caller rather than by this
+    /// handle, so an owner that shares the engine between threads behind `&Mpv`
+    /// can still render. The caller's OpenGL context must be current. libmpv
+    /// allows one render context per engine: this fails while the one from
+    /// [`Self::create_render_context`] exists, and vice versa.
+    ///
+    /// # Safety
+    /// The renderer must be dropped before this `Mpv`, with the OpenGL context it
+    /// was created under current.
+    pub unsafe fn create_opengl_renderer(&self) -> Result<OpenGlRenderer, MpvError> {
+        create_opengl_render_context(self.handle, None, false)?
+            .map(|context| OpenGlRenderer { context })
+            .ok_or(MpvError::MissingRenderContext)
     }
 
     /// Create libmpv's CPU-only render context. This is the no-device fallback
@@ -1549,6 +1644,34 @@ impl Mpv {
         let args = load_url_command_args(url, ytdl_format, self.loadfile_has_index);
         let args = args.iter().map(String::as_str).collect::<Vec<_>>();
         self.command(&args)
+    }
+
+    /// Replace the current media with `target` (a local path or a URL), with
+    /// file-local `options`: libmpv applies them to this entry only and restores
+    /// them when it ends, so a start position cannot leak into the next load.
+    /// Returns the playlist entry id libmpv gave the new entry, when it reports
+    /// one, to match against [`EntryEvent::playlist_entry_id`].
+    pub fn load_with_file_options(
+        &self,
+        target: &str,
+        options: &[(&str, String)],
+    ) -> Result<Option<i64>, MpvError> {
+        if let Some(pump) = self.pump.as_ref() {
+            pump.begin_media_load();
+        }
+        let args = load_command_args(target, options, self.loadfile_has_index);
+        let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        let (_c_args, ptrs) = command_args(&args)?;
+        let mut result = ffi::mpv_node {
+            value: ffi::mpv_node_value { int64: 0 },
+            format: ffi::MPV_FORMAT_NONE,
+        };
+        check(unsafe { ffi::mpv_command_ret(self.handle.as_ptr(), ptrs.as_ptr(), &mut result) })?;
+        // libmpv filled `result` because the command succeeded; it is freed
+        // only in that case.
+        let entry = unsafe { node_map_int64(&result, "playlist_entry_id") };
+        unsafe { ffi::mpv_free_node_contents(&mut result) };
+        Ok(entry.filter(|id| *id > 0))
     }
 
     pub fn add_subtitle_file(&self, path: &Path) -> Result<(), MpvError> {
@@ -2158,15 +2281,59 @@ fn loadfile_has_index_argument(version: Option<&str>) -> bool {
 
 /// Construct file-local options in the syntax supported by the initialized engine.
 fn load_url_command_args(url: &str, ytdl_format: Option<&str>, has_index: bool) -> Vec<String> {
-    let mut args = vec!["loadfile".to_owned(), url.to_owned()];
-    if let Some(ytdl_format) = ytdl_format {
+    let options: Vec<(&str, String)> = ytdl_format
+        .map(|format| ("ytdl-format", format.to_owned()))
+        .into_iter()
+        .collect();
+    load_command_args(url, &options, has_index)
+}
+
+/// `loadfile` replacing the current media, with file-local options when there
+/// are any. Each value is length-quoted (`%<bytes>%<value>`), so it may contain
+/// commas or `=`.
+fn load_command_args(target: &str, options: &[(&str, String)], has_index: bool) -> Vec<String> {
+    let mut args = vec!["loadfile".to_owned(), target.to_owned()];
+    if !options.is_empty() {
         args.push("replace".to_owned());
         if has_index {
             args.push("-1".to_owned());
         }
-        args.push(format!("ytdl-format=%{}%{ytdl_format}", ytdl_format.len()));
+        args.push(
+            options
+                .iter()
+                .map(|(name, value)| format!("{name}=%{}%{value}", value.len()))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
     }
     args
+}
+
+/// The integer at `key` in a node map, if the node is a map holding one.
+///
+/// # Safety
+/// `node` must be a node libmpv filled in and has not freed.
+unsafe fn node_map_int64(node: &ffi::mpv_node, key: &str) -> Option<i64> {
+    if node.format != ffi::MPV_FORMAT_NODE_MAP {
+        return None;
+    }
+    let list = unsafe { node.value.list.as_ref() }?;
+    if list.num <= 0 || list.values.is_null() || list.keys.is_null() {
+        return None;
+    }
+    for index in 0..list.num as usize {
+        let name = unsafe { *list.keys.add(index) };
+        if name.is_null() || unsafe { CStr::from_ptr(name) }.to_bytes() != key.as_bytes() {
+            continue;
+        }
+        let value = unsafe { &*list.values.add(index) };
+        // Read the union only as the member libmpv says it holds.
+        if value.format != ffi::MPV_FORMAT_INT64 {
+            return None;
+        }
+        return Some(unsafe { value.value.int64 });
+    }
+    None
 }
 
 fn screenshot_mode(include_subtitles: bool) -> &'static str {
@@ -2790,6 +2957,27 @@ mod tests {
         assert_eq!(
             load_url_command_args("https://www.youtube.com/watch?v=0O91lY-CoeE", None, true),
             ["loadfile", "https://www.youtube.com/watch?v=0O91lY-CoeE"]
+        );
+    }
+
+    #[test]
+    fn several_file_options_are_quoted_and_joined_for_one_load() {
+        let options = [
+            ("start", "1.5".to_owned()),
+            ("sub-delay", "a,b=c".to_owned()),
+        ];
+        assert_eq!(
+            load_command_args("/media/a b.mkv", &options, false),
+            [
+                "loadfile",
+                "/media/a b.mkv",
+                "replace",
+                "start=%3%1.5,sub-delay=%5%a,b=c",
+            ]
+        );
+        assert_eq!(
+            load_command_args("/media/a.mkv", &[], true),
+            ["loadfile", "/media/a.mkv"]
         );
     }
 
