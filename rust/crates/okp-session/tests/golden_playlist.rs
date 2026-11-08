@@ -1,6 +1,6 @@
-//! The playlist documents' wire format, pinned by the hand-written documents in
-//! `fixtures/playlist/`. Each Rust value must serialise to exactly its fixture
-//! and decode back from it.
+//! The playlist documents' wire format, pinned by the hand-written
+//! `fixtures/playlist-*.json` documents. Each Rust value must serialise to
+//! exactly its fixture and decode back from it.
 
 use std::collections::BTreeSet;
 use std::fmt::Debug;
@@ -18,29 +18,33 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/playlist")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures")
 }
+
+/// The playlist's documents sit next to the others, so that a shell's own test
+/// that every fixture is covered sees them too.
+const PREFIX: &str = "playlist-";
 
 /// The fixtures the tests below check, so that a new file cannot sit unchecked.
 const CHECKED: &[&str] = &[
-    "command-open.json",
-    "command-next.json",
-    "command-previous.json",
-    "command-jump.json",
-    "command-queue.json",
-    "command-play-next.json",
-    "command-move.json",
-    "command-remove.json",
-    "command-clear-queue.json",
-    "command-set-repeat.json",
-    "command-set-shuffle.json",
-    "command-set-shuffle-unseeded.json",
-    "reply-applied.json",
-    "query-playlist.json",
-    "query-reply-playlist.json",
-    "query-reply-playlist-empty.json",
-    "events-playlist.json",
-    "enums.json",
+    "playlist-command-open.json",
+    "playlist-command-next.json",
+    "playlist-command-previous.json",
+    "playlist-command-jump.json",
+    "playlist-command-queue.json",
+    "playlist-command-play-next.json",
+    "playlist-command-move.json",
+    "playlist-command-remove.json",
+    "playlist-command-clear-queue.json",
+    "playlist-command-set-repeat.json",
+    "playlist-command-set-shuffle.json",
+    "playlist-command-set-shuffle-unseeded.json",
+    "playlist-reply-applied.json",
+    "playlist-query.json",
+    "playlist-query-reply.json",
+    "playlist-query-reply-empty.json",
+    "playlist-events.json",
+    "playlist-enums.json",
 ];
 
 fn golden<T>(name: &str, expected: T)
@@ -86,7 +90,7 @@ fn entry(location: &str, title: &str) -> PlaylistEntry {
 #[test]
 fn every_playlist_command_matches_its_fixture() {
     golden(
-        "command-open.json",
+        "playlist-command-open.json",
         playlist(PlaylistAction::Open {
             sources: vec![
                 local("/Users/example/Movies/Show/Episode 1.mkv"),
@@ -99,53 +103,56 @@ fn every_playlist_command_matches_its_fixture() {
             ],
         }),
     );
-    golden("command-next.json", playlist(PlaylistAction::Next {}));
     golden(
-        "command-previous.json",
+        "playlist-command-next.json",
+        playlist(PlaylistAction::Next {}),
+    );
+    golden(
+        "playlist-command-previous.json",
         playlist(PlaylistAction::Previous {}),
     );
     golden(
-        "command-jump.json",
+        "playlist-command-jump.json",
         playlist(PlaylistAction::Jump { index: 3 }),
     );
     golden(
-        "command-queue.json",
+        "playlist-command-queue.json",
         playlist(PlaylistAction::Queue {
             sources: vec![local("/Users/example/Movies/next.mkv")],
             mode: QueueMode::PlayNext,
         }),
     );
     golden(
-        "command-play-next.json",
+        "playlist-command-play-next.json",
         playlist(PlaylistAction::PlayNext { index: 4 }),
     );
     golden(
-        "command-move.json",
+        "playlist-command-move.json",
         playlist(PlaylistAction::Move { from: 2, to: 0 }),
     );
     golden(
-        "command-remove.json",
+        "playlist-command-remove.json",
         playlist(PlaylistAction::Remove { index: 1 }),
     );
     golden(
-        "command-clear-queue.json",
+        "playlist-command-clear-queue.json",
         playlist(PlaylistAction::ClearQueue {}),
     );
     golden(
-        "command-set-repeat.json",
+        "playlist-command-set-repeat.json",
         playlist(PlaylistAction::SetRepeat {
             mode: RepeatMode::One,
         }),
     );
     golden(
-        "command-set-shuffle.json",
+        "playlist-command-set-shuffle.json",
         playlist(PlaylistAction::SetShuffle {
             enabled: true,
             seed: Some(42),
         }),
     );
     golden(
-        "command-set-shuffle-unseeded.json",
+        "playlist-command-set-shuffle-unseeded.json",
         playlist(PlaylistAction::SetShuffle {
             enabled: false,
             seed: None,
@@ -156,7 +163,7 @@ fn every_playlist_command_matches_its_fixture() {
 #[test]
 fn the_applied_reply_matches_its_fixture() {
     golden(
-        "reply-applied.json",
+        "playlist-reply-applied.json",
         DispatchReply {
             schema_version: SCHEMA_VERSION,
             result: DispatchResult::Applied {},
@@ -167,14 +174,14 @@ fn the_applied_reply_matches_its_fixture() {
 #[test]
 fn the_playlist_query_and_its_replies_match_their_fixtures() {
     golden(
-        "query-playlist.json",
+        "playlist-query.json",
         QueryEnvelope {
             schema_version: SCHEMA_VERSION,
             query: Query::Playlist {},
         },
     );
     golden(
-        "query-reply-playlist.json",
+        "playlist-query-reply.json",
         QueryReply {
             schema_version: SCHEMA_VERSION,
             result: QueryResult::Playlist {
@@ -199,7 +206,7 @@ fn the_playlist_query_and_its_replies_match_their_fixtures() {
         },
     );
     golden(
-        "query-reply-playlist-empty.json",
+        "playlist-query-reply-empty.json",
         QueryReply {
             schema_version: SCHEMA_VERSION,
             result: QueryResult::Playlist {
@@ -218,7 +225,7 @@ fn the_playlist_query_and_its_replies_match_their_fixtures() {
 #[test]
 fn the_playlist_event_follows_the_snapshot_change_in_its_fixture() {
     golden(
-        "events-playlist.json",
+        "playlist-events.json",
         EventBatch {
             schema_version: SCHEMA_VERSION,
             events: vec![
@@ -266,7 +273,7 @@ fn every_playlist_enum_value_matches_the_enums_fixture() {
         }
     }
     golden(
-        "enums.json",
+        "playlist-enums.json",
         Enums {
             repeat_mode,
             queue_mode,
@@ -277,9 +284,9 @@ fn every_playlist_enum_value_matches_the_enums_fixture() {
 #[test]
 fn every_playlist_fixture_file_is_checked() {
     let on_disk: BTreeSet<String> = fs::read_dir(fixtures_dir())
-        .expect("the playlist fixtures directory exists")
+        .expect("the fixtures directory exists")
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|name| name.ends_with(".json"))
+        .filter(|name| name.starts_with(PREFIX) && name.ends_with(".json"))
         .collect();
     let checked: BTreeSet<String> = CHECKED.iter().map(|name| (*name).to_owned()).collect();
     assert_eq!(on_disk, checked);

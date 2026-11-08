@@ -19,7 +19,10 @@ use serde::{Deserialize, Serialize};
 pub use crate::playlist::{PlaylistAction, PlaylistEntry, PlaylistState, QueueMode, RepeatMode};
 
 /// Version of every envelope below. Bump on any change a shell built against
-/// the previous version could not decode or would misread.
+/// the previous version could not decode or would misread. A new command,
+/// query or event, or a reply variant that answers only a new command, keeps
+/// the version: shells skip events they do not know (`docs/session-abi.md`,
+/// "Compatibility within a version").
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// What the shell passes when it creates a session.

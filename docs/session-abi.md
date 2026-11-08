@@ -99,9 +99,32 @@ The snapshot carries `status`, `source`, `time_pos`, `duration`, `volume`,
 `mute`, `speed`, `subtitle_delay`, `tracks`, `chapters`, `end_reason`, `title`,
 `video` (`width`, `height`, `display_aspect`), `buffering` and `cache_ahead`.
 
-The golden documents in `rust/crates/okp-session/fixtures/` (the playlist's in
-`fixtures/playlist/`) pin every shape and every enum value. Change them only
-together with the protocol.
+The golden documents in `rust/crates/okp-session/fixtures/` (the playlist's
+are the `playlist-*.json` ones) pin every shape and every enum value. Change
+them only together with the protocol. They all sit in that one directory, so a
+shell test that checks it covers every fixture there notices a new document.
+
+## Compatibility within a version
+
+Within one `schema_version` the protocol only grows. A new command, query or
+event, or a reply variant that answers only a new command, keeps the version.
+A shell built before the addition keeps working because it follows two rules:
+
+- It skips an event it does not know. Each event is its own entry of
+  `events`, so the shell decodes the entries one by one and drops an entry
+  whose name it does not know; it never discards the rest of the batch. Swift's
+  synthesised `Codable` fails a whole `[Event]` on an unknown case, so decode
+  each entry on its own. For example, a session that has the playlist sends
+  `playlist_changed` after an `open`, whether or not the shell uses the
+  playlist.
+- It gets new reply and query-result variants only for the commands and queries
+  it sends: `applied` answers only playlist commands, and `result.playlist`
+  answers only the playlist query.
+
+Everything else bumps `schema_version`: a new, renamed or removed field or enum
+value in an existing document, a new snapshot field, or a changed meaning. A
+session refuses documents of another version, so a shell and a session with
+different versions do not talk at all.
 
 ## Events
 
