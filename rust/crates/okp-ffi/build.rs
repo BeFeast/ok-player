@@ -24,7 +24,6 @@ fn main() {
     bindings.write_to_file(out_dir.join("okp_core.h"));
 
     println!("cargo:rerun-if-changed=src/lib.rs");
-    println!("cargo:rerun-if-changed=src/live.rs");
     println!("cargo:rerun-if-changed=src/session.rs");
     println!("cargo:rerun-if-changed=src/c_text.rs");
     println!("cargo:rerun-if-changed=cbindgen.toml");

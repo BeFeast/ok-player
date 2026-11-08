@@ -3,21 +3,15 @@
 //! It wraps the pure [`okp_core::player::PlayerMachine`] behind an opaque handle and
 //! mirrors the core command/outcome/status enums as `#[repr(C)]` types a C consumer can
 //! build and read. With the `live-mpv` feature it also exports the `okp-session` JSON
-//! session ABI (`okp_session_*`) and the older opaque live session (`okp_live_session_*`),
-//! both owning this same state machine and the event-driven `okp-mpv` adapter. The C
-//! header (`okp_core.h`) is generated from these declarations by cbindgen at build time.
+//! session ABI (`okp_session_*`), which owns this same state machine and the
+//! event-driven `okp-mpv` adapter. The C header (`okp_core.h`) is generated from these
+//! declarations by cbindgen at build time.
 
 #[cfg(feature = "live-mpv")]
 mod c_text;
 
 #[cfg(feature = "live-mpv")]
-mod live;
-
-#[cfg(feature = "live-mpv")]
 mod session;
-
-#[cfg(feature = "live-mpv")]
-pub use live::*;
 
 #[cfg(feature = "live-mpv")]
 pub use session::*;

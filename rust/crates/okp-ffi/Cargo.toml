@@ -11,11 +11,10 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
-live-mpv = ["dep:okp-mpv", "dep:okp-session"]
+live-mpv = ["dep:okp-session"]
 
 [dependencies]
 okp-core = { path = "../okp-core" }
-okp-mpv = { path = "../okp-mpv", optional = true }
 okp-session = { path = "../okp-session", optional = true }
 
 [build-dependencies]

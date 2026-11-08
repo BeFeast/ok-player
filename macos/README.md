@@ -1,11 +1,12 @@
 # macOS developer preview
 
-The first Apple Silicon shell is a small native AppKit window over the same Rust
-player command/event state machine and libmpv engine as the Linux player. It opens
-local videos through **File → Open**, the Open button, a file argument, or Finder's
-Open With action. **Space** and the transport button toggle pause. Closing the
-window stops playback and releases the renderer before destroying its GL context.
-Errors stay visible until another explicit open attempt.
+The first Apple Silicon shell is a small native AppKit window over the Rust session
+(`okp-session`, through the JSON session ABI in [docs/session-abi.md](../docs/session-abi.md))
+and the same libmpv engine as the Linux player. It opens local videos through
+**File → Open**, the Open button, a file argument, or Finder's Open With action.
+**Space** and the transport button toggle pause. Closing the window stops playback,
+destroys the render context and then frees the session. Errors stay visible until
+another explicit open attempt.
 
 This preview is for local testing. It does not yet contain the Linux shell's URL
 resolver, History, saving/cache UI, subtitle controls or update service. Its chrome
@@ -88,7 +89,7 @@ The Swift package (`Package.swift`, no Xcode project) has three targets:
 | Target | What it is |
 |---|---|
 | `COKPCore` | System library module over the okp-ffi C ABI; links `libokp_ffi` |
-| `OKPlayerShell` | The AppKit shell: window, video view, palette, launcher |
+| `OKPlayerShell` | The AppKit shell: window, session client, video layer, palette, launcher |
 | `OKPlayer` | The thin `ok-player` executable; it only calls `PlayerLauncher.run()` |
 | `OKPlayerShellTests` | XCTest target for `OKPlayerShell` |
 
@@ -269,11 +270,46 @@ not verify. The bounded smoke runs as in the Forgejo workflow, but the step also
 unless the app wrote both window snapshots. The artifact carries the same files plus
 the generated fixture's SHA-256.
 
+## Session and rendering
+
+`SessionClient` owns the session handle. The session's event thread calls its
+wakeup once per batch; the wakeup only hops to the main queue, which drains the
+batch, decodes it with the `Codable` models in `SessionProtocol.swift` and applies
+it to an `@Observable` `SessionStore`. Nothing polls. The XCTest target decodes and
+re-encodes every golden document in `rust/crates/okp-session/fixtures`, so a
+protocol change on either side fails the Mac build until both agree.
+
+Video is drawn by `VideoLayer`, a `CAOpenGLLayer` with its own CGL context (3.2
+core profile, a 16-bit float colour buffer when the GPU offers one) and its own
+serial render queue. The render context is created with libmpv's advanced control:
+
+1. libmpv's update callback schedules `okp_session_render_update` on the render
+   queue. It never waits for the main thread, because libmpv may be waiting for
+   the render thread while the main thread waits for libmpv.
+2. Only when that update says a frame is due is the view's display link
+   (`NSView.displayLink`) started.
+3. The next tick draws on the render queue: `display()`, `CATransaction.flush()`,
+   then `okp_session_render_report_swap`.
+
+Ticks without a due frame pause the link again, so a paused or idle player draws
+nothing and stops ticking. A resize redraws the current frame once; it never
+creates another GL context. Nothing draws on the main thread.
+
 ## Verification boundary
 
 The optional bounded smoke mode opens the deterministic local fixture in a native
-window, observes loaded/progress events, checks a stable paused position, resumes,
-and reports successful render calls and clean teardown. The complete app is copied
+window and checks, from the session's events and the video layer's counters:
+
+- no render calls while idle, before the file is open;
+- the position and the render calls advance while playing;
+- while paused, the position holds and the render calls stay flat for two seconds;
+- both advance again after resuming;
+- six window resizes during playback create no further GL context;
+- closing the window during playback tears down in order (close, destroy the
+  render context, free the session).
+
+Its `OKP_SMOKE` line also reports the swap count, the pixel format, and the
+volume and track count from the session snapshot. The complete app is copied
 to a new directory and launched with `DYLD_LIBRARY_PATH` unset. A separate 40-second
 process deadline prevents a blocked render callback from keeping the job alive.
 

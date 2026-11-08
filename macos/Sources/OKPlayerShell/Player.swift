@@ -1,6 +1,4 @@
 import AppKit
-import COKPCore
-import OpenGL.GL3
 
 extension PaletteRole {
     /// The role as a colour resolved against the appearance it is drawn in, so the
@@ -100,78 +98,32 @@ final class AccentButton: NSButton {
     }
 }
 
-final class VideoView: NSOpenGLView {
-    var session: OpaquePointer?
-    var rendererReady = false
-    var renderCount = 0
-    var onError: ((String) -> Void)?
-
-    init() {
-        let attributes: [NSOpenGLPixelFormatAttribute] = [
-            UInt32(NSOpenGLPFAOpenGLProfile), UInt32(NSOpenGLProfileVersion3_2Core),
-            UInt32(NSOpenGLPFAColorSize), 24,
-            UInt32(NSOpenGLPFAAlphaSize), 8,
-            UInt32(NSOpenGLPFADoubleBuffer), 0
-        ]
-        super.init(frame: .zero, pixelFormat: NSOpenGLPixelFormat(attributes: attributes)!)!
-        wantsBestResolutionOpenGLSurface = true
-    }
-    required init?(coder: NSCoder) { fatalError("Use init()") }
-    override var acceptsFirstResponder: Bool { true }
-    override func keyDown(with event: NSEvent) {
-        if event.charactersIgnoringModifiers == " ", let session {
-            _ = okp_live_session_toggle_pause(session)
-        } else { super.keyDown(with: event) }
-    }
-    func renderFrame() {
-        guard let session, let context = openGLContext else { return }
-        context.makeCurrentContext()
-        if !rendererReady {
-            var interval: GLint = 1
-            context.setValues(&interval, for: .swapInterval)
-            guard okp_mac_result_ok(okp_live_session_create_render_context(session)) else {
-                onError?("Could not create the video renderer")
-                return
-            }
-            rendererReady = true
-        }
-        let pixels = convertToBacking(bounds)
-        guard pixels.width > 0, pixels.height > 0 else { return }
-        glBindFramebuffer(GLenum(GL_FRAMEBUFFER), 0)
-        if okp_mac_result_ok(okp_live_session_render(session, Int32(pixels.width), Int32(pixels.height))) {
-            context.flushBuffer()
-            renderCount += 1
-        } else { onError?("Video rendering failed") }
-    }
-    override func reshape() { super.reshape(); openGLContext?.update() }
-    func shutdown() {
-        if let session {
-            openGLContext?.makeCurrentContext()
-            okp_live_session_destroy_render_context(session)
-        }
-        rendererReady = false
-        session = nil
+extension SessionConfig {
+    /// The app's own session: per-user directories named after the bundle id, as
+    /// the core's `AppIdentity::macos` does, and the session's engine defaults.
+    static func forApp() -> SessionConfig {
+        let files = FileManager.default
+        let bundleID = "uk.oklabs.ok-player"
+        let support = files.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(bundleID)
+        let caches = files.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(bundleID)
+        return SessionConfig(app: AppIdentity(name: "OK Player", platform: .macos),
+                             dataDir: support.path, configDir: support.path, cacheDir: caches.path)
     }
 }
 
 final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var window: NSWindow!
-    let video = VideoView()
+    var video: VideoView?
     let status = NSTextField(labelWithString: "Open a video to begin")
     let pause = AccentButton(label: "Pause", target: nil, action: nil)
     let bar = PaletteSurface(fill: .surface, separator: .borderSubtle)
     var statusRole = PaletteRole.textMuted
-    var session: OpaquePointer?
-    var timer: Timer?
+    var client: SessionClient?
     var pendingPath: String?
     let smoke = CommandLine.arguments.contains("--smoke-test")
     let snapshotDirectory = CommandLine.arguments.first { $0.hasPrefix("--snapshot-dir=") }
         .map { String($0.dropFirst("--snapshot-dir=".count)) }
-    var smokeStarted = Date()
-    var smokePhase = 0
-    var pausePosition = 0.0
-    var phaseStarted = Date()
-    var loaded = false
+    var smokeRun: SmokeRun?
     var shuttingDown = false
     var errorShown = false
 
@@ -191,7 +143,11 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.minSize = NSSize(width: 420, height: 280)
         window.backgroundColor = PaletteRole.canvas.color
         let root = PaletteSurface(fill: .canvas); window.contentView = root
-        video.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(video)
+        // The video area keeps its place in the layout even when no renderer exists.
+        let surface = GLSurface.make()
+        let videoArea: NSView = surface.map { VideoView(surface: $0) as NSView } ?? NSView()
+        video = videoArea as? VideoView
+        videoArea.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(videoArea)
         bar.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(bar)
         let open = AccentButton(label: "Open…", target: self, action: #selector(openFile))
         pause.target = self; pause.action = #selector(togglePause)
@@ -200,29 +156,38 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         controls.orientation = .horizontal; controls.spacing = 14
         controls.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(controls)
         NSLayoutConstraint.activate([
-            video.topAnchor.constraint(equalTo: root.topAnchor), video.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            video.trailingAnchor.constraint(equalTo: root.trailingAnchor), video.bottomAnchor.constraint(equalTo: controls.topAnchor, constant: -8),
-            bar.topAnchor.constraint(equalTo: video.bottomAnchor), bar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            videoArea.topAnchor.constraint(equalTo: root.topAnchor), videoArea.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            videoArea.trailingAnchor.constraint(equalTo: root.trailingAnchor), videoArea.bottomAnchor.constraint(equalTo: controls.topAnchor, constant: -8),
+            bar.topAnchor.constraint(equalTo: videoArea.bottomAnchor), bar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             bar.trailingAnchor.constraint(equalTo: root.trailingAnchor), bar.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             controls.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             controls.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -12),
             controls.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10), controls.heightAnchor.constraint(equalToConstant: 30)
         ])
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
-        var error = [CChar](repeating: 0, count: 2048)
-        session = okp_live_session_new(&error, numericCast(error.count))
-        guard let session else { fail(String(cString: error)); return }
-        video.session = session
-        video.onError = { [weak self] message in self?.fail(message) }
-        video.renderFrame()
-        timer = Timer(timeInterval: 1.0 / 60.0, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
-        RunLoop.main.add(timer!, forMode: .common)
-        smokeStarted = Date()
+        guard let video else { fail("No OpenGL pixel format is available for video"); return }
+        let client: SessionClient
+        do {
+            client = try SessionClient(config: .forApp())
+        } catch {
+            fail("\(error)"); return
+        }
+        self.client = client
+        client.onBatch = { [weak self] batch in self?.sessionChanged(batch) }
+        video.onTogglePause = { [weak self] in self?.togglePause() }
+        video.videoLayer.onError = { [weak self] message in self?.fail(message) }
+        if let handle = client.handle { video.videoLayer.attach(session: handle) }
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
-        if let path = pendingPath ?? args.first { play(path) }
+        let path = pendingPath ?? args.first
+        if smoke {
+            smokeRun = SmokeRun(app: self, path: path)
+            smokeRun?.start()
+        } else if let path {
+            play(path)
+        }
     }
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {
-        if session != nil { play(filename) } else { pendingPath = filename }
+        if client != nil { play(filename) } else { pendingPath = filename }
         return true
     }
     @objc func openFile() {
@@ -232,48 +197,35 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
     func play(_ path: String) {
-        guard let session else { return }
+        guard let client else { return }
         errorShown = false
-        let result = path.withCString { okp_live_session_open_file(session, $0) }
-        if !okp_mac_result_ok(result.result) { fail(lastError()); return }
+        switch client.dispatch(.open(source: MediaSource(kind: .local, location: path))) {
+        case .accepted, .noOp: break
+        case .rejected(_, let message), .failed(_, let message): fail(message); return
+        }
         window.title = "\((path as NSString).lastPathComponent) — OK Player"
         bar.progress = 0
         showStatus("Opening…", .textMuted)
     }
-    @objc func togglePause() { if let session { _ = okp_live_session_toggle_pause(session) } }
-    func lastError() -> String {
-        var bytes = [CChar](repeating: 0, count: 4096)
-        _ = okp_live_session_last_error(session, &bytes, numericCast(bytes.count))
-        return String(cString: bytes)
-    }
-    @objc func tick() {
-        guard !shuttingDown, !errorShown, let session else { return }
-        video.renderFrame()
+    @objc func togglePause() { client?.dispatch(.togglePause) }
+    /// The session reported a batch; the store already holds the new state.
+    func sessionChanged(_ batch: EventBatch) {
+        guard !shuttingDown, let client else { return }
+        for case .error(_, let message, _) in batch.events {
+            fail(message); return
+        }
+        if batch.events.contains(.shutdown) { fail("The playback engine stopped"); return }
         guard !errorShown else { return }
-        let snapshot = okp_live_session_poll(session)
-        if snapshot.error { fail(lastError()); return }
-        loaded = loaded || snapshot.loaded
-        let paused = okp_mac_is_paused(snapshot.status)
-        let transport = paused ? "Play" : "Pause"
+        let snapshot = client.store.snapshot
+        video?.hasVideo = snapshot.video != nil
+        let transport = snapshot.status == .paused ? "Play" : "Pause"
         if pause.title != transport { pause.title = transport }
-        if snapshot.time_pos_known {
-            showStatus(String(format: "%.0f / %.0f s", snapshot.time_pos, snapshot.duration), .text)
-            bar.progress = snapshot.duration > 0 ? max(0, snapshot.time_pos / snapshot.duration) : 0
+        if let time = snapshot.timePos {
+            let duration = snapshot.duration ?? 0
+            showStatus(String(format: "%.0f / %.0f s", time, duration), .text)
+            bar.progress = duration > 0 ? max(0, time / duration) : 0
         }
-        guard smoke else { return }
-        if Date().timeIntervalSince(smokeStarted) > 20 { fail("Smoke playback timed out"); return }
-        if smokePhase == 0 && loaded && snapshot.time_pos > 0.7 && video.renderCount > 10 {
-            _ = okp_live_session_set_paused(session, true); smokePhase = 1; phaseStarted = Date()
-        } else if smokePhase == 1 && paused && Date().timeIntervalSince(phaseStarted) > 0.3 {
-            pausePosition = snapshot.time_pos; smokePhase = 2; phaseStarted = Date()
-        } else if smokePhase == 2 && Date().timeIntervalSince(phaseStarted) > 0.5 {
-            guard paused && abs(snapshot.time_pos - pausePosition) < 0.12 else { fail("Pause did not hold playback position"); return }
-            _ = okp_live_session_set_paused(session, false); smokePhase = 3
-        } else if smokePhase == 3 && !paused && snapshot.time_pos > pausePosition + 0.5 {
-            print("OKP_SMOKE loaded=true progressed=true pause=true resume=true render_calls=\(video.renderCount)")
-            if let snapshotDirectory { captureAppearances(to: snapshotDirectory) }
-            shutdown(); print("OKP_SMOKE teardown=clean"); fflush(stdout); NSApp.terminate(nil)
-        }
+        smokeRun?.sessionChanged(snapshot)
     }
     func fail(_ message: String) {
         guard !shuttingDown, !errorShown else { return }
@@ -290,7 +242,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     /// Smoke evidence: renders the window content in the light and the dark appearance
     /// to PNG files. Only this window's appearance is overridden, never the system's.
-    /// The OpenGL video surface is not part of an AppKit cache, so it stays empty.
+    /// The OpenGL video layer is not part of an AppKit cache, so it stays empty.
     func captureAppearances(to directory: String) {
         guard let view = window.contentView else { return }
         for (name, appearanceName) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
@@ -310,17 +262,152 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         window.appearance = nil
     }
+    /// Close, then destroy the render context, then free the session.
     func shutdown() {
         guard !shuttingDown else { return }; shuttingDown = true
-        timer?.invalidate(); timer = nil
-        if let session {
-            _ = okp_live_session_close(session); video.shutdown(); okp_live_session_free(session)
+        smokeRun?.cancel()
+        if let client {
+            client.dispatch(.close)
+            video?.shutdown()
+            client.close()
         }
-        session = nil
+        client = nil
     }
-    func windowWillClose(_ notification: Notification) { shutdown(); NSApp.terminate(nil) }
+    func windowWillClose(_ notification: Notification) {
+        shutdown()
+        if smokeRun?.finished == true { print("OKP_SMOKE teardown=clean"); fflush(stdout) }
+        NSApp.terminate(nil)
+    }
     func applicationWillTerminate(_ notification: Notification) { shutdown() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+}
+
+/// The bounded smoke the macOS workflows run (`--smoke-test`). Each step is checked
+/// against what the session reported and what the video layer counted:
+///
+/// 1. idle: no render calls before a file is open;
+/// 2. playing: the position and the render calls advance;
+/// 3. paused: the position holds and the render calls stay flat for two seconds;
+/// 4. resumed: both advance again;
+/// 5. resized: repeated window resizes create no further GL context;
+/// 6. closed while playing: teardown runs in order and the app exits.
+///
+/// The timed steps use one-shot timers; the session state itself arrives through
+/// wakeup-driven drains, never through polling.
+final class SmokeRun {
+    enum Phase { case idle, playing, pausing, holding, resuming, resizing, finished }
+
+    private weak var app: PlayerApp?
+    private let path: String?
+    private var phase = Phase.idle
+    private var cancelled = false
+    private var pausePosition = 0.0
+    private var pausedRenders = 0
+    private var resizeRenders = 0
+
+    init(app: PlayerApp, path: String?) {
+        self.app = app
+        self.path = path
+    }
+
+    private var renders: Int { app?.video?.videoLayer.counts.renders ?? 0 }
+
+    /// Every step passed.
+    var finished: Bool { phase == .finished }
+
+    func cancel() { cancelled = true }
+
+    func start() {
+        guard let path else { fail("Smoke needs a media file argument"); return }
+        after(25) { [self] in
+            if phase != .finished { fail("Smoke timed out in phase \(phase) after \(renders) render calls") }
+        }
+        // Idle: the render context exists, nothing is loaded, nothing may be drawn.
+        after(0.6) { [self] in
+            guard renders == 0 else { fail("\(renders) render calls while idle"); return }
+            phase = .playing
+            app?.play(path)
+        }
+    }
+
+    func sessionChanged(_ snapshot: SessionSnapshot) {
+        guard !cancelled else { return }
+        let position = snapshot.timePos ?? 0
+        switch phase {
+        case .playing where snapshot.status == .playing && position > 0.7 && renders > 10:
+            phase = .pausing
+            app?.client?.dispatch(.setPaused(paused: true))
+        case .pausing where snapshot.status == .paused:
+            phase = .holding
+            // Let the pause settle, then measure two seconds of it.
+            after(0.5) { [self] in
+                pausePosition = app?.client?.store.snapshot.timePos ?? 0
+                pausedRenders = renders
+                after(2) { [self] in checkPause() }
+            }
+        case .resuming where snapshot.status == .playing && position > pausePosition + 0.5 && renders > pausedRenders + 5:
+            phase = .resizing
+            resize()
+        default:
+            break
+        }
+    }
+
+    private func checkPause() {
+        guard let app, let client = app.client else { return }
+        let snapshot = client.store.snapshot
+        guard snapshot.status == .paused, abs((snapshot.timePos ?? 0) - pausePosition) < 0.12 else {
+            fail("Pause did not hold playback position"); return
+        }
+        guard renders == pausedRenders else {
+            fail("\(renders - pausedRenders) render calls in two paused seconds"); return
+        }
+        phase = .resuming
+        client.dispatch(.setPaused(paused: false))
+    }
+
+    private func resize() {
+        guard let window = app?.window else { return }
+        resizeRenders = renders
+        let origin = window.frame.origin
+        let sizes = [NSSize(width: 800, height: 500), NSSize(width: 1100, height: 660), NSSize(width: 640, height: 420),
+                     NSSize(width: 1000, height: 600), NSSize(width: 720, height: 480), NSSize(width: 960, height: 580)]
+        for (index, size) in sizes.enumerated() {
+            after(0.1 * Double(index + 1)) { window.setFrame(NSRect(origin: origin, size: size), display: true) }
+        }
+        after(1.0) { [self] in finish() }
+    }
+
+    private func finish() {
+        guard let app, let client = app.client, !cancelled else { return }
+        guard GLSurface.contextsCreated == 1 else {
+            fail("\(GLSurface.contextsCreated) GL contexts after resizing"); return
+        }
+        guard renders > resizeRenders else { fail("No render calls while resizing during playback"); return }
+        phase = .finished
+        let snapshot = client.store.snapshot
+        let counts = app.video?.videoLayer.counts ?? (renders: 0, swaps: 0)
+        let pixelFormat = app.video?.videoLayer.surface.floatColor == true ? "float16" : "rgba8"
+        print("OKP_SMOKE loaded=true progressed=true pause=true resume=true idle_render_calls=0 paused_render_calls=0 "
+              + "render_calls=\(counts.renders) swaps=\(counts.swaps) gl_contexts=\(GLSurface.contextsCreated) "
+              + "pixel_format=\(pixelFormat) volume=\(Int(snapshot.volume ?? -1)) tracks=\(snapshot.tracks.count)")
+        if let directory = app.snapshotDirectory { app.captureAppearances(to: directory) }
+        // Closing the window during playback runs the real teardown path; the app
+        // reports it once teardown has returned.
+        app.window.close()
+    }
+
+    private func fail(_ message: String) {
+        guard !cancelled else { return }
+        app?.fail(message)
+    }
+
+    private func after(_ seconds: Double, _ body: @escaping () -> Void) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+            guard let self, !self.cancelled else { return }
+            body()
+        }
+    }
 }
 
 /// Starts the app. The `ok-player` executable target only calls this.

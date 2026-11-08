@@ -1252,7 +1252,6 @@ version = "0.1.0"
 dependencies = [
  "cbindgen",
  "okp-core",
- "okp-mpv",
  "okp-session",
 ]
 
