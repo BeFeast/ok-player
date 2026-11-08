@@ -12,6 +12,8 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resourc
 export MACOSX_DEPLOYMENT_TARGET=13.0
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 DYLD_LIBRARY_PATH="$OKP_MPV_PREFIX/lib" cargo test --manifest-path "$root/rust/Cargo.toml" --locked --lib -p okp-ffi --features live-mpv --target aarch64-apple-darwin 2>&1 | tee "$output/tests.log"
+# The session's own tests drive the pinned libmpv through the session and its C ABI.
+DYLD_LIBRARY_PATH="$OKP_MPV_PREFIX/lib" cargo test --manifest-path "$root/rust/Cargo.toml" --locked -p okp-session --target aarch64-apple-darwin 2>&1 | tee -a "$output/tests.log"
 cargo build --manifest-path "$root/rust/Cargo.toml" --locked --release -p okp-ffi --features live-mpv --target aarch64-apple-darwin 2>&1 | tee "$output/build.log"
 cp "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/libokp_ffi.dylib" "$app/Contents/Frameworks/"
 cp "$OKP_MPV_PREFIX"/lib/*.dylib "$app/Contents/Frameworks/"

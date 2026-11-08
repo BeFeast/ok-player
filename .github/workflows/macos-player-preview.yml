@@ -36,6 +36,7 @@ on:
       - 'scripts/generate-macos-palette.py'
       - 'brand/**'
       - 'rust/crates/okp-ffi/**'
+      - 'rust/crates/okp-session/**'
       - 'rust/crates/okp-mpv/**'
       - 'rust/crates/okp-core/**'
       - '.github/workflows/macos-player-preview.yml'
