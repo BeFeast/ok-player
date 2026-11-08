@@ -42,7 +42,10 @@ pub fn launch_shape<S: AsRef<OsStr>>(args: &[S]) -> LaunchShape {
 /// What is playing when a request is dequeued.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PlaybackSummary {
-    /// The loaded item, or `None` when the player is idle (or just started).
+    /// The item the engine is loading or playing, or `None` when the player is idle (or just
+    /// started). A shell reports an item whose load failed, or that ended, as `None` even while
+    /// its window still names it: nothing plays it, so a link must open rather than seek in it
+    /// or queue behind it.
     pub current: Option<Target>,
 }
 

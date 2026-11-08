@@ -248,7 +248,19 @@ pub(crate) fn deliver_open_request(state: &Rc<RefCell<PlayerState>>, item: Playl
 }
 
 /// What plays now, as the core's planner sees it.
+///
+/// An item counts only while the engine is loading or playing it. A source whose load failed
+/// (or that the engine dropped at end of file with a failure) keeps its name in the window's
+/// bookkeeping for the failure card and Retry, but nothing plays it: the player is idle, so a
+/// link opens instead of seeking in it or queueing behind it.
 pub(crate) fn link_playback_summary(state: &PlayerState) -> PlaybackSummary {
+    use network_media::MediaLoadState;
+    if !matches!(
+        state.media_load_state,
+        MediaLoadState::Loading | MediaLoadState::Playing
+    ) {
+        return PlaybackSummary::idle();
+    }
     if let Some(path) = &state.current_file {
         PlaybackSummary::playing(Target::Path(path.clone().into_os_string()))
     } else if let Some(url) = &state.current_url {
@@ -785,6 +797,14 @@ mod tests {
         PlaylistItem::Local(path.to_path_buf())
     }
 
+    fn url(url: &str) -> PlaylistItem {
+        PlaylistItem::Url(url.to_owned())
+    }
+
+    fn load_state(player: &Player) -> network_media::MediaLoadState {
+        player.state.borrow().media_load_state
+    }
+
     macro_rules! main_context {
         ($context:ident) => {
             let _serial = SAVE_SHUTDOWN_CONTEXT_TEST_LOCK
@@ -993,6 +1013,120 @@ mod tests {
             player.surface.take(),
             [Effect::Present(Some(STARTUP_ID.to_owned()))]
         );
+    }
+
+    #[test]
+    fn a_failed_current_item_is_reloaded_by_open_with_a_start_not_seeked_in() {
+        main_context!(context);
+        let player = Player::running(GatedProbe::new(true));
+        let clip = player.clip("show", "A.mkv");
+        let stream = "http://127.0.0.1:9/clips/A001.MP4";
+        let cases = [
+            (
+                path_link("open", &clip, "&t=30"),
+                local(&clip),
+                clip.to_str().unwrap().to_owned(),
+            ),
+            (
+                format!("{}&t=30", url_link("open", stream)),
+                url(stream),
+                stream.to_owned(),
+            ),
+        ];
+        for (link, item, engine_path) in cases {
+            match &item {
+                PlaylistItem::Local(path) => load_media_path(&player.state, path.clone()),
+                PlaylistItem::Url(url) => load_link_url(&player.state, url.clone()),
+            }
+            // The engine rejects the source (the camera server was asleep): the window keeps
+            // its name for the failure card and Retry, but nothing plays it.
+            apply_endfile_error(&player.state, 7, Some(&engine_path), &[]);
+            assert_eq!(load_state(&player), network_media::MediaLoadState::Failed);
+            let failed_generation = player.generation();
+            player.surface.take();
+
+            player.forward_link(&link);
+            settle(&context, &player.delivery);
+
+            let state = player.state.borrow();
+            assert!(
+                state.source_generation > failed_generation,
+                "{item:?}: reloaded, not a seek stored for a source nothing plays"
+            );
+            assert_eq!(current_history_source(&state), Some(item.clone()));
+            assert_eq!(
+                state.media_load_state,
+                network_media::MediaLoadState::Loading
+            );
+            assert_eq!(
+                state.pending_resume,
+                Some(PendingResume {
+                    source_generation: state.source_generation,
+                    target: launch_args::ResumeTarget {
+                        seconds: 30.0,
+                        origin: launch_args::ResumeOrigin::ExplicitLaunch,
+                    },
+                }),
+                "{item:?}"
+            );
+            drop(state);
+            assert_eq!(
+                player.surface.take(),
+                [Effect::Present(Some(STARTUP_ID.to_owned()))],
+                "{item:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn after_the_current_item_failed_or_ended_add_and_next_open_and_come_forward() {
+        main_context!(context);
+        type Ending = fn(&Rc<RefCell<PlayerState>>, &Path);
+        let endings: [(&str, Ending); 3] = [
+            ("the load failed", |state, path| {
+                apply_endfile_error(state, 7, path.to_str(), &[]);
+            }),
+            ("it ended with a decoder failure", |state, path| {
+                assert!(apply_endfile_eof_diagnostic(
+                    state,
+                    path.to_str(),
+                    &["[ffmpeg/video] Decoder not found for codec hevc".to_owned()],
+                ));
+            }),
+            // What the end-of-file event does for the last item in Up Next.
+            ("it played to the end", |state, path| {
+                finish_current_progress(state, path.to_str(), None);
+                assert!(!advance_playlist_on_eof(state));
+            }),
+        ];
+        for (ending, end) in endings {
+            for action in ["add", "next"] {
+                let player = Player::running(GatedProbe::new(true));
+                let x = player.clip("show", "X.mkv");
+                let target = player.clip("elsewhere", "T.mkv");
+                load_media_path(&player.state, x.clone());
+                end(&player.state, &x);
+
+                player.forward_link(&path_link(action, &target, ""));
+                settle(&context, &player.delivery);
+
+                assert_eq!(
+                    player.surface.take(),
+                    [Effect::Present(Some(STARTUP_ID.to_owned()))],
+                    "{action} after {ending}: as open while idle, so it comes forward"
+                );
+                assert_eq!(
+                    player.current_file(),
+                    Some(target.clone()),
+                    "{action} after {ending}"
+                );
+                assert_eq!(
+                    player.playlist(),
+                    [local(&target)],
+                    "{action} after {ending}"
+                );
+            }
+        }
     }
 
     #[test]

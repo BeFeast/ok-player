@@ -147,6 +147,9 @@ how to test a link that a browser would rewrite first, as the browser notes expl
 - Requests run in arrival order. Whether a request opens or queues is decided when it is
   taken off the queue, once the player is ready, so a cold `open A` followed by `add B`
   yields `[A, B]`.
+- "Playing" means the player is loading or playing an item. An item whose load failed, or
+  that ended, counts as idle even while the window still shows its name: `open` of it with
+  `t=` opens it again instead of seeking, and `add` or `next` act as `open`, window included.
 - History is recorded as for any other open. A private session suppresses it.
 - A direct media URL (its last path segment has a known media extension) streams from the
   server and never starts a background Replay cache download, whether it is opened or
