@@ -1,0 +1,366 @@
+[
+  {
+    "action": "play-pause",
+    "chord": {
+      "key": "space",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "Space"
+    }
+  },
+  {
+    "action": "seek-back",
+    "chord": {
+      "key": "Left",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "Left"
+    }
+  },
+  {
+    "action": "seek-forward",
+    "chord": {
+      "key": "Right",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "Right"
+    }
+  },
+  {
+    "action": "frame-forward",
+    "chord": {
+      "key": "period",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "."
+    }
+  },
+  {
+    "action": "frame-back",
+    "chord": {
+      "key": "comma",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": ","
+    }
+  },
+  {
+    "action": "previous-item",
+    "chord": {
+      "key": "Page_Up",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "PageUp"
+    }
+  },
+  {
+    "action": "next-item",
+    "chord": {
+      "key": "Page_Down",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "PageDown"
+    }
+  },
+  {
+    "action": "volume-down",
+    "chord": {
+      "key": "Down",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "Down"
+    }
+  },
+  {
+    "action": "volume-up",
+    "chord": {
+      "key": "Up",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "Up"
+    }
+  },
+  {
+    "action": "mute",
+    "chord": {
+      "key": "m",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "M"
+    }
+  },
+  {
+    "action": "open-file",
+    "chord": {
+      "key": "o",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": true
+      },
+      "label": "Cmd+O"
+    }
+  },
+  {
+    "action": "add-subtitle",
+    "chord": {
+      "key": "s",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "S"
+    }
+  },
+  {
+    "action": "open-url",
+    "chord": {
+      "key": "o",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": true,
+        "cmd": true
+      },
+      "label": "Shift+Cmd+O"
+    }
+  },
+  {
+    "action": "close-media",
+    "chord": {
+      "key": "x",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "X"
+    }
+  },
+  {
+    "action": "save-screenshot",
+    "chord": {
+      "key": "c",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "C"
+    }
+  },
+  {
+    "action": "copy-frame",
+    "chord": {
+      "key": "c",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": true,
+        "cmd": false
+      },
+      "label": "Shift+C"
+    }
+  },
+  {
+    "action": "media-info",
+    "chord": {
+      "key": "i",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": true
+      },
+      "label": "Cmd+I"
+    }
+  },
+  {
+    "action": "go-to-time",
+    "chord": {
+      "key": "j",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "J"
+    }
+  },
+  {
+    "action": "ab-loop",
+    "chord": {
+      "key": "l",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "L"
+    }
+  },
+  {
+    "action": "subtitle-delay-forward",
+    "chord": {
+      "key": "z",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "Z"
+    }
+  },
+  {
+    "action": "subtitle-delay-back",
+    "chord": {
+      "key": "z",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": true,
+        "cmd": false
+      },
+      "label": "Shift+Z"
+    }
+  },
+  {
+    "action": "subtitle-size-down",
+    "chord": {
+      "key": "bracketleft",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "["
+    }
+  },
+  {
+    "action": "subtitle-size-up",
+    "chord": {
+      "key": "bracketright",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "]"
+    }
+  },
+  {
+    "action": "subtitle-previous-cue",
+    "chord": {
+      "key": "Left",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": true
+      },
+      "label": "Cmd+Left"
+    }
+  },
+  {
+    "action": "subtitle-next-cue",
+    "chord": {
+      "key": "Right",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": true
+      },
+      "label": "Cmd+Right"
+    }
+  },
+  {
+    "action": "fullscreen",
+    "chord": {
+      "key": "f",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "F"
+    }
+  },
+  {
+    "action": "escape-fullscreen",
+    "chord": {
+      "key": "Escape",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "Escape"
+    }
+  },
+  {
+    "action": "open-settings",
+    "chord": {
+      "key": "comma",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": true
+      },
+      "label": "Cmd+,"
+    }
+  }
+]

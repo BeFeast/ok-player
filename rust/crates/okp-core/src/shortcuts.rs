@@ -196,6 +196,20 @@ impl ShortcutAction {
     }
 }
 
+/// An action serialises as its config identifier (`"open-file"`).
+impl Serialize for ShortcutAction {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.id())
+    }
+}
+
+impl<'de> Deserialize<'de> for ShortcutAction {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let id = String::deserialize(deserializer)?;
+        Self::by_id(&id).ok_or_else(|| D::Error::custom(format!("unknown shortcut action {id}")))
+    }
+}
+
 /// Every bindable action, in the order the Settings editor and config serialisation use.
 pub const SHORTCUT_ACTIONS: &[ShortcutAction] = &[
     ShortcutAction::PlayPause,
@@ -261,6 +275,16 @@ impl ShortcutChord {
         }
     }
 
+    /// The canonical, case-folded key name (`space`, `comma`, `Page_Up`, `o`), the name
+    /// [`action_for_key`] compares a key event against.
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    pub fn modifiers(&self) -> ShortcutModifiers {
+        self.modifiers
+    }
+
     /// True when a key event with this canonical key name and modifier set triggers the chord.
     pub fn matches(&self, key_name: &str, modifiers: ShortcutModifiers) -> bool {
         self.key == folded_key_name(key_name) && self.modifiers == modifiers
@@ -288,22 +312,54 @@ impl ShortcutChord {
     }
 }
 
-/// A chord serialises as its config-text label (`"Shift+Cmd+O"`), the same text the config
-/// parser reads.
+/// The wire form of a chord, for shells that read the shortcut table over a JSON boundary
+/// (the macOS menu bar and key handling):
+///
+/// ```json
+/// {"key": "o", "modifiers": {"ctrl": false, "alt": false, "shift": true, "cmd": true},
+///  "label": "Shift+Cmd+O"}
+/// ```
+///
+/// `key` is the canonical key name that [`action_for_key`] compares against (`space`,
+/// `comma`, `Page_Down`, `o`), and `modifiers` the exact set, so a shell builds menu key
+/// equivalents and matches key events without parsing chord text. `label` is the display text
+/// and is output only: input ignores it, and a display spelling in `key` (`PageDown`, `,`) is
+/// read as its canonical name.
 impl Serialize for ShortcutChord {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.label())
+        ShortcutChordWire {
+            key: self.key.clone(),
+            modifiers: self.modifiers,
+            label: Some(self.label()),
+        }
+        .serialize(serializer)
     }
 }
 
-/// Reads the label form back. A key token outside the portable set is taken as the canonical
-/// platform key name a serialised chord carries (`F1`, `Return`), so every chord this module
-/// serialises reads back equal.
 impl<'de> Deserialize<'de> for ShortcutChord {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = String::deserialize(deserializer)?;
-        parse_chord(&text, 0, &SerializedKeyNames).map_err(|error| D::Error::custom(error.message))
+        let wire = ShortcutChordWire::deserialize(deserializer)?;
+        let key = key_name_from_token(&wire.key, &SerializedKeyNames)
+            .filter(|key| is_key_name_token(key))
+            .ok_or_else(|| D::Error::custom(format!("{:?} is not a key name", wire.key)))?;
+        chord_from_captured_key(Some(&key), wire.modifiers).map_err(D::Error::custom)
     }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShortcutChordWire {
+    key: String,
+    #[serde(default)]
+    modifiers: ShortcutModifiers,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+}
+
+/// A single key name: not empty, and no chord separator or whitespace in it (canonical names
+/// spell `+` as `plus`).
+fn is_key_name_token(key: &str) -> bool {
+    !key.is_empty() && !key.contains('+') && !key.chars().any(char::is_whitespace)
 }
 
 /// Key namespace for serialised chords: their key names are already canonical.
@@ -315,8 +371,11 @@ impl KeyNames for SerializedKeyNames {
     }
 }
 
-/// One action ↔ chord pair in the resolved keybinding table.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One action ↔ chord pair in the resolved keybinding table. Serialises as
+/// `{"action": "open-file", "chord": {…}}`, the chord in its wire form (see
+/// [`ShortcutChord`]'s `Serialize`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ShortcutBinding {
     pub action: ShortcutAction,
     pub chord: ShortcutChord,
@@ -1150,10 +1209,17 @@ play-pause=Ctrl+P
         assert_eq!(portable_chord(&chord.label()), chord);
         assert_eq!(portable_chord("command+o"), chord);
 
-        let json = serde_json::to_string(&chord).expect("chord serializes");
-        assert_eq!(json, r#""Cmd+O""#);
+        let json = serde_json::to_value(&chord).expect("chord serializes");
         assert_eq!(
-            serde_json::from_str::<ShortcutChord>(&json).expect("chord parses"),
+            json,
+            serde_json::json!({
+                "key": "o",
+                "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": true },
+                "label": "Cmd+O",
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<ShortcutChord>(json).expect("chord parses"),
             chord
         );
 
@@ -1162,10 +1228,111 @@ play-pause=Ctrl+P
         assert_eq!(all.label(), "Ctrl+Alt+Shift+Cmd+F");
         assert_eq!(portable_chord("Cmd+Shift+O").label(), "Shift+Cmd+O");
         assert_eq!(
-            serde_json::from_str::<ShortcutChord>(r#""Ctrl+Alt+Shift+Cmd+F""#)
-                .expect("chord parses"),
+            serde_json::from_str::<ShortcutChord>(
+                r#"{"key":"f","modifiers":{"ctrl":true,"alt":true,"shift":true,"cmd":true}}"#
+            )
+            .expect("chord parses"),
             all
         );
+    }
+
+    #[test]
+    fn chord_accessors_expose_the_canonical_key_and_modifiers() {
+        let chord = portable_chord("Shift+Cmd+PageDown");
+
+        assert_eq!(chord.key(), "Page_Down");
+        assert_eq!(
+            chord.modifiers(),
+            ShortcutModifiers {
+                shift: true,
+                cmd: true,
+                ..ShortcutModifiers::default()
+            }
+        );
+        assert_eq!(portable_chord(",").key(), "comma");
+        assert_eq!(portable_chord("[").key(), "bracketleft");
+        assert_eq!(portable_chord("Space").key(), "space");
+        assert_eq!(portable_chord("C").key(), "c");
+    }
+
+    #[test]
+    fn wire_keys_are_the_names_dispatch_compares() {
+        let bindings = default_bindings_on(Platform::MacOs);
+        for binding in &bindings {
+            let wire = serde_json::to_value(&binding.chord).expect("chord serializes");
+            let key = wire["key"].as_str().expect("the wire form carries a key");
+            let modifiers: ShortcutModifiers =
+                serde_json::from_value(wire["modifiers"].clone()).expect("modifiers parse");
+
+            assert_eq!(
+                action_for_key(&bindings, key, modifiers),
+                Some(binding.action),
+                "{wire}"
+            );
+        }
+
+        // A client that sends a display spelling back still names the bound key.
+        let echoed: ShortcutChord =
+            serde_json::from_str(r#"{"key":"PageDown","label":"PageDown"}"#)
+                .expect("a display spelling parses");
+        assert_eq!(echoed.key(), "Page_Down");
+        assert_eq!(
+            action_for_key(&bindings, echoed.key(), echoed.modifiers()),
+            Some(ShortcutAction::NextItem)
+        );
+    }
+
+    #[test]
+    fn wire_chords_without_a_single_key_are_rejected() {
+        for document in [
+            r#"{"key":""}"#,
+            r#"{"key":"Cmd+O"}"#,
+            r#"{"key":"Page Down"}"#,
+            r#"{"key":"Shift_L","modifiers":{"shift":true}}"#,
+            r#"{"modifiers":{"cmd":true}}"#,
+            r#"{"key":"o","mods":{"cmd":true}}"#,
+            r#""Cmd+O""#,
+        ] {
+            assert!(
+                serde_json::from_str::<ShortcutChord>(document).is_err(),
+                "{document} parsed"
+            );
+        }
+    }
+
+    #[test]
+    fn macos_default_bindings_match_the_wire_fixture() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/shortcuts/macos-default-bindings.json"
+        );
+        let fixture: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(path).expect("the shortcut fixture is readable"),
+        )
+        .expect("the shortcut fixture is JSON");
+        let defaults = default_bindings_on(Platform::MacOs);
+
+        assert_eq!(
+            serde_json::to_value(&defaults).expect("bindings serialize"),
+            fixture
+        );
+        assert_eq!(
+            serde_json::from_value::<Vec<ShortcutBinding>>(fixture).expect("the fixture parses"),
+            defaults
+        );
+    }
+
+    #[test]
+    fn actions_serialize_as_their_config_ids() {
+        for action in SHORTCUT_ACTIONS {
+            let json = serde_json::to_value(action).expect("action serializes");
+            assert_eq!(json, serde_json::Value::String(action.id().to_owned()));
+            assert_eq!(
+                serde_json::from_value::<ShortcutAction>(json).expect("action parses"),
+                *action
+            );
+        }
+        assert!(serde_json::from_str::<ShortcutAction>(r#""open_file""#).is_err());
     }
 
     #[test]
@@ -1201,7 +1368,6 @@ play-pause=Ctrl+P
                 "{json}"
             );
         }
-        assert!(serde_json::from_str::<ShortcutChord>(r#""Cmd+""#).is_err());
     }
 
     #[test]

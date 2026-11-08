@@ -360,7 +360,11 @@ directly unit-tested, and renders it in the GTK shell; cache and network are def
   modifier (`Ctrl+Alt+Shift+Cmd+Key`): Linux Ctrl chords become Cmd chords, Open File, Open URL
   and Media Info take `Cmd+O`, `Shift+Cmd+O` and `Cmd+I`, and every in-window key stays. Linux
   config text rejects a Cmd chord, because the GTK shell masks Super out and the binding could
-  never fire.
+  never fire. Over JSON a binding is `{"action": "open-file", "chord": {"key": "o",
+  "modifiers": {"ctrl": false, "alt": false, "shift": false, "cmd": true}, "label": "Cmd+O"}}`:
+  `key` is the canonical name dispatch compares, and `label` is display text that input
+  ignores. `rust/crates/okp-core/tests/fixtures/shortcuts/macos-default-bindings.json` pins the
+  macOS table in that form.
 
 ## OSC clock → `okp_core::time_code::format_clock` / subtitle delay → `okp_core::subtitle_delay` (Linux shell extraction)
 
