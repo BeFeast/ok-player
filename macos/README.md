@@ -59,6 +59,29 @@ mpv 0.36 / FFmpeg 6 and ARM64 OpenGL, CoreAudio and VideoToolbox support. Its em
 `provenance.json` records upstream source and archive hashes. This runtime has no
 Lua or bundled yt-dlp, which is why the preview is scoped to local-file playback.
 
+## GitHub-hosted build
+
+`.github/workflows/macos-player-preview.yml` builds the same app on a GitHub-hosted
+Apple Silicon runner, so a build does not wait for the one self-hosted Mac. It runs on
+demand and on pull requests that touch this shell, its build script, `brand/` or the
+Rust crates the app links. Pull requests build their head commit, not the merge preview.
+Its inputs come from public sources, each pinned by SHA-256:
+
+- The runtime is assembled from the upstream media-kit v0.7.2 release archive and the
+  mpv 0.36.0 source archive (for the headers). Its `provenance.json` is regenerated from
+  the dylibs and has to hash to the value of the Forgejo runtime package's copy. That
+  file records every dylib's SHA-256, so a match means the app bundles the same dylibs.
+- The H.264/AAC smoke fixture is generated on the runner with the static ffmpeg from
+  the imageio-ffmpeg 0.8.1 wheel on PyPI: 12 seconds of a test pattern and a 440 Hz
+  tone, 640x360 at 30 fps, H.264 High and AAC-LC 48 kHz mono.
+- Rust is the version the Rust workspace job pins, installed with rustup; Swift and the
+  SDK are the image's default Xcode.
+
+After `scripts/build-macos-preview.sh`, the job fails if a bundled binary is not arm64,
+loads a library from outside the app or keeps a build rpath, or if the signature does
+not verify. The bounded smoke runs as in the Forgejo workflow, and the artifact carries
+the same files plus the generated fixture's SHA-256.
+
 ## Verification boundary
 
 The optional bounded smoke mode opens the deterministic local fixture in a native
