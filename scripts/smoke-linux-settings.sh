@@ -202,11 +202,8 @@ if [[ "$PAGE" == "video" ]]; then
   # Playback and Updates. The shared 39x22 content request plus its 3px inset
   # renders a 45x28 horizontal track; measure the actual accent-painted bounds
   # so a stock GtkSwitch or fractional-scale vertical allocation cannot return.
-  if [[ "$COLOR_SCHEME" == "dark" ]]; then
-    switch_accent='#28b3aa'
-  else
-    switch_accent='#10938a'
-  fi
+  # brand/palette.json gives both schemes the same accent.
+  switch_accent='#2563eb'
   switch_geometry="$(
     magick "$OUT_DIR/settings.png" \
       -crop 64x64+636+120 \

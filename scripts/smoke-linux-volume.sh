@@ -456,14 +456,22 @@ color_fraction() {
     -transparent "$color" -alpha extract -negate -format '%[fx:mean]' info:
 }
 
+# The volume chrome sits on dark playback surfaces and takes the dark scheme's colours.
+palette_color() {
+  python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["dark"][sys.argv[2]])' \
+    "$ROOT/brand/palette.json" "$1"
+}
+
 if [[ "$INTERACTION_ONLY" != "1" ]]; then
+  level_color="$(palette_color accent)"
+  boost_color="$(palette_color warning)"
   for background in "${BACKGROUNDS[@]}"; do
-    teal="$(color_fraction "$OUT_DIR/$background-normal.png" '#28B3AA')"
-    amber_boost="$(color_fraction "$OUT_DIR/$background-boost.png" '#F0B840')"
-    amber_muted="$(color_fraction "$OUT_DIR/$background-muted.png" '#F0B840')"
-    if ! awk -v teal="$teal" -v boost="$amber_boost" -v muted="$amber_muted" \
-      'BEGIN { exit !(teal > 0.000005 && boost > 0.000005 && muted > 0.000005) }'; then
-      echo "$background: canonical volume colors missing: teal=$teal boost=$amber_boost muted=$amber_muted" >&2
+    level="$(color_fraction "$OUT_DIR/$background-normal.png" "$level_color")"
+    amber_boost="$(color_fraction "$OUT_DIR/$background-boost.png" "$boost_color")"
+    amber_muted="$(color_fraction "$OUT_DIR/$background-muted.png" "$boost_color")"
+    if ! awk -v level="$level" -v boost="$amber_boost" -v muted="$amber_muted" \
+      'BEGIN { exit !(level > 0.000005 && boost > 0.000005 && muted > 0.000005) }'; then
+      echo "$background: canonical volume colors missing: level=$level boost=$amber_boost muted=$amber_muted" >&2
       exit 1
     fi
 

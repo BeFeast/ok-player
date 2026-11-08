@@ -199,7 +199,12 @@ pub(crate) fn draw_about_illustration(
     cr.line_to(108.0, 54.0);
     cr.line_to(64.0, 80.0);
     cr.close_path();
-    cr.set_source_rgba(0.039, 0.396, 0.373, 0.09);
+    cr.set_source_rgba(
+        tick.red().into(),
+        tick.green().into(),
+        tick.blue().into(),
+        0.09,
+    );
     cr.set_line_width(12.0);
     let _ = cr.stroke();
 
@@ -208,9 +213,15 @@ pub(crate) fn draw_about_illustration(
     cr.line_to(64.0, 74.0);
     cr.close_path();
     let gradient = cairo::LinearGradient::new(64.0, 22.0, 108.0, 74.0);
-    gradient.add_color_stop_rgb(0.0, 0.110, 0.686, 0.635);
-    gradient.add_color_stop_rgb(0.55, 0.067, 0.541, 0.502);
-    gradient.add_color_stop_rgb(1.0, 0.039, 0.396, 0.373);
+    // The fill follows the stylesheet's palette colour for this art, deepening
+    // towards the far corner.
+    let (red, green, blue) = (
+        f64::from(tick.red()),
+        f64::from(tick.green()),
+        f64::from(tick.blue()),
+    );
+    gradient.add_color_stop_rgb(0.0, red, green, blue);
+    gradient.add_color_stop_rgb(1.0, red * 0.62, green * 0.62, blue * 0.62);
     let _ = cr.set_source(&gradient);
     cr.set_line_width(6.0);
     let _ = cr.fill_preserve();

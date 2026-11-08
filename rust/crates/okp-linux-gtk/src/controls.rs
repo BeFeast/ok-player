@@ -200,11 +200,8 @@ fn draw_timeline_rail(
     } else {
         fill_timeline_layer(cr, geometry.buffered, (1.0, 1.0, 1.0, 0.46));
     }
-    fill_timeline_layer(
-        cr,
-        geometry.played,
-        (40.0 / 255.0, 179.0 / 255.0, 170.0 / 255.0, 1.0),
-    );
+    let (red, green, blue) = palette::color(palette::Scheme::Dark, "accent").unit();
+    fill_timeline_layer(cr, geometry.played, (red, green, blue, 1.0));
 
     for mark in snapshot.marks {
         if !range.is_finite() || range <= 0.0 {
@@ -870,9 +867,9 @@ fn draw_volume_wick(cr: &cairo::Context, width: i32, height: i32, state: volume:
     if !state.is_muted() {
         let fill = (f64::from(width) - 3.0) * state.level_fraction();
         let color = if state.is_boosted() {
-            (0.941, 0.722, 0.251)
+            palette::color(palette::Scheme::Dark, "warning").unit()
         } else {
-            (0.157, 0.702, 0.667)
+            palette::color(palette::Scheme::Dark, "accent").unit()
         };
         cr.set_source_rgb(color.0, color.1, color.2);
         cr.move_to(1.5, y);
@@ -892,22 +889,19 @@ fn draw_volume_track(cr: &cairo::Context, width: i32, height: i32, state: volume
     let _ = cr.stroke();
 
     let track_span = width - 6.0;
-    let teal_end = 3.0 + track_span * state.teal_fraction();
-    if teal_end > 3.0 {
-        cr.set_source_rgba(
-            0.157,
-            0.702,
-            0.667,
-            if state.is_muted() { 0.38 } else { 1.0 },
-        );
+    let level_end = 3.0 + track_span * state.teal_fraction();
+    if level_end > 3.0 {
+        let (red, green, blue) = palette::color(palette::Scheme::Dark, "accent").unit();
+        cr.set_source_rgba(red, green, blue, if state.is_muted() { 0.38 } else { 1.0 });
         cr.move_to(3.0, y);
-        cr.line_to(teal_end, y);
+        cr.line_to(level_end, y);
         let _ = cr.stroke();
     }
     if state.is_boosted() && !state.is_muted() {
         let boost_start = 3.0 + track_span * volume::VolumeState::unity_fraction();
         let boost_end = boost_start + track_span * state.boost_fraction();
-        cr.set_source_rgb(0.941, 0.722, 0.251);
+        let (red, green, blue) = palette::color(palette::Scheme::Dark, "warning").unit();
+        cr.set_source_rgb(red, green, blue);
         cr.move_to(boost_start, y);
         cr.line_to(boost_end, y);
         let _ = cr.stroke();

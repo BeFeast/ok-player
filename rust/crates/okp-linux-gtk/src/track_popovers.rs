@@ -1564,10 +1564,17 @@ pub(crate) fn scribe_icon() -> gtk::DrawingArea {
     icon.add_css_class("okp-scribe-icon");
     icon.set_content_width(16);
     icon.set_content_height(16);
-    icon.set_draw_func(|_, cr, width, height| {
+    icon.set_draw_func(|area, cr, width, height| {
         let width = f64::from(width);
         let height = f64::from(height);
-        cr.set_source_rgba(0.06, 0.49, 0.46, 0.56);
+        // Stroke colour comes from the stylesheet's palette role.
+        let color = area.color();
+        cr.set_source_rgba(
+            color.red().into(),
+            color.green().into(),
+            color.blue().into(),
+            color.alpha().into(),
+        );
         cr.set_line_width(1.35);
         cr.set_line_cap(cairo::LineCap::Round);
         cr.set_line_join(cairo::LineJoin::Round);
@@ -2292,10 +2299,17 @@ pub(crate) fn selection_check_icon() -> gtk::DrawingArea {
     icon.set_content_width(14);
     icon.set_content_height(14);
     icon.set_valign(gtk::Align::Center);
-    icon.set_draw_func(|_, cr, width, height| {
+    icon.set_draw_func(|area, cr, width, height| {
         let width = f64::from(width);
         let height = f64::from(height);
-        cr.set_source_rgb(0.04, 0.48, 0.45);
+        // Stroke colour comes from the stylesheet's palette role.
+        let color = area.color();
+        cr.set_source_rgba(
+            color.red().into(),
+            color.green().into(),
+            color.blue().into(),
+            color.alpha().into(),
+        );
         cr.set_line_width(1.8);
         cr.set_line_cap(cairo::LineCap::Round);
         cr.set_line_join(cairo::LineJoin::Round);

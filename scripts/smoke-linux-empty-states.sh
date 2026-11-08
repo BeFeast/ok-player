@@ -153,7 +153,7 @@ capture_panel() {
 capture_panel up-next-empty up-next-empty
 capture_panel chapters-empty chapters-empty
 
-# The short queue pins its current item in teal and the no-chapters state must
+# The short queue pins its current item in the palette accent and the no-chapters state must
 # render dark copy and its bookmark action over the light panel substrate.
 up_next_red="$(magick "$OUT_DIR/up-next-empty.png" -crop 280x70+820+94 -format '%[fx:mean.r]' info:)"
 up_next_green="$(magick "$OUT_DIR/up-next-empty.png" -crop 280x70+820+94 -format '%[fx:mean.g]' info:)"
@@ -414,7 +414,7 @@ mapfile -t history_progress_runs < <(
         sub(/^.*srgb\(/, "", value)
         sub(/\).*$/, "", value)
         split(value, rgb, ",")
-        hit = rgb[2] - rgb[1] > 35 && rgb[2] - rgb[3] > 0
+        hit = rgb[3] - rgb[1] > 35 && rgb[3] - rgb[2] > 0
         if (hit && !inside) {
           print xy[2]
           inside = 1
@@ -444,7 +444,7 @@ read -r _ _ history_progress_width < <(
         sub(/^.*srgb\(/, "", value)
         sub(/\).*$/, "", value)
         split(value, rgb, ",")
-        if (rgb[2] - rgb[1] > 35 && rgb[2] - rgb[3] > 0) {
+        if (rgb[3] - rgb[1] > 35 && rgb[3] - rgb[2] > 0) {
           if (minimum == "") minimum = xy[1]
           maximum = xy[1]
         }

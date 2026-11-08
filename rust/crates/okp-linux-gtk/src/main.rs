@@ -90,6 +90,7 @@ mod mpv_bridge;
 mod native_video;
 mod nfo_title;
 mod osc_bar;
+mod palette;
 mod panels;
 mod playback;
 mod playlist_ops;

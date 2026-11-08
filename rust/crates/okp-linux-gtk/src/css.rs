@@ -7,27 +7,22 @@ use super::*;
 pub(crate) const SHELL_CORNER_RADIUS_PX: i32 = 14;
 
 pub(crate) const OKP_STYLESHEET: &str = "
-        /* Design tokens: one coherent OK Player palette. Every accent and state
-           colour below derives from these bases via alpha()/mix(), so the whole
-           shell retints from a single edit. Dark chrome and the light settings
-           surface share one teal brand accent; there is no stray adwaita blue. */
+        /* Design tokens. Brand colours are not written in this sheet: palette.rs
+           generates `@define-color okp_light_<role>` and `okp_dark_<role>` for
+           every semantic role of brand/palette.json and `stylesheet()` puts
+           them in front of it, so the shell retints from that one shared file.
+           Light surfaces use the light roles, dark surfaces the dark roles;
+           alpha()/shade() derive every state from them. */
+
+        /* The video plane is not chrome: video gets no palette tint. */
         @define-color okp_bg #050507;
-        @define-color okp_accent #28b3aa;
-        @define-color okp_accent_bright #37cfc5;
-        @define-color okp_accent_deep #229a92;
-        @define-color okp_light_bg #eef4f9;
-        @define-color okp_light_rail #eaf0f5;
-        @define-color okp_settings_light #f7f7f5;
-        @define-color okp_settings_dark #1f1f1f;
-        @define-color okp_ink #161616;
-        @define-color okp_teal #10938a;
-        @define-color okp_teal_deep #0a655f;
-        @define-color okp_danger #c42b1c;
-        @define-color okp_danger_deep #9a1f15;
-        @define-color okp_danger_dark #db3b3b;
-        @define-color okp_danger_bright #ff6868;
-        @define-color okp_warning #b07600;
-        @define-color okp_warning_deep #6f4b00;
+
+        @define-color okp_light_accent_hover shade(@okp_light_accent, 0.86);
+        @define-color okp_dark_accent_hover shade(@okp_dark_accent, 1.12);
+        @define-color okp_dark_accent_pressed shade(@okp_dark_accent, 0.86);
+        /* A filled destructive control carries a white glyph in either theme,
+           so it uses the light scheme's danger, which holds that contrast. */
+        @define-color okp_danger_fill @okp_light_danger;
 
         .okp-root {
             background: @okp_bg;
@@ -157,18 +152,18 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         button.okp-player-window-pin.is-selected {
-            background: alpha(@okp_accent, 0.24);
-            color: @okp_accent_bright;
+            background: alpha(@okp_dark_accent, 0.24);
+            color: @okp_dark_link;
         }
 
         .okp-player-window-controls button:focus-visible,
         button.okp-player-window-control:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.65);
+            box-shadow: inset 0 0 0 1px alpha(@okp_dark_focus, 0.65);
         }
 
         button.okp-player-window-close:hover {
-            background: alpha(@okp_danger_dark, 0.86);
+            background: alpha(@okp_danger_fill, 0.86);
             color: #ffffff;
         }
 
@@ -239,7 +234,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-loading-ring {
             min-width: 34px;
             min-height: 34px;
-            color: @okp_accent_bright;
+            color: @okp_dark_link;
         }
 
         .okp-loading-label {
@@ -258,7 +253,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-error-icon {
-            color: @okp_danger_bright;
+            color: @okp_dark_danger;
             -gtk-icon-size: 24px;
         }
 
@@ -284,9 +279,9 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         button.okp-error-primary {
-            background: @okp_accent;
-            border: 1px solid @okp_accent;
-            color: #041110;
+            background: @okp_dark_accent;
+            border: 1px solid @okp_dark_accent;
+            color: @okp_dark_on_accent;
         }
 
         button.okp-error-secondary {
@@ -326,22 +321,22 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-empty-primary-button {
-            background: @okp_accent_bright;
-            color: #041110;
+            background: @okp_dark_accent;
+            color: @okp_dark_on_accent;
         }
 
         .okp-empty-primary-button:hover {
-            background: @okp_accent_bright;
+            background: @okp_dark_accent_hover;
         }
 
         .okp-empty-primary-button:active {
-            background: @okp_accent_deep;
+            background: @okp_dark_accent_pressed;
         }
 
         .okp-empty-primary-button:focus-visible,
         .okp-empty-secondary-button:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.55);
+            box-shadow: 0 0 0 2px alpha(@okp_dark_focus, 0.55);
         }
 
         .okp-empty-secondary-button {
@@ -429,7 +424,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-recent-card:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.58);
+            box-shadow: 0 0 0 2px alpha(@okp_dark_focus, 0.58);
         }
 
         .okp-history-thumbnail {
@@ -439,7 +434,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-history-thumbnail-placeholder {
             border-radius: 8px;
-            background: linear-gradient(135deg, rgba(51, 57, 65, 0.96), rgba(25, 29, 35, 0.98));
+            background: linear-gradient(135deg, @okp_dark_surface_raised, @okp_dark_surface);
             border: 1px solid rgba(255, 255, 255, 0.07);
         }
 
@@ -468,7 +463,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 4px;
             border: none;
             border-radius: 0 0 0 8px;
-            background: @okp_accent_bright;
+            background: @okp_dark_accent;
         }
 
         .okp-recent-time-left {
@@ -528,7 +523,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-welcome-private-icon {
             margin-bottom: 12px;
-            color: alpha(@okp_accent_bright, 0.88);
+            color: alpha(@okp_dark_link, 0.88);
         }
 
         .okp-welcome-private-title {
@@ -570,8 +565,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         entry.okp-history-search:focus-within {
-            border-color: alpha(@okp_accent, 0.75);
-            box-shadow: 0 0 0 1px alpha(@okp_accent, 0.32);
+            border-color: alpha(@okp_dark_focus, 0.75);
+            box-shadow: 0 0 0 1px alpha(@okp_dark_focus, 0.32);
         }
 
         .okp-history-subtitle {
@@ -622,7 +617,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-history-row:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.62);
+            box-shadow: inset 0 0 0 1px alpha(@okp_dark_focus, 0.62);
         }
 
         .okp-history-row-title {
@@ -643,7 +638,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-history-row-progress-label {
-            color: alpha(@okp_accent_bright, 0.86);
+            color: alpha(@okp_dark_link, 0.86);
             font-weight: 650;
         }
 
@@ -664,7 +659,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 3px;
             border: none;
             border-radius: 3px;
-            background: @okp_accent;
+            background: @okp_dark_accent;
         }
 
         .okp-history-empty {
@@ -689,12 +684,12 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-idle-canvas.is-light {
-            background: linear-gradient(135deg, #f7f9fa, #edf3f6);
-            color: #161616;
+            background: linear-gradient(135deg, @okp_light_canvas, @okp_light_surface_raised);
+            color: @okp_light_text;
         }
 
         .okp-idle-canvas.is-dark {
-            background: linear-gradient(135deg, #232629, #1b1e21);
+            background: linear-gradient(135deg, @okp_dark_surface, @okp_dark_canvas);
             color: rgba(255, 255, 255, 0.94);
         }
 
@@ -711,8 +706,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
             padding-left: 15px;
         }
 
-        .is-light .okp-idle-titlebar-mark { color: @okp_teal; }
-        .is-dark .okp-idle-titlebar-mark { color: @okp_accent; }
+        .is-light .okp-idle-titlebar-mark { color: @okp_light_accent; }
+        .is-dark .okp-idle-titlebar-mark { color: @okp_dark_link; }
 
         .okp-idle-titlebar-text {
             font-size: 12.5px;
@@ -734,7 +729,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             padding: 0;
             border-radius: 11px;
             background: transparent;
-            box-shadow: 0 8px 22px alpha(@okp_teal_deep, 0.24);
+            box-shadow: 0 8px 22px alpha(@okp_light_accent, 0.24);
         }
 
         .okp-welcome-first-run {
@@ -749,7 +744,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             font-weight: 600;
         }
 
-        .is-light .okp-first-run-title { color: #161616; }
+        .is-light .okp-first-run-title { color: @okp_light_text; }
         .is-dark .okp-first-run-title { color: rgba(255, 255, 255, 0.94); }
 
         .okp-first-run-copy {
@@ -801,8 +796,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-empty-surface.is-drop-target button.okp-first-run-drop-target,
         .okp-empty-surface.is-drop-target button.okp-welcome-drop-target {
-            border-color: @okp_accent;
-            background: alpha(@okp_accent, 0.12);
+            border-color: @okp_dark_accent;
+            background: alpha(@okp_dark_accent, 0.12);
         }
 
         .okp-drop-primary {
@@ -810,8 +805,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
             font-weight: 600;
         }
 
-        .is-light .okp-first-run-drop-target .okp-drop-primary { color: @okp_teal_deep; }
-        .is-dark .okp-first-run-drop-target .okp-drop-primary { color: @okp_accent_bright; }
+        .is-light .okp-first-run-drop-target .okp-drop-primary { color: @okp_light_link; }
+        .is-dark .okp-first-run-drop-target .okp-drop-primary { color: @okp_dark_link; }
 
         .okp-drop-secondary {
             font-size: 11px;
@@ -828,7 +823,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             letter-spacing: 0;
         }
 
-        .is-light .okp-welcome-recents-title { color: #161616; }
+        .is-light .okp-welcome-recents-title { color: @okp_light_text; }
         .is-dark .okp-welcome-recents-title { color: rgba(255, 255, 255, 0.94); }
 
         .okp-welcome-recents-subtitle {
@@ -880,7 +875,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .is-light button.okp-recents-history-button:hover { background: rgba(0, 0, 0, 0.08); }
         .is-dark button.okp-recents-history-button:hover { background: rgba(255, 255, 255, 0.10); }
 
-        .is-light button.okp-recent-card { color: #161616; }
+        .is-light button.okp-recent-card { color: @okp_light_text; }
         .is-dark button.okp-recent-card { color: rgba(255, 255, 255, 0.94); }
 
         .is-light button.okp-recent-card:hover { background: rgba(0, 0, 0, 0.045); }
@@ -889,12 +884,12 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-history-thumbnail { border-radius: 8px; }
 
         .is-light .okp-history-thumbnail-placeholder {
-            background: linear-gradient(135deg, #d9e3e8, #bdcbd2);
+            background: linear-gradient(135deg, @okp_light_surface_raised, @okp_light_border_subtle);
             border: 1px solid rgba(0, 0, 0, 0.06);
         }
 
         .is-dark .okp-history-thumbnail-placeholder {
-            background: linear-gradient(135deg, #343a40, #202429);
+            background: linear-gradient(135deg, @okp_dark_surface_raised, @okp_dark_surface);
             border: 1px solid rgba(255, 255, 255, 0.07);
         }
 
@@ -923,7 +918,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-width: 0;
             min-height: 4px;
             border: none;
-            background: @okp_accent;
+            background: @okp_dark_accent;
         }
 
         .okp-recent-time-left {
@@ -941,7 +936,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             font-weight: 500;
         }
 
-        .is-light .okp-recent-title { color: #202020; }
+        .is-light .okp-recent-title { color: @okp_light_text; }
         .is-dark .okp-recent-title { color: rgba(255, 255, 255, 0.92); }
 
         .okp-recent-location {
@@ -972,17 +967,17 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         button.okp-idle-primary-button {
-            background: @okp_teal;
-            border: 1px solid @okp_teal;
-            color: #ffffff;
+            background: @okp_light_accent;
+            border: 1px solid @okp_light_accent;
+            color: @okp_light_on_accent;
         }
 
-        button.okp-idle-primary-button:hover { background: @okp_teal_deep; }
+        button.okp-idle-primary-button:hover { background: @okp_light_accent_hover; }
 
         .is-light button.okp-idle-secondary-button {
             background: rgba(0, 0, 0, 0.045);
             border: 1px solid rgba(0, 0, 0, 0.08);
-            color: #202020;
+            color: @okp_light_text;
         }
 
         .is-dark button.okp-idle-secondary-button {
@@ -995,7 +990,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             padding: 36px 24px;
         }
 
-        .okp-private-hero-icon { color: @okp_accent; }
+        .okp-private-hero-icon { color: @okp_dark_link; }
 
         .okp-private-hero-title {
             margin-top: 12px;
@@ -1040,7 +1035,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .is-light .okp-idle-footer-status { color: rgba(0, 0, 0, 0.40); }
         .is-dark .okp-idle-footer-status { color: rgba(255, 255, 255, 0.42); }
-        .okp-idle-footer-status:not(.is-private) { color: @okp_teal; }
+        .okp-idle-footer-status:not(.is-private) { color: @okp_light_accent; }
 
         .okp-history-page {
             padding: 30px 26px 40px;
@@ -1057,7 +1052,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             box-shadow: none;
         }
 
-        .is-light button.okp-history-back-button { background: rgba(0, 0, 0, 0.045); color: #202020; }
+        .is-light button.okp-history-back-button { background: rgba(0, 0, 0, 0.045); color: @okp_light_text; }
         .is-dark button.okp-history-back-button { background: rgba(255, 255, 255, 0.055); color: #ffffff; }
 
         .okp-history-title {
@@ -1067,7 +1062,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             letter-spacing: 0;
         }
 
-        .is-light .okp-history-title { color: #161616; }
+        .is-light .okp-history-title { color: @okp_light_text; }
         .is-dark .okp-history-title { color: rgba(255, 255, 255, 0.94); }
 
         entry.okp-history-search {
@@ -1080,7 +1075,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .is-light entry.okp-history-search {
             background: rgba(0, 0, 0, 0.035);
             border: 1px solid rgba(0, 0, 0, 0.08);
-            color: #161616;
+            color: @okp_light_text;
         }
 
         .is-dark entry.okp-history-search {
@@ -1163,13 +1158,13 @@ pub(crate) const OKP_STYLESHEET: &str = "
             box-shadow: none;
         }
 
-        .is-light button.okp-history-row { color: #161616; }
+        .is-light button.okp-history-row { color: @okp_light_text; }
         .is-dark button.okp-history-row { color: rgba(255, 255, 255, 0.92); }
         .is-light button.okp-history-row:hover { background: rgba(0, 0, 0, 0.04); }
         .is-dark button.okp-history-row:hover { background: rgba(255, 255, 255, 0.05); }
 
         .okp-history-row-title { font-size: 13px; font-weight: 500; }
-        .is-light .okp-history-row-title { color: #202020; }
+        .is-light .okp-history-row-title { color: @okp_light_text; }
         .is-dark .okp-history-row-title { color: rgba(255, 255, 255, 0.92); }
         .okp-history-row-location,
         .okp-history-row-when,
@@ -1189,7 +1184,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .is-dark .okp-history-row-when,
         .is-dark .okp-history-barely-label { color: rgba(255, 255, 255, 0.42); }
 
-        .okp-history-progress-label { color: @okp_teal; font-weight: 600; }
+        .okp-history-progress-label { color: @okp_light_accent; font-weight: 600; }
 
         .okp-history-finished-chip {
             padding: 3px 7px;
@@ -1301,8 +1296,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-width: 54px;
             min-height: 54px;
             border-radius: 14px;
-            background: alpha(@okp_accent, 0.12);
-            color: @okp_teal;
+            background: alpha(@okp_dark_accent, 0.12);
+            color: @okp_light_accent;
         }
 
         .okp-history-state-title { font-size: 16px; font-weight: 600; }
@@ -1315,9 +1310,9 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 34px;
             padding: 7px 18px;
             border-radius: 7px;
-            background: @okp_teal;
+            background: @okp_light_accent;
             border: none;
-            color: #ffffff;
+            color: @okp_light_on_accent;
             font-size: 12px;
             font-weight: 600;
         }
@@ -1351,7 +1346,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-lyrics-header {
             margin-bottom: 6px;
-            color: alpha(@okp_accent_bright, 0.90);
+            color: alpha(@okp_dark_link, 0.90);
             font-size: 11px;
             font-weight: 760;
             letter-spacing: 2px;
@@ -1398,7 +1393,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-lyrics-line:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.55);
+            box-shadow: 0 0 0 2px alpha(@okp_dark_focus, 0.55);
         }
 
         .okp-lyrics-line-plain {
@@ -1409,7 +1404,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-lyrics-empty-icon {
-            color: alpha(@okp_accent_bright, 0.80);
+            color: alpha(@okp_dark_link, 0.80);
         }
 
         .okp-lyrics-empty-text {
@@ -1481,11 +1476,11 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-compact-button:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.60);
+            box-shadow: 0 0 0 2px alpha(@okp_dark_focus, 0.60);
         }
 
         button.okp-compact-close:hover {
-            background: alpha(@okp_danger_dark, 0.86);
+            background: alpha(@okp_danger_fill, 0.86);
         }
 
         button.okp-compact-play {
@@ -1531,7 +1526,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 3px;
             border: none;
             border-radius: 2px;
-            background: @okp_accent;
+            background: @okp_dark_accent;
         }
 
         scale.okp-compact-seek slider {
@@ -1601,8 +1596,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         menubutton.okp-control-button > button:active,
         button.okp-control-button:checked,
         menubutton.okp-control-button > button:checked {
-            background: alpha(@okp_accent, 0.24);
-            border-color: alpha(@okp_accent, 0.42);
+            background: alpha(@okp_dark_accent, 0.24);
+            border-color: alpha(@okp_dark_accent, 0.42);
             color: rgba(255, 255, 255, 0.98);
         }
 
@@ -1616,7 +1611,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         button.okp-control-button:focus-visible,
         menubutton.okp-control-button > button:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.55);
+            box-shadow: 0 0 0 2px alpha(@okp_dark_focus, 0.55);
         }
 
         button.okp-play-button {
@@ -1661,7 +1656,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-control-button.is-selected {
-            background: alpha(@okp_accent, 0.22);
+            background: alpha(@okp_dark_accent, 0.22);
         }
 
         .okp-time-label {
@@ -1705,9 +1700,9 @@ pub(crate) const OKP_STYLESHEET: &str = "
             border-radius: 4px;
             background: transparent;
             box-shadow: none;
-            color: @okp_accent_bright;
+            color: @okp_dark_link;
             text-decoration-line: underline;
-            text-decoration-color: alpha(@okp_accent_bright, 0.72);
+            text-decoration-color: alpha(@okp_dark_link, 0.72);
         }
 
         button.okp-status-toast-path:hover {
@@ -1717,7 +1712,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-status-toast-path:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.62);
+            box-shadow: 0 0 0 2px alpha(@okp_dark_focus, 0.62);
         }
 
         button.okp-status-toast-path:disabled {
@@ -1728,12 +1723,12 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-update-action-surface {
             padding: 12px 14px;
             border-radius: 8px;
-            background: #f8fafb;
+            background: @okp_light_surface;
             border: 1px solid rgba(0, 0, 0, 0.06);
         }
 
         .okp-update-action-title {
-            color: @okp_ink;
+            color: @okp_light_text;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 13px;
             font-weight: 600;
@@ -1763,8 +1758,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
             padding: 5px 14px;
             border-radius: 7px;
             border: none;
-            background: @okp_teal;
-            color: #ffffff;
+            background: @okp_light_accent;
+            color: @okp_light_on_accent;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
             font-weight: 600;
@@ -1772,12 +1767,12 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         button.okp-update-primary-button:hover {
-            background: @okp_teal_deep;
+            background: @okp_light_accent_hover;
         }
 
         button.okp-update-primary-button:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_teal, 0.35);
+            box-shadow: 0 0 0 2px alpha(@okp_light_focus, 0.35);
         }
 
         button.okp-update-primary-button:disabled {
@@ -1908,7 +1903,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-volume-control.is-boosted .okp-volume-icon,
         .okp-volume-control.is-muted .okp-volume-icon {
-            color: #F0B840;
+            color: @okp_dark_warning;
         }
 
         popover.okp-volume-popover,
@@ -1985,7 +1980,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-volume-capsule.is-boosted scale.okp-volume-slider slider {
-            background: #F0B840;
+            background: @okp_dark_warning;
         }
 
         .okp-volume-capsule.is-muted scale.okp-volume-slider slider {
@@ -2017,14 +2012,14 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-volume-capsule.is-boosted button.okp-volume-readout,
         .okp-volume-capsule.is-muted button.okp-volume-readout {
-            color: #F0B840;
+            color: @okp_dark_warning;
         }
 
         entry.okp-volume-readout-input {
             padding: 2px 5px;
             border-radius: 5px;
             background: rgba(255, 255, 255, 0.10);
-            border: 1px solid @okp_accent;
+            border: 1px solid @okp_dark_accent;
             color: rgba(255, 255, 255, 0.96);
             font-size: 12px;
             font-feature-settings: 'tnum';
@@ -2068,13 +2063,13 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-side-panel-tab.is-selected {
             background: rgba(255, 255, 255, 0.96);
-            color: @okp_teal_deep;
+            color: @okp_light_link;
             box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16);
         }
 
         button.okp-side-panel-tab:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.6);
+            box-shadow: inset 0 0 0 1px alpha(@okp_light_focus, 0.6);
         }
 
         button.okp-side-panel-close {
@@ -2095,7 +2090,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-side-panel-close:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.6);
+            box-shadow: inset 0 0 0 1px alpha(@okp_light_focus, 0.6);
         }
 
         .okp-up-next-list {
@@ -2159,7 +2154,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-width: 3px;
             min-height: 34px;
             border-radius: 2px;
-            background: @okp_teal;
+            background: @okp_light_accent;
             opacity: 0;
         }
 
@@ -2186,11 +2181,11 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-bookmark-row .okp-bookmark-icon {
-            color: alpha(@okp_accent, 0.92);
+            color: alpha(@okp_light_link, 0.92);
         }
 
         .okp-up-next-list row.okp-interval-row {
-            background: alpha(@okp_teal, 0.045);
+            background: alpha(@okp_light_accent, 0.045);
             border-style: dashed;
             border-color: rgba(0, 0, 0, 0.13);
         }
@@ -2206,19 +2201,19 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-up-next-list row.okp-detect-row {
             min-height: 52px;
             margin: 2px 6px 8px 6px;
-            background: alpha(@okp_teal, 0.11);
-            border-color: alpha(@okp_teal, 0.40);
-            color: @okp_teal_deep;
+            background: alpha(@okp_light_accent, 0.11);
+            border-color: alpha(@okp_light_accent, 0.40);
+            color: @okp_light_link;
         }
 
         .okp-up-next-list row.okp-detect-row:hover {
-            background: alpha(@okp_teal, 0.17);
-            border-color: alpha(@okp_teal, 0.62);
-            color: @okp_teal_deep;
+            background: alpha(@okp_light_accent, 0.17);
+            border-color: alpha(@okp_light_accent, 0.62);
+            color: @okp_light_link;
         }
 
         .okp-detect-row .okp-detect-icon {
-            color: @okp_teal;
+            color: @okp_light_accent;
         }
 
         .okp-detect-subtitle {
@@ -2246,25 +2241,25 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-up-next-list row.okp-interval-row:focus-visible,
         .okp-up-next-list row.okp-detect-row:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 2px alpha(@okp_teal, 0.58);
+            box-shadow: inset 0 0 0 2px alpha(@okp_light_focus, 0.58);
         }
 
         .okp-up-next-list row.okp-add-bookmark-row {
             margin-top: 6px;
-            background: @okp_teal;
-            border-color: @okp_teal;
-            color: #ffffff;
+            background: @okp_light_accent;
+            border-color: @okp_light_accent;
+            color: @okp_light_on_accent;
             font-weight: 650;
         }
 
         .okp-up-next-list row.okp-add-bookmark-row:hover {
-            background: @okp_teal_deep;
-            border-color: @okp_teal_deep;
-            color: #ffffff;
+            background: @okp_light_accent_hover;
+            border-color: @okp_light_accent_hover;
+            color: @okp_light_on_accent;
         }
 
         .okp-add-bookmark-row .okp-add-bookmark-icon {
-            color: #ffffff;
+            color: @okp_light_on_accent;
         }
 
         .okp-up-next-list row.okp-add-files-row {
@@ -2272,19 +2267,19 @@ pub(crate) const OKP_STYLESHEET: &str = "
             margin: 6px;
             background: rgba(255, 255, 255, 0.44);
             border-style: dashed;
-            border-color: alpha(@okp_teal, 0.42);
-            color: @okp_teal_deep;
+            border-color: alpha(@okp_light_accent, 0.42);
+            color: @okp_light_link;
             font-weight: 650;
         }
 
         .okp-up-next-list row.okp-add-files-row:hover {
-            background: alpha(@okp_teal, 0.12);
-            border-color: alpha(@okp_teal, 0.64);
-            color: @okp_teal_deep;
+            background: alpha(@okp_light_accent, 0.12);
+            border-color: alpha(@okp_light_accent, 0.64);
+            color: @okp_light_link;
         }
 
         .okp-add-files-row .okp-add-files-icon {
-            color: alpha(@okp_accent, 0.92);
+            color: alpha(@okp_light_link, 0.92);
         }
 
         /* The lone now-playing card at the top of a short queue has no reorder /
@@ -2295,32 +2290,32 @@ pub(crate) const OKP_STYLESHEET: &str = "
             margin: 6px 6px 10px 6px;
             padding: 8px;
             border-radius: 8px;
-            background: alpha(@okp_teal, 0.12);
-            color: @okp_teal_deep;
+            background: alpha(@okp_light_accent, 0.12);
+            color: @okp_light_link;
         }
 
         .okp-now-playing-thumb {
             min-width: 54px;
             min-height: 34px;
             border-radius: 5px;
-            background: linear-gradient(135deg, #16352b, @okp_teal);
+            background: linear-gradient(135deg, @okp_dark_surface_raised, @okp_light_accent);
             color: rgba(255, 255, 255, 0.56);
         }
 
         .okp-now-playing-title {
-            color: @okp_teal_deep;
+            color: @okp_light_link;
             font-size: 12.5px;
             font-weight: 650;
         }
 
         .okp-now-playing-state {
-            color: @okp_teal;
+            color: @okp_light_accent;
             font-size: 10.5px;
             font-weight: 650;
         }
 
         .okp-up-next-row.is-current .okp-chapter-thumb {
-            border-color: alpha(@okp_accent, 0.55);
+            border-color: alpha(@okp_light_accent, 0.55);
         }
 
         .okp-up-next-row:hover {
@@ -2328,9 +2323,9 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-up-next-row.is-current {
-            background: alpha(@okp_accent, 0.10);
-            border-color: alpha(@okp_teal, 0.18);
-            color: @okp_teal_deep;
+            background: alpha(@okp_light_accent, 0.10);
+            border-color: alpha(@okp_light_accent, 0.18);
+            color: @okp_light_link;
         }
 
         .okp-up-next-row.is-behind {
@@ -2348,8 +2343,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-up-next-row.is-drop-target {
-            background: alpha(@okp_accent, 0.22);
-            border-color: alpha(@okp_accent, 0.62);
+            background: alpha(@okp_light_accent, 0.22);
+            border-color: alpha(@okp_light_accent, 0.62);
         }
 
         .okp-up-next-drag-handle {
@@ -2379,7 +2374,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-up-next-watched-icon {
-            color: @okp_teal;
+            color: @okp_light_accent;
         }
 
         .okp-up-next-source-icon {
@@ -2387,14 +2382,14 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-up-next-row.is-current .okp-up-next-source-icon {
-            color: @okp_teal_deep;
+            color: @okp_light_link;
         }
 
         .okp-now-badge {
             padding: 1px 7px;
             border-radius: 999px;
-            background: @okp_accent;
-            color: #041110;
+            background: @okp_light_accent;
+            color: @okp_light_on_accent;
             font-size: 9.5px;
             font-weight: 800;
             letter-spacing: 0;
@@ -2403,8 +2398,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-next-badge {
             padding: 1px 7px;
             border-radius: 999px;
-            background: alpha(@okp_accent, 0.18);
-            color: alpha(@okp_accent, 0.98);
+            background: alpha(@okp_light_accent, 0.18);
+            color: alpha(@okp_light_link, 0.98);
             font-size: 9.5px;
             font-weight: 760;
             letter-spacing: 0;
@@ -2418,7 +2413,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-up-next-row.is-current .okp-up-next-marker {
-            color: @okp_teal_deep;
+            color: @okp_light_link;
         }
 
         .okp-up-next-file {
@@ -2445,7 +2440,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-up-next-actions-popover {
             min-width: 142px;
             padding: 6px;
-            background: #f4f4f4;
+            background: @okp_light_surface;
         }
 
         button.okp-up-next-menu-action {
@@ -2500,8 +2495,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-track-popover-content {
             padding: 8px;
-            background: #f7f7f5;
-            color: #17191c;
+            background: @okp_light_surface;
+            color: @okp_light_text;
         }
 
         .okp-track-popover-content.okp-speed-popover {
@@ -2519,7 +2514,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         popover.okp-track-popover contents {
             padding: 0;
             border-radius: 8px;
-            background: #f7f7f5;
+            background: @okp_light_surface;
             border: 1px solid rgba(0, 0, 0, 0.16);
             box-shadow: 0 12px 34px rgba(0, 0, 0, 0.26);
         }
@@ -2534,7 +2529,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-command-surface {
             padding: 6px;
-            background: #f7f7f5;
+            background: @okp_light_surface;
         }
 
         entry.okp-command-search {
@@ -2544,18 +2539,18 @@ pub(crate) const OKP_STYLESHEET: &str = "
             border-radius: 6px;
             border: 1px solid rgba(0, 0, 0, 0.10);
             background: rgba(0, 0, 0, 0.035);
-            color: rgba(23, 25, 28, 0.92);
+            color: alpha(@okp_light_text, 0.92);
             box-shadow: none;
             font-size: 12px;
         }
 
         entry.okp-command-search > image {
             margin: 0 6px 0 8px;
-            color: rgba(23, 25, 28, 0.48);
+            color: alpha(@okp_light_text, 0.48);
         }
 
         entry.okp-command-search > text > placeholder {
-            color: rgba(23, 25, 28, 0.48);
+            color: alpha(@okp_light_text, 0.48);
         }
 
         entry.okp-command-search:hover {
@@ -2564,19 +2559,19 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         entry.okp-command-search:focus-within {
-            border-color: alpha(@okp_teal, 0.62);
-            box-shadow: inset 0 0 0 1px alpha(@okp_teal, 0.20);
+            border-color: alpha(@okp_light_focus, 0.62);
+            box-shadow: inset 0 0 0 1px alpha(@okp_light_focus, 0.20);
             background: rgba(0, 0, 0, 0.045);
         }
 
         entry.okp-command-search:disabled {
             background: rgba(0, 0, 0, 0.02);
             border-color: rgba(0, 0, 0, 0.06);
-            color: rgba(23, 25, 28, 0.42);
+            color: alpha(@okp_light_text, 0.42);
         }
 
         entry.okp-command-search:disabled > image {
-            color: rgba(23, 25, 28, 0.30);
+            color: alpha(@okp_light_text, 0.30);
         }
 
         .okp-command-scroll,
@@ -2586,7 +2581,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-command-group-title {
             margin: 10px 8px 4px 8px;
-            color: rgba(23, 25, 28, 0.50);
+            color: alpha(@okp_light_text, 0.50);
             font-size: 10px;
             font-weight: 720;
             letter-spacing: 0.04em;
@@ -2595,7 +2590,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         separator.okp-command-separator {
             min-height: 1px;
             margin: 4px 8px;
-            background: rgba(23, 25, 28, 0.12);
+            background: alpha(@okp_light_text, 0.12);
         }
 
         button.okp-command-row {
@@ -2605,13 +2600,13 @@ pub(crate) const OKP_STYLESHEET: &str = "
             border: 1px solid transparent;
             background: transparent;
             box-shadow: none;
-            color: rgba(23, 25, 28, 0.88);
+            color: alpha(@okp_light_text, 0.88);
             font-size: 12px;
         }
 
         button.okp-command-row:hover {
             background: rgba(0, 0, 0, 0.055);
-            color: #111316;
+            color: @okp_light_text;
         }
 
         button.okp-command-row:active {
@@ -2619,20 +2614,20 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         button.okp-command-row.is-selected {
-            background: alpha(@okp_teal, 0.11);
-            border-color: alpha(@okp_teal, 0.20);
-            color: #0a5f59;
+            background: alpha(@okp_light_accent, 0.11);
+            border-color: alpha(@okp_light_accent, 0.20);
+            color: @okp_light_link;
         }
 
         button.okp-command-row:disabled {
             background: transparent;
             border-color: transparent;
-            color: rgba(23, 25, 28, 0.34);
+            color: alpha(@okp_light_text, 0.34);
         }
 
         button.okp-command-row:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px alpha(@okp_teal, 0.72);
+            box-shadow: inset 0 0 0 1px alpha(@okp_light_focus, 0.72);
         }
 
         button.okp-command-back-row {
@@ -2641,7 +2636,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-command-submenu-arrow {
-            color: rgba(23, 25, 28, 0.46);
+            color: alpha(@okp_light_text, 0.46);
         }
 
         .okp-command-row-label {
@@ -2649,7 +2644,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-command-shortcut {
-            color: rgba(23, 25, 28, 0.46);
+            color: alpha(@okp_light_text, 0.46);
             font-size: 10.5px;
             font-feature-settings: 'tnum';
         }
@@ -2660,20 +2655,20 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-command-no-results-title {
-            color: rgba(23, 25, 28, 0.84);
+            color: alpha(@okp_light_text, 0.84);
             font-size: 13px;
             font-weight: 650;
         }
 
         .okp-command-no-results-hint {
-            color: rgba(23, 25, 28, 0.48);
+            color: alpha(@okp_light_text, 0.48);
             font-size: 11.5px;
         }
 
         popover.okp-command-popover.is-dark > contents,
         popover.okp-command-popover.is-dark contents,
         popover.okp-command-popover.is-dark .okp-command-surface {
-            background: #252528;
+            background: @okp_dark_surface_raised;
             border-color: rgba(255, 255, 255, 0.11);
         }
 
@@ -2697,8 +2692,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         popover.okp-command-popover.is-dark entry.okp-command-search:focus-within {
-            border-color: alpha(@okp_accent, 0.62);
-            box-shadow: inset 0 0 0 1px alpha(@okp_accent, 0.22);
+            border-color: alpha(@okp_dark_focus, 0.62);
+            box-shadow: inset 0 0 0 1px alpha(@okp_dark_focus, 0.22);
             background: rgba(255, 255, 255, 0.065);
         }
 
@@ -2792,9 +2787,9 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         popover.okp-command-popover.is-dark button.okp-command-row.is-selected {
-            background: alpha(@okp_accent, 0.16);
-            border-color: alpha(@okp_accent, 0.25);
-            color: @okp_accent_bright;
+            background: alpha(@okp_dark_accent, 0.16);
+            border-color: alpha(@okp_dark_accent, 0.25);
+            color: @okp_dark_link;
         }
 
         popover.okp-command-popover.is-dark button.okp-command-row:disabled {
@@ -2814,27 +2809,27 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-track-popover-scroll {
-            background: #f7f7f5;
+            background: @okp_light_surface;
         }
 
         .okp-track-popover-title {
             min-height: 24px;
             margin: 0 6px 4px 6px;
-            color: #17191c;
+            color: @okp_light_text;
             font-size: 12.5px;
             font-weight: 700;
         }
 
         .okp-track-group-title {
             margin: 10px 4px 4px 4px;
-            color: rgba(23, 25, 28, 0.58);
+            color: alpha(@okp_light_text, 0.58);
             font-size: 10.5px;
             font-weight: 720;
         }
 
         .okp-track-subgroup-title {
             margin: 6px 4px 2px 4px;
-            color: rgba(23, 25, 28, 0.52);
+            color: alpha(@okp_light_text, 0.52);
             font-size: 10px;
             font-weight: 640;
         }
@@ -2846,13 +2841,13 @@ pub(crate) const OKP_STYLESHEET: &str = "
             background: transparent;
             border: 1px solid transparent;
             box-shadow: none;
-            color: rgba(23, 25, 28, 0.88);
+            color: alpha(@okp_light_text, 0.88);
             font-size: 12px;
         }
 
         button.okp-track-row:hover {
             background: rgba(0, 0, 0, 0.055);
-            color: #111316;
+            color: @okp_light_text;
         }
 
         button.okp-track-row:active {
@@ -2860,9 +2855,9 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         button.okp-track-row.is-selected {
-            background: alpha(@okp_teal, 0.12);
-            border-color: alpha(@okp_teal, 0.22);
-            color: #0a5f59;
+            background: alpha(@okp_light_accent, 0.12);
+            border-color: alpha(@okp_light_accent, 0.22);
+            color: @okp_light_link;
         }
 
         button.okp-track-row.is-selected .okp-track-row-label {
@@ -2879,7 +2874,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-audio-track-detail {
-            color: rgba(23, 25, 28, 0.54);
+            color: alpha(@okp_light_text, 0.54);
             font-size: 10.5px;
         }
 
@@ -2890,17 +2885,26 @@ pub(crate) const OKP_STYLESHEET: &str = "
         button.okp-track-row:disabled {
             background: transparent;
             border-color: transparent;
-            color: rgba(23, 25, 28, 0.38);
+            color: alpha(@okp_light_text, 0.38);
         }
 
         button.okp-track-row:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px alpha(@okp_teal, 0.72);
+            box-shadow: inset 0 0 0 1px alpha(@okp_light_focus, 0.72);
         }
 
         .okp-track-check {
             min-width: 14px;
             min-height: 14px;
+            color: @okp_light_link;
+        }
+
+        .okp-scribe-icon {
+            color: alpha(@okp_light_link, 0.56);
+        }
+
+        popover.okp-command-popover.is-dark .okp-track-check {
+            color: @okp_dark_link;
         }
 
         .okp-speed-popover button.okp-track-row {
@@ -2910,17 +2914,17 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         button.okp-scribe-row {
-            color: #0a655f;
+            color: @okp_light_link;
         }
 
         button.okp-scribe-row:disabled {
-            color: rgba(10, 101, 95, 0.54);
+            color: alpha(@okp_light_link, 0.54);
         }
 
         .okp-scribe-spinner {
             min-width: 16px;
             min-height: 16px;
-            color: rgba(10, 101, 95, 0.72);
+            color: alpha(@okp_light_link, 0.72);
         }
 
         .okp-subtitle-action-icon {
@@ -2933,18 +2937,18 @@ pub(crate) const OKP_STYLESHEET: &str = "
             padding: 0 5px;
             border-radius: 4px;
             background: rgba(0, 0, 0, 0.065);
-            color: rgba(23, 25, 28, 0.52);
+            color: alpha(@okp_light_text, 0.52);
             font-size: 8.5px;
             font-weight: 720;
         }
 
         button.okp-scribe-row .okp-subtitle-action-badge {
-            background: alpha(@okp_teal, 0.12);
-            color: rgba(10, 101, 95, 0.64);
+            background: alpha(@okp_light_accent, 0.12);
+            color: alpha(@okp_light_link, 0.64);
         }
 
         button.okp-online-subtitle-row:disabled {
-            color: rgba(23, 25, 28, 0.38);
+            color: alpha(@okp_light_text, 0.38);
         }
 
         .okp-track-empty {
@@ -2954,7 +2958,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             border-radius: 4px;
             border: 1px solid transparent;
             background: transparent;
-            color: rgba(23, 25, 28, 0.48);
+            color: alpha(@okp_light_text, 0.48);
             font-size: 12px;
         }
 
@@ -2970,12 +2974,12 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-quick-delay-label {
-            color: rgba(23, 25, 28, 0.72);
+            color: alpha(@okp_light_text, 0.72);
             font-size: 12px;
         }
 
         .okp-quick-delay-value {
-            color: #0a655f;
+            color: @okp_light_link;
             font-size: 11.5px;
             font-weight: 650;
             font-feature-settings: 'tnum';
@@ -2997,7 +3001,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-quick-delay-button:focus-visible {
             outline: none;
-            box-shadow: inset 0 0 0 1px alpha(@okp_teal, 0.72);
+            box-shadow: inset 0 0 0 1px alpha(@okp_light_focus, 0.72);
         }
 
         .okp-quick-style-row {
@@ -3007,7 +3011,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-subtitle-preset-status {
             margin: 2px 7px 0;
-            color: rgba(23, 25, 28, 0.56);
+            color: alpha(@okp_light_text, 0.56);
             font-size: 10.5px;
             line-height: 1.25;
         }
@@ -3019,7 +3023,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             border: 1px solid transparent;
             background: rgba(0, 0, 0, 0.055);
             box-shadow: none;
-            color: rgba(23, 25, 28, 0.86);
+            color: alpha(@okp_light_text, 0.86);
             font-size: 11.5px;
             font-weight: 600;
         }
@@ -3030,14 +3034,14 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-quick-style-button:disabled {
             background: rgba(0, 0, 0, 0.035);
-            color: rgba(23, 25, 28, 0.48);
+            color: alpha(@okp_light_text, 0.48);
         }
 
         .okp-quick-preference-footer {
             margin: 4px -8px -8px;
             padding: 8px 14px;
             border-top: 1px solid rgba(0, 0, 0, 0.08);
-            color: rgba(23, 25, 28, 0.48);
+            color: alpha(@okp_light_text, 0.48);
             font-size: 10.5px;
         }
 
@@ -3048,7 +3052,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-settings-audio-delay-row .okp-sub-adjust-label {
-            color: rgba(23, 25, 28, 0.72);
+            color: alpha(@okp_light_text, 0.72);
             font-size: 12px;
         }
 
@@ -3058,23 +3062,23 @@ pub(crate) const OKP_STYLESHEET: &str = "
             padding: 4px 7px;
             border-radius: 6px;
             border: 1px solid rgba(0, 0, 0, 0.16);
-            background: #ffffff;
-            color: #17191c;
+            background: @okp_light_surface;
+            color: @okp_light_text;
             font-feature-settings: 'tnum';
         }
 
         .okp-settings-audio-delay-row entry.okp-sub-adjust-entry:focus {
-            border-color: alpha(@okp_teal, 0.72);
-            box-shadow: 0 0 0 2px alpha(@okp_teal, 0.14);
+            border-color: alpha(@okp_light_focus, 0.72);
+            box-shadow: 0 0 0 2px alpha(@okp_light_focus, 0.14);
         }
 
         .okp-settings-audio-delay-row entry.okp-sub-adjust-entry.is-error {
-            border-color: rgba(196, 43, 28, 0.88);
-            box-shadow: 0 0 0 2px rgba(196, 43, 28, 0.14);
+            border-color: alpha(@okp_light_danger, 0.88);
+            box-shadow: 0 0 0 2px alpha(@okp_light_danger, 0.14);
         }
 
         .okp-settings-audio-delay-row .okp-sub-adjust-unit {
-            color: rgba(23, 25, 28, 0.58);
+            color: alpha(@okp_light_text, 0.58);
             font-size: 12px;
         }
 
@@ -3085,7 +3089,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             border-radius: 6px;
             border: 1px solid rgba(0, 0, 0, 0.10);
             background: rgba(0, 0, 0, 0.035);
-            color: rgba(23, 25, 28, 0.86);
+            color: alpha(@okp_light_text, 0.86);
         }
 
         .okp-settings-audio-delay-row .okp-sub-adjust-button:hover {
@@ -3104,8 +3108,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-media-info-card {
-            background: #f7f7f5;
-            color: @okp_ink;
+            background: @okp_light_canvas;
+            color: @okp_light_text;
             border: 1px solid rgba(0, 0, 0, 0.08);
             border-radius: 11px;
             box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
@@ -3120,13 +3124,13 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-width: 38px;
             min-height: 38px;
             border-radius: 9px;
-            background: linear-gradient(150deg, @okp_teal, @okp_teal_deep);
-            box-shadow: 0 4px 12px rgba(14, 133, 132, 0.30);
-            color: #ffffff;
+            background: linear-gradient(150deg, @okp_light_accent, @okp_light_accent_hover);
+            box-shadow: 0 4px 12px alpha(@okp_light_accent, 0.30);
+            color: @okp_light_on_accent;
         }
 
         .okp-media-info-title {
-            color: #161616;
+            color: @okp_light_text;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 17px;
             font-weight: 600;
@@ -3181,9 +3185,9 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         button.okp-media-info-tab.is-active {
-            background: #ffffff;
+            background: @okp_light_surface;
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.10);
-            color: @okp_teal_deep;
+            color: @okp_light_link;
             font-weight: 600;
         }
 
@@ -3195,7 +3199,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-media-info-stack,
         .okp-media-info-scroller,
         .okp-media-info-scroller > viewport {
-            background: #f7f7f5;
+            background: @okp_light_canvas;
         }
 
         .okp-media-info-content {
@@ -3225,13 +3229,13 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-media-info-card .okp-info-section {
             padding: 13px 16px;
             border-radius: 8px;
-            background: #ffffff;
+            background: @okp_light_surface;
             border: 1px solid rgba(0, 0, 0, 0.06);
         }
 
         .okp-media-info-card .okp-info-section-title {
             margin-bottom: 11px;
-            color: #0c7c75;
+            color: @okp_light_link;
             font-size: 11px;
             font-weight: 600;
         }
@@ -3248,7 +3252,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-media-info-card .okp-info-value {
-            color: #1a1a1a;
+            color: @okp_light_text;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12.5px;
             font-weight: 500;
@@ -3256,7 +3260,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-media-info-card .okp-info-row.is-highlight .okp-info-value {
-            color: @okp_teal_deep;
+            color: @okp_light_link;
             font-weight: 600;
         }
 
@@ -3269,8 +3273,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-media-info-card .okp-info-track-row.is-selected {
-            background: alpha(@okp_teal, 0.07);
-            border-color: alpha(@okp_teal, 0.16);
+            background: alpha(@okp_light_accent, 0.07);
+            border-color: alpha(@okp_light_accent, 0.16);
         }
 
         .okp-media-info-card .okp-info-track-kind {
@@ -3282,8 +3286,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-media-info-card .okp-info-track-current {
-            background: alpha(@okp_teal, 0.14);
-            color: #0c7c75;
+            background: alpha(@okp_light_accent, 0.14);
+            color: @okp_light_link;
             font-size: 9px;
         }
 
@@ -3317,7 +3321,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         button.okp-media-info-copy {
             border: 1px solid rgba(0, 0, 0, 0.08);
             background: rgba(0, 0, 0, 0.05);
-            color: #1a1a1a;
+            color: @okp_light_text;
         }
 
         button.okp-media-info-copy:hover {
@@ -3328,13 +3332,13 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-width: 70px;
             padding: 0 18px;
             border: none;
-            background: @okp_teal;
-            color: #ffffff;
-            box-shadow: 0 3px 10px alpha(@okp_teal, 0.28);
+            background: @okp_light_accent;
+            color: @okp_light_on_accent;
+            box-shadow: 0 3px 10px alpha(@okp_light_accent, 0.28);
         }
 
         button.okp-media-info-done:hover {
-            background: #0c7c75;
+            background: @okp_light_accent_hover;
         }
 
         button.okp-media-info-close:focus-visible,
@@ -3342,14 +3346,14 @@ pub(crate) const OKP_STYLESHEET: &str = "
         button.okp-media-info-copy:focus-visible,
         button.okp-media-info-done:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_teal, 0.42);
+            box-shadow: 0 0 0 2px alpha(@okp_light_focus, 0.42);
         }
 
         window.okp-media-info-window.is-dark .okp-media-info-card,
         window.okp-media-info-window.is-dark .okp-media-info-stack,
         window.okp-media-info-window.is-dark .okp-media-info-scroller,
         window.okp-media-info-window.is-dark .okp-media-info-scroller > viewport {
-            background: #17191d;
+            background: @okp_dark_surface;
             color: rgba(255, 255, 255, 0.94);
         }
 
@@ -3398,7 +3402,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         window.okp-media-info-window.is-dark .okp-info-section-title,
         window.okp-media-info-window.is-dark .okp-info-row.is-highlight .okp-info-value,
         window.okp-media-info-window.is-dark .okp-info-track-current {
-            color: @okp_accent;
+            color: @okp_dark_link;
         }
 
         window.okp-media-info-window.is-dark .okp-media-info-scroller scrollbar slider {
@@ -3430,13 +3434,13 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         window.okp-command-dialog {
-            background: #101115;
+            background: @okp_dark_surface;
             color: rgba(255, 255, 255, 0.9);
             border-radius: 8px;
         }
 
         window.okp-command-dialog > contents {
-            background: #101115;
+            background: @okp_dark_surface;
         }
 
         .okp-command-dialog-title {
@@ -3448,7 +3452,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         window.okp-command-dialog entry {
             min-height: 34px;
             border-radius: 7px;
-            border: 1px solid alpha(@okp_accent, 0.42);
+            border: 1px solid alpha(@okp_dark_accent, 0.42);
             background: rgba(255, 255, 255, 0.055);
             color: rgba(255, 255, 255, 0.92);
             box-shadow: none;
@@ -3471,8 +3475,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         window.okp-command-dialog button:active {
-            background: alpha(@okp_accent, 0.28);
-            border-color: alpha(@okp_accent, 0.48);
+            background: alpha(@okp_dark_accent, 0.28);
+            border-color: alpha(@okp_dark_accent, 0.48);
         }
 
         window.okp-command-dialog .okp-info-label {
@@ -3485,7 +3489,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         /* Missing-tooling hint (e.g. the YouTube resolver is not installed): a warm,
            attention-drawing tint that stays calm — the state is informational, not an error. */
         window.okp-command-dialog .okp-info-label.okp-info-label-muted {
-            color: @okp_warning;
+            color: @okp_dark_warning;
         }
 
         .okp-settings-window {
@@ -3509,20 +3513,20 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-settings-root {
-            background: @okp_settings_light;
-            color: @okp_ink;
+            background: @okp_light_canvas;
+            color: @okp_light_text;
             border: none;
             border-radius: 0;
         }
 
         window.okp-settings-window {
-            background: @okp_settings_light;
+            background: @okp_light_canvas;
         }
 
         .okp-settings-titlebar {
             min-height: 41px;
             padding: 0 144px 0 16px;
-            background: @okp_settings_light;
+            background: @okp_light_canvas;
             border-bottom: 1px solid rgba(0, 0, 0, 0.05);
         }
 
@@ -3534,7 +3538,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-settings-body {
-            background: @okp_settings_light;
+            background: @okp_light_canvas;
         }
 
         .okp-settings-rail-frame {
@@ -3552,7 +3556,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             margin-bottom: 6px;
             padding: 7px 10px;
             border-radius: 7px;
-            background: #ffffff;
+            background: @okp_light_surface;
             border: 1px solid rgba(0, 0, 0, 0.09);
             box-shadow: none;
             color: rgba(0, 0, 0, 0.40);
@@ -3562,8 +3566,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         entry.okp-settings-search:focus {
-            border-color: alpha(@okp_teal, 0.68);
-            box-shadow: 0 0 0 1px alpha(@okp_teal, 0.18);
+            border-color: alpha(@okp_light_focus, 0.68);
+            box-shadow: 0 0 0 1px alpha(@okp_light_focus, 0.18);
         }
 
         /* The Windows rail states the distance from the magnifier to the query outright:
@@ -3585,13 +3589,13 @@ pub(crate) const OKP_STYLESHEET: &str = "
             padding: 6px 10px;
             border: none;
             border-radius: 7px;
-            background: alpha(@okp_teal, 0.08);
-            box-shadow: inset 2px 0 0 alpha(@okp_teal, 0.65);
-            color: @okp_ink;
+            background: alpha(@okp_light_accent, 0.08);
+            box-shadow: inset 2px 0 0 alpha(@okp_light_accent, 0.65);
+            color: @okp_light_text;
         }
 
         button.okp-settings-search-result:hover {
-            background: alpha(@okp_teal, 0.13);
+            background: alpha(@okp_light_accent, 0.13);
         }
 
         .okp-settings-search-result-label {
@@ -3613,17 +3617,17 @@ pub(crate) const OKP_STYLESHEET: &str = "
             margin-bottom: 2px;
             padding: 6px 10px;
             border-radius: 7px;
-            background: #f9fbfc;
-            border: 1px solid #d5dce2;
+            background: @okp_light_surface;
+            border: 1px solid @okp_light_border_subtle;
             box-shadow: none;
-            color: @okp_ink;
+            color: @okp_light_text;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
         }
 
         entry.okp-shortcuts-search:focus {
-            border-color: alpha(@okp_teal, 0.68);
-            box-shadow: 0 0 0 1px alpha(@okp_teal, 0.18);
+            border-color: alpha(@okp_light_focus, 0.68);
+            box-shadow: 0 0 0 1px alpha(@okp_light_focus, 0.18);
         }
 
         .okp-settings-nav-row {
@@ -3644,9 +3648,9 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-settings-nav-row.is-selected {
-            background: alpha(@okp_teal, 0.12);
-            box-shadow: inset 3px 0 0 @okp_teal;
-            color: @okp_teal_deep;
+            background: alpha(@okp_light_accent, 0.12);
+            box-shadow: inset 3px 0 0 @okp_light_accent;
+            color: @okp_light_link;
             font-weight: 600;
         }
 
@@ -3677,7 +3681,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             border-radius: 0;
             background: transparent;
             box-shadow: none;
-            color: @okp_ink;
+            color: @okp_light_text;
         }
 
         .okp-settings-window-control:hover {
@@ -3687,15 +3691,15 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-settings-window-control-glyph {
             min-width: 10px;
             min-height: 10px;
-            color: @okp_ink;
+            color: @okp_light_text;
         }
 
         button.okp-settings-window-control:hover .okp-settings-window-control-glyph {
-            color: @okp_ink;
+            color: @okp_light_text;
         }
 
         button.okp-settings-window-close:hover {
-            background: @okp_danger;
+            background: @okp_danger_fill;
         }
 
         button.okp-settings-window-close:hover .okp-settings-window-control-glyph {
@@ -3703,11 +3707,11 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-settings-stack {
-            background: @okp_settings_light;
+            background: @okp_light_canvas;
         }
 
         .okp-settings-scroller {
-            background: @okp_settings_light;
+            background: @okp_light_canvas;
         }
 
         .okp-settings-page {
@@ -3720,7 +3724,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-about-pane {
             padding: 28px 44px 0 24px;
-            background: @okp_settings_light;
+            background: @okp_light_canvas;
         }
 
         .okp-about-identity {
@@ -3733,11 +3737,11 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-about-illustration-art {
-            color: @okp_teal;
+            color: @okp_light_accent;
         }
 
         .okp-about-wordmark {
-            color: @okp_ink;
+            color: @okp_light_text;
             font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
             font-size: 30px;
             letter-spacing: 0;
@@ -3758,8 +3762,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-about-version-chip {
             padding: 3px 9px;
             border-radius: 6px;
-            background: #e2e8ec;
-            color: @okp_ink;
+            background: @okp_light_surface_raised;
+            color: @okp_light_text;
             font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
             font-size: 11.5px;
             font-weight: 600;
@@ -3769,8 +3773,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-about-channel-chip {
             padding: 4px 9px;
             border-radius: 6px;
-            background: alpha(@okp_teal, 0.12);
-            color: @okp_teal_deep;
+            background: alpha(@okp_light_accent, 0.12);
+            color: @okp_light_link;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 10px;
             font-weight: 600;
@@ -3802,7 +3806,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-about-card {
             padding: 14px 16px;
             border-radius: 8px;
-            background: #ffffff;
+            background: @okp_light_surface;
             border: 1px solid rgba(0, 0, 0, 0.06);
         }
 
@@ -3835,7 +3839,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         .okp-about-row-value,
         .okp-about-row-value-mono {
-            color: @okp_ink;
+            color: @okp_light_text;
             font-size: 12.5px;
             font-weight: 500;
         }
@@ -3866,25 +3870,25 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-about-tag.is-accent {
-            background: alpha(@okp_teal, 0.12);
-            color: @okp_teal_deep;
+            background: alpha(@okp_light_accent, 0.12);
+            color: @okp_light_link;
         }
 
         .okp-about-copy-button {
             min-height: 34px;
             padding: 0 14px;
             border-radius: 7px;
-            background: #e2e8ec;
+            background: @okp_light_surface_raised;
             border: 1px solid rgba(0, 0, 0, 0.06);
             box-shadow: none;
-            color: @okp_ink;
+            color: @okp_light_text;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
             font-weight: 600;
         }
 
         .okp-about-copy-button:hover {
-            background: #d9e1e7;
+            background: shade(@okp_light_surface_raised, 0.96);
         }
 
         .okp-about-check-button {
@@ -3892,17 +3896,17 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 34px;
             padding: 0 14px;
             border-radius: 7px;
-            background: #ffffff;
+            background: @okp_light_surface;
             border: 1px solid rgba(0, 0, 0, 0.06);
             box-shadow: none;
-            color: @okp_ink;
+            color: @okp_light_text;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
             font-weight: 400;
         }
 
         .okp-about-check-button:hover {
-            background: #f8fafb;
+            background: @okp_light_surface_raised;
         }
 
         button.okp-settings-switch {
@@ -3911,17 +3915,17 @@ pub(crate) const OKP_STYLESHEET: &str = "
             padding: 3px;
             border: none;
             border-radius: 999px;
-            background: #ccd5dc;
+            background: @okp_light_border_subtle;
             box-shadow: none;
         }
 
         button.okp-settings-switch.is-active {
-            background: @okp_teal;
+            background: @okp_light_accent;
         }
 
         button.okp-settings-switch:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 2px alpha(@okp_teal, 0.35);
+            box-shadow: 0 0 0 2px alpha(@okp_light_focus, 0.35);
         }
 
         .okp-settings-switch-knob {
@@ -3937,14 +3941,14 @@ pub(crate) const OKP_STYLESHEET: &str = "
             border: none;
             background: transparent;
             box-shadow: none;
-            color: @okp_teal_deep;
+            color: @okp_light_link;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
             font-weight: 600;
         }
 
         .okp-about-link-arrow {
-            color: @okp_teal_deep;
+            color: @okp_light_link;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
             font-weight: 600;
@@ -3968,25 +3972,25 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-mpv-conf-scroller {
             min-height: 132px;
             border-radius: 8px;
-            background: #ffffff;
+            background: @okp_light_surface;
             border: 1px solid rgba(0, 0, 0, 0.06);
         }
 
         textview.okp-mpv-conf-editor,
         textview.okp-mpv-conf-editor text {
             padding: 10px;
-            background: #ffffff;
-            color: @okp_ink;
+            background: @okp_light_surface;
+            color: @okp_light_text;
             font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
             font-size: 12px;
             font-weight: 500;
-            caret-color: @okp_teal;
+            caret-color: @okp_light_accent;
         }
 
         textview.okp-mpv-conf-editor selection,
         textview.okp-mpv-conf-editor text selection {
-            background: alpha(@okp_teal, 0.24);
-            color: @okp_ink;
+            background: alpha(@okp_light_accent, 0.24);
+            color: @okp_light_text;
         }
 
         /* Switch rows sit inside an .okp-info-section card, so they use the same
@@ -3997,7 +4001,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 42px;
             padding: 10px;
             border-radius: 8px;
-            background: #f8fafb;
+            background: @okp_light_surface;
             border: 1px solid rgba(0, 0, 0, 0.05);
         }
 
@@ -4005,8 +4009,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-width: 34px;
             padding: 3px 8px;
             border-radius: 999px;
-            background: alpha(@okp_teal, 0.12);
-            color: @okp_teal_deep;
+            background: alpha(@okp_light_accent, 0.12);
+            color: @okp_light_link;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 11px;
             font-weight: 600;
@@ -4022,24 +4026,24 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-integration-state-pill.is-good {
-            background: alpha(@okp_teal, 0.12);
-            color: @okp_teal_deep;
+            background: alpha(@okp_light_success, 0.12);
+            color: @okp_light_success;
         }
 
         .okp-integration-state-pill.is-warning {
-            background: alpha(@okp_warning, 0.14);
-            color: @okp_warning_deep;
+            background: alpha(@okp_light_warning, 0.14);
+            color: @okp_light_warning;
         }
 
         .okp-integration-state-pill.is-bad {
-            background: alpha(@okp_danger, 0.12);
-            color: @okp_danger_deep;
+            background: alpha(@okp_light_danger, 0.12);
+            color: @okp_light_danger;
         }
 
         .okp-info-section {
             padding: 14px 16px;
             border-radius: 8px;
-            background: #ffffff;
+            background: @okp_light_surface;
             border: 1px solid rgba(0, 0, 0, 0.06);
         }
 
@@ -4064,7 +4068,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-info-value {
-            color: @okp_ink;
+            color: @okp_light_text;
             font-family: 'Cascadia Code', 'Cascadia Mono', monospace;
             font-size: 12px;
             font-weight: 500;
@@ -4072,7 +4076,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-info-row.is-highlight .okp-info-value {
-            color: @okp_teal_deep;
+            color: @okp_light_link;
             font-weight: 700;
         }
 
@@ -4107,11 +4111,11 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-shortcut-row.is-conflict {
-            color: @okp_danger_deep;
+            color: @okp_light_danger;
         }
 
         .okp-shortcut-action-title {
-            color: @okp_ink;
+            color: @okp_light_text;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12.5px;
             font-weight: 500;
@@ -4127,8 +4131,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-shortcut-badge {
             padding: 2px 6px;
             border-radius: 5px;
-            background: alpha(@okp_teal, 0.12);
-            color: @okp_teal_deep;
+            background: alpha(@okp_light_accent, 0.12);
+            color: @okp_light_link;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 8.5px;
             font-weight: 600;
@@ -4139,14 +4143,14 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 30px;
             padding: 0 10px;
             border-radius: 7px;
-            background: #f8fafb;
+            background: @okp_light_surface;
             border: 1px solid rgba(0, 0, 0, 0.07);
             box-shadow: none;
-            color: @okp_ink;
+            color: @okp_light_text;
         }
 
         button.okp-shortcut-chip:hover {
-            background: #f1f5f8;
+            background: @okp_light_surface_raised;
         }
 
         button.okp-shortcut-chip.is-secondary {
@@ -4155,22 +4159,22 @@ pub(crate) const OKP_STYLESHEET: &str = "
 
         button.okp-shortcut-chip.is-empty {
             background: transparent;
-            border-color: alpha(@okp_teal, 0.18);
-            color: @okp_teal_deep;
+            border-color: alpha(@okp_light_accent, 0.18);
+            color: @okp_light_link;
         }
 
         button.okp-shortcut-chip.is-empty:hover {
-            background: alpha(@okp_teal, 0.08);
+            background: alpha(@okp_light_accent, 0.08);
         }
 
         button.okp-shortcut-chip.is-capturing {
-            background: alpha(@okp_teal, 0.12);
-            border-color: alpha(@okp_teal, 0.52);
+            background: alpha(@okp_light_accent, 0.12);
+            border-color: alpha(@okp_light_accent, 0.52);
         }
 
         button.okp-shortcut-chip.is-conflict {
-            background: alpha(@okp_danger, 0.10);
-            border-color: alpha(@okp_danger, 0.42);
+            background: alpha(@okp_light_danger, 0.10);
+            border-color: alpha(@okp_light_danger, 0.42);
         }
 
         .okp-shortcut-chip-label {
@@ -4188,14 +4192,14 @@ pub(crate) const OKP_STYLESHEET: &str = "
             background: transparent;
             border: 1px solid transparent;
             box-shadow: none;
-            color: @okp_teal_deep;
+            color: @okp_light_link;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
             font-weight: 600;
         }
 
         button.okp-shortcut-reset:hover {
-            background: alpha(@okp_teal, 0.08);
+            background: alpha(@okp_light_accent, 0.08);
         }
 
         button.okp-shortcut-reset:disabled {
@@ -4211,7 +4215,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-settings-scale highlight {
             min-height: 6px;
             border-radius: 999px;
-            background: @okp_teal;
+            background: @okp_light_accent;
         }
 
         .okp-settings-scale slider {
@@ -4226,16 +4230,16 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-width: 82px;
             min-height: 32px;
             border-radius: 7px;
-            background: #ffffff;
+            background: @okp_light_surface;
             border: 1px solid rgba(0, 0, 0, 0.06);
             box-shadow: none;
-            color: @okp_ink;
+            color: @okp_light_text;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
         }
 
         .okp-settings-button:hover {
-            background: #f8fafb;
+            background: @okp_light_surface_raised;
         }
 
         dropdown.okp-history-retention button {
@@ -4243,16 +4247,16 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 32px;
             padding: 0 10px;
             border-radius: 7px;
-            background: #ffffff;
+            background: @okp_light_surface;
             border: 1px solid rgba(0, 0, 0, 0.06);
             box-shadow: none;
-            color: @okp_ink;
+            color: @okp_light_text;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
         }
 
         dropdown.okp-history-retention button:hover {
-            background: #f8fafb;
+            background: @okp_light_surface_raised;
         }
 
         button.okp-screenshot-format-button {
@@ -4260,15 +4264,15 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         button.okp-screenshot-format-button.is-selected {
-            background: alpha(@okp_teal, 0.12);
-            border-color: alpha(@okp_teal, 0.38);
-            color: @okp_teal_deep;
+            background: alpha(@okp_light_accent, 0.12);
+            border-color: alpha(@okp_light_accent, 0.38);
+            color: @okp_light_link;
             font-weight: 650;
         }
 
         .okp-settings-button:disabled,
         .okp-settings-stepper-button:disabled {
-            background: #f2f5f8;
+            background: @okp_light_canvas;
             border-color: rgba(0, 0, 0, 0.04);
             color: rgba(0, 0, 0, 0.32);
         }
@@ -4284,7 +4288,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
             margin: 2px 0;
             padding: 14px;
             border-radius: 8px;
-            background: #f4f8fb;
+            background: @okp_light_canvas;
             border: 1px dashed rgba(0, 0, 0, 0.13);
         }
 
@@ -4304,23 +4308,23 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 34px;
             padding: 7px 10px;
             border-radius: 7px;
-            background: #f8fafb;
+            background: @okp_light_surface;
             border: 1px solid rgba(0, 0, 0, 0.04);
             box-shadow: none;
-            color: @okp_ink;
+            color: @okp_light_text;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
             font-weight: 400;
         }
 
         button.okp-settings-track-row:hover {
-            background: #f1f5f8;
+            background: @okp_light_surface_raised;
         }
 
         button.okp-settings-track-row.is-selected {
-            background: alpha(@okp_teal, 0.12);
-            border-color: alpha(@okp_teal, 0.24);
-            color: @okp_teal_deep;
+            background: alpha(@okp_light_accent, 0.12);
+            border-color: alpha(@okp_light_accent, 0.24);
+            color: @okp_light_link;
             font-weight: 600;
         }
 
@@ -4328,17 +4332,17 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 44px;
             padding: 8px 9px;
             border-radius: 7px;
-            background: #f8fafb;
+            background: @okp_light_canvas;
             border: 1px solid rgba(0, 0, 0, 0.04);
         }
 
         .okp-info-track-row.is-selected {
-            background: alpha(@okp_teal, 0.10);
-            border-color: alpha(@okp_teal, 0.18);
+            background: alpha(@okp_light_accent, 0.10);
+            border-color: alpha(@okp_light_accent, 0.18);
         }
 
         .okp-info-track-kind {
-            color: @okp_teal_deep;
+            color: @okp_light_link;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 11px;
             font-weight: 600;
@@ -4346,7 +4350,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         .okp-info-track-title {
-            color: @okp_ink;
+            color: @okp_light_text;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12.5px;
             font-weight: 600;
@@ -4355,8 +4359,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         .okp-info-track-current {
             padding: 2px 6px;
             border-radius: 5px;
-            background: alpha(@okp_teal, 0.12);
-            color: @okp_teal_deep;
+            background: alpha(@okp_light_accent, 0.12);
+            color: @okp_light_link;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 8.5px;
             font-weight: 600;
@@ -4374,17 +4378,17 @@ pub(crate) const OKP_STYLESHEET: &str = "
             min-height: 34px;
             padding: 0 14px;
             border-radius: 7px;
-            background: #e2e8ec;
+            background: @okp_light_surface_raised;
             border: 1px solid rgba(0, 0, 0, 0.06);
             box-shadow: none;
-            color: @okp_ink;
+            color: @okp_light_text;
             font-family: 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
             font-size: 12px;
             font-weight: 600;
         }
 
         .okp-info-footer-button:hover {
-            background: #d9e1e7;
+            background: shade(@okp_light_surface_raised, 0.96);
         }
 
         .okp-settings-segmented {
@@ -4412,8 +4416,8 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         button.okp-settings-segment-button.is-selected {
-            background: #ffffff;
-            color: @okp_ink;
+            background: @okp_light_surface;
+            color: @okp_light_text;
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
         }
 
@@ -4431,7 +4435,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-dark .okp-settings-scroller,
         window.okp-settings-window.is-dark .okp-settings-page,
         window.okp-settings-window.is-dark .okp-about-pane {
-            background: @okp_settings_dark;
+            background: @okp_dark_canvas;
             color: rgba(255, 255, 255, 0.94);
         }
 
@@ -4460,13 +4464,13 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         window.okp-settings-window.is-dark button.okp-settings-search-result {
-            background: alpha(@okp_accent, 0.10);
-            box-shadow: inset 2px 0 0 alpha(@okp_accent, 0.70);
+            background: alpha(@okp_dark_accent, 0.10);
+            box-shadow: inset 2px 0 0 alpha(@okp_dark_accent, 0.70);
             color: rgba(255, 255, 255, 0.90);
         }
 
         window.okp-settings-window.is-dark button.okp-settings-search-result:hover {
-            background: alpha(@okp_accent, 0.16);
+            background: alpha(@okp_dark_accent, 0.16);
         }
 
         window.okp-settings-window.is-dark .okp-settings-search-result-page {
@@ -4482,9 +4486,9 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         window.okp-settings-window.is-dark .okp-settings-nav-row.is-selected {
-            background: alpha(@okp_accent, 0.16);
-            box-shadow: inset 3px 0 0 @okp_accent;
-            color: @okp_accent;
+            background: alpha(@okp_dark_accent, 0.16);
+            box-shadow: inset 3px 0 0 @okp_dark_accent;
+            color: @okp_dark_link;
         }
 
         window.okp-settings-window.is-dark .okp-settings-footer-rule {
@@ -4501,7 +4505,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         window.okp-settings-window.is-dark button.okp-settings-window-close:hover {
-            background: @okp_danger_dark;
+            background: @okp_danger_fill;
         }
 
         window.okp-settings-window.is-dark button.okp-settings-window-control:hover .okp-settings-window-control-glyph {
@@ -4509,7 +4513,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         window.okp-settings-window.is-dark .okp-about-illustration-art {
-            color: @okp_accent;
+            color: @okp_dark_link;
         }
 
         window.okp-settings-window.is-dark .okp-about-wordmark,
@@ -4571,15 +4575,15 @@ pub(crate) const OKP_STYLESHEET: &str = "
         window.okp-settings-window.is-dark .okp-settings-state-pill,
         window.okp-settings-window.is-dark .okp-shortcut-badge,
         window.okp-settings-window.is-dark .okp-info-track-current {
-            background: alpha(@okp_accent, 0.16);
-            color: @okp_accent;
+            background: alpha(@okp_dark_accent, 0.16);
+            color: @okp_dark_link;
         }
 
         window.okp-settings-window.is-dark .okp-about-link-button,
         window.okp-settings-window.is-dark .okp-about-link-arrow,
         window.okp-settings-window.is-dark button.okp-shortcut-reset,
         window.okp-settings-window.is-dark .okp-info-row.is-highlight .okp-info-value {
-            color: @okp_accent;
+            color: @okp_dark_link;
         }
 
         window.okp-settings-window.is-dark .okp-about-link-dot {
@@ -4610,12 +4614,12 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         scale.okp-settings-scale highlight {
-            background: @okp_teal;
+            background: @okp_light_accent;
         }
 
         window.okp-settings-window.is-dark scale.okp-settings-scale highlight,
         window.okp-settings-window.is-dark button.okp-settings-switch.is-active {
-            background: @okp_accent;
+            background: @okp_dark_accent;
         }
 
         window.okp-settings-window.is-dark button.okp-settings-switch {
@@ -4623,7 +4627,7 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
 
         window.okp-settings-window.is-dark button.okp-settings-switch:focus-visible {
-            box-shadow: 0 0 0 2px alpha(@okp_accent, 0.45);
+            box-shadow: 0 0 0 2px alpha(@okp_dark_focus, 0.45);
         }
 
         window.okp-settings-window.is-dark .okp-settings-segmented {
@@ -4741,6 +4745,30 @@ pub(crate) const OKP_STYLESHEET: &str = "
             box-shadow: none;
         }
 
+        /* The shared Welcome/History rules above are written for the dark
+           base. Where they name a theme-specific role (focus, link), the light
+           theme takes its own; the dark theme gets readable emphasis in the
+           rules written for the light base. */
+        .is-light button.okp-recent-card:focus-visible {
+            box-shadow: 0 0 0 2px alpha(@okp_light_focus, 0.58);
+        }
+
+        .is-light entry.okp-history-search:focus-within {
+            border-color: alpha(@okp_light_focus, 0.75);
+            box-shadow: 0 0 0 1px alpha(@okp_light_focus, 0.32);
+        }
+
+        .is-light button.okp-history-row:focus-visible {
+            box-shadow: inset 0 0 0 1px alpha(@okp_light_focus, 0.62);
+        }
+
+        .is-light .okp-welcome-private-icon { color: alpha(@okp_light_link, 0.88); }
+        .is-light .okp-history-row-progress-label { color: alpha(@okp_light_link, 0.86); }
+        .is-light .okp-private-hero-icon { color: @okp_light_accent; }
+        .is-dark .okp-idle-footer-status:not(.is-private),
+        .is-dark .okp-history-progress-label,
+        .is-dark .okp-history-state-icon-wrap { color: @okp_dark_link; }
+
         /* #731. A widget node that takes its icon from CSS is the one kind of
            chrome icon neither a call site nor a resource path can reach: GTK's
            own stylesheet names the standard icon, and an application provider
@@ -4759,13 +4787,19 @@ pub(crate) const OKP_STYLESHEET: &str = "
         }
         ";
 
+/// The complete application stylesheet: the colour roles generated from
+/// brand/palette.json, followed by the rules that name them.
+pub(crate) fn stylesheet() -> String {
+    format!("{}{OKP_STYLESHEET}", palette::css_definitions())
+}
+
 pub(crate) fn install_css() {
     let Some(display) = gdk::Display::default() else {
         return;
     };
 
     let provider = gtk::CssProvider::new();
-    provider.load_from_data(OKP_STYLESHEET);
+    provider.load_from_data(&stylesheet());
     gtk::style_context_add_provider_for_display(
         &display,
         &provider,
@@ -4775,8 +4809,9 @@ pub(crate) fn install_css() {
 
 #[cfg(test)]
 mod tests {
-    use super::{OKP_STYLESHEET, SHELL_CORNER_RADIUS_PX};
-    use std::collections::HashSet;
+    use super::{OKP_STYLESHEET, SHELL_CORNER_RADIUS_PX, stylesheet};
+    use crate::palette::{self, ROLES, Scheme};
+    use std::collections::{HashMap, HashSet};
 
     /// The mask the native video plane cuts is driven by
     /// `SHELL_CORNER_RADIUS_PX`, while the stylesheet is a static string that
@@ -4815,27 +4850,32 @@ mod tests {
         assert!(rule.contains("background: transparent;"));
     }
 
-    /// Token names declared via `@define-color okp_<name> <value>;`.
-    fn defined_tokens() -> HashSet<String> {
-        OKP_STYLESHEET
-            .lines()
+    /// Colour names and values declared via `@define-color <name> <value>;`.
+    fn defined_colors(css: &str) -> HashMap<String, String> {
+        css.lines()
             .filter_map(|line| line.trim().strip_prefix("@define-color "))
-            .filter_map(|rest| rest.split_whitespace().next())
-            .map(str::to_owned)
+            .filter_map(|rest| {
+                let (name, value) = rest.split_once(' ')?;
+                Some((
+                    name.to_owned(),
+                    value.trim().trim_end_matches(';').to_owned(),
+                ))
+            })
             .collect()
     }
 
     #[test]
     fn every_token_reference_resolves_to_a_definition() {
-        let defined = defined_tokens();
+        let css = stylesheet();
+        let defined: HashSet<String> = defined_colors(&css).into_keys().collect();
         assert!(!defined.is_empty(), "stylesheet declares no @okp tokens");
 
         // A stray `@okp_...` typo makes GTK drop that declaration silently, so a
         // whole surface would lose its colour with no build error. Guard it.
         let mut idx = 0;
-        while let Some(pos) = OKP_STYLESHEET[idx..].find("@okp_") {
+        while let Some(pos) = css[idx..].find("@okp_") {
             let start = idx + pos + 1; // skip the leading '@'
-            let name: String = OKP_STYLESHEET[start..]
+            let name: String = css[start..]
                 .chars()
                 .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
                 .collect();
@@ -4847,50 +4887,100 @@ mod tests {
         }
     }
 
+    /// The installed stylesheet defines every semantic role of both schemes
+    /// with exactly the value brand/palette.json gives it (#791). The file is
+    /// read from disk here, independently of the copy palette.rs embeds.
     #[test]
-    fn palette_is_unified_on_the_brand_accent() {
-        // The generic adwaita blue must not reappear on any surface: the light
-        // settings chrome shares the dark player's single teal brand accent.
-        for stray in ["#0067c0", "0, 103, 192"] {
+    fn palette_roles_come_from_the_shared_brand_palette() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../brand/palette.json");
+        let json = std::fs::read_to_string(&path).expect("brand/palette.json should be readable");
+        let file: serde_json::Value =
+            serde_json::from_str(&json).expect("brand/palette.json should parse");
+        let defined = defined_colors(&stylesheet());
+
+        for scheme in Scheme::ALL {
+            for role in ROLES {
+                let expected = file[scheme.key()][role]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("palette lacks {}.{role}", scheme.key()));
+                let name = palette::css_color_name(scheme, role);
+                let actual = defined
+                    .get(&name)
+                    .unwrap_or_else(|| panic!("stylesheet does not define @{name}"));
+                assert!(
+                    actual.eq_ignore_ascii_case(expected),
+                    "@{name} is {actual}, brand/palette.json says {expected}"
+                );
+
+                let rgb = palette::color(scheme, role);
+                let hex = format!("#{:02X}{:02X}{:02X}", rgb.red, rgb.green, rgb.blue);
+                assert!(hex.eq_ignore_ascii_case(expected), "{name} drawn as {hex}");
+            }
+        }
+        assert_eq!(
+            palette::css_color_name(Scheme::Dark, "surfaceRaised"),
+            "okp_dark_surface_raised"
+        );
+    }
+
+    #[test]
+    fn retired_teal_identity_is_gone_and_brand_colours_have_one_source() {
+        let css = stylesheet().to_ascii_lowercase();
+        // The generic adwaita blue and the retired teal family must not come back.
+        for retired in [
+            "#0067c0",
+            "#28b3aa",
+            "#37cfc5",
+            "#229a92",
+            "#10938a",
+            "#0a655f",
+            "#0a5f59",
+            "#0c7c75",
+            "#041110",
+            "40, 179, 170",
+            "16, 147, 138",
+            "10, 101, 95",
+        ] {
             assert!(
-                !OKP_STYLESHEET.contains(stray),
-                "stray adwaita-blue literal `{stray}` found; use @okp_teal"
+                !css.contains(retired),
+                "retired colour literal `{retired}` found"
             );
         }
 
-        // Brand accent colours live only in their `@define-color`; every other
-        // use goes through a token so the palette retints from one edit.
-        for once in ["#28b3aa", "#37cfc5", "#10938a"] {
-            let count = OKP_STYLESHEET.matches(once).count();
-            assert!(
-                count <= 1,
-                "accent colour `{once}` should only appear in its @define-color, found {count}"
-            );
-        }
-        for gone in ["40, 179, 170", "16, 147, 138"] {
-            assert!(
-                !OKP_STYLESHEET.contains(gone),
-                "raw accent literal `{gone}` should be replaced by a token"
-            );
+        // Palette values reach the rules only through the generated roles, so
+        // the static sheet keeps no copy of them. White is exempt: it is also
+        // the neutral knob and high-contrast colour, not only a palette role.
+        let rules = OKP_STYLESHEET.to_ascii_lowercase();
+        for scheme in Scheme::ALL {
+            for role in ROLES {
+                let rgb = palette::color(scheme, role);
+                let hex = format!("#{:02x}{:02x}{:02x}", rgb.red, rgb.green, rgb.blue);
+                if hex != "#ffffff" {
+                    assert!(
+                        !rules.contains(&hex),
+                        "{} {role} {hex} copied into the static sheet",
+                        scheme.key()
+                    );
+                }
+            }
         }
     }
 
     #[test]
     fn shell_surface_roles_remain_distinct() {
+        let defined = defined_colors(&stylesheet());
         let value = |name: &str| {
-            OKP_STYLESHEET
-                .lines()
-                .map(str::trim)
-                .find_map(|line| line.strip_prefix(&format!("@define-color {name} ")))
-                .and_then(|value| value.strip_suffix(';'))
+            defined
+                .get(name)
                 .expect("surface token should be defined")
+                .clone()
         };
-        let dark = value("okp_bg");
-        let light = value("okp_light_bg");
-        let rail = value("okp_light_rail");
-        assert_ne!(dark, light);
-        assert_ne!(dark, rail);
-        assert!(dark.starts_with('#') && light.starts_with('#') && rail.starts_with('#'));
+        let video = value("okp_bg");
+        assert_ne!(video, value("okp_light_canvas"));
+        assert_ne!(video, value("okp_dark_canvas"));
+        assert_ne!(value("okp_light_canvas"), value("okp_light_surface"));
+        assert_ne!(value("okp_dark_canvas"), value("okp_dark_surface"));
     }
 
     #[test]

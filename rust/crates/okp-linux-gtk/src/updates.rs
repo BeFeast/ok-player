@@ -2723,7 +2723,7 @@ pub(crate) fn settings_appearance_section(
         "Custom captionless controls",
     ));
     section.append(&settings_value_row("Fullscreen caption", "Hidden"));
-    section.append(&settings_value_row("Accent", "OK teal"));
+    section.append(&settings_value_row("Accent", "BeFeast blue"));
     section
 }
 

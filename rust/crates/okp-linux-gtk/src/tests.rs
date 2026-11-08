@@ -318,13 +318,11 @@ fn floating_volume_css_pins_capsule_geometry_motion_and_state_colors() {
         "min-height: 14px;",
         "transition: opacity 150ms cubic-bezier(0.25, 0.1, 0.25, 1), transform 150ms cubic-bezier(0.25, 0.1, 0.25, 1);",
         "transition: opacity 120ms cubic-bezier(0.25, 0.1, 0.25, 1), transform 120ms cubic-bezier(0.25, 0.1, 0.25, 1);",
-        "#F0B840",
     ] {
         assert!(css.contains(required), "missing volume CSS: {required}");
     }
 
     let controls = include_str!("controls.rs");
-    assert!(controls.contains("(0.157, 0.702, 0.667)")); // #28B3AA
     assert!(controls.contains("VolumeState::unity_fraction()"));
 }
 
@@ -3867,7 +3865,7 @@ fn compact_mode_keeps_the_render_surface_and_restores_standard_chrome() {
         "min-width: 28px;",
         "min-height: 28px;",
         "background: rgba(22, 22, 25, 0.56);",
-        "background: @okp_accent;",
+        "background: @okp_dark_accent;",
         "min-width: 80px;",
         "min-height: 20px;",
         "font-feature-settings: 'tnum';",
