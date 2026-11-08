@@ -172,7 +172,7 @@ Single consolidated source of truth. IDs cross-reference the detailed requiremen
 | History, configurable retention, private mode, clear history (§12) | State | MVP |
 | Empty / "Continue watching" surface (§14 / 2.2) | State / UX | MVP |
 | Launch-with-resume + progress report-back to library (§13.1) | Integration | MVP |
-| `ok-player://` URI scheme registration (§13.2) | Integration | Reserve now / external control Later |
+| `ok-player://` links: `open` / `add` / `next` from user pages (§13.4) | Integration | Linux v1 (ships with #849); Windows + macOS Later |
 | JSON app index + media sidecars, no DB (§13.3) | Storage | MVP |
 | Mini-player / PiP; compact "music" mode (§14 / 2.10, 2.11) | UX / Window | MVP |
 | Settings (8 panels) + context menu + OSD toasts (§14) | UX | MVP |
@@ -423,7 +423,8 @@ Companion Library App                      OK Player
         │◄── watched(file)           ────────│ (near-end)   │
         └────────────────────────────────────┴──────────────┘
    MVP: process invocation / CLI args + local report channel
-   Later: ok-player:// URI · shared DB · cross-device (homelab)
+   v1 (Linux): ok-player:// links from user pages, inbound only (§13.4)
+   Later: shared DB · cross-device (homelab)
 ```
 Report-back cadence/channel is an implementation choice (CLI/callback/local IPC); keep it pluggable so the Later shared-DB model can replace it without UX change.
 
@@ -451,7 +452,7 @@ Rules:
 ### 13.4 Topology & reserved seams
 - **Local-only** for now — no cross-device sync; handoff and report-back are between two local processes.
 - **Homelab door open:** keep the transport abstraction clean so a future homelab-hosted shared store / sync (and Scribe networking) is not blocked by a hard "localhost-only" assumption. Do not implement remote endpoints now.
-- **`ok-player://` URI scheme** — **reserve the scheme now** (clean registration). MVP launch-with-resume uses process invocation / CLI args; external programmatic control via the URI is **[Later]**.
+- **`ok-player://` links** — **active in v1 on Linux** (ships with #849; the scheme had been reserved since 0.11.0-beta.1). A page the user writes (a local `file://` HTML page, a web app on the local network) starts or feeds the player with `ok-player://open|add|next?url=…|path=…[&t=…]`: `open` plays and presents; while something plays, `add` appends to Up Next and `next` inserts after the current item, both without raising the window; with nothing playing both act as `open`. One parser and one policy live in `okp-core`; shells execute the typed plan it returns (freeze boundary). Targets are `http(s)` URLs or existing local regular files; any other target, playlist and subtitle files included, is rejected with a visible toast, and nothing from a link ever becomes an engine option. Links are inbound only: no response channel, no remote-control verbs (MPRIS covers those), no signing or per-site allowlists. Windows and macOS follow against the same contract **[Later]**. The companion-library launch-with-resume keeps using process invocation / CLI args (§13.1). Normative contract: [`ok-player-links.md`](ok-player-links.md).
 
 ---
 
@@ -604,7 +605,7 @@ instance instead of stacking another. Curated-simplicity = 3/10 — smart defaul
 | **Video** | Hardware decoding (auto), HDR handling (Later: tone-map/passthrough — shown future/disabled), **"Rarely used" group** (aspect, zoom/pan, rotate, deinterlace). No upscaling/shaders (absent by design). | Geometry collapsed by default. |
 | **Audio** | Output device, volume boost >100% cap, default audio delay. Normalization is a non-exposed sensible default (no control). | Lightly exposed. |
 | **Shortcuts** | **Keybinding remap editor** (§15.2): searchable action list, current-binding chips, click-to-rebind, conflict detection, reset-to-defaults. | MVP / early. |
-| **Integration** | Companion-library link/handshake, **URI scheme `ok-player://`** (reserved), SMTC/media keys, taskbar thumbnail toolbar + jump list, Discord Rich Presence, global hotkeys, **file associations** helper. | File-assoc routes through the **system picker** (Win11 25H2 caveat — guide, don't claim; §17.5). |
+| **Integration** | Companion-library link/handshake, **`ok-player://` links** (handler state; Linux v1, §13.4), SMTC/media keys, taskbar thumbnail toolbar + jump list, Discord Rich Presence, global hotkeys, **file associations** helper. | File-assoc routes through the **system picker** (Win11 25H2 caveat — guide, don't claim; §17.5). |
 | **Advanced** | **Custom `mpv.conf` snippet** editor (monospace, validate/apply), screenshot format/path, history retention + **private mode** + **Clear history**, logs/diagnostics, reset all. | Developer escape hatch. |
 
 **States:** Default · Modified (unsaved — apply/revert if not live-applied) · Invalid input (bad mpv.conf/path — inline error) · Search-filtered · Feature-disabled (Day-2/Later items shown muted with a "soon" tag to reserve the slot).
@@ -839,7 +840,7 @@ OK Player earns its elegance by **declining** scope. These are out of scope by d
 - **Online subtitle search/download**, advanced sync (auto-sync by audio, FPS stretch, per-show memory), dual simultaneous subtitles, image/ASS/WebVTT subtitle formats — *[Day-2]/[Later]* per §7.
 - **Clip/GIF export** of A–B selection — *[Day-2]*.
 - **HDR** tone-map / passthrough — *[Later]*.
-- **`ok-player://` external programmatic control** — scheme reserved now, control *[Later]*.
+- **`ok-player://` links on Windows and macOS** — v1 is Linux-only (§13.4); the other shells adopt the same contract *[Later]*. Remote-control verbs through links (`pause`/`seek`/`stop`) are not planned; MPRIS covers them.
 
 ---
 
@@ -864,6 +865,6 @@ Decisions for the user before/during build. Each notes a recommended default so 
 10. **"Mica subtle, not glassy" calibration** — agree the exact material/tint per surface (titlebar vs. panels vs. OSC) against the reference apps before broad UI build, so the look is locked once.
 
 **Cross-cutting / future-facing (reserve space, don't build)**
-11. **`ok-player://` URI scheme** — reserve now (cheap), even though external control is *[Later]*; confirm the user wants it registered at MVP for the companion-library handoff.
+11. **`ok-player://` URI scheme** — *Resolved:* the scheme was registered early and is activated in v1 on Linux for links from user pages (`open` / `add` / `next`, §13.4, [`ok-player-links.md`](ok-player-links.md)). The companion-library handoff stays on CLI args (§13.1); Windows and macOS follow *[Later]*.
 
 > **Resolved (was an open IA question):** *Where do theme/accent/Mica-intensity live in Settings?* — **Resolved** by adding a dedicated **Appearance** panel as the 8th Settings panel (§14 / 2.9, §16.3). The brief's seven functional panels are preserved; Appearance is additive so the designer can place all theming controls without ambiguity.

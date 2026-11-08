@@ -70,7 +70,8 @@ once playback progresses.
 Progress is written periodically while playing and once more when the file is
 closed/replaced. There is no push/callback channel yet — a companion app polls or
 watches the file. A future revision may add a push channel (CLI callback / local
-IPC / `ok-player://`) without changing this schema.
+IPC) without changing this schema. `ok-player://` links are inbound only: they never
+answer the page that opened them.
 
 ## Inbound: launch-with-resume
 
@@ -114,27 +115,42 @@ OkPlayer.exe "C:\media\show\s01e03.mkv" --sub no          # start with subtitles
 - Track ids are file-specific — the library is expected to pass an id it learned from
   a prior probe of the same file.
 
-## Reserved `ok-player://` scheme (Linux)
+## `ok-player://` links (Linux)
 
-The player **reserves** the `ok-player://` URI scheme now (PRD §13.4) so packaging and
-desktop integration can register it cleanly, but external programmatic control through it
-is **[Later]**. Today the MVP handoff is process/CLI based (the launch-with-resume contract
-above); the scheme exists only to hold the seam.
+A page the user writes, such as a local `file://` HTML page or a web app on the local
+network, can start the player with a link such as
+`ok-player://open?url=<encoded http(s) URL>&t=90` or
+`ok-player://add?path=<encoded absolute path>`. The full v1 contract (grammar, encoding,
+accepted targets, behaviour per action, rejections, browser notes) is
+[`ok-player-links.md`](ok-player-links.md); PRD §13.4 records the product decision. It ships
+with #849. v1 covers the Linux player only; Windows and macOS follow against the same
+contract.
+
+How links relate to the command-line contract above:
+
+- `t=` (alias `resume=`) is the link equivalent of `--resume`. It accepts the same forms:
+  seconds, `m:ss` and `h:mm:ss`.
+- Track preselection (`--sub`, `--audio`) has no link equivalent. Such keys in a link are
+  ignored like any unknown key, and no engine option ever travels through a link.
+- A command line that carries an `ok-player:` argument must carry exactly that one
+  positional argument; otherwise the whole launch is rejected and none of its switches are
+  honoured. A launcher that needs `--resume` or `--sub` invokes the player directly, not
+  through a link.
+- Links never report anything back. Progress and watched state still come from the app
+  index described above.
+
+Registration and diagnostics:
 
 - **Registration.** The `.deb` desktop entry advertises `x-scheme-handler/ok-player` in its
   `MimeType=` line and launches with `Exec=ok-player %U`, so `update-desktop-database`
   (run from the package `postinst`) makes OK Player the handler for `ok-player://…`. The
   Velopack/AppImage lane generates its own desktop entry; where its packaging cannot claim
-  the scheme, the app **diagnoses** the state instead of pretending it is registered.
-- **Diagnostics.** Settings → Integration shows a **URI scheme** row (and a
-  `Reserved URI scheme (ok-player://)` line in *Copy Diagnostics*) reporting whether the
-  scheme is advertised by an installed desktop entry and, where `xdg-mime` is available,
-  whether OK Player is its current handler.
-- **Handling.** A received `ok-player://…` request (from the launch command line, a
-  second-instance invocation, an `org.mpris…OpenUri` call, or the in-app Open URL box) is
-  **parsed and reported, never played**. A well-formed request surfaces a local notice that
-  external control is reserved and names the parsed command; a malformed request is rejected
-  the same way. No `ok-player://` token is ever handed to the media engine, so an
-  unsupported command fails with a clear local error rather than undefined playback. The
-  parser is the engine-agnostic `okp-core::ok_player_uri`; the scheme accepts no command
-  yet, so nothing is silently executed.
+  the scheme, the app **diagnoses** the state instead of pretending it is registered. The
+  Flatpak build does not handle links in v1.
+- **Diagnostics.** Settings → Integration shows a URI scheme row, and *Copy Diagnostics*
+  has a matching line, reporting whether the scheme is advertised by an installed desktop
+  entry and, where `xdg-mime` is available, whether OK Player is its current handler.
+- **Handling.** Every entry point (the launch command line, a second-instance invocation,
+  an `org.mpris…OpenUri` call, and the in-app Open URL box) goes through the same parser and
+  policy, `okp-core::ok_player_uri`. A rejected link shows a fixed-text toast and writes one
+  log line; it never reaches the media engine.

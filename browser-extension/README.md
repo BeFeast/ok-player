@@ -28,8 +28,13 @@ only that the launch request started; it does not claim playback succeeded.
 The existing OK Player CLI and its single-instance handoff remain responsible
 for opening the URL and recording it in player history. This integration does
 not add a local server, downloader, browser-cookie access, remote-control
-commands, or a global HTTP/HTTPS handler. The reserved `ok-player://` scheme is
-unchanged.
+commands, or a global HTTP/HTTPS handler.
+
+The extension does not use `ok-player://` links. It starts the player directly
+through native messaging, so it needs neither the scheme handler nor the
+browser's external-app prompt. A page that should start OK Player without the
+extension can use an `ok-player://` link instead; see
+[`docs/ok-player-links.md`](../docs/ok-player-links.md) (Linux, v1).
 
 ## Install
 
