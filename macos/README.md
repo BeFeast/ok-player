@@ -304,11 +304,15 @@ window and checks, from the session's events and the video layer's counters:
 - the position and the render calls advance while playing;
 - while paused, the position holds and the render calls stay flat for two seconds;
 - both advance again after resuming;
-- six window resizes during playback create no further GL context;
+- after six window resizes during playback, Core Animation holds exactly one GL
+  context (each `copyCGLContext` but one is balanced by `releaseCGLContext`) and
+  has drawn into no context but the layer's own;
+- every frame drawn reported a swap that reached libmpv: the count
+  `okp_session_render_report_swap` returns equals the frames drawn;
 - closing the window during playback tears down in order (close, destroy the
   render context, free the session).
 
-Its `OKP_SMOKE` line also reports the swap count, the pixel format, and the
+Its `OKP_SMOKE` line also reports those counts, the pixel format, and the
 volume and track count from the session snapshot. The complete app is copied
 to a new directory and launched with `DYLD_LIBRARY_PATH` unset. A separate 40-second
 process deadline prevents a blocked render callback from keeping the job alive.

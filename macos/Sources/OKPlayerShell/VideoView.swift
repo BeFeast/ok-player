@@ -7,15 +7,26 @@ import QuartzCore
 /// The CGL pixel format and context the video layer draws with: one of each for
 /// the life of the layer, whatever happens to the window's size or screen.
 final class GLSurface {
-    /// Contexts every surface created so far. The smoke checks that resizing the
-    /// window creates none.
-    private(set) static var contextsCreated = 0
+    /// What Core Animation has done with the context so far: how often
+    /// `copyCGLContext` handed it out, how many of those came back through
+    /// `releaseCGLContext`, and every context it drew into. The smoke checks that
+    /// resizing the window leaves exactly one context held and drawn into.
+    struct ContextUse {
+        var copies = 0
+        var releases = 0
+        var drawnInto: Set<CGLContextObj> = []
+        /// Contexts Core Animation holds now.
+        var held: Int { copies - releases }
+    }
 
     let pixelFormat: CGLPixelFormatObj
     let context: CGLContextObj
     /// The colour buffer has floating-point components (16 bits each), so EDR
     /// output later is a layer flag, not a new renderer.
     let floatColor: Bool
+
+    private let useLock = NSLock()
+    private var use = ContextUse()
 
     private init(pixelFormat: CGLPixelFormatObj, context: CGLContextObj, floatColor: Bool) {
         self.pixelFormat = pixelFormat
@@ -53,10 +64,22 @@ final class GLSurface {
                 CGLReleasePixelFormat(pixelFormat)
                 continue
             }
-            contextsCreated += 1
             return GLSurface(pixelFormat: pixelFormat, context: context, floatColor: floatColor)
         }
         return nil
+    }
+
+    /// Core Animation's context use; read from any thread.
+    var contextUse: ContextUse {
+        useLock.lock()
+        defer { useLock.unlock() }
+        return use
+    }
+
+    fileprivate func noteContextUse(_ change: (inout ContextUse) -> Void) {
+        useLock.lock()
+        change(&use)
+        useLock.unlock()
     }
 
     /// Run `body` with the context locked and current on this thread, as every
@@ -119,7 +142,9 @@ final class VideoLayer: CAOpenGLLayer {
 
     required init?(coder: NSCoder) { fatalError("Use init(surface:)") }
 
-    /// Frames drawn and swaps reported so far; read from any thread.
+    /// Frames drawn and presented, counted here, and the swaps the session says
+    /// reached libmpv, as `okp_session_render_report_swap` returned last; read
+    /// from any thread. Each presented frame reports one swap, so the two match.
     var counts: (renders: Int, swaps: Int) {
         countersLock.lock()
         defer { countersLock.unlock() }
@@ -185,10 +210,10 @@ final class VideoLayer: CAOpenGLLayer {
         drawing = false
         if renderFailed { reportError("Video rendering failed") }
         guard drewFrame else { return }
-        surface.withCurrentContext { okp_session_render_report_swap(session) }
+        let reported = surface.withCurrentContext { okp_session_render_report_swap(session) }
         countersLock.lock()
         renders += 1
-        swaps += 1
+        swaps = Int(reported)
         countersLock.unlock()
     }
 
@@ -204,7 +229,15 @@ final class VideoLayer: CAOpenGLLayer {
     }
 
     override func copyCGLContext(forPixelFormat pf: CGLPixelFormatObj) -> CGLContextObj {
-        CGLRetainContext(surface.context)
+        // Core Animation hands the context back through `releaseCGLContext`.
+        surface.noteContextUse { $0.copies += 1 }
+        return CGLRetainContext(surface.context)
+    }
+
+    override func releaseCGLContext(_ c: CGLContextObj) {
+        surface.noteContextUse { $0.releases += 1 }
+        // The default implementation releases the context.
+        super.releaseCGLContext(c)
     }
 
     override func canDraw(inCGLContext ctx: CGLContextObj, pixelFormat pf: CGLPixelFormatObj,
@@ -216,6 +249,7 @@ final class VideoLayer: CAOpenGLLayer {
 
     override func draw(inCGLContext ctx: CGLContextObj, pixelFormat pf: CGLPixelFormatObj,
                        forLayerTime t: CFTimeInterval, displayTime ts: UnsafePointer<CVTimeStamp>?) {
+        surface.noteContextUse { _ = $0.drawnInto.insert(ctx) }
         // Core Animation sets the viewport to the layer's size in pixels.
         var viewport = [GLint](repeating: 0, count: 4)
         glGetIntegerv(GLenum(GL_VIEWPORT), &viewport)

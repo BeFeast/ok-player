@@ -293,8 +293,11 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 /// 2. playing: the position and the render calls advance;
 /// 3. paused: the position holds and the render calls stay flat for two seconds;
 /// 4. resumed: both advance again;
-/// 5. resized: repeated window resizes create no further GL context;
-/// 6. closed while playing: teardown runs in order and the app exits.
+/// 5. resized: after repeated window resizes Core Animation holds exactly one GL
+///    context and has drawn into no context but the layer's own;
+/// 6. presented: every frame drawn reported a swap that reached libmpv (the swap
+///    count the session returns equals the frames drawn);
+/// 7. closed while playing: teardown runs in order and the app exits.
 ///
 /// The timed steps use one-shot timers; the session state itself arrives through
 /// wakeup-driven drains, never through polling.
@@ -385,19 +388,26 @@ final class SmokeRun {
     }
 
     private func finish() {
-        guard let app, let client = app.client, !cancelled else { return }
-        guard GLSurface.contextsCreated == 1 else {
-            fail("\(GLSurface.contextsCreated) GL contexts after resizing"); return
+        guard let app, let client = app.client, let layer = app.video?.videoLayer, !cancelled else { return }
+        let surface = layer.surface
+        let use = surface.contextUse
+        guard use.held == 1, use.drawnInto == [surface.context] else {
+            fail("Core Animation holds \(use.held) GL contexts (\(use.copies) copied, \(use.releases) released) "
+                 + "and drew into \(use.drawnInto.count) after resizing"); return
         }
         guard renders > resizeRenders else { fail("No render calls while resizing during playback"); return }
+        let counts = layer.counts
+        guard counts.swaps == counts.renders else {
+            fail("\(counts.swaps) swaps reached libmpv for \(counts.renders) frames drawn"); return
+        }
         phase = .finished
         let snapshot = client.store.snapshot
-        let counts = app.video?.videoLayer.counts ?? (renders: 0, swaps: 0)
-        let pixelFormat = app.video?.videoLayer.surface.floatColor == true ? "float16" : "rgba8"
+        let pixelFormat = surface.floatColor ? "float16" : "rgba8"
         print("OKP_SMOKE loaded=true progressed=true pause=true resume=true idle_render_calls=0 paused_render_calls=0 "
               + "render_calls=\(counts.renders) swaps=\(counts.swaps) before_pause=\(playingRenders) "
-              + "before_resize=\(resizeRenders) gl_contexts=\(GLSurface.contextsCreated) "
-              + "pixel_format=\(pixelFormat) volume=\(Int(snapshot.volume ?? -1)) tracks=\(snapshot.tracks.count)")
+              + "before_resize=\(resizeRenders) ca_contexts_held=\(use.held) ca_context_copies=\(use.copies) "
+              + "draw_contexts=\(use.drawnInto.count) pixel_format=\(pixelFormat) "
+              + "volume=\(Int(snapshot.volume ?? -1)) tracks=\(snapshot.tracks.count)")
         if let directory = app.snapshotDirectory { app.captureAppearances(to: directory) }
         // Closing the window during playback runs the real teardown path; the app
         // reports it once teardown has returned.
