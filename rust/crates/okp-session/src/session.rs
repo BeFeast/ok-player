@@ -151,7 +151,15 @@ impl Session {
     /// the previous wakeup is not running and will not be called again. If
     /// events are already waiting, the new wakeup fires promptly.
     pub fn set_wakeup(&self, wakeup: Option<Wakeup>) {
-        *lock(&self.shared.wakeup) = wakeup;
+        let mut slot = lock(&self.shared.wakeup);
+        let installed = wakeup.is_some();
+        *slot = wakeup;
+        if installed {
+            // The new wakeup has not been told about a batch that is still
+            // waiting, so it gets its own announcement.
+            lock(&self.shared.state).armed = true;
+        }
+        drop(slot);
         self.shared.signal.notify();
     }
 
@@ -783,17 +791,23 @@ mod tests {
     }
 
     #[test]
-    fn a_replaced_wakeup_is_never_called_again() {
+    fn a_new_wakeup_learns_of_the_waiting_batch_and_the_old_one_goes_quiet() {
         let (session, engine) = fake_session();
         let first = counting_wakeup(&session);
         assert!(wait_for(|| first.load(Ordering::SeqCst) == 1));
+
+        // The first batch is still undrained when the wakeup is replaced.
         let second = counting_wakeup(&session);
+        assert!(
+            wait_for(|| second.load(Ordering::SeqCst) == 1),
+            "the new wakeup was not told about the waiting batch"
+        );
         session.drain_events();
         engine.publish(
             |observation| observation.playback.volume = Some(7.0),
             vec![],
         );
-        assert!(wait_for(|| second.load(Ordering::SeqCst) == 1));
+        assert!(wait_for(|| second.load(Ordering::SeqCst) == 2));
         assert_eq!(first.load(Ordering::SeqCst), 1);
     }
 
