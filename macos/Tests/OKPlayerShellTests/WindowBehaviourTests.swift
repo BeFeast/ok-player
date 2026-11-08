@@ -21,8 +21,9 @@ private final class ManualTimer: ClickTimer {
 }
 
 /// The player window's decisions (#881): which keys and clicks toggle
-/// fullscreen, how clicks become pause or fullscreen, when the window is fitted,
-/// what the aspect lock is and what the chrome shows.
+/// fullscreen, how clicks become pause or fullscreen, what size a resize settles
+/// on and what the chrome shows. PlayerWindowControllerTests drives the same
+/// rules through a real window.
 final class WindowBehaviourTests: XCTestCase {
     // MARK: Fullscreen command routing
 
@@ -145,32 +146,67 @@ final class WindowBehaviourTests: XCTestCase {
         XCTAssertEqual(fullscreens(), 0)
     }
 
-    // MARK: Fit and aspect
+    // MARK: Resize aspect
 
-    private func snapshot(video: VideoGeometry?) -> SessionSnapshot {
-        SessionSnapshot(status: video == nil ? .opening : .playing, video: video)
+    private let bar = CGSize(width: 0, height: 48)
+    private let minimum = CGSize(width: 420, height: 280)
+    private let wide = CGSize(width: 640, height: 360)
+
+    /// How far the video area (`size` less `chrome`) is from the aspect of `video`, in points of width.
+    private func aspectError(_ size: CGSize, video: CGSize, chrome: CGSize) -> CGFloat {
+        abs((size.width - chrome.width) - (size.height - chrome.height) * video.width / video.height)
     }
 
-    func testAnOpenIsFittedOnceToItsFirstVideoSize() {
-        let film = VideoGeometry(width: 1920, height: 800, displayAspect: 2.4)
-        var fit = InitialWindowFit()
-        XCTAssertNil(fit.take(snapshot(video: film)), "no fit before anything was opened")
-        fit.beginOpen()
-        XCTAssertNil(fit.take(snapshot(video: nil)), "the size is not known while opening")
-        XCTAssertEqual(fit.take(snapshot(video: film)), film)
-        XCTAssertNil(fit.take(snapshot(video: VideoGeometry(width: 1280, height: 720, displayAspect: 16 / 9))),
-                     "a size change during playback does not refit")
-        fit.beginOpen()
-        XCTAssertNil(fit.take(snapshot(video: VideoGeometry(width: 0, height: 0, displayAspect: 0))))
-        XCTAssertEqual(fit.take(snapshot(video: film)), film, "the next open is fitted again")
+    func testAResizeKeepsTheVideoAreaAboveTheControlBarAtTheVideosAspect() {
+        let current = CGSize(width: 640, height: 408)
+        // A drag that is mostly sideways: the width leads.
+        let wider = VideoAreaAspect.constrain(proposed: CGSize(width: 1000, height: 500), current: current,
+                                              video: wide, chrome: bar, minimum: minimum)
+        XCTAssertEqual(wider.width, 1000)
+        XCTAssertLessThanOrEqual(aspectError(wider, video: wide, chrome: bar), 1, "\(wider)")
+        // A drag on the bottom edge: the height leads and the width follows.
+        let taller = VideoAreaAspect.constrain(proposed: CGSize(width: 640, height: 600), current: current,
+                                               video: wide, chrome: bar, minimum: minimum)
+        XCTAssertEqual(taller.height, 600)
+        XCTAssertLessThanOrEqual(aspectError(taller, video: wide, chrome: bar), 1, "\(taller)")
+        XCTAssertGreaterThan(taller.width, 640)
     }
 
-    func testResizingKeepsTheVideosDisplayAspectAndUnlocksWithoutVideo() {
-        XCTAssertEqual(WindowAspect.lock(for: VideoGeometry(width: 1920, height: 800, displayAspect: 2.4)),
+    func testTheWholeContentKeepsTheAspectWhenTheWindowHasNoControlsOutsideTheVideo() {
+        let size = VideoAreaAspect.constrain(proposed: CGSize(width: 1200, height: 500),
+                                             current: CGSize(width: 640, height: 360), video: wide, chrome: .zero,
+                                             minimum: minimum)
+        XCTAssertEqual(size, CGSize(width: 1200, height: 675))
+    }
+
+    func testAResizeNeverGoesBelowTheMinimumAndKeepsTheAspectThere() {
+        let small = VideoAreaAspect.constrain(proposed: CGSize(width: 300, height: 200),
+                                              current: CGSize(width: 640, height: 408), video: wide, chrome: bar,
+                                              minimum: minimum)
+        XCTAssertGreaterThanOrEqual(small.width, minimum.width)
+        XCTAssertGreaterThanOrEqual(small.height, minimum.height)
+        XCTAssertLessThanOrEqual(aspectError(small, video: wide, chrome: bar), 1, "\(small)")
+        let portrait = CGSize(width: 1080, height: 1920)
+        let narrow = VideoAreaAspect.constrain(proposed: CGSize(width: 420, height: 300),
+                                               current: CGSize(width: 500, height: 937), video: portrait, chrome: bar,
+                                               minimum: minimum)
+        XCTAssertGreaterThanOrEqual(narrow.width, minimum.width)
+        XCTAssertGreaterThanOrEqual(narrow.height, minimum.height)
+        XCTAssertLessThanOrEqual(aspectError(narrow, video: portrait, chrome: bar), 1, "\(narrow)")
+    }
+
+    func testOnlyAVideoWithASizeLocksTheAspect() {
+        XCTAssertEqual(VideoAreaAspect.lock(for: VideoGeometry(width: 1920, height: 800, displayAspect: 2.4)),
                        CGSize(width: 1920, height: 800))
-        XCTAssertNil(WindowAspect.lock(for: nil))
-        XCTAssertNil(WindowAspect.lock(for: VideoGeometry(width: 0, height: 720, displayAspect: 0)))
+        XCTAssertNil(VideoAreaAspect.lock(for: nil))
+        XCTAssertNil(VideoAreaAspect.lock(for: VideoGeometry(width: 0, height: 720, displayAspect: 0)))
+        XCTAssertEqual(VideoAreaAspect.constrain(proposed: CGSize(width: 777, height: 333),
+                                                 current: CGSize(width: 640, height: 408), video: .zero, chrome: bar,
+                                                 minimum: minimum),
+                       CGSize(width: 777, height: 333), "without a video size a resize is free")
     }
+
+    // MARK: Screen areas
 
     func testAScreenAreaIsPassedAsTheWholePointsInsideIt() {
         XCTAssertEqual(WindowRect(inside: CGRect(x: 0.5, y: 24.3, width: 1511, height: 920.4)),

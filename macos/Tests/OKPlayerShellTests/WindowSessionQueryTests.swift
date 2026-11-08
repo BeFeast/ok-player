@@ -8,7 +8,7 @@ import XCTest
 final class WindowSessionQueryTests: XCTestCase {
     /// The golden documents of the window queries.
     static let fixtures: Set<String> = [
-        "query-window-fit.json", "query-reply-window-fit.json",
+        "query-window-fit.json", "query-initial-window-fit.json", "query-reply-window-fit.json",
         "query-video-click.json", "query-reply-video-click.json",
     ]
 
@@ -62,6 +62,21 @@ final class WindowSessionQueryTests: XCTestCase {
         XCTAssertTrue(screen.contains(frame), "\(frame) is not inside \(screen)")
     }
 
+    func testTheControlBarsRoomIsAddedSoTheVideoAreaKeepsTheVideosSize() {
+        // The preview's bar takes 48 points under the video.
+        XCTAssertEqual(client.windowFit(video: VideoGeometry(width: 640, height: 360, displayAspect: 16 / 9),
+                                        backingScale: 1, visibleFrame: CGRect(x: 0, y: 0, width: 1512, height: 945),
+                                        minSize: CGSize(width: 420, height: 280), chrome: CGSize(width: 0, height: 48)),
+                       CGRect(x: 436, y: 268, width: 640, height: 408))
+    }
+
+    func testNoInitialFitIsOwedBeforeAnythingIsOpened() {
+        XCTAssertNil(client.initialWindowFit(backingScale: 2,
+                                             visibleFrame: CGRect(x: 0, y: 0, width: 1512, height: 945),
+                                             minSize: CGSize(width: 420, height: 280),
+                                             chrome: CGSize(width: 0, height: 48)))
+    }
+
     func testNothingIsFittedWithoutAVideoSize() {
         XCTAssertNil(client.windowFit(video: VideoGeometry(width: 0, height: 0, displayAspect: 0), backingScale: 2,
                                       visibleFrame: CGRect(x: 0, y: 0, width: 1512, height: 945),
@@ -106,14 +121,21 @@ final class WindowSessionQueryTests: XCTestCase {
 
     // MARK: Golden documents
 
-    func testTheWindowFitQueryAndReplyRoundTrip() throws {
+    func testTheWindowFitQueriesAndTheirReplyRoundTrip() throws {
+        let screen = WindowRect(x: 0, y: 0, width: 1512, height: 945)
+        let minimum = WindowSize(width: 420, height: 280)
+        let bar = WindowSize(width: 0, height: 48)
         let query = QueryEnvelope(query: .windowFit(video: WindowSize(width: 3840, height: 2160), backingScale: 2,
-                                                    visibleFrame: WindowRect(x: 0, y: 0, width: 1512, height: 945),
-                                                    minSize: WindowSize(width: 420, height: 280)))
+                                                    visibleFrame: screen, minSize: minimum, chrome: bar))
         XCTAssertEqual(try GoldenFixtures.decode(QueryEnvelope.self, "query-window-fit.json"), query)
         XCTAssertEqual(try GoldenFixtures.encodedObject(query), try GoldenFixtures.object("query-window-fit.json"))
+        let initial = QueryEnvelope(query: .initialWindowFit(backingScale: 2, visibleFrame: screen, minSize: minimum,
+                                                             chrome: bar))
+        XCTAssertEqual(try GoldenFixtures.decode(QueryEnvelope.self, "query-initial-window-fit.json"), initial)
+        XCTAssertEqual(try GoldenFixtures.encodedObject(initial),
+                       try GoldenFixtures.object("query-initial-window-fit.json"))
         let reply = try GoldenFixtures.decode(QueryReply.self, "query-reply-window-fit.json")
-        XCTAssertEqual(reply.result, .windowFit(frame: WindowRect(x: 45, y: 73, width: 1421, height: 799)))
+        XCTAssertEqual(reply.result, .windowFit(frame: WindowRect(x: 45, y: 49, width: 1421, height: 847)))
     }
 
     func testTheVideoClickQueryAndReplyRoundTrip() throws {

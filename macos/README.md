@@ -10,13 +10,17 @@ another explicit open attempt.
 
 The window runs its content under a transparent title bar, with the media title in
 the strip along the top. Opening a file fits the window to the video on the screen
-it is on (at most one video pixel per device pixel, centered, never below the
-window's minimum size; the session's `window_fit` query asks okp-core), and while
-video shows a resize keeps its aspect. **F**, **Control-Command-F** and a double
-click on the video toggle native fullscreen; **Esc** leaves it. A single click on
-the video toggles pause once the double-click interval has passed, so a double
-click never pauses first. The traffic lights and the title strip hide and show
-with the transport controls (`WindowChromeVisibility`).
+it is on: at most one video pixel per device pixel, centered, never below the
+window's minimum size, with room for the control bar under the video so the video
+view itself has the video's size. The session keeps the one fit each opened source
+is owed and answers the `initial_window_fit` query with okp-core's frame, whichever
+way the file was opened. While video shows, a resize keeps the video view at the
+video's aspect (`windowWillResize(_:to:)`; AppKit's `contentAspectRatio` would lock
+the whole content, bar included). **F**, **Control-Command-F** and a double click on
+the video toggle native fullscreen; **Esc** leaves it. A single click on the video
+toggles pause once the double-click interval has passed, so a double click never
+pauses first. The traffic lights and the title strip hide and show with the
+transport controls (`WindowChromeVisibility`); hidden ones take no clicks.
 
 This preview is for local testing. It does not yet contain the Linux shell's URL
 resolver, History, saving/cache UI, subtitle controls or update service. Its chrome
@@ -319,15 +323,18 @@ window and checks, from the session's events and the video layer's counters:
   has drawn into no context but the layer's own;
 - every frame drawn reported a swap that reached libmpv: the count
   `okp_session_render_report_swap` returns equals the frames drawn;
-- once playing, the window has the frame the fit gave it, its resize aspect is the
-  video's, and the title strip has room under the title bar;
-- F enters native fullscreen and Escape leaves it again;
+- once playing, the window has the frame the fit gave it, the video view has the
+  video's aspect after the fit and after a resize through the window's resize rule,
+  and the title strip has room under the title bar;
+- F and Escape, sent as key events to the video view, enter native fullscreen and
+  leave it again;
 - closing the window during playback tears down in order (close, destroy the
   render context, free the session).
 
 Its `OKP_SMOKE` line also reports those counts, the pixel format, the
-volume and track count from the session snapshot, and the fitted size, the aspect
-lock and the title strip height. The complete app is copied
+volume and track count from the session snapshot, and the fitted size, the video
+view's size after the fit and after the resize, the aspect and the title strip
+height. The complete app is copied
 to a new directory and launched with `DYLD_LIBRARY_PATH` unset. A separate 40-second
 process deadline prevents a blocked render callback from keeping the job alive.
 

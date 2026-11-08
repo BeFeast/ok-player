@@ -115,8 +115,10 @@ struct DispatchReply: Codable, Equatable {
 
 enum Query: Codable, Equatable {
     case snapshot
-    /// See `SessionClient.windowFit`.
-    case windowFit(video: WindowSize, backingScale: Double, visibleFrame: WindowRect, minSize: WindowSize?)
+    /// See `SessionClient.windowFit` and `SessionClient.initialWindowFit`.
+    case windowFit(video: WindowSize, backingScale: Double, visibleFrame: WindowRect, minSize: WindowSize?,
+                   chrome: WindowSize?)
+    case initialWindowFit(backingScale: Double, visibleFrame: WindowRect, minSize: WindowSize?, chrome: WindowSize?)
     case videoClick(pressCount: Int32)
 }
 

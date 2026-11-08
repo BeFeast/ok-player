@@ -1,9 +1,9 @@
 import AppKit
 
 // The player window's decisions as plain values, so XCTest can check them
-// without a window: which key or click asks for fullscreen, when a fit is owed,
-// what the aspect lock is, and what the chrome shows. `PlayerWindowController`
-// applies them to AppKit.
+// without a window: which key or click asks for fullscreen, what size a resize
+// settles on, and what the chrome shows. `PlayerWindowController` applies them
+// to AppKit. The fit an open is owed is the session's (`initial_window_fit`).
 
 /// A window operation a key or a click asks for.
 enum WindowCommand: Equatable {
@@ -44,28 +44,36 @@ enum WindowKeys {
     }
 }
 
-/// The fit one open is owed, as core's `InitialFitState` keeps it per source:
-/// armed when a file is opened, spent on the first video size the session
-/// reports for it. Later size changes and audio-only files never refit.
-struct InitialWindowFit {
-    private(set) var armed = false
-
-    mutating func beginOpen() { armed = true }
-
-    /// The video to fit the window to, once per open.
-    mutating func take(_ snapshot: SessionSnapshot) -> VideoGeometry? {
-        guard armed, let video = snapshot.video, video.width > 0, video.height > 0 else { return nil }
-        armed = false
-        return video
-    }
-}
-
-enum WindowAspect {
-    /// The content aspect ratio a resize keeps while `video` shows: its display
-    /// size. Nil unlocks it (no video, an audio file, nothing open).
+/// The aspect a resize keeps while video shows: the video area's, which is the
+/// window content less the room the window's own controls take (`chrome`), not
+/// the whole content's. AppKit's `contentAspectRatio` can only lock the whole
+/// content, so the window applies this from `windowWillResize(_:to:)`.
+enum VideoAreaAspect {
+    /// The aspect to keep for `video`: its display size. Nil leaves resizing
+    /// free (no video, an audio file, nothing open).
     static func lock(for video: VideoGeometry?) -> CGSize? {
         guard let video, video.width > 0, video.height > 0 else { return nil }
         return CGSize(width: CGFloat(video.width), height: CGFloat(video.height))
+    }
+
+    /// The content size a resize from `current` towards `proposed` settles on, so
+    /// the video area (content less `chrome`) has the aspect of `video`. The
+    /// dimension the user changed more leads and the other follows; neither
+    /// goes below `minimum`. Sizes are window content sizes in points.
+    static func constrain(proposed: CGSize, current: CGSize, video: CGSize, chrome: CGSize,
+                          minimum: CGSize) -> CGSize {
+        guard video.width > 0, video.height > 0 else { return proposed }
+        let aspect = video.width / video.height
+        func height(forWidth width: CGFloat) -> CGFloat { max(1, width - chrome.width) / aspect + chrome.height }
+        func width(forHeight height: CGFloat) -> CGFloat { max(1, height - chrome.height) * aspect + chrome.width }
+        var size = abs(proposed.width - current.width) >= abs(proposed.height - current.height)
+            ? CGSize(width: proposed.width, height: height(forWidth: proposed.width))
+            : CGSize(width: width(forHeight: proposed.height), height: proposed.height)
+        if size.width < minimum.width { size = CGSize(width: minimum.width, height: height(forWidth: minimum.width)) }
+        if size.height < minimum.height {
+            size = CGSize(width: width(forHeight: minimum.height), height: minimum.height)
+        }
+        return CGSize(width: size.width.rounded(), height: size.height.rounded())
     }
 }
 

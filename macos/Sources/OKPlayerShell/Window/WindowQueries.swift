@@ -50,16 +50,41 @@ enum VideoClickIntent: String, Codable, CaseIterable {
     case cancelPlayPauseAndToggleFullscreen = "cancel_play_pause_and_toggle_fullscreen"
 }
 
-extension SessionClient {
+/// What the player window asks the session: okp-core's fit and click rules.
+/// `SessionClient` answers; tests answer with a stand-in.
+protocol WindowRules: AnyObject {
+    /// The frame (window content, in screen coordinates) of the fit the current
+    /// source is owed, once per opened source; nil before its video size is
+    /// known, after it was taken, or when the session cannot answer. Asking
+    /// takes the fit. `chrome` is the room the window's own controls take
+    /// outside the video area.
+    func initialWindowFit(backingScale: CGFloat, visibleFrame: CGRect, minSize: CGSize, chrome: CGSize) -> CGRect?
+    /// What a release with `clickCount` clicks on the video means.
+    func videoClickIntent(clickCount: Int) -> VideoClickIntent
+}
+
+extension SessionClient: WindowRules {
     /// The frame of a window fitted to `video` on a screen; nil when there is
-    /// nothing to fit or the session cannot answer.
+    /// nothing to fit or the session cannot answer. `chrome` is the room the
+    /// window's own controls take outside the video area: the frame grows by it.
     func windowFit(video: VideoGeometry, backingScale: CGFloat, visibleFrame: CGRect,
-                   minSize: CGSize) -> CGRect? {
+                   minSize: CGSize, chrome: CGSize = .zero) -> CGRect? {
         let request = Query.windowFit(
             video: WindowSize(width: video.width, height: video.height),
             backingScale: Double(backingScale),
             visibleFrame: WindowRect(inside: visibleFrame),
-            minSize: WindowSize(width: Int32(minSize.width.rounded(.up)), height: Int32(minSize.height.rounded(.up))))
+            minSize: WindowSize(points: minSize),
+            chrome: WindowSize(points: chrome))
+        guard case .windowFit(let frame)? = query(request) else { return nil }
+        return frame?.cgRect
+    }
+
+    func initialWindowFit(backingScale: CGFloat, visibleFrame: CGRect, minSize: CGSize, chrome: CGSize) -> CGRect? {
+        let request = Query.initialWindowFit(
+            backingScale: Double(backingScale),
+            visibleFrame: WindowRect(inside: visibleFrame),
+            minSize: WindowSize(points: minSize),
+            chrome: WindowSize(points: chrome))
         guard case .windowFit(let frame)? = query(request) else { return nil }
         return frame?.cgRect
     }
@@ -70,5 +95,13 @@ extension SessionClient {
         let count = Int32(clamping: clickCount)
         guard case .videoClick(let intent)? = query(.videoClick(pressCount: count)) else { return .ignore }
         return intent
+    }
+}
+
+extension WindowSize {
+    /// A size in points as whole points, rounded up, so a window of this size is
+    /// never smaller than `points`.
+    init(points: CGSize) {
+        self.init(width: Int32(max(0, points.width).rounded(.up)), height: Int32(max(0, points.height).rounded(.up)))
     }
 }

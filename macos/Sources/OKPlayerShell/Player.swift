@@ -166,7 +166,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             controls.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -12),
             controls.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10), controls.heightAnchor.constraint(equalToConstant: 30)
         ])
-        behaviour.install(in: root, video: video)
+        behaviour.install(in: root, videoArea: videoArea)
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         guard let video else { fail("No OpenGL pixel format is available for video"); return }
         let client: SessionClient
@@ -207,7 +207,6 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         case .accepted, .noOp: break
         case .rejected(_, let message), .failed(_, let message): fail(message); return
         }
-        windowBehaviour?.beginOpen()
         window.title = "\((path as NSString).lastPathComponent) — OK Player"
         bar.progress = 0
         showStatus("Opening…", .textMuted)
@@ -279,6 +278,9 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         client = nil
     }
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        windowBehaviour?.windowWillResize(to: frameSize) ?? frameSize
+    }
     func windowWillClose(_ notification: Notification) {
         // Terminating closes the window again; the first close does the work.
         guard !closing else { return }
@@ -302,9 +304,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 ///    context and has drawn into no context but the layer's own;
 /// 6. presented: every frame drawn reported a swap that reached libmpv (the swap
 ///    count the session returns equals the frames drawn);
-/// 7. fitted: once playing, the window has the size the fit gave it and keeps
-///    the video's aspect (checked with step 2);
-/// 8. fullscreen: F enters native fullscreen and Escape leaves it;
+/// 7. fitted: once playing, the window has the size the fit gave it, the video
+///    view has the video's aspect, and a resize keeps it (checked with step 2);
+/// 8. fullscreen: F and Escape, pressed on the video view, enter and leave
+///    native fullscreen;
 /// 9. closed while playing: teardown runs in order and the app exits.
 ///
 /// The timed steps use one-shot timers; the session state itself arrives through
