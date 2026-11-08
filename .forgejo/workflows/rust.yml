@@ -134,6 +134,16 @@ jobs:
           PYTHONDONTWRITEBYTECODE: 1
         run: python3 scripts/tests/macos-palette.Tests.py
 
+      - name: macOS bundle version, Info.plist and icon tests
+        env:
+          PYTHONDONTWRITEBYTECODE: 1
+        run: python3 scripts/tests/macos-bundle.Tests.py
+
+      - name: macOS pull request bridge tests
+        env:
+          PYTHONDONTWRITEBYTECODE: 1
+        run: python3 scripts/tests/mac-ci-bridge.Tests.py
+
       - name: Candidate gate split tests
         run: ./scripts/tests/candidate-gate-split.Tests.sh
       - name: Narrow-width seam aiming tests

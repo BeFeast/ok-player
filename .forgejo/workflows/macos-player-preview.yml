@@ -49,10 +49,12 @@ jobs:
           export CARGO_TARGET_DIR="$stage/target"
           export CARGO_BUILD_JOBS=4
           export OKP_MACOS_OUTPUT="$receipt"
+          export OKP_MACOS_BUILD_NUMBER="${{ github.run_number }}"
           { sw_vers; rustc -vV; xcrun swiftc --version; xcrun --sdk macosx --show-sdk-version; } > "$receipt/toolchain.txt"
           git init -q "$stage/source"
           git -C "$stage/source" remote add origin "$FORGEJO_ENDPOINT/BeFeast/ok-player.git"
-          git -C "$stage/source" -c http.followRedirects=false fetch --no-tags --depth=1 origin "$SOURCE_SHA"
+          # Full history and tags: the bundle version is derived from `git describe`.
+          git -C "$stage/source" -c http.followRedirects=false fetch --tags origin "$SOURCE_SHA"
           git -C "$stage/source" checkout -q --detach FETCH_HEAD
           test "$(git -C "$stage/source" rev-parse HEAD)" = "$SOURCE_SHA"
           printf '%s\n' "$SOURCE_SHA" > "$receipt/source-sha.txt"

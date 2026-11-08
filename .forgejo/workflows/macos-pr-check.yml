@@ -1,0 +1,74 @@
+name: macOS PR check
+
+# The Mac build of every Forgejo pull request. Forgejo has no Mac runner in the pull
+# request gate; the build runs on a GitHub-hosted Apple Silicon runner through
+# .github/workflows/macos-player-preview.yml. scripts/mac-ci-bridge.py pushes the head
+# commit to the bridge branch mac-ci/pr-<number> on the GitHub mirror (no GitHub pull
+# request is opened), waits for the macOS run that push starts, fails unless that run
+# passed, and deletes the branch. The run's artifact - ok-player-macos-arm64.zip,
+# SHA256SUMS.txt and the light/dark window snapshots - is published again as an
+# artifact of this run, so a build can be downloaded without a GitHub account.
+#
+# The job always runs and gets the same check name, so it can be required: a pull
+# request that touches nothing the Mac build reads passes at once without a build.
+#
+# Credentials: the MAC_CI_GITHUB_TOKEN repository secret, a GitHub token for the mirror
+# with Contents and Workflows read/write and Actions read/write. Without it a
+# macOS-relevant pull request fails. macos/README.md has the one-time setup.
+#
+# The manual "macOS player preview" workflow on the self-hosted Mac stays an on-demand
+# fallback and is not part of this check.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: macos-pr-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bridge:
+    name: Apple Silicon app (GitHub-hosted)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      # Full history: the scope check diffs against the merge base, and pushing the head
+      # commit to the mirror needs every commit the mirror does not have yet.
+      - uses: https://code.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Does the change touch the macOS build?
+        id: scope
+        run: python3 scripts/mac-ci-bridge.py scope --base "$BASE_SHA" --head "$HEAD_SHA" --github-output "$GITHUB_OUTPUT"
+
+      - name: No macOS-relevant change
+        if: steps.scope.outputs.relevant != 'true'
+        run: echo "No macOS-relevant change; passing without a Mac build."
+
+      - name: Build, test and smoke on a GitHub-hosted Mac
+        if: steps.scope.outputs.relevant == 'true'
+        env:
+          MAC_CI_GITHUB_TOKEN: ${{ secrets.MAC_CI_GITHUB_TOKEN }}
+        run: >-
+          python3 scripts/mac-ci-bridge.py run
+          --sha "$HEAD_SHA" --ref "mac-ci/pr-$PR_NUMBER"
+          --download-dir mac-ci-artifact
+
+      - name: Publish the Mac build
+        if: always() && steps.scope.outputs.relevant == 'true'
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: macos-player-${{ github.event.pull_request.head.sha }}
+          path: mac-ci-artifact/
+          if-no-files-found: ignore
+          retention-days: 30

@@ -1,0 +1,4 @@
+# Written by scripts/build-macos-preview.sh before `swift build`.
+/Sources/COKPCore/okp_core.h
+/Sources/OKPlayerShell/Generated/
+/.build/

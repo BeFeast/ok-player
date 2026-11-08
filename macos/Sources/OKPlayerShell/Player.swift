@@ -1,4 +1,5 @@
 import AppKit
+import COKPCore
 import OpenGL.GL3
 
 extension PaletteRole {
@@ -322,12 +323,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 
-// The build compiles this file together with the generated palette source, so the
-// entry point is explicit rather than top-level code.
-@main
-@MainActor
-enum OKPlayerMain {
-    static func main() {
+/// Starts the app. The `ok-player` executable target only calls this.
+public enum PlayerLauncher {
+    @MainActor
+    public static func run() {
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
         let delegate = PlayerApp()
