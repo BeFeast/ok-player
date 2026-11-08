@@ -16,6 +16,8 @@ use okp_core::player as core;
 use okp_core::playlist::PlaylistItem;
 use serde::{Deserialize, Serialize};
 
+pub use crate::playlist::{PlaylistAction, PlaylistEntry, PlaylistState, QueueMode, RepeatMode};
+
 /// Version of every envelope below. Bump on any change a shell built against
 /// the previous version could not decode or would misread.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -122,6 +124,10 @@ pub enum Command {
     SetSubtitleDelay {
         seconds: f64,
     },
+    /// Open, step through and edit the playlist; see [`PlaylistAction`].
+    Playlist {
+        action: PlaylistAction,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +177,10 @@ pub enum DispatchResult {
     /// Validated, but the engine refused it immediately. The session state has
     /// already absorbed the failure.
     Failed { request_id: u64, message: String },
+    /// Carried out by the session itself (a playlist edit, or an open whose
+    /// folders are being read); nothing reached the engine yet. Events report
+    /// the effect.
+    Applied {},
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,6 +211,8 @@ pub struct QueryEnvelope {
 pub enum Query {
     /// The full session state, as the event stream has reported it so far.
     Snapshot {},
+    /// The playlist as it is now.
+    Playlist {},
 }
 
 /// `{"schema_version":1,"result":{...}}`, the answer to a query.
@@ -216,6 +228,9 @@ pub struct QueryReply {
 pub enum QueryResult {
     Snapshot {
         snapshot: SessionSnapshot,
+    },
+    Playlist {
+        playlist: PlaylistState,
     },
     Rejected {
         reason: RejectReason,
@@ -233,13 +248,18 @@ pub struct EventBatch {
 
 /// One entry of a drained batch. A batch holds at most one `snapshot_changed`,
 /// first, carrying the latest value of every field that changed since the
-/// previous batch; `error` events follow in the order they happened; `shutdown`
-/// comes last.
+/// previous batch; then at most one `playlist_changed` with the latest
+/// playlist; `error` events follow in the order they happened; `shutdown` comes
+/// last.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Event {
     SnapshotChanged {
         changes: Vec<SnapshotChange>,
+    },
+    /// The playlist changed: its items, current item, play modes or scanning.
+    PlaylistChanged {
+        playlist: PlaylistState,
     },
     Error {
         kind: ErrorKind,
@@ -461,6 +481,9 @@ impl Command {
                 id: *id,
             },
             Self::SetSubtitleDelay { seconds } => core::PlayerCommand::SetSubtitleDelay(*seconds),
+            // The session's playlist carries these out and plays an item with an
+            // `open`; a playlist command itself is never forwarded.
+            Self::Playlist { .. } => unreachable!("playlist commands are not forwarded"),
         }
     }
 }

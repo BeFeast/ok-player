@@ -17,10 +17,12 @@ use okp_mpv::{EndFileReason, EntryEvent, MpvEvent, error_description};
 use crate::coalesce::Coalescer;
 use crate::engine::{Engine, MpvEngine, Observation};
 use crate::machine::SessionMachine;
+use crate::playlist::{Background, PlannedOpen, SessionPlaylist, Step};
 use crate::protocol::{
     Command, CommandEnvelope, DispatchReply, DispatchResult, ErrorKind, Event, EventBatch,
-    MediaSource, Query, QueryEnvelope, QueryReply, QueryResult, RejectReason, SCHEMA_VERSION,
-    SessionConfig, SessionSnapshot, Track, TrackKind, VideoGeometry, parse_envelope, to_json,
+    MediaSource, PlaylistAction, Query, QueryEnvelope, QueryReply, QueryResult, RejectReason,
+    SCHEMA_VERSION, SessionConfig, SessionSnapshot, Track, TrackKind, VideoGeometry,
+    parse_envelope, to_json,
 };
 use crate::reconcile::{core_end_reason, endfile_error, event_matches_source};
 
@@ -68,6 +70,7 @@ struct State {
     load: Option<i64>,
     /// Tracks the current open asked for, selected once its file has loaded.
     pending_tracks: Vec<(TrackKind, i64)>,
+    playlist: SessionPlaylist,
 }
 
 /// Wakes the event thread: set by the engine listener, by commands and by
@@ -130,6 +133,7 @@ impl Session {
         let signal = Arc::new(Signal::default());
         let listener_signal = Arc::clone(&signal);
         engine.set_listener(Some(Arc::new(move || listener_signal.notify())));
+        let playlist_signal = Arc::clone(&signal);
         let shared = Arc::new(Shared {
             engine,
             state: Mutex::new(State {
@@ -139,6 +143,7 @@ impl Session {
                 observed_paused: None,
                 load: None,
                 pending_tracks: Vec::new(),
+                playlist: SessionPlaylist::new(Arc::new(move || playlist_signal.notify())),
             }),
             signal,
             wakeup: Mutex::new(None),
@@ -175,41 +180,18 @@ impl Session {
     }
 
     /// Validate `command` with the core state machine and, only if it accepts,
-    /// hand it to the engine.
+    /// hand it to the engine. A playlist command is decided by the session's
+    /// playlist, and an item it plays is opened the same way.
     pub fn dispatch(&self, command: &Command) -> DispatchResult {
-        let core = command.to_core();
         let engine = &*self.shared.engine;
         let mut state = lock(&self.shared.state);
-        let mut load = None;
-        let (outcome, engine_result) = state.machine.dispatch(&core, |_, request_id| {
-            engine
-                .forward(command, request_id)
-                .map(|entry| load = entry)
-        });
-        if engine_result.is_ok() {
-            state.track_load(command, outcome, load);
-        }
-        let result = match (outcome, engine_result) {
-            (CommandOutcome::Accepted { request_id }, Ok(())) => {
-                DispatchResult::Accepted { request_id }
+        let result = match command {
+            Command::Playlist { action } => state.dispatch_playlist(engine, action),
+            _ => {
+                let result = state.forward(engine, command);
+                state.playlist.follow(command, &result);
+                result
             }
-            (CommandOutcome::Accepted { request_id }, Err(message)) => {
-                state.queue.push(Event::Error {
-                    kind: if matches!(core, PlayerCommand::Open(_)) {
-                        ErrorKind::LoadFailed
-                    } else {
-                        ErrorKind::CommandFailed
-                    },
-                    message: message.clone(),
-                    request_id: Some(request_id),
-                });
-                DispatchResult::Failed {
-                    request_id,
-                    message,
-                }
-            }
-            (CommandOutcome::NoOp, _) => DispatchResult::NoOp {},
-            (CommandOutcome::Rejected(reason), _) => rejected(reason.into()),
         };
         drop(state);
         self.shared.signal.notify();
@@ -220,6 +202,9 @@ impl Session {
         match query {
             Query::Snapshot {} => QueryResult::Snapshot {
                 snapshot: self.snapshot(),
+            },
+            Query::Playlist {} => QueryResult::Playlist {
+                playlist: lock(&self.shared.state).playlist.state(),
             },
         }
     }
@@ -378,8 +363,86 @@ impl State {
         if loaded {
             self.select_pending_tracks(engine);
         }
+        self.advance_playlist(engine);
         let current = self.project(&observation);
         self.queue.observe(&current, now)
+    }
+
+    /// Validate `command` with the core state machine and, only if it accepts,
+    /// hand it to the engine.
+    fn forward(&mut self, engine: &dyn Engine, command: &Command) -> DispatchResult {
+        let core = command.to_core();
+        let mut load = None;
+        let (outcome, engine_result) = self.machine.dispatch(&core, |_, request_id| {
+            engine
+                .forward(command, request_id)
+                .map(|entry| load = entry)
+        });
+        if engine_result.is_ok() {
+            self.track_load(command, outcome, load);
+        }
+        match (outcome, engine_result) {
+            (CommandOutcome::Accepted { request_id }, Ok(())) => {
+                DispatchResult::Accepted { request_id }
+            }
+            (CommandOutcome::Accepted { request_id }, Err(message)) => {
+                self.queue.push(Event::Error {
+                    kind: if matches!(core, PlayerCommand::Open(_)) {
+                        ErrorKind::LoadFailed
+                    } else {
+                        ErrorKind::CommandFailed
+                    },
+                    message: message.clone(),
+                    request_id: Some(request_id),
+                });
+                DispatchResult::Failed {
+                    request_id,
+                    message,
+                }
+            }
+            (CommandOutcome::NoOp, _) => DispatchResult::NoOp {},
+            (CommandOutcome::Rejected(reason), _) => rejected(reason.into()),
+        }
+    }
+
+    fn dispatch_playlist(
+        &mut self,
+        engine: &dyn Engine,
+        action: &PlaylistAction,
+    ) -> DispatchResult {
+        let current = self.machine.machine().snapshot().source.clone();
+        match self.playlist.dispatch(action, current.as_ref()) {
+            Step::Reply(result) => result,
+            Step::Open(open) => self.open_planned(engine, open),
+        }
+    }
+
+    /// Open an item the playlist chose, as an `open` command would.
+    fn open_planned(&mut self, engine: &dyn Engine, open: PlannedOpen) -> DispatchResult {
+        let result = self.forward(engine, &open.command());
+        self.playlist.opened(open, &result);
+        result
+    }
+
+    /// Play what finished folder reads and an end of file call for, and queue
+    /// the playlist if it changed.
+    fn advance_playlist(&mut self, engine: &dyn Engine) {
+        for step in self.playlist.poll() {
+            match step {
+                Background::Open(open) => {
+                    // An engine refusal is already queued as an error event.
+                    let _ = self.open_planned(engine, open);
+                }
+                Background::NothingPlayable => self.queue.push(Event::Error {
+                    kind: ErrorKind::LoadFailed,
+                    message: "nothing playable was found".to_owned(),
+                    request_id: None,
+                }),
+            }
+        }
+        if let Some(playlist) = self.playlist.take_changed() {
+            self.queue.set_playlist(playlist);
+        }
     }
 
     /// Remember what a forwarded command means for the current load.
@@ -478,6 +541,9 @@ impl State {
                 let error = endfile_error(reason, &diagnostic_messages);
                 if !self.ends_current_media(entry, reason, error.is_some(), path.as_deref()) {
                     return false;
+                }
+                if reason == EndFileReason::Eof && error.is_none() {
+                    self.playlist.end_of_file();
                 }
                 if let Some(message) = error {
                     self.machine.apply_event(PlayerEvent::Error(PlayerError {
@@ -1429,4 +1495,7 @@ mod tests {
         config.schema_version = 2;
         assert!(validate_config(&config).is_err());
     }
+
+    /// The playlist through the session: folder scans, auto-advance, commands.
+    mod playlist;
 }
