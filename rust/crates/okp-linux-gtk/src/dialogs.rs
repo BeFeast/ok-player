@@ -168,27 +168,41 @@ pub(crate) fn open_url_dialog(
 
     dialog.connect_response(move |dialog, response| {
         if response == gtk::ResponseType::Accept {
-            let url = entry.text().trim().to_owned();
-            if ok_player_uri::is_link(std::ffi::OsStr::new(&url)) {
-                // A link pasted here runs exactly as if a page had launched it.
-                dispatch_link_text(&state, &url, LinkOrigin::OpenUrl);
-            } else {
-                match youtube_open::resolve_open_url(&url, youtube_resolver_available()) {
-                    youtube_open::OpenUrlOutcome::PlayDirect
-                    | youtube_open::OpenUrlOutcome::PlayYouTube => load_media_url(&state, url),
-                    youtube_open::OpenUrlOutcome::YouTubeToolingMissing => {
-                        status_toast.show(&youtube_open::tooling_missing_notice());
-                    }
-                    youtube_open::OpenUrlOutcome::Invalid => {
-                        status_toast.show("Enter a valid stream URL");
-                    }
-                }
+            let text = entry.text().trim().to_owned();
+            if let Some(notice) = route_open_url_text(&state, text, youtube_resolver_available()) {
+                status_toast.show(&notice);
             }
         }
         dialog.close();
     });
 
     dialog.present();
+}
+
+/// What Open URL does with the text the user accepted; returns the notice to show, if any.
+///
+/// An `ok-player:` link is checked first and runs exactly as if a page had launched it, in turn
+/// in the launch queue, so it never reaches the YouTube or engine routing. A stream URL opens at
+/// once as the user's own open.
+pub(crate) fn route_open_url_text(
+    state: &Rc<RefCell<PlayerState>>,
+    text: String,
+    youtube_resolver_available: bool,
+) -> Option<String> {
+    if ok_player_uri::is_link(std::ffi::OsStr::new(&text)) {
+        dispatch_link_text(state, &text, LinkOrigin::OpenUrl);
+        return None;
+    }
+    match youtube_open::resolve_open_url(&text, youtube_resolver_available) {
+        youtube_open::OpenUrlOutcome::PlayDirect | youtube_open::OpenUrlOutcome::PlayYouTube => {
+            load_media_url(state, text);
+            None
+        }
+        youtube_open::OpenUrlOutcome::YouTubeToolingMissing => {
+            Some(youtube_open::tooling_missing_notice())
+        }
+        youtube_open::OpenUrlOutcome::Invalid => Some("Enter a valid stream URL".to_owned()),
+    }
 }
 
 #[allow(deprecated)]

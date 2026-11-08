@@ -204,17 +204,20 @@ pub(crate) fn handle_mpris_command(
                 }
             }
         }
-        // Every OpenUri goes through the launch queue, so it keeps its turn behind a link whose
-        // filesystem check is still running; an ok-player: link goes through the link dispatcher.
-        MprisCommand::OpenUri(uri) => {
-            if ok_player_uri::is_link(std::ffi::OsStr::new(&uri)) {
-                dispatch_link_text(state, &uri, LinkOrigin::Mpris);
-            } else if let Some(path) = file_uri_path(&uri) {
-                deliver_open_request(state, PlaylistItem::Local(path));
-            } else if is_media_url(&uri) {
-                deliver_open_request(state, PlaylistItem::Url(uri));
-            }
-        }
+        MprisCommand::OpenUri(uri) => route_mpris_open_uri(state, uri),
+    }
+}
+
+/// MPRIS `OpenUri`. Every one goes through the launch queue, so it keeps its turn behind a link
+/// whose filesystem check is still running; an `ok-player:` link goes through the link
+/// dispatcher, a `file:` URI or a media URL opens in turn, anything else is ignored.
+pub(crate) fn route_mpris_open_uri(state: &Rc<RefCell<PlayerState>>, uri: String) {
+    if ok_player_uri::is_link(std::ffi::OsStr::new(&uri)) {
+        dispatch_link_text(state, &uri, LinkOrigin::Mpris);
+    } else if let Some(path) = file_uri_path(&uri) {
+        deliver_open_request(state, PlaylistItem::Local(path));
+    } else if is_media_url(&uri) {
+        deliver_open_request(state, PlaylistItem::Url(uri));
     }
 }
 

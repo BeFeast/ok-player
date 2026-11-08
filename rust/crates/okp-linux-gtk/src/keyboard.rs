@@ -359,6 +359,21 @@ fn log_keyboard_interaction(action: &str) {
     }
 }
 
+/// Take the engine and the native render loop out of the player as the window closes, and say
+/// so where it happens: a launch forwarded from now on, or a link whose check is still running,
+/// waits for an engine instead of being applied to none.
+pub(crate) fn detach_engine_for_close(
+    state: &Rc<RefCell<PlayerState>>,
+    launch_delivery: &LaunchDeliveryGate,
+) -> (Option<Mpv>, Option<NativeRenderLoop>) {
+    let detached = {
+        let mut state = state.borrow_mut();
+        (state.mpv.take(), state.native_render_loop.take())
+    };
+    launch_delivery.borrow_mut().mark_player_unavailable();
+    detached
+}
+
 pub(crate) fn connect_progress_persistence(
     app: &gtk::Application,
     window: &gtk::ApplicationWindow,
@@ -391,13 +406,7 @@ pub(crate) fn connect_progress_persistence(
         // Pull engine + native render loop out before hide/unrealize so GTK
         // cannot block this handler inside destroy_render_context / join.
         // Candidate headless-launch-smoke then saw an unmapped shell + live process.
-        let (engine, render_loop) = {
-            let mut state = close_state.borrow_mut();
-            (state.mpv.take(), state.native_render_loop.take())
-        };
-        // Said where it happens: a launch forwarded from now on, or a link whose check is still
-        // running, waits for an engine instead of being applied to none.
-        launch_delivery.borrow_mut().mark_player_unavailable();
+        let (engine, render_loop) = detach_engine_for_close(&close_state, &launch_delivery);
         if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
             eprintln!("window close lifecycle: engine detached");
         }

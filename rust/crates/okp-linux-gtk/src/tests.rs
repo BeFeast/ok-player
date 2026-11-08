@@ -2431,20 +2431,13 @@ fn find_executable_rejects_a_file_without_an_execute_bit() {
 }
 
 #[test]
-fn open_url_routes_links_before_youtube_classification() {
+fn open_url_classifies_youtube_and_direct_stream_urls() {
     use youtube_open::OpenUrlOutcome;
 
-    // The dialog sends an ok-player: link to the link dispatcher first, so it never reaches
-    // the YouTube / engine routing...
-    assert!(ok_player_uri::is_link(std::ffi::OsStr::new(
-        "ok-player://open"
-    )));
-
-    // ...a real YouTube link is not a link and, with no resolver on the host, lands in the
-    // deliberate missing-tooling state rather than a silent hand-off to libmpv...
-    assert!(!ok_player_uri::is_link(std::ffi::OsStr::new(
-        "https://youtu.be/abc123"
-    )));
+    // (`route_open_url_text` sends an ok-player: link to the link dispatcher before any of
+    // this; the link dispatcher tests drive that.) A real YouTube link, with no resolver on
+    // the host, lands in the deliberate missing-tooling state rather than a silent hand-off
+    // to libmpv...
     assert_eq!(
         youtube_open::resolve_open_url("https://youtu.be/abc123", false),
         OpenUrlOutcome::YouTubeToolingMissing

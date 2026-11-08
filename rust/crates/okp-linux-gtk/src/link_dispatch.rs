@@ -801,8 +801,43 @@ mod tests {
         PlaylistItem::Url(url.to_owned())
     }
 
+    /// The `file:` URI a desktop hands MPRIS `OpenUri` for a local file.
+    fn file_uri(path: &Path) -> String {
+        glib::filename_to_uri(path, None)
+            .expect("an absolute path has a file URI")
+            .to_string()
+    }
+
+    fn current_item(player: &Player) -> Option<PlaylistItem> {
+        current_history_source(&player.state.borrow())
+    }
+
     fn load_state(player: &Player) -> network_media::MediaLoadState {
         player.state.borrow().media_load_state
+    }
+
+    /// Release `link` with a short apply deadline instead of the production one, so a test can
+    /// watch the queue give up on a check that does not answer in time.
+    fn release_with_deadline(player: &Player, link: &str, deadline: Duration) {
+        let CommandLineLaunch::Link(link) =
+            command_line_launch(vec![link.into()], None, Some(STARTUP_ID.to_owned()))
+        else {
+            panic!("a link launch");
+        };
+        let released = player.delivery.borrow_mut().push(LaunchRequest::Link(link));
+        drive_released_launch_requests(
+            &player.delivery,
+            &player.state,
+            released,
+            deadline,
+            |delivery, state, released| {
+                let launch_args::ReleasedLaunch { ticket, request } = released;
+                let LaunchRequest::Link(link) = request else {
+                    panic!("a link");
+                };
+                start_link_request(delivery, state, ticket, link)
+            },
+        );
     }
 
     macro_rules! main_context {
@@ -1130,6 +1165,44 @@ mod tests {
     }
 
     #[test]
+    fn after_the_window_closes_a_launch_behind_a_given_up_link_waits_for_an_engine() {
+        main_context!(context);
+        let probe = GatedProbe::new(false);
+        let player = Player::running(probe);
+        let a = player.clip("one", "A.mkv");
+        let b = player.clip("two", "B.mkv");
+        // A link whose check outlives the apply deadline, and a file-manager launch behind it.
+        release_with_deadline(
+            &player,
+            &path_link("open", &a, ""),
+            Duration::from_millis(30),
+        );
+        player.forward(&[b.to_str().unwrap()]);
+
+        // The window closes while A's check runs; then the queue gives up on A.
+        let (engine, _render_loop) = detach_engine_for_close(&player.state, &player.delivery);
+        run_for(&context, Duration::from_millis(100));
+        assert_eq!(
+            player.current_file(),
+            None,
+            "B is never recorded as playing with no engine to play it"
+        );
+        assert!(!player.delivery.borrow().is_idle(), "B waits");
+
+        player.state.borrow_mut().mpv = engine;
+        mark_startup_player_ready(&player.delivery, &player.state);
+        settle(&context, &player.delivery);
+        assert_eq!(player.current_file(), Some(b.clone()));
+        probe.open();
+        run_for(&context, Duration::from_millis(50));
+        assert_eq!(
+            player.current_file(),
+            Some(b),
+            "A's late answer changes nothing"
+        );
+    }
+
+    #[test]
     fn rejected_links_leave_playback_alone_and_raise_by_their_action_only() {
         main_context!(context);
         let player = Player::running(GatedProbe::new(true));
@@ -1323,30 +1396,73 @@ mod tests {
         let a = player.clip("one", "A.mkv");
         let b = player.clip("two", "B.mkv");
         let c = player.clip("three", "C.mkv");
+        let d = "http://127.0.0.1:9/clips/D.mp4";
 
-        // A link typed into Open URL is checked; meanwhile MPRIS opens a file and sends a link.
-        dispatch_link_text(
-            &player.state,
-            &path_link("open", &a, ""),
-            LinkOrigin::OpenUrl,
-        );
-        deliver_open_request(&player.state, local(&b));
-        dispatch_link_text(&player.state, &path_link("add", &c, ""), LinkOrigin::Mpris);
-        run_for(&context, Duration::from_millis(50));
+        // A link pasted into Open URL is checked. Meanwhile MPRIS opens a stream, then a file,
+        // then sends a link of its own, each through the handlers' own routing.
         assert_eq!(
-            player.current_file(),
-            None,
-            "the OpenUri file waits behind A"
+            route_open_url_text(&player.state, path_link("open", &a, ""), false),
+            None
         );
+        route_mpris_open_uri(&player.state, d.to_owned());
+        route_mpris_open_uri(&player.state, file_uri(&b));
+        route_mpris_open_uri(&player.state, path_link("add", &c, ""));
+        run_for(&context, Duration::from_millis(50));
+        assert_eq!(current_item(&player), None, "every OpenUri waits behind A");
 
         probe.open();
         settle(&context, &player.delivery);
         assert_eq!(
             player.current_file(),
             Some(b.clone()),
-            "A, then B replaces it"
+            "A, then D and B replace it in turn"
         );
         assert_eq!(player.playlist(), [local(&b), local(&c)], "then C is added");
+    }
+
+    #[test]
+    fn open_url_runs_links_in_turn_before_youtube_classification_and_streams_at_once() {
+        main_context!(context);
+        let probe = GatedProbe::new(false);
+        let player = Player::running(probe);
+        let playing = player.clip("show", "X.mkv");
+        load_media_path(&player.state, playing.clone());
+        let a = player.clip("one", "A.mkv");
+        player.forward_link(&path_link("add", &a, ""));
+
+        // Text that is not a link gets the dialog's own answers, without the queue.
+        assert_eq!(
+            route_open_url_text(&player.state, "https://youtu.be/abc123".to_owned(), false),
+            Some(youtube_open::tooling_missing_notice())
+        );
+        assert_eq!(
+            route_open_url_text(&player.state, "not a stream".to_owned(), false),
+            Some("Enter a valid stream URL".to_owned())
+        );
+        // A link is never read as a YouTube or stream URL: it waits behind the add link.
+        let youtube = "https://youtu.be/abc123";
+        assert_eq!(
+            route_open_url_text(&player.state, url_link("next", youtube), false),
+            None
+        );
+        assert_eq!(player.current_file(), Some(playing.clone()));
+        assert_eq!(player.playlist(), [local(&playing)]);
+
+        probe.open();
+        settle(&context, &player.delivery);
+        assert_eq!(
+            player.playlist(),
+            [local(&playing), url(youtube), local(&a)],
+            "A appended, then the pasted link plays next"
+        );
+
+        // A stream URL is the user's own open: it plays at once.
+        let stream = "http://127.0.0.1:9/clips/E.mp4";
+        assert_eq!(
+            route_open_url_text(&player.state, stream.to_owned(), false),
+            None
+        );
+        assert_eq!(current_item(&player), Some(url(stream)));
     }
 
     #[test]
@@ -1361,9 +1477,8 @@ mod tests {
             [Effect::Present(Some(STARTUP_ID.to_owned()))]
         );
 
-        // The engine is detached while A's check runs, and the detach site says so.
-        let engine = player.state.borrow_mut().mpv.take();
-        player.delivery.borrow_mut().mark_player_unavailable();
+        // The window closes while A's check runs.
+        let (engine, _render_loop) = detach_engine_for_close(&player.state, &player.delivery);
         probe.open();
         run_for(&context, Duration::from_millis(100));
         assert_eq!(player.current_file(), None, "never applied to no engine");
@@ -1383,27 +1498,10 @@ mod tests {
         let a = player.clip("one", "A.mkv");
         let page = "http://127.0.0.1:9/watch?v=later";
 
-        let CommandLineLaunch::Link(open_a) =
-            command_line_launch(vec![path_link("open", &a, "").into()], None, None)
-        else {
-            panic!("a link launch");
-        };
-        let released = player
-            .delivery
-            .borrow_mut()
-            .push(LaunchRequest::Link(open_a));
-        drive_released_launch_requests(
-            &player.delivery,
-            &player.state,
-            released,
+        release_with_deadline(
+            &player,
+            &path_link("open", &a, ""),
             Duration::from_millis(30),
-            |delivery, state, released| {
-                let launch_args::ReleasedLaunch { ticket, request } = released;
-                let LaunchRequest::Link(link) = request else {
-                    panic!("a link");
-                };
-                start_link_request(delivery, state, ticket, link)
-            },
         );
         // B arrives behind A; the queue gives up on A at the deadline and runs B.
         player.forward_link(&url_link("open", page));
