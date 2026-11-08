@@ -289,7 +289,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard !closing else { return }
         closing = true
         shutdown()
-        if smokeRun?.finished == true { print("OKP_SMOKE teardown=clean"); fflush(stdout) }
+        if smokeRun?.finished == true {
+            if let problem = system.smokeCheckWithdrawn() { fputs("OK Player: \(problem)\n", stderr); exit(1) }
+            print("OKP_SMOKE teardown=clean"); fflush(stdout)
+        }
         NSApp.terminate(nil)
     }
     func applicationWillTerminate(_ notification: Notification) { shutdown() }
@@ -302,17 +305,19 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 ///
 /// 1. idle: no render calls before a file is open;
 /// 2. playing: the position and the render calls advance; Now Playing shows the file
-///    as playing video and the display-sleep assertion is held; the pause is sent as
-///    the remote pause command;
+///    as playing video, the display-sleep assertion is held and the system offers the
+///    remote commands; the pause is sent through the handler the system holds for its
+///    pause command;
 /// 3. paused: the position holds and the render calls stay flat for two seconds; Now
-///    Playing shows the pause and the assertion is released; the resume is sent as
-///    the remote play command;
+///    Playing shows the pause and the assertion is released; the resume is sent
+///    through the handler for the system's play command;
 /// 4. resumed: both advance again;
 /// 5. resized: after repeated window resizes Core Animation holds exactly one GL
 ///    context and has drawn into no context but the layer's own;
 /// 6. presented: every frame drawn reported a swap that reached libmpv (the swap
 ///    count the session returns equals the frames drawn);
-/// 7. closed while playing: teardown runs in order and the app exits.
+/// 7. closed while playing: teardown runs in order, the system offers no remote
+///    command any more, and the app exits.
 ///
 /// The timed steps use one-shot timers; the session state itself arrives through
 /// wakeup-driven drains, never through polling.

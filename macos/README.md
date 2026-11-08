@@ -330,12 +330,14 @@ window and checks, from the session's events and the video layer's counters:
 
 - no render calls while idle, before the file is open;
 - the position and the render calls advance while playing;
-- while playing, the system's Now Playing reports the fixture as playing video and
-  IOKit lists the display-sleep assertion; the pause is sent through the remote
-  pause command;
+- while playing, the system's Now Playing reports the fixture as playing video,
+  IOKit lists the display-sleep assertion, and `MPRemoteCommandCenter` has play,
+  pause, play/pause, stop, both skips (10 s), change position and change rate enabled
+  (with the offered rates) and next and previous off; the pause is sent by running
+  the handler registered with the center's pause command;
 - while paused, the position holds and the render calls stay flat for two seconds,
   Now Playing reports the pause at rate 0 and the assertion is gone; the resume is sent
-  through the remote play command;
+  through the handler registered with the center's play command;
 - both advance again after resuming;
 - after six window resizes during playback, Core Animation holds exactly one GL
   context (each `copyCGLContext` but one is balanced by `releaseCGLContext`) and
@@ -343,7 +345,8 @@ window and checks, from the session's events and the video layer's counters:
 - every frame drawn reported a swap that reached libmpv: the count
   `okp_session_render_report_swap` returns equals the frames drawn;
 - closing the window during playback tears down in order (close, destroy the
-  render context, free the session).
+  render context, free the session), after which the center has none of those
+  commands enabled and no handler of the app's.
 
 Its `OKP_SMOKE` line also reports those counts, the pixel format, and the
 volume and track count from the session snapshot. The complete app is copied

@@ -6,7 +6,8 @@ import MediaPlayer
 /// Everything is derived from the session snapshot it is handed after each drained
 /// batch; it keeps no playback state of its own.
 final class SystemIntegration: NSObject {
-    let remote: RemoteCommandController
+    private let remote: RemoteCommandController
+    private let remoteSource: RemoteCommandSource
     private let nowPlaying: NowPlayingPublisher
     private let nowPlayingCenter: NowPlayingCenter
     private let displaySleep: DisplaySleepGuard
@@ -48,6 +49,7 @@ final class SystemIntegration: NSObject {
         self.open = open
         self.nowPlayingCenter = nowPlayingCenter
         self.recentList = recentList
+        self.remoteSource = remoteSource
         nowPlaying = NowPlayingPublisher(center: nowPlayingCenter, artwork: artwork, clock: clock)
         remote = RemoteCommandController(source: remoteSource, session: session)
         displaySleep = DisplaySleepGuard(power: power)
@@ -121,9 +123,28 @@ final class SystemIntegration: NSObject {
 
     // MARK: Smoke
 
+    /// Smoke: runs the handler the system's remote-command center holds for `command`,
+    /// so the binding, the controller and the session are all on the path.
+    private func smokeSend(_ command: MPRemoteCommand, _ name: String) -> String? {
+        guard let source = remoteSource as? SystemRemoteCommandSource else { return "Remote commands are not the system's" }
+        guard let status = source.deliver(command) else { return "No handler is registered for the remote \(name) command" }
+        guard status == .success else { return "The remote \(name) command returned status \(status.rawValue)" }
+        return nil
+    }
+
+    /// Smoke: the system's remote-command center offers what the shell handles.
+    private func smokeCheckOffered() -> String? {
+        let offer = RemoteCommandOffer.read()
+        let expected = RemoteCommandOffer.installed(next: playlist?.canStep(.next) ?? false,
+                                                    previous: playlist?.canStep(.previous) ?? false)
+        guard offer == expected else { return "The remote-command center offers \(offer), not \(expected)" }
+        return nil
+    }
+
     /// Smoke, while the fixture plays: the system's Now Playing names it as playing
-    /// video, IOKit lists the display-sleep assertion, and then the pause goes out
-    /// through the remote-command path. Returns what failed.
+    /// video, IOKit lists the display-sleep assertion, the remote-command center offers
+    /// the shell's commands, and then the pause goes out through the handler registered
+    /// for the system's pause command. Returns what failed.
     func smokeCheckPlayingThenPause() -> String? {
         guard let center = nowPlayingCenter as? SystemNowPlayingCenter, let expected = nowPlaying.published else {
             return "Now Playing was not published while playing"
@@ -141,17 +162,17 @@ final class SystemIntegration: NSObject {
             return "No display-sleep assertion while video plays"
         }
         smokeAssertion = assertion
-        let status = remote.handle(.pause)
-        guard status == .success else { return "The remote pause command returned status \(status.rawValue)" }
+        if let problem = smokeCheckOffered() { return problem }
+        if let problem = smokeSend(MPRemoteCommandCenter.shared().pauseCommand, "pause") { return problem }
         print("OKP_SMOKE system=playing now_playing_state=playing now_playing_type=video "
-              + "display_sleep_assertion=held remote_pause=success")
+              + "display_sleep_assertion=held remote_commands=offered remote_pause=success")
         fflush(stdout)
         return nil
     }
 
     /// Smoke, after two paused seconds: Now Playing shows the pause with a stopped
     /// position, the assertion is gone from IOKit, and playback resumes through the
-    /// remote-command path. Returns what failed.
+    /// handler registered for the system's play command. Returns what failed.
     func smokeCheckPausedThenResume() -> String? {
         guard let center = nowPlayingCenter as? SystemNowPlayingCenter else { return "Now Playing is not the system's" }
         let (info, state) = center.current
@@ -163,9 +184,22 @@ final class SystemIntegration: NSObject {
         if let smokeAssertion, SystemPowerAssertions.type(of: smokeAssertion) != nil {
             return "IOKit still lists the display-sleep assertion while paused"
         }
-        let status = remote.handle(.play)
-        guard status == .success else { return "The remote play command returned status \(status.rawValue)" }
+        if let problem = smokeSend(MPRemoteCommandCenter.shared().playCommand, "play") { return problem }
         print("OKP_SMOKE system=paused now_playing_state=paused display_sleep_assertion=released remote_play=success")
+        fflush(stdout)
+        return nil
+    }
+
+    /// Smoke, after `shutdown`: the remote-command center offers nothing and holds no
+    /// handler of the shell's. Returns what failed.
+    func smokeCheckWithdrawn() -> String? {
+        let offer = RemoteCommandOffer.read()
+        guard offer.enabled.isEmpty else { return "The remote-command center still offers \(offer.enabled) after shutdown" }
+        if let source = remoteSource as? SystemRemoteCommandSource,
+           source.deliver(MPRemoteCommandCenter.shared().playCommand) != nil {
+            return "The remote play command still has a handler after shutdown"
+        }
+        print("OKP_SMOKE system=closed remote_commands=withdrawn")
         fflush(stdout)
         return nil
     }

@@ -88,3 +88,93 @@ final class RemoteCommandTests: XCTestCase {
         XCTAssertEqual(source.uninstalls, 1)
     }
 }
+
+/// The registration with the system's `MPRemoteCommandCenter` that media keys, Control
+/// Center and AirPods depend on: which commands it offers, and which handler each one
+/// runs.
+final class SystemRemoteCommandSourceTests: XCTestCase {
+    private let center = MPRemoteCommandCenter.shared()
+    private let source = SystemRemoteCommandSource()
+    private let session = SessionRecorder()
+    private lazy var controller = RemoteCommandController(source: source, session: { [unowned self] in self.session.dispatch($0) })
+
+    private let alwaysOffered = ["play", "pause", "togglePlayPause", "stop",
+                                 "skipForward", "skipBackward", "changePlaybackPosition", "changePlaybackRate"]
+    private let rates = [0.5, 0.75, 1, 1.25, 1.5, 2]
+
+    override func tearDown() {
+        controller.stop()
+        super.tearDown()
+    }
+
+    private func offer(_ enabled: [String]) -> RemoteCommandOffer {
+        RemoteCommandOffer(enabled: enabled, skipForwardIntervals: [10], skipBackwardIntervals: [10], playbackRates: rates)
+    }
+
+    func testTheSystemOffersTheHandledCommandsUntilTheyAreUninstalled() {
+        controller.start()
+        XCTAssertEqual(RemoteCommandOffer.read(center), offer(alwaysOffered),
+                       "next and previous stay off without a playlist; skips move ten seconds")
+        XCTAssertFalse(center.nextTrackCommand.isEnabled)
+        XCTAssertFalse(center.previousTrackCommand.isEnabled)
+
+        let playlist = FakePlaylist()
+        playlist.canGoPrevious = false
+        controller.playlist = playlist
+        controller.refresh()
+        XCTAssertTrue(center.nextTrackCommand.isEnabled)
+        XCTAssertFalse(center.previousTrackCommand.isEnabled)
+        playlist.canGoNext = false
+        playlist.canGoPrevious = true
+        controller.refresh()
+        XCTAssertFalse(center.nextTrackCommand.isEnabled)
+        XCTAssertTrue(center.previousTrackCommand.isEnabled)
+
+        controller.stop()
+        XCTAssertEqual(RemoteCommandOffer.read(center).enabled, [], "uninstalling withdraws every command")
+        for command: MPRemoteCommand in [center.playCommand, center.pauseCommand, center.nextTrackCommand,
+                                         center.changePlaybackRateCommand] {
+            XCTAssertNil(source.deliver(command), "\(command) still has a handler")
+        }
+
+        controller.playlist = nil
+        controller.start()
+        XCTAssertEqual(RemoteCommandOffer.read(center), offer(alwaysOffered), "installing again offers them again")
+    }
+
+    func testEachSystemCommandRunsItsOwnHandler() {
+        controller.start()
+        let sent: [(MPRemoteCommand, MPRemoteCommandHandlerStatus)] = [
+            (center.pauseCommand, .success),
+            (center.playCommand, .success),
+            (center.togglePlayPauseCommand, .success),
+            (center.stopCommand, .success),
+            (center.skipForwardCommand, .success),
+            (center.skipBackwardCommand, .success),
+            // Without event details there is no position or rate to pass on.
+            (center.changePlaybackPositionCommand, .commandFailed),
+            (center.changePlaybackRateCommand, .commandFailed),
+            // Without a playlist there is nothing to step to.
+            (center.nextTrackCommand, .noSuchContent),
+            (center.previousTrackCommand, .noSuchContent),
+        ]
+        for (command, status) in sent {
+            XCTAssertEqual(source.deliver(command), status, "\(command)")
+        }
+        XCTAssertEqual(session.commands, [
+            .setPaused(paused: true),
+            .setPaused(paused: false),
+            .togglePause,
+            .close,
+            .seek(seconds: 10, mode: .relative, precision: .exact),
+            .seek(seconds: -10, mode: .relative, precision: .exact),
+        ])
+
+        let playlist = FakePlaylist()
+        controller.playlist = playlist
+        controller.refresh()
+        XCTAssertEqual(source.deliver(center.nextTrackCommand), .success)
+        XCTAssertEqual(source.deliver(center.previousTrackCommand), .success)
+        XCTAssertEqual(playlist.steps, [.next, .previous])
+    }
+}

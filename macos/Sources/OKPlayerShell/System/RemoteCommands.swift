@@ -141,6 +141,9 @@ final class RemoteCommandController {
 final class SystemRemoteCommandSource: RemoteCommandSource {
     private let center = MPRemoteCommandCenter.shared()
     private var targets: [(command: MPRemoteCommand, target: Any)] = []
+    /// The handler registered with each command, so the smoke and the tests can send a
+    /// command through the same closure the system calls.
+    private var handlers: [ObjectIdentifier: (MPRemoteCommandEvent?) -> MPRemoteCommandHandlerStatus] = [:]
 
     func install(_ handler: @escaping (RemoteCommand) -> MPRemoteCommandHandlerStatus) {
         uninstall()
@@ -177,9 +180,17 @@ final class SystemRemoteCommandSource: RemoteCommandSource {
     }
 
     private func add(_ command: MPRemoteCommand,
-                     _ handler: @escaping (MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus) {
+                     _ handler: @escaping (MPRemoteCommandEvent?) -> MPRemoteCommandHandlerStatus) {
         command.isEnabled = true
-        targets.append((command, command.addTarget(handler: handler)))
+        handlers[ObjectIdentifier(command)] = handler
+        targets.append((command, command.addTarget(handler: { event in handler(event) })))
+    }
+
+    /// Runs the handler registered with `command`, as the system does when the command
+    /// arrives without event details (no skip interval, position or rate); `nil` when
+    /// no handler is registered.
+    func deliver(_ command: MPRemoteCommand) -> MPRemoteCommandHandlerStatus? {
+        handlers[ObjectIdentifier(command)]?(nil)
     }
 
     func setPlaylistSteps(next: Bool, previous: Bool) {
@@ -193,5 +204,43 @@ final class SystemRemoteCommandSource: RemoteCommandSource {
             command.isEnabled = false
         }
         targets = []
+        handlers = [:]
+    }
+}
+
+/// What `MPRemoteCommandCenter` offers, read back from it: the smoke and the tests
+/// check the registration itself, not only the controller behind it.
+struct RemoteCommandOffer: Equatable {
+    /// The enabled commands by name, in the order of `read`.
+    var enabled: [String]
+    var skipForwardIntervals: [Double]
+    var skipBackwardIntervals: [Double]
+    var playbackRates: [Double]
+
+    static func read(_ center: MPRemoteCommandCenter = .shared()) -> RemoteCommandOffer {
+        let commands: [(name: String, command: MPRemoteCommand)] = [
+            ("play", center.playCommand), ("pause", center.pauseCommand),
+            ("togglePlayPause", center.togglePlayPauseCommand), ("stop", center.stopCommand),
+            ("nextTrack", center.nextTrackCommand), ("previousTrack", center.previousTrackCommand),
+            ("skipForward", center.skipForwardCommand), ("skipBackward", center.skipBackwardCommand),
+            ("changePlaybackPosition", center.changePlaybackPositionCommand),
+            ("changePlaybackRate", center.changePlaybackRateCommand),
+        ]
+        return RemoteCommandOffer(
+            enabled: commands.filter { $0.command.isEnabled }.map { $0.name },
+            skipForwardIntervals: center.skipForwardCommand.preferredIntervals.map(\.doubleValue),
+            skipBackwardIntervals: center.skipBackwardCommand.preferredIntervals.map(\.doubleValue),
+            playbackRates: center.changePlaybackRateCommand.supportedPlaybackRates.map(\.doubleValue))
+    }
+
+    /// The offer while the shell's handlers are installed.
+    static func installed(next: Bool, previous: Bool) -> RemoteCommandOffer {
+        let steps = [("nextTrack", next), ("previousTrack", previous)].filter { $0.1 }.map { $0.0 }
+        let interval = [RemoteCommandMapping.skipInterval]
+        return RemoteCommandOffer(
+            enabled: ["play", "pause", "togglePlayPause", "stop"] + steps
+                + ["skipForward", "skipBackward", "changePlaybackPosition", "changePlaybackRate"],
+            skipForwardIntervals: interval, skipBackwardIntervals: interval,
+            playbackRates: RemoteCommandMapping.offeredRates)
     }
 }
