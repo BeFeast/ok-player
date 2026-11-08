@@ -248,7 +248,12 @@ impl SessionHistory {
                 subtitle_delay: Some(*seconds),
                 ..Preferences::default()
             },
-            Command::Seek { .. } | Command::SetMute { .. } | Command::History { .. } => return,
+            // An invoked registry command arrives here as the command it stands
+            // for.
+            Command::Seek { .. }
+            | Command::SetMute { .. }
+            | Command::History { .. }
+            | Command::InvokeCommand { .. } => return,
         };
         // The value the shell just set, not the engine's next report of it,
         // which may still hold the previous value. It is written with the next
