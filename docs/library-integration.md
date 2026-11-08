@@ -148,8 +148,11 @@ Registration and diagnostics:
   the scheme, the app **diagnoses** the state instead of pretending it is registered. The
   Flatpak build does not handle links in v1.
 - **Diagnostics.** Settings → Integration shows a URI scheme row, and *Copy Diagnostics*
-  has a matching line, reporting whether the scheme is advertised by an installed desktop
-  entry and, where `xdg-mime` is available, whether OK Player is its current handler.
+  has a matching line, reporting whether link handling is on, whether the scheme is
+  advertised by an installed desktop entry and, where `xdg-mime` is available, whether OK
+  Player is its current handler. The *Open ok-player:// links* switch turns handling off by
+  removing the association in the user's `mimeapps.list`; see
+  [ok-player-links.md](ok-player-links.md#registration-on-linux).
 - **Handling.** Every entry point (the launch command line, a second-instance invocation,
   an `org.mpris…OpenUri` call, and the in-app Open URL box) goes through the same parser and
   policy, `okp-core::ok_player_uri`. A rejected link shows a fixed-text toast and writes one

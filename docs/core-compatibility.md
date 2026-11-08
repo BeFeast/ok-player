@@ -520,6 +520,9 @@ cover the Windows reader/writer and legacy-settings upgrade.
   the subset it understands and carries the rest through untouched on save, so the shared schema
   grows without either side dropping the other's state. Empty optional sections remain omitted
   from a default Linux document.
+- **`integration.restore_uri_scheme_default` is Linux-only.** It remembers that turning
+  `ok-player://` link handling back on should make OK Player the scheme's default handler again
+  (#850). It is absent unless set, and a migrated Windows document leaves it absent.
 
 ### Video adjustment parity ledger
 

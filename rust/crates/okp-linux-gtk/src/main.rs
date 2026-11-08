@@ -84,6 +84,7 @@ mod link_dispatch;
 mod lyrics;
 mod media_download;
 mod media_info;
+mod mimeapps;
 mod mpris;
 mod mpv_bridge;
 mod native_video;
@@ -2321,8 +2322,7 @@ struct LinuxIntegrationSnapshot {
     desktop_entry_path: Option<PathBuf>,
     registered_key_mimes: usize,
     default_key_mimes: Option<usize>,
-    uri_scheme_registered: bool,
-    uri_scheme_default: Option<bool>,
+    uri_scheme: UriSchemeState,
     xdg_mime_available: bool,
     update_desktop_database_available: bool,
 }
@@ -2337,20 +2337,15 @@ impl LinuxIntegrationSnapshot {
             .as_deref()
             .map(count_registered_key_media_mimes)
             .unwrap_or_default();
-        let uri_scheme_registered = desktop_entry
-            .as_deref()
-            .map(desktop_registers_uri_scheme)
-            .unwrap_or(false);
         let xdg_mime_available = find_executable("xdg-mime").is_some();
         let default_key_mimes = xdg_mime_available.then(count_default_key_media_mimes);
-        let uri_scheme_default = xdg_mime_available.then(uri_scheme_default_is_ok_player);
+        let uri_scheme = UriSchemeState::capture(desktop_entry.as_deref(), xdg_mime_available);
 
         Self {
             desktop_entry_path,
             registered_key_mimes,
             default_key_mimes,
-            uri_scheme_registered,
-            uri_scheme_default,
+            uri_scheme,
             xdg_mime_available,
             update_desktop_database_available: find_executable("update-desktop-database").is_some(),
         }

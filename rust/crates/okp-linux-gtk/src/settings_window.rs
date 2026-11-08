@@ -131,7 +131,10 @@ impl SettingsPageBuilder {
             SettingsPage::Integration => {
                 let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
                 page.add_css_class("okp-settings-page");
-                page.append(&settings_integration_section(Rc::clone(&self.status_toast)));
+                page.append(&settings_integration_section(
+                    Rc::clone(&self.state),
+                    Rc::clone(&self.status_toast),
+                ));
                 page.append(&settings_replay_cache_section(
                     Rc::clone(&self.state),
                     Rc::clone(&self.status_toast),

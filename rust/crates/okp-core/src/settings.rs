@@ -56,6 +56,8 @@ pub struct Settings {
     pub privacy: PrivacySettings,
     #[serde(default)]
     pub online_video: OnlineVideoSettings,
+    #[serde(default, skip_serializing_if = "IntegrationSettings::is_empty")]
+    pub integration: IntegrationSettings,
 }
 
 impl Default for Settings {
@@ -72,6 +74,7 @@ impl Default for Settings {
             screenshots: ScreenshotSettings::default(),
             privacy: PrivacySettings::default(),
             online_video: OnlineVideoSettings::default(),
+            integration: IntegrationSettings::default(),
         }
     }
 }
@@ -469,6 +472,22 @@ const fn default_replay_cache_enabled() -> bool {
     true
 }
 
+/// Desktop-integration state a shell has to remember across runs. Linux-only today.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct IntegrationSettings {
+    /// OK Player should become the default handler for `ok-player://` links again when the user
+    /// turns link handling back on. Set when turning handling off removed OK Player as the
+    /// scheme's default, or when the user chose Make Default while handling was off (#850).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restore_uri_scheme_default: Option<bool>,
+}
+
+impl IntegrationSettings {
+    fn is_empty(&self) -> bool {
+        self.restore_uri_scheme_default.is_none()
+    }
+}
+
 fn default_auto_check() -> bool {
     true
 }
@@ -546,6 +565,7 @@ impl WindowsSettings {
                 history_retention_days: self.history_retention_days,
             },
             online_video: OnlineVideoSettings::default(),
+            integration: IntegrationSettings::default(),
         }
     }
 }
@@ -663,6 +683,29 @@ mod tests {
                 .version(UpdateChannel::Candidate),
             Some("0.11.0-beta.2.41")
         );
+    }
+
+    #[test]
+    fn uri_scheme_restore_flag_round_trips_and_is_omitted_by_default() {
+        let default_json =
+            serde_json::to_value(Settings::default()).expect("settings should serialize");
+        assert!(
+            default_json.get("integration").is_none(),
+            "a default document carries no integration section: {default_json}"
+        );
+        assert_eq!(
+            Settings::load(r#"{"version": 2}"#)
+                .expect("older canonical settings should load")
+                .integration
+                .restore_uri_scheme_default,
+            None
+        );
+
+        let mut settings = Settings::default();
+        settings.integration.restore_uri_scheme_default = Some(true);
+        let json = serde_json::to_string_pretty(&settings).expect("settings should serialize");
+        let loaded = Settings::load(&json).expect("settings should reload");
+        assert_eq!(loaded.integration.restore_uri_scheme_default, Some(true));
     }
 
     #[test]

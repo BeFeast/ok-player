@@ -1,8 +1,18 @@
 use super::*;
 
-pub(crate) fn settings_integration_section(status_toast: Rc<StatusToast>) -> gtk::Box {
+pub(crate) fn settings_integration_section(
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+) -> gtk::Box {
     let snapshot = LinuxIntegrationSnapshot::capture();
     let section = settings_section("Integration");
+
+    let status = gtk::Label::new(Some("Ready"));
+    status.add_css_class("okp-update-status");
+    status.set_xalign(0.0);
+    status.set_width_chars(1);
+    status.set_max_width_chars(58);
+    status.set_wrap(true);
 
     let desktop_detail = snapshot
         .desktop_entry_path
@@ -74,13 +84,14 @@ pub(crate) fn settings_integration_section(status_toast: Rc<StatusToast>) -> gtk
     );
     section.append(&defaults_row);
 
-    let (scheme_value, scheme_detail, scheme_status) =
-        uri_scheme_row_content(snapshot.uri_scheme_registered, snapshot.uri_scheme_default);
-    section.append(&integration_status_row(
-        "URI scheme",
-        scheme_value,
-        &scheme_detail,
-        scheme_status,
+    let scheme_row = UriSchemeRow::new(snapshot.uri_scheme);
+    section.append(&scheme_row.row);
+    section.append(&uri_links_toggle_row(
+        snapshot.uri_scheme.handling,
+        Rc::clone(&state),
+        Rc::clone(&status_toast),
+        scheme_row.clone(),
+        status.clone(),
     ));
 
     section.append(&integration_status_row(
@@ -94,12 +105,6 @@ pub(crate) fn settings_integration_section(status_toast: Rc<StatusToast>) -> gtk
         },
     ));
 
-    let status = gtk::Label::new(Some("Ready"));
-    status.add_css_class("okp-update-status");
-    status.set_xalign(0.0);
-    status.set_width_chars(1);
-    status.set_max_width_chars(58);
-    status.set_wrap(true);
     section.append(&status);
 
     let actions = gtk::Box::new(gtk::Orientation::Vertical, 8);
@@ -116,9 +121,12 @@ pub(crate) fn settings_integration_section(status_toast: Rc<StatusToast>) -> gtk
     let make_default_status = status.clone();
     let make_default_value = defaults_value_label.clone();
     let make_default_toast = Rc::clone(&status_toast);
+    let make_default_state = Rc::clone(&state);
+    let make_default_scheme_row = scheme_row.clone();
     make_default.connect_clicked(move |button| {
         button.set_sensitive(false);
-        match set_linux_default_app_for_key_mimes() {
+        let uri_scheme_handling = user_uri_scheme_handling_enabled();
+        match set_linux_default_app(uri_scheme_handling) {
             Ok(count) => {
                 set_integration_state_pill(
                     &make_default_value,
@@ -129,9 +137,20 @@ pub(crate) fn settings_integration_section(status_toast: Rc<StatusToast>) -> gtk
                         IntegrationStatus::Warning
                     },
                 );
-                make_default_status.set_text(&format!(
-                    "OK Player set as default for {count} key media types."
-                ));
+                if uri_scheme_handling {
+                    make_default_status.set_text(&format!(
+                        "OK Player set as default for {count} key media types and {LINUX_RESERVED_URI_SCHEME} links."
+                    ));
+                } else {
+                    // A default for a removed association would contradict the toggle, so the
+                    // choice waits until links are turned back on.
+                    let mut state = make_default_state.borrow_mut();
+                    state.settings.set_restore_uri_scheme_default(true);
+                    save_settings_or_toast(&mut state, &make_default_toast);
+                    make_default_status.set_text(&format!(
+                        "OK Player set as default for {count} key media types. {LINUX_RESERVED_URI_SCHEME} links are off; OK Player becomes their default when you turn them on."
+                    ));
+                }
                 make_default_toast.show("Default media app updated");
             }
             Err(error) => {
@@ -139,6 +158,7 @@ pub(crate) fn settings_integration_section(status_toast: Rc<StatusToast>) -> gtk
                 make_default_toast.show("Could not update defaults");
             }
         }
+        make_default_scheme_row.show(UriSchemeState::current());
         button.set_sensitive(true);
     });
     primary.append(&make_default);
@@ -216,6 +236,17 @@ pub(crate) fn integration_status_row_with_value(
     detail: &str,
     status: IntegrationStatus,
 ) -> (gtk::Box, gtk::Label) {
+    let (row, value, _detail) = integration_status_row_parts(label, value, detail, status);
+    (row, value)
+}
+
+/// A status row plus its value pill and detail label, for rows whose text changes in place.
+pub(crate) fn integration_status_row_parts(
+    label: &str,
+    value: &str,
+    detail: &str,
+    status: IntegrationStatus,
+) -> (gtk::Box, gtk::Label, gtk::Label) {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     row.add_css_class("okp-settings-row");
 
@@ -240,7 +271,7 @@ pub(crate) fn integration_status_row_with_value(
     value.set_valign(gtk::Align::Center);
     row.append(&value);
 
-    (row, value)
+    (row, value, detail)
 }
 
 pub(crate) fn set_integration_state_pill(
@@ -355,31 +386,314 @@ pub(crate) fn uri_scheme_default_is_ok_player() -> bool {
         .is_some_and(default_app_matches_ok_player)
 }
 
-/// The pill value / detail / status for the reserved `ok-player://` scheme row.
-/// `registered` reflects the installed desktop entry advertising the scheme; `default` is
-/// the xdg-mime default-handler check (`Some(true)` when OK Player is the explicit default,
-/// `None` when xdg-mime is unavailable). Reserving the scheme *is* registration, so an
-/// advertised scheme reads Good regardless of the default handler — the default only
-/// enriches the detail line (a reserved scheme is claimed for later, not actively routed).
-pub(crate) fn uri_scheme_row_content(
-    registered: bool,
-    default: Option<bool>,
-) -> (&'static str, String, IntegrationStatus) {
-    if !registered {
-        return (
-            "Missing",
-            format!("{LINUX_RESERVED_URI_SCHEME} is not advertised by an installed desktop entry."),
-            IntegrationStatus::Bad,
-        );
+/// The `ok-player://` contract version this shell executes (epic #845).
+pub(crate) const URI_SCHEME_CONTRACT: &str = "v1";
+
+/// Where `ok-player://` links stand on this desktop, as Settings and Copy Diagnostics report it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct UriSchemeState {
+    /// An installed desktop entry lists `x-scheme-handler/ok-player` in `MimeType=`.
+    pub(crate) advertised: bool,
+    /// The Settings toggle: the user's `mimeapps.list` does not remove the association.
+    pub(crate) handling: bool,
+    /// `xdg-mime query default` names OK Player; `None` when xdg-mime is unavailable.
+    pub(crate) default: Option<bool>,
+}
+
+impl UriSchemeState {
+    pub(crate) fn capture(desktop_entry: Option<&str>, xdg_mime_available: bool) -> Self {
+        Self {
+            advertised: desktop_entry.is_some_and(desktop_registers_uri_scheme),
+            handling: user_uri_scheme_handling_enabled(),
+            default: xdg_mime_available.then(uri_scheme_default_is_ok_player),
+        }
     }
-    let detail = match default {
-        Some(true) => format!("{LINUX_RESERVED_URI_SCHEME} is reserved and handled by OK Player."),
-        Some(false) => format!(
-            "{LINUX_RESERVED_URI_SCHEME} is advertised; not set as the system default handler."
+
+    /// A fresh reading, for refreshing the Settings row after a change.
+    pub(crate) fn current() -> Self {
+        let desktop_entry =
+            linux_desktop_entry_path().and_then(|path| fs::read_to_string(path).ok());
+        Self::capture(
+            desktop_entry.as_deref(),
+            find_executable("xdg-mime").is_some(),
+        )
+    }
+
+    /// Whether the desktop routes links to OK Player at all. Turning handling off is what
+    /// unregisters it, so an advertised scheme with handling off is not registered.
+    pub(crate) fn registered(self) -> bool {
+        self.advertised && self.handling
+    }
+
+    /// The Copy Diagnostics value:
+    /// `v1, handling on|off; registered (default)|registered (not default)|missing`.
+    /// Without xdg-mime the default handler cannot be checked, which reads
+    /// `registered (default unknown)`.
+    pub(crate) fn diagnostics(self) -> String {
+        let registration = if !self.registered() {
+            "missing"
+        } else {
+            match self.default {
+                Some(true) => "registered (default)",
+                Some(false) => "registered (not default)",
+                None => "registered (default unknown)",
+            }
+        };
+        format!(
+            "{URI_SCHEME_CONTRACT}, handling {}; {registration}",
+            if self.handling { "on" } else { "off" }
+        )
+    }
+
+    /// The Settings row's pill value, detail line and status.
+    pub(crate) fn row_content(self) -> (&'static str, String, IntegrationStatus) {
+        if !self.advertised {
+            return (
+                "Missing",
+                format!(
+                    "{LINUX_RESERVED_URI_SCHEME} is not advertised by an installed desktop entry."
+                ),
+                IntegrationStatus::Bad,
+            );
+        }
+        if !self.handling {
+            return (
+                "Off",
+                format!(
+                    "{LINUX_RESERVED_URI_SCHEME} links are turned off; browsers no longer offer OK Player for them."
+                ),
+                IntegrationStatus::Warning,
+            );
+        }
+        match self.default {
+            Some(true) => (
+                "Default",
+                format!("OK Player opens {LINUX_RESERVED_URI_SCHEME} links."),
+                IntegrationStatus::Good,
+            ),
+            Some(false) => (
+                "Registered",
+                format!(
+                    "Another application is the default for {LINUX_RESERVED_URI_SCHEME} links; Make Default claims them."
+                ),
+                IntegrationStatus::Warning,
+            ),
+            None => (
+                "Registered",
+                format!(
+                    "{LINUX_RESERVED_URI_SCHEME} is advertised; xdg-mime is unavailable to check the default handler."
+                ),
+                IntegrationStatus::Good,
+            ),
+        }
+    }
+}
+
+/// The Settings → Integration "URI scheme" row, kept so a change can update it in place.
+#[derive(Clone)]
+pub(crate) struct UriSchemeRow {
+    row: gtk::Box,
+    value: gtk::Label,
+    detail: gtk::Label,
+}
+
+impl UriSchemeRow {
+    fn new(state: UriSchemeState) -> Self {
+        let (value, detail, status) = state.row_content();
+        let (row, value, detail) =
+            integration_status_row_parts("URI scheme", value, &detail, status);
+        Self { row, value, detail }
+    }
+
+    fn show(&self, state: UriSchemeState) {
+        let (value, detail, status) = state.row_content();
+        set_integration_state_pill(&self.value, value, status);
+        self.detail.set_text(&detail);
+    }
+}
+
+/// The "Open ok-player:// links" switch. Off writes a `[Removed Associations]` entry to the
+/// user's `mimeapps.list`, so the desktop stops offering OK Player for the scheme; on removes it
+/// again. It is not a player-side refusal: with handling off a link never reaches the player.
+fn uri_links_toggle_row(
+    active: bool,
+    state: Rc<RefCell<PlayerState>>,
+    status_toast: Rc<StatusToast>,
+    scheme_row: UriSchemeRow,
+    status: gtk::Label,
+) -> gtk::Box {
+    let flatpak = flatpak_install_detected(
+        env::var_os("FLATPAK_ID").as_deref(),
+        Path::new("/.flatpak-info").is_file(),
+    );
+    let title = format!("Open {LINUX_RESERVED_URI_SCHEME} links");
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("okp-settings-switch-row");
+
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    text.set_hexpand(true);
+    let label = gtk::Label::new(Some(&title));
+    label.add_css_class("okp-info-label");
+    label.set_xalign(0.0);
+    text.append(&label);
+    let detail = gtk::Label::new(Some(if flatpak {
+        "The Flatpak build does not handle these links."
+    } else {
+        "Lets web pages and local HTML files open media in OK Player. Off removes OK Player as a handler for these links."
+    }));
+    detail.add_css_class("okp-update-status");
+    detail.set_xalign(0.0);
+    detail.set_width_chars(1);
+    detail.set_max_width_chars(50);
+    detail.set_wrap(true);
+    text.append(&detail);
+    row.append(&text);
+
+    let state_label = gtk::Label::new(Some(if active { "On" } else { "Off" }));
+    state_label.add_css_class("okp-settings-state-pill");
+    state_label.set_valign(gtk::Align::Center);
+    row.append(&state_label);
+
+    let toggle = settings_switch_button(active, &title);
+    // Inside the sandbox `$XDG_CONFIG_HOME` is the app's own directory, which the desktop never
+    // reads, so the switch could not change anything.
+    toggle.set_sensitive(!flatpak);
+    toggle.connect_clicked(move |button| {
+        let enabled = !button.has_css_class("is-active");
+        let Some(config_home) = mimeapps::user_config_home() else {
+            status.set_text("Could not change links: no configuration directory (HOME is unset).");
+            status_toast.show("Could not change links");
+            return;
+        };
+        let restore_default = state.borrow().settings.restore_uri_scheme_default();
+        match set_uri_scheme_handling(&config_home, enabled, restore_default) {
+            Ok(change) => {
+                {
+                    let mut state = state.borrow_mut();
+                    state
+                        .settings
+                        .set_restore_uri_scheme_default(change.restore_default_on_enable);
+                    save_settings_or_toast(&mut state, &status_toast);
+                }
+                set_settings_switch_active(button, enabled);
+                state_label.set_text(if enabled { "On" } else { "Off" });
+                status.set_text(&if !enabled {
+                    format!(
+                        "{LINUX_RESERVED_URI_SCHEME} links turned off; browsers no longer offer OK Player for them."
+                    )
+                } else if change.restored_default {
+                    format!(
+                        "{LINUX_RESERVED_URI_SCHEME} links turned on; OK Player is their default again."
+                    )
+                } else {
+                    format!("{LINUX_RESERVED_URI_SCHEME} links turned on.")
+                });
+                status_toast.show(&format!(
+                    "{LINUX_RESERVED_URI_SCHEME} links {}",
+                    if enabled { "on" } else { "off" }
+                ));
+                scheme_row.show(UriSchemeState::current());
+            }
+            Err(error) => {
+                eprintln!("ok-player:// handling: could not update mimeapps.list: {error}");
+                status.set_text(&format!("Could not update mimeapps.list: {error}"));
+                status_toast.show("Could not change links");
+            }
+        }
+    });
+    row.append(&toggle);
+
+    row
+}
+
+/// Whether the `mimeapps.list` under `config_home` leaves the `ok-player://` association in
+/// place. A file that cannot be read counts as on, the default, and is logged.
+pub(crate) fn uri_scheme_handling_enabled(config_home: &Path) -> bool {
+    match mimeapps::read_mimeapps(&mimeapps::user_mimeapps_path(config_home)) {
+        Ok(list) => !list.contains(
+            mimeapps::REMOVED_ASSOCIATIONS,
+            LINUX_URI_SCHEME_MIME,
+            LINUX_DESKTOP_ID,
         ),
-        None => format!("{LINUX_RESERVED_URI_SCHEME} is advertised through the desktop entry."),
-    };
-    ("Reserved", detail, IntegrationStatus::Good)
+        Err(error) => {
+            eprintln!("ok-player:// handling: could not read mimeapps.list: {error}");
+            true
+        }
+    }
+}
+
+pub(crate) fn user_uri_scheme_handling_enabled() -> bool {
+    mimeapps::user_config_home().is_none_or(|home| uri_scheme_handling_enabled(&home))
+}
+
+/// What a change of the link toggle did, for the caller to persist and report.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct UriSchemeHandlingChange {
+    /// Remember for the next time handling is turned on (`IntegrationSettings`).
+    pub(crate) restore_default_on_enable: bool,
+    /// Turning handling on made OK Player the scheme's default handler again.
+    pub(crate) restored_default: bool,
+}
+
+/// Turn `ok-player://` handling on or off in the `mimeapps.list` under `config_home`.
+///
+/// Off adds OK Player to `[Removed Associations]` for the scheme, drops it from `[Added
+/// Associations]` (listing an app in both is invalid per the spec), and drops it from `[Default
+/// Applications]`: GIO and xdg-mime both still answer with a `[Default Applications]` entry
+/// whose association is removed. When OK Player was the default, the change asks the caller to
+/// remember that. On removes the `[Removed Associations]` entry and, when
+/// `restore_default_on_enable` is set, makes OK Player the scheme's default again.
+pub(crate) fn set_uri_scheme_handling(
+    config_home: &Path,
+    enabled: bool,
+    restore_default_on_enable: bool,
+) -> std::io::Result<UriSchemeHandlingChange> {
+    use mimeapps::{ADDED_ASSOCIATIONS, DEFAULT_APPLICATIONS, ListPosition, REMOVED_ASSOCIATIONS};
+
+    let path = mimeapps::user_mimeapps_path(config_home);
+    mimeapps::update_mimeapps(&path, |list| {
+        if enabled {
+            list.remove(
+                REMOVED_ASSOCIATIONS,
+                LINUX_URI_SCHEME_MIME,
+                LINUX_DESKTOP_ID,
+            );
+            if restore_default_on_enable {
+                list.insert(
+                    DEFAULT_APPLICATIONS,
+                    LINUX_URI_SCHEME_MIME,
+                    LINUX_DESKTOP_ID,
+                    ListPosition::First,
+                );
+            }
+            UriSchemeHandlingChange {
+                restore_default_on_enable: false,
+                restored_default: restore_default_on_enable,
+            }
+        } else {
+            let was_default = list
+                .entries(DEFAULT_APPLICATIONS, LINUX_URI_SCHEME_MIME)
+                .first()
+                .is_some_and(|id| id == LINUX_DESKTOP_ID);
+            list.remove(
+                DEFAULT_APPLICATIONS,
+                LINUX_URI_SCHEME_MIME,
+                LINUX_DESKTOP_ID,
+            );
+            list.remove(ADDED_ASSOCIATIONS, LINUX_URI_SCHEME_MIME, LINUX_DESKTOP_ID);
+            list.insert(
+                REMOVED_ASSOCIATIONS,
+                LINUX_URI_SCHEME_MIME,
+                LINUX_DESKTOP_ID,
+                ListPosition::Last,
+            );
+            UriSchemeHandlingChange {
+                restore_default_on_enable: restore_default_on_enable || was_default,
+                restored_default: false,
+            }
+        }
+    })
 }
 
 pub(crate) fn count_default_key_media_mimes() -> usize {
@@ -411,14 +725,26 @@ pub(crate) fn default_app_matches_ok_player(desktop_id: &str) -> bool {
     desktop_id.trim() == LINUX_DESKTOP_ID
 }
 
-pub(crate) fn set_linux_default_app_for_key_mimes() -> Result<usize, String> {
+/// The MIME types Make Default claims: the key media types and, unless link handling is off,
+/// `x-scheme-handler/ok-player`.
+pub(crate) fn default_app_mime_types(claim_uri_scheme: bool) -> Vec<&'static str> {
+    let mut mimes = LINUX_KEY_MEDIA_MIME_TYPES.to_vec();
+    if claim_uri_scheme {
+        mimes.push(LINUX_URI_SCHEME_MIME);
+    }
+    mimes
+}
+
+/// Make OK Player the default for the key media types and, with `claim_uri_scheme`, for
+/// `ok-player://` links. Returns the number of key media types claimed.
+pub(crate) fn set_linux_default_app(claim_uri_scheme: bool) -> Result<usize, String> {
     if linux_desktop_entry_path().is_none() {
         return Err(format!("{LINUX_DESKTOP_ID} is not installed"));
     }
     let xdg_mime =
         find_executable("xdg-mime").ok_or_else(|| "xdg-mime is not installed".to_owned())?;
     let mut failures = Vec::new();
-    for mime in LINUX_KEY_MEDIA_MIME_TYPES {
+    for mime in default_app_mime_types(claim_uri_scheme) {
         match Command::new(&xdg_mime)
             .arg("default")
             .arg(LINUX_DESKTOP_ID)
@@ -503,17 +829,6 @@ pub(crate) fn open_linux_default_apps_settings() -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-pub(crate) fn uri_scheme_diagnostics(snapshot: &LinuxIntegrationSnapshot) -> &'static str {
-    if !snapshot.uri_scheme_registered {
-        return "missing";
-    }
-    match snapshot.uri_scheme_default {
-        Some(true) => "registered (default handler)",
-        Some(false) => "registered (not default)",
-        None => "registered",
-    }
-}
-
 pub(crate) fn linux_integration_diagnostics(snapshot: &LinuxIntegrationSnapshot) -> String {
     let desktop_entry = snapshot
         .desktop_entry_path
@@ -524,9 +839,9 @@ pub(crate) fn linux_integration_diagnostics(snapshot: &LinuxIntegrationSnapshot)
         .default_key_mimes
         .map(|count| format!("{count}/{}", LINUX_KEY_MEDIA_MIME_TYPES.len()))
         .unwrap_or_else(|| "unavailable".to_owned());
-    let uri_scheme = uri_scheme_diagnostics(snapshot);
+    let uri_scheme = snapshot.uri_scheme.diagnostics();
     format!(
-        "OK Player Linux Integration\nVersion: {APP_BUILD_VERSION}\nBuild: {APP_BUILD_SHA}\nDesktop ID: {LINUX_DESKTOP_ID}\nDesktop entry: {desktop_entry}\nRegistered key MIME types: {}/{}\nDefault key MIME types: {defaults}\nReserved URI scheme ({LINUX_RESERVED_URI_SCHEME}): {uri_scheme}\nxdg-mime: {}\nupdate-desktop-database: {}\n",
+        "OK Player Linux Integration\nVersion: {APP_BUILD_VERSION}\nBuild: {APP_BUILD_SHA}\nDesktop ID: {LINUX_DESKTOP_ID}\nDesktop entry: {desktop_entry}\nRegistered key MIME types: {}/{}\nDefault key MIME types: {defaults}\nURI scheme ({LINUX_RESERVED_URI_SCHEME}): {uri_scheme}\nxdg-mime: {}\nupdate-desktop-database: {}\n",
         snapshot.registered_key_mimes,
         LINUX_KEY_MEDIA_MIME_TYPES.len(),
         if snapshot.xdg_mime_available {

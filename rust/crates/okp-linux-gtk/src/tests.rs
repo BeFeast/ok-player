@@ -2270,32 +2270,287 @@ fn packaged_desktop_entry_advertises_reserved_scheme() {
     );
 }
 
-#[test]
-fn uri_scheme_row_reflects_registration_and_default_handler() {
-    // Not advertised by an installed desktop entry — the reservation is not in place.
-    assert!(matches!(
-        uri_scheme_row_content(false, None),
-        ("Missing", _, IntegrationStatus::Bad)
-    ));
-    assert!(matches!(
-        uri_scheme_row_content(false, Some(true)),
-        ("Missing", _, IntegrationStatus::Bad)
-    ));
-    // Advertised is the reservation, so it reads Good whatever the default handler is; the
-    // default only flavors the detail line.
-    for default in [None, Some(true), Some(false)] {
-        assert!(
-            matches!(
-                uri_scheme_row_content(true, default),
-                ("Reserved", _, IntegrationStatus::Good)
-            ),
-            "registered scheme should read Good for default={default:?}"
-        );
+fn uri_scheme_state(advertised: bool, handling: bool, default: Option<bool>) -> UriSchemeState {
+    UriSchemeState {
+        advertised,
+        handling,
+        default,
     }
+}
+
+#[test]
+fn uri_scheme_row_reflects_toggle_registration_and_default_handler() {
+    // Not advertised by an installed desktop entry: nothing routes links to OK Player.
+    for (handling, default) in [(true, Some(true)), (false, None), (true, None)] {
+        assert!(matches!(
+            uri_scheme_state(false, handling, default).row_content(),
+            ("Missing", _, IntegrationStatus::Bad)
+        ));
+    }
+    // Turned off in Settings: the desktop no longer offers OK Player, whatever xdg-mime says.
+    for default in [None, Some(true), Some(false)] {
+        assert!(matches!(
+            uri_scheme_state(true, false, default).row_content(),
+            ("Off", _, IntegrationStatus::Warning)
+        ));
+    }
+    assert!(matches!(
+        uri_scheme_state(true, true, Some(true)).row_content(),
+        ("Default", _, IntegrationStatus::Good)
+    ));
+    // Another application takes the links: Make Default is the way back.
+    let (value, detail, status) = uri_scheme_state(true, true, Some(false)).row_content();
+    assert!(matches!(
+        (value, status),
+        ("Registered", IntegrationStatus::Warning)
+    ));
+    assert!(detail.contains("Make Default"), "{detail}");
+    assert!(matches!(
+        uri_scheme_state(true, true, None).row_content(),
+        ("Registered", _, IntegrationStatus::Good)
+    ));
+}
+
+#[test]
+fn copy_diagnostics_reports_contract_handling_and_registration() {
+    for (state, expected) in [
+        (
+            uri_scheme_state(true, true, Some(true)),
+            "v1, handling on; registered (default)",
+        ),
+        (
+            uri_scheme_state(true, true, Some(false)),
+            "v1, handling on; registered (not default)",
+        ),
+        (
+            uri_scheme_state(true, true, None),
+            "v1, handling on; registered (default unknown)",
+        ),
+        // Off unregisters, even where xdg-mime still names OK Player.
+        (
+            uri_scheme_state(true, false, Some(true)),
+            "v1, handling off; missing",
+        ),
+        (
+            uri_scheme_state(false, true, Some(true)),
+            "v1, handling on; missing",
+        ),
+    ] {
+        assert_eq!(state.diagnostics(), expected, "{state:?}");
+    }
+
+    let snapshot = LinuxIntegrationSnapshot {
+        desktop_entry_path: None,
+        registered_key_mimes: 0,
+        default_key_mimes: None,
+        uri_scheme: uri_scheme_state(true, true, Some(false)),
+        xdg_mime_available: true,
+        update_desktop_database_available: false,
+    };
+    let report = linux_integration_diagnostics(&snapshot);
     assert!(
-        uri_scheme_row_content(true, Some(true))
-            .1
-            .contains("handled by OK Player")
+        report
+            .lines()
+            .any(|line| line
+                == "URI scheme (ok-player://): v1, handling on; registered (not default)"),
+        "{report}"
+    );
+}
+
+#[test]
+fn make_default_claims_the_scheme_only_while_link_handling_is_on() {
+    let on = default_app_mime_types(true);
+    let off = default_app_mime_types(false);
+    for mime in LINUX_KEY_MEDIA_MIME_TYPES {
+        assert!(on.contains(mime) && off.contains(mime), "{mime}");
+    }
+    assert!(on.contains(&LINUX_URI_SCHEME_MIME));
+    assert!(!off.contains(&LINUX_URI_SCHEME_MIME));
+}
+
+#[test]
+fn turning_links_off_and_on_edits_only_our_scheme_entries_and_restores_the_default() {
+    let config = unique_temp_dir("okp-uri-toggle-default");
+    let path = config.path().join("mimeapps.list");
+    let original = "# managed by hand\n[Default Applications]\nx-scheme-handler/ok-player=com.befeast.okplayer.desktop;\nvideo/mp4=com.befeast.okplayer.desktop;\ntext/html=firefox.desktop;\n\n[Added Associations]\nx-scheme-handler/ok-player=com.befeast.okplayer.desktop;\nimage/png=eog.desktop;\n";
+    fs::write(&path, original).expect("mimeapps.list fixture");
+    assert!(uri_scheme_handling_enabled(config.path()));
+
+    let off = set_uri_scheme_handling(config.path(), false, false).expect("turn links off");
+    assert_eq!(
+        off,
+        UriSchemeHandlingChange {
+            restore_default_on_enable: true,
+            restored_default: false,
+        },
+        "OK Player was the default, so turning links back on has to restore it"
+    );
+    assert!(!uri_scheme_handling_enabled(config.path()));
+    assert_eq!(
+        fs::read_to_string(&path).expect("mimeapps.list"),
+        "# managed by hand\n[Default Applications]\nvideo/mp4=com.befeast.okplayer.desktop;\ntext/html=firefox.desktop;\n\n[Added Associations]\nimage/png=eog.desktop;\n\n[Removed Associations]\nx-scheme-handler/ok-player=com.befeast.okplayer.desktop;\n"
+    );
+
+    let on = set_uri_scheme_handling(config.path(), true, off.restore_default_on_enable)
+        .expect("turn links on");
+    assert_eq!(
+        on,
+        UriSchemeHandlingChange {
+            restore_default_on_enable: false,
+            restored_default: true,
+        }
+    );
+    assert!(uri_scheme_handling_enabled(config.path()));
+    let list = mimeapps::read_mimeapps(&path).expect("mimeapps.list");
+    assert_eq!(
+        list.entries(mimeapps::DEFAULT_APPLICATIONS, LINUX_URI_SCHEME_MIME),
+        vec![LINUX_DESKTOP_ID.to_owned()]
+    );
+    assert!(
+        list.entries(mimeapps::REMOVED_ASSOCIATIONS, LINUX_URI_SCHEME_MIME)
+            .is_empty()
+    );
+    let text = list.render();
+    for kept in [
+        "# managed by hand\n",
+        "video/mp4=com.befeast.okplayer.desktop;\n",
+        "text/html=firefox.desktop;\n",
+        "image/png=eog.desktop;\n",
+    ] {
+        assert!(text.contains(kept), "{kept:?} lost from:\n{text}");
+    }
+}
+
+#[test]
+fn turning_links_off_leaves_another_apps_default_and_does_not_claim_it_back() {
+    let config = unique_temp_dir("okp-uri-toggle-foreign");
+    let path = config.path().join("mimeapps.list");
+    fs::write(
+        &path,
+        "[Default Applications]\nx-scheme-handler/ok-player=other.desktop;\n",
+    )
+    .expect("mimeapps.list fixture");
+
+    let off = set_uri_scheme_handling(config.path(), false, false).expect("turn links off");
+    assert!(!off.restore_default_on_enable);
+    let on = set_uri_scheme_handling(config.path(), true, false).expect("turn links on");
+    assert!(!on.restored_default);
+    let list = mimeapps::read_mimeapps(&path).expect("mimeapps.list");
+    assert_eq!(
+        list.entries(mimeapps::DEFAULT_APPLICATIONS, LINUX_URI_SCHEME_MIME),
+        vec!["other.desktop".to_owned()]
+    );
+
+    // Make Default while links were off is remembered by the caller and passed back in.
+    set_uri_scheme_handling(config.path(), false, false).expect("turn links off");
+    let on = set_uri_scheme_handling(config.path(), true, true).expect("turn links on");
+    assert!(on.restored_default);
+    assert_eq!(
+        mimeapps::read_mimeapps(&path)
+            .expect("mimeapps.list")
+            .entries(mimeapps::DEFAULT_APPLICATIONS, LINUX_URI_SCHEME_MIME),
+        vec![LINUX_DESKTOP_ID.to_owned(), "other.desktop".to_owned()]
+    );
+}
+
+#[test]
+fn turning_links_off_without_a_mimeapps_list_creates_one_and_keeps_a_pending_restore() {
+    let root = unique_temp_dir("okp-uri-toggle-fresh");
+    let config = root.path().join("config");
+    assert!(
+        uri_scheme_handling_enabled(&config),
+        "links are on until the user turns them off"
+    );
+    let off = set_uri_scheme_handling(&config, false, true).expect("turn links off");
+    assert!(
+        off.restore_default_on_enable,
+        "an earlier Make Default stays pending while links are off"
+    );
+    assert!(!uri_scheme_handling_enabled(&config));
+    assert_eq!(
+        fs::read_to_string(config.join("mimeapps.list")).expect("created mimeapps.list"),
+        "[Removed Associations]\nx-scheme-handler/ok-player=com.befeast.okplayer.desktop;\n"
+    );
+}
+
+/// What GIO, the lookup Firefox and `gio open` use, says about the scheme under an isolated
+/// XDG tree whose only application is an OK Player desktop entry. The first line names the
+/// default handler.
+fn gio_scheme_report(gio: &Path, root: &Path) -> String {
+    let output = Command::new(gio)
+        .arg("mime")
+        .arg(LINUX_URI_SCHEME_MIME)
+        .env_clear()
+        .env("PATH", env::var_os("PATH").unwrap_or_default())
+        .env("HOME", root)
+        .env("LC_ALL", "C")
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_CONFIG_DIRS", root.join("system"))
+        .env("XDG_DATA_HOME", root.join("data"))
+        .env("XDG_DATA_DIRS", root.join("system"))
+        .output()
+        .expect("gio mime should run");
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+#[test]
+fn the_desktop_stops_offering_ok_player_for_links_while_handling_is_off() {
+    let Some(gio) = find_executable("gio") else {
+        eprintln!("skipped: gio is not installed, so the GIO lookup cannot be exercised");
+        return;
+    };
+    let root = unique_temp_dir("okp-uri-toggle-gio");
+    let applications = root.path().join("data/applications");
+    fs::create_dir_all(&applications).expect("applications dir");
+    fs::create_dir_all(root.path().join("system")).expect("empty system dirs");
+    fs::write(
+        applications.join(LINUX_DESKTOP_ID),
+        "[Desktop Entry]\nType=Application\nName=OK Player\nExec=true %U\nMimeType=video/mp4;x-scheme-handler/ok-player;\n",
+    )
+    .expect("desktop entry");
+    // What the package's update-desktop-database run leaves behind; GIO looks types up here.
+    fs::write(
+        applications.join("mimeinfo.cache"),
+        "[MIME Cache]\nvideo/mp4=com.befeast.okplayer.desktop;\nx-scheme-handler/ok-player=com.befeast.okplayer.desktop;\n",
+    )
+    .expect("mimeinfo.cache");
+    // The state after Make Default.
+    let config = root.path().join("config");
+    fs::create_dir_all(&config).expect("config dir");
+    fs::write(
+        config.join("mimeapps.list"),
+        "[Default Applications]\nx-scheme-handler/ok-player=com.befeast.okplayer.desktop;\n",
+    )
+    .expect("mimeapps.list");
+
+    let names_ok_player_as_default = |report: &str| {
+        report
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .ends_with(LINUX_DESKTOP_ID)
+    };
+    let before = gio_scheme_report(&gio, root.path());
+    assert!(
+        names_ok_player_as_default(&before),
+        "the fixture should make OK Player the default:\n{before}"
+    );
+
+    // GIO keeps answering with a [Default Applications] entry even when the association is
+    // removed, so turning links off has to drop the default too.
+    let off_change = set_uri_scheme_handling(&config, false, false).expect("turn links off");
+    let off = gio_scheme_report(&gio, root.path());
+    assert!(
+        !off.contains(LINUX_DESKTOP_ID),
+        "links off must stop offering OK Player:\n{off}"
+    );
+
+    set_uri_scheme_handling(&config, true, off_change.restore_default_on_enable)
+        .expect("turn links on");
+    let on = gio_scheme_report(&gio, root.path());
+    assert!(
+        names_ok_player_as_default(&on),
+        "links on must make OK Player the default again:\n{on}"
     );
 }
 

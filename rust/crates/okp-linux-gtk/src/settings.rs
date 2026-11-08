@@ -233,6 +233,15 @@ impl SettingsStore {
         self.data.online_video.replay_cache_enabled
     }
 
+    /// Whether turning `ok-player://` link handling back on should make OK Player the scheme's
+    /// default handler again (#850).
+    pub fn restore_uri_scheme_default(&self) -> bool {
+        self.data
+            .integration
+            .restore_uri_scheme_default
+            .unwrap_or(false)
+    }
+
     pub fn set_volume(&mut self, volume: f64) {
         let Some(volume) = normalized_volume(Some(volume)) else {
             return;
@@ -458,6 +467,14 @@ impl SettingsStore {
         }
     }
 
+    pub fn set_restore_uri_scheme_default(&mut self, restore: bool) {
+        if self.restore_uri_scheme_default() != restore {
+            // Absent rather than `false`, so a default document stays free of the section.
+            self.data.integration.restore_uri_scheme_default = restore.then_some(true);
+            self.dirty = true;
+        }
+    }
+
     pub fn save(&mut self) -> io::Result<()> {
         if !self.dirty {
             return Ok(());
@@ -673,6 +690,34 @@ mod tests {
             HistoryRetention::Days365
         );
         dir.close().expect("temp settings dir should be removed");
+    }
+
+    #[test]
+    fn uri_scheme_default_restore_flag_is_absent_until_set_and_marks_dirty_once() {
+        let mut settings = store();
+        assert!(!settings.restore_uri_scheme_default());
+
+        settings.set_restore_uri_scheme_default(true);
+        assert!(settings.restore_uri_scheme_default());
+        assert!(settings.dirty);
+        let saved = serde_json::to_value(&settings.data).expect("settings serialize");
+        assert_eq!(
+            saved["integration"]["restore_uri_scheme_default"],
+            serde_json::Value::Bool(true)
+        );
+
+        settings.dirty = false;
+        settings.set_restore_uri_scheme_default(true);
+        assert!(!settings.dirty);
+
+        settings.set_restore_uri_scheme_default(false);
+        assert!(!settings.restore_uri_scheme_default());
+        assert!(settings.dirty);
+        let cleared = serde_json::to_value(&settings.data).expect("settings serialize");
+        assert!(
+            cleared.get("integration").is_none(),
+            "a cleared flag leaves no integration section behind: {cleared}"
+        );
     }
 
     #[test]

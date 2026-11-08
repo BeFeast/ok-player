@@ -319,8 +319,21 @@ accepted:
   and starts `ok-player %U`; the package runs `update-desktop-database`. Check the current
   handler with `xdg-mime query default x-scheme-handler/ok-player`; it should print
   `com.befeast.okplayer.desktop`.
-- Settings → Integration and Copy Diagnostics report whether an installed desktop entry
-  advertises the scheme and whether OK Player is its current handler.
+- Settings → Integration → **Make Default** also makes OK Player the default handler for
+  `x-scheme-handler/ok-player` (through `xdg-mime default`, like the media types).
+- Settings → Integration → **Open ok-player:// links** turns handling off and on. Off adds
+  OK Player to `[Removed Associations]` for the scheme in `$XDG_CONFIG_HOME/mimeapps.list`
+  (`~/.config/mimeapps.list`) and drops it from `[Default Applications]`; on removes the
+  entry and makes OK Player the default again if it was the default before, or if Make
+  Default was chosen while links were off. Every other line of the file is left as it was. GIO lookups honour the removal: Firefox, `gio open`, and
+  `xdg-open` on GNOME and Cinnamon, which calls `gio open`. `xdg-mime query default` does
+  not read `[Removed Associations]`, so where `xdg-open` falls back to `xdg-mime` (a session
+  it does not recognise as a known desktop) a link can still reach the player.
+- Settings → Integration and Copy Diagnostics report the state on one line, for example
+  `URI scheme (ok-player://): v1, handling on; registered (default)`. The registration part
+  is `registered (default)`, `registered (not default)` or `missing` (no installed desktop
+  entry advertises the scheme, or handling is off); without `xdg-mime` it reads
+  `registered (default unknown)`.
 - The Flatpak build does not handle links in v1: a link shows a toast saying so.
 - AppImage builds do not register the scheme in v1.
 
