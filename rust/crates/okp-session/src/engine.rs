@@ -200,6 +200,11 @@ impl Engine for MpvEngine {
                 TrackKind::Subtitle => engine.select_subtitle(*id),
             },
             Command::SetSubtitleDelay { seconds } => engine.set_subtitle_delay(*seconds),
+            // The session resolves an invoked registry command to the command it
+            // stands for before anything reaches the engine.
+            Command::InvokeCommand { id } => {
+                return Err(format!("invoke_command `{id}` is not an engine command"));
+            }
         };
         result.map(|()| None).map_err(|error| error.to_string())
     }
@@ -291,6 +296,7 @@ mod tests {
                 name: "input-vo-keyboard".to_owned(),
                 value: "yes".to_owned(),
             }],
+            shell_commands: Vec::new(),
         };
         let options = engine_options(&config);
         let last = options

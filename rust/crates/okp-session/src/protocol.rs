@@ -16,6 +16,8 @@ use okp_core::player as core;
 use okp_core::playlist::PlaylistItem;
 use serde::{Deserialize, Serialize};
 
+pub use crate::commands::{CommandGroup, CommandMenu, RegistryCommand, ShortcutRow};
+
 /// Version of every envelope below. Bump on any change a shell built against
 /// the previous version could not decode or would misread.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -38,6 +40,11 @@ pub struct SessionConfig {
     /// Extra libmpv options, applied in order after the session defaults.
     #[serde(default)]
     pub mpv_options: Vec<MpvOption>,
+    /// The registry commands this shell carries out itself (dialogs, window
+    /// and clipboard actions). A command neither the session nor the shell
+    /// carries out is reported unavailable.
+    #[serde(default)]
+    pub shell_commands: Vec<String>,
 }
 
 /// One libmpv option.
@@ -122,6 +129,10 @@ pub enum Command {
     SetSubtitleDelay {
         seconds: f64,
     },
+    /// Run a command of the registry (`command_registry`) by its id.
+    InvokeCommand {
+        id: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +182,9 @@ pub enum DispatchResult {
     /// Validated, but the engine refused it immediately. The session state has
     /// already absorbed the failure.
     Failed { request_id: u64, message: String },
+    /// An invoked registry command the shell carries out itself. The session
+    /// found it available; nothing reached the engine.
+    Perform {},
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,6 +200,10 @@ pub enum RejectReason {
     UnsupportedSchemaVersion,
     /// The C caller passed a null pointer or text that is not UTF-8.
     InvalidArgument,
+    /// `invoke_command` named an id that is not in the registry.
+    UnknownCommand,
+    /// `invoke_command` named a command this shell cannot run.
+    Unavailable,
 }
 
 /// `{"schema_version":1,"query":{...}}`
@@ -201,6 +219,16 @@ pub struct QueryEnvelope {
 pub enum Query {
     /// The full session state, as the event stream has reported it so far.
     Snapshot {},
+    /// Every registry command, resolved against the current state. The shell
+    /// passes the window state only it knows.
+    CommandRegistry {
+        #[serde(default)]
+        fullscreen: bool,
+        #[serde(default)]
+        mini_player: bool,
+    },
+    /// Every bindable action with its chords on this platform.
+    ShortcutTable {},
 }
 
 /// `{"schema_version":1,"result":{...}}`, the answer to a query.
@@ -216,6 +244,12 @@ pub struct QueryReply {
 pub enum QueryResult {
     Snapshot {
         snapshot: SessionSnapshot,
+    },
+    CommandRegistry {
+        commands: Vec<RegistryCommand>,
+    },
+    ShortcutTable {
+        shortcuts: Vec<ShortcutRow>,
     },
     Rejected {
         reason: RejectReason,
@@ -426,9 +460,10 @@ impl MediaSource {
 }
 
 impl Command {
-    /// The core command `PlayerMachine` validates for this intent.
-    pub(crate) fn to_core(&self) -> core::PlayerCommand {
-        match self {
+    /// The core command `PlayerMachine` validates for this intent; `None` for
+    /// `invoke_command`, which names a registry command instead of carrying one.
+    pub(crate) fn to_core(&self) -> Option<core::PlayerCommand> {
+        Some(match self {
             Self::Open {
                 source,
                 resume_from,
@@ -461,7 +496,8 @@ impl Command {
                 id: *id,
             },
             Self::SetSubtitleDelay { seconds } => core::PlayerCommand::SetSubtitleDelay(*seconds),
-        }
+            Self::InvokeCommand { .. } => return None,
+        })
     }
 }
 
@@ -564,6 +600,8 @@ impl RejectReason {
             Self::Malformed => "the document is not a known command or query",
             Self::UnsupportedSchemaVersion => "unsupported schema_version",
             Self::InvalidArgument => "a null pointer or non-UTF-8 text was passed",
+            Self::UnknownCommand => "not a registry command",
+            Self::Unavailable => "the command is not available in this shell",
         }
     }
 }

@@ -10,6 +10,7 @@
 //! The session decides; a shell only renders what it reports.
 
 mod coalesce;
+pub mod commands;
 mod engine;
 pub mod machine;
 pub mod protocol;
@@ -17,6 +18,7 @@ pub mod reconcile;
 mod session;
 
 pub use coalesce::TIMELINE_INTERVAL;
+pub use commands::{CommandRegistry, WindowState};
 pub use machine::SessionMachine;
 pub use protocol::SCHEMA_VERSION;
 pub use session::{RenderUpdate, Session, Wakeup};

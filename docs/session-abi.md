@@ -78,10 +78,10 @@ written as `null` and may be left out on input.
 
 | Document | Shape |
 |---|---|
-| Config (`okp_session_new`) | `schema_version`, `app` (`name`, `platform`), absolute `data_dir`, `config_dir`, `cache_dir`, optional `hwdec`, ordered `mpv_options` (`name`, `value`) applied after the session defaults |
-| Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay` |
-| Reply | `{"schema_version":1,"result":{...}}`: `accepted {request_id}`, `no_op {}`, `rejected {reason, message}`, or `failed {request_id, message}` when the engine refused an accepted command at once |
-| Query (`okp_session_query`) | `{"schema_version":1,"query":{"snapshot":{}}}`, answered with `result.snapshot.snapshot` (the full state) or `result.rejected` |
+| Config (`okp_session_new`) | `schema_version`, `app` (`name`, `platform`), absolute `data_dir`, `config_dir`, `cache_dir`, optional `hwdec`, ordered `mpv_options` (`name`, `value`) applied after the session defaults, optional `shell_commands` (see Command registry) |
+| Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay`, `invoke_command {id}` |
+| Reply | `{"schema_version":1,"result":{...}}`: `accepted {request_id}`, `no_op {}`, `rejected {reason, message}`, `failed {request_id, message}` when the engine refused an accepted command at once, or `perform {}` (`invoke_command` only) |
+| Query (`okp_session_query`) | `{"schema_version":1,"query":{...}}`: `snapshot {}`, answered with `result.snapshot.snapshot` (the full state); `command_registry {fullscreen, mini_player}` (both optional), answered with `result.command_registry.commands`; `shortcut_table {}`, answered with `result.shortcut_table.shortcuts`; or `result.rejected` |
 | Event batch (`okp_session_drain_events`) | `{"schema_version":1,"events":[...]}` |
 
 An open source is `{"kind":"local"|"url","location":"..."}`. A URL is handed
@@ -101,6 +101,46 @@ The snapshot carries `status`, `source`, `time_pos`, `duration`, `volume`,
 
 The golden documents in `rust/crates/okp-session/fixtures/` pin every shape and
 every enum value. Change them only together with the protocol.
+
+## Command registry
+
+The registry is everything a menu or a key can run: the core player command
+registry (the commands of the Linux command menu, with their ids and labels)
+followed by the bindable keyboard actions no registry command covers
+(`seek-back`, `volume-up`, `mute`, `next-item`, the subtitle nudges, ...),
+under their shortcut action ids. Each `command_registry` row carries `id`,
+`group`, `menu` (the place in the Linux command menu, `null` for a
+keyboard-only command), `label`, `available`, `enabled`, `checked` and
+`shortcut`, the primary chord bound to it on the config's platform.
+`enabled`, `checked` and the state-dependent labels ("Mute" checked while
+muted, "Exit fullscreen") are resolved against the session state at the time
+of the query. The window state is the shell's, so it passes `fullscreen` and
+`mini_player` in the query. Query when a menu opens; no event announces a
+change.
+
+The session runs some commands itself: `play-pause`, `close-media`,
+`seek-back`/`seek-forward` (5 s), `volume-down`/`volume-up` (5 points, within
+0-130), `mute`, `subtitle-delay-back`/`subtitle-delay-forward` (0.05 s). The
+rest are carried out by the shell (dialogs, window, clipboard). A shell lists
+the ones it implements in the config's `shell_commands`; a command that
+neither the session nor the shell carries out is `available: false`, and the
+shell should hide it. An id in `shell_commands` that is not in the registry
+fails `okp_session_new`.
+
+`invoke_command {id}` answers `rejected` with `unknown_command` for an id
+outside the registry and `unavailable` for an unavailable command. A command
+the session runs is dispatched as the session command it stands for and
+answered like one (`accepted`, `no_op`, `rejected`, `failed`). A command the
+shell carries out is answered `perform {}`: the shell runs it, gating it on
+the `enabled` state it queried.
+
+`shortcut_table` rows carry `action`, `command` (the registry id to invoke),
+`primary` and `secondary`. The session has no user bindings yet, so these are
+the platform defaults and `secondary` is `null`. A chord is
+`{"key", "modifiers": {"ctrl", "alt", "shift", "cmd"}, "label"}`: `key` is
+the canonical key name (`space`, `comma`, `Left`, `o`) and `label` the display
+text (`Shift+Cmd+O`). On macOS menu commands use Cmd chords and in-window keys
+stay single keys.
 
 ## Events
 
