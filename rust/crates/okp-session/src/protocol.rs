@@ -215,6 +215,22 @@ pub enum Query {
         /// The window's minimum size, if it has one.
         #[serde(default)]
         min_size: Option<WindowSize>,
+        /// The room the window's own controls take outside the video area, if
+        /// any: the frame grows by it so the video area keeps the video's aspect.
+        #[serde(default)]
+        chrome: Option<WindowSize>,
+    },
+    /// The fit the current source is owed: once per opened source, the frame of
+    /// a window fitted to the first video size reported while it is loaded (as
+    /// `window_fit` with that size); `null` before that size is known, after the
+    /// fit was taken, and for a source without video. Answering takes the fit.
+    InitialWindowFit {
+        backing_scale: f64,
+        visible_frame: WindowRect,
+        #[serde(default)]
+        min_size: Option<WindowSize>,
+        #[serde(default)]
+        chrome: Option<WindowSize>,
     },
     /// What a primary-button release with `press_count` clicks on the video
     /// means ([`crate::window::video_click_intent`]). Reads no session state.
@@ -235,7 +251,8 @@ pub enum QueryResult {
     Snapshot {
         snapshot: SessionSnapshot,
     },
-    /// `null` when there is nothing to fit.
+    /// The answer to `window_fit` and `initial_window_fit`; `null` when there
+    /// is nothing to fit.
     WindowFit {
         frame: Option<WindowRect>,
     },

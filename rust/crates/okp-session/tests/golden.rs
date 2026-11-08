@@ -53,6 +53,7 @@ const CHECKED: &[&str] = &[
     "query-reply-snapshot.json",
     "query-reply-rejected.json",
     "query-window-fit.json",
+    "query-initial-window-fit.json",
     "query-reply-window-fit.json",
     "query-video-click.json",
     "query-reply-video-click.json",
@@ -325,6 +326,33 @@ fn the_window_queries_and_their_replies_match_their_fixtures() {
                     width: 420,
                     height: 280,
                 }),
+                chrome: Some(WindowSize {
+                    width: 0,
+                    height: 48,
+                }),
+            },
+        },
+    );
+    golden(
+        "query-initial-window-fit.json",
+        QueryEnvelope {
+            schema_version: SCHEMA_VERSION,
+            query: Query::InitialWindowFit {
+                backing_scale: 2.0,
+                visible_frame: WindowRect {
+                    x: 0,
+                    y: 0,
+                    width: 1512,
+                    height: 945,
+                },
+                min_size: Some(WindowSize {
+                    width: 420,
+                    height: 280,
+                }),
+                chrome: Some(WindowSize {
+                    width: 0,
+                    height: 48,
+                }),
             },
         },
     );
@@ -335,9 +363,9 @@ fn the_window_queries_and_their_replies_match_their_fixtures() {
             result: QueryResult::WindowFit {
                 frame: Some(WindowRect {
                     x: 45,
-                    y: 73,
+                    y: 49,
                     width: 1421,
-                    height: 799,
+                    height: 847,
                 }),
             },
         },

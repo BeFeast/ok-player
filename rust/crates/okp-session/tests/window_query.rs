@@ -1,6 +1,7 @@
 //! The window queries through the `okp_session_*` C ABI: the golden query
-//! documents a shell sends are answered with exactly the golden replies, and the
-//! answers need no loaded media.
+//! documents a shell sends are answered with exactly the golden replies, the fit
+//! and click answers need no loaded media, and no initial fit is owed before a
+//! source is open.
 
 mod common;
 
@@ -100,6 +101,12 @@ fn the_window_queries_are_answered_by_core_without_media() {
         }}}),
     );
     assert_eq!(result(reply), QueryResult::WindowFit { frame: None });
+
+    // The fit an opened source is owed: none before anything is open.
+    assert_eq!(
+        result(query(session, &fixture("query-initial-window-fit.json"))),
+        QueryResult::WindowFit { frame: None }
+    );
 
     unsafe { okp_session_free(session) };
     root.close().expect("fixture directory is removed");
