@@ -21,8 +21,13 @@ cp "$root/macos/README.md" "$app/Contents/Resources/README.md"
 cp "$OKP_MPV_PREFIX/provenance.json" "$app/Contents/Resources/runtime-provenance.json"
 headers=("$CARGO_TARGET_DIR"/aarch64-apple-darwin/release/build/okp-ffi-*/out/okp_core.h)
 test "${#headers[@]}" -eq 1
-xcrun swiftc -swift-version 5 -O -target arm64-apple-macosx13.0 -sdk "$SDKROOT" \
-  -I "$(dirname "${headers[0]}")" -import-objc-header "$root/macos/Bridge.h" "$root/macos/Player.swift" \
+# The shell's colours come from the shared brand palette, generated into Swift here.
+generated="$(mktemp -d)"
+trap 'rm -rf -- "$generated"' EXIT
+python3 "$root/scripts/generate-macos-palette.py" "$root/brand/palette.json" "$generated/Palette.swift"
+xcrun swiftc -swift-version 5 -O -parse-as-library -target arm64-apple-macosx13.0 -sdk "$SDKROOT" \
+  -I "$(dirname "${headers[0]}")" -import-objc-header "$root/macos/Bridge.h" \
+  "$root/macos/Player.swift" "$generated/Palette.swift" \
   -L "$app/Contents/Frameworks" -lokp_ffi -framework AppKit -framework OpenGL \
   -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
   -o "$app/Contents/MacOS/ok-player" 2>&1 | tee "$output/swift-build.log"
