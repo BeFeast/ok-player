@@ -10,10 +10,13 @@
 //!   natural order, when the listing finishes, unless a newer open has
 //!   superseded it (#870);
 //! - opening several sources plays them as a list in the given order, folders
-//!   expanded; opening an M3U file plays its entries;
+//!   expanded; opening an M3U file plays its entries. Until they are read the
+//!   old playlist stays: picking an item from it drops the read, and what is
+//!   queued meanwhile follows the opened items;
 //! - previous and next wrap at both ends, like the transport buttons;
 //! - the end of a file advances per the repeat mode and restarts the item on
-//!   repeat-one.
+//!   repeat-one; while a folder or playlist file is being read, it waits for
+//!   the read, so that the advance sees the playlist the read produces.
 //!
 //! The module decides and the session carries out: a step that plays another
 //! item comes back as a [`PlannedOpen`], which the session opens through the
@@ -167,8 +170,9 @@ pub(crate) struct PlannedOpen {
 enum Effect {
     /// A step within the playlist: the cursor moves to this index.
     Cursor(usize),
-    /// A new local file: it plays alone while its folder is listed.
-    Folder,
+    /// A new local file: it plays while its folder is listed, followed only by
+    /// what was `queued` while the open that found it was being read.
+    Folder { queued: Vec<PlaylistItem> },
     /// A new list, starting with its first item.
     List(Vec<PlaylistItem>),
 }
@@ -204,6 +208,17 @@ pub(crate) enum Background {
 struct ActiveJob {
     id: u64,
     cancel: Arc<AtomicBool>,
+    kind: JobKind,
+}
+
+enum JobKind {
+    /// The current local file's folder is being listed; the current playlist
+    /// stays and fills in around it.
+    Folder,
+    /// An open's folders and playlist files are being read; the playlist they
+    /// replace stays until then. `queued` is what was queued meanwhile, which
+    /// follows the opened items.
+    Resolve { queued: Vec<PlaylistItem> },
 }
 
 /// The session's playlist, its folder jobs and its change tracking.
@@ -211,7 +226,8 @@ pub(crate) struct SessionPlaylist {
     list: Playlist,
     active: Option<ActiveJob>,
     next_job: u64,
-    /// The current item reached its end and the next step is due.
+    /// The current item reached its end; what plays next is decided as soon
+    /// as no folder or playlist file is being read.
     advance_due: bool,
     /// Bumped on every change a shell can see.
     revision: u64,
@@ -337,7 +353,9 @@ impl SessionPlaylist {
             Command::Open { source, .. } => {
                 let item = source.to_item();
                 let effect = match &item {
-                    PlaylistItem::Local(path) if media_formats::is_media(path) => Effect::Folder,
+                    PlaylistItem::Local(path) if media_formats::is_media(path) => {
+                        Effect::Folder { queued: Vec::new() }
+                    }
                     _ => Effect::List(vec![item.clone()]),
                 };
                 self.opened(PlannedOpen { item, effect }, result);
@@ -354,7 +372,8 @@ impl SessionPlaylist {
 
     /// Record how the session's open of `open` went. An open the core state
     /// machine accepted owns the playlist whether or not the engine took it;
-    /// only an accepted local file has its folder listed.
+    /// only an accepted local file has its folder listed. Whatever ended
+    /// before is followed by this open, not by the auto-advance.
     pub(crate) fn opened(&mut self, open: PlannedOpen, result: &DispatchResult) {
         let accepted = match result {
             DispatchResult::Accepted { .. } => true,
@@ -363,13 +382,29 @@ impl SessionPlaylist {
             | DispatchResult::Rejected { .. }
             | DispatchResult::Applied {} => return,
         };
+        self.advance_due = false;
         match open.effect {
             Effect::Cursor(index) => {
+                // An item picked from the playlist an open is still being read
+                // to replace: the pick is newer, so the read is dropped.
+                if self
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| matches!(active.kind, JobKind::Resolve { .. }))
+                {
+                    self.supersede();
+                }
                 self.list.set_current_index(index);
             }
-            Effect::Folder => {
+            Effect::Folder { queued } => {
                 self.supersede();
-                self.list.reset(vec![open.item.clone()], &open.item);
+                let mut items = vec![open.item.clone()];
+                for item in queued {
+                    if !items.contains(&item) {
+                        items.push(item);
+                    }
+                }
+                self.list.reset(items, &open.item);
                 if accepted && let PlaylistItem::Local(path) = &open.item {
                     self.start(Job::Folder(path.clone()));
                 }
@@ -388,14 +423,15 @@ impl SessionPlaylist {
     }
 
     /// Fold in finished jobs and decide what plays after an end of file.
-    pub(crate) fn poll(&mut self) -> Vec<Background> {
+    /// `ended` is the media the session is at the end of, if it is.
+    pub(crate) fn poll(&mut self, ended: Option<&PlaylistItem>) -> Vec<Background> {
         let finished = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(|p| p.into_inner()));
         let mut steps = Vec::new();
         for Finished { job, outcome } in finished {
-            if self.active.as_ref().is_none_or(|active| active.id != job) {
-                continue; // superseded by a newer open
-            }
-            self.active = None;
+            // A job superseded by a newer open is no longer the active one.
+            let Some(active) = self.active.take_if(|active| active.id == job) else {
+                continue;
+            };
             self.touch();
             match outcome {
                 Outcome::Folder {
@@ -403,22 +439,25 @@ impl SessionPlaylist {
                     siblings: Some(siblings),
                 } => self.merge_folder(&file, siblings),
                 Outcome::Folder { siblings: None, .. } => {}
-                Outcome::Resolved(resolution) => steps.push(match resolution {
-                    scan::Resolution::Folder(path) => Background::Open(PlannedOpen {
-                        item: PlaylistItem::Local(path),
-                        effect: Effect::Folder,
-                    }),
-                    scan::Resolution::List(items) => Background::Open(PlannedOpen {
-                        item: items[0].clone(),
-                        effect: Effect::List(items),
-                    }),
-                    scan::Resolution::Nothing => Background::NothingPlayable,
-                }),
+                Outcome::Resolved(resolution) => {
+                    let queued = match active.kind {
+                        JobKind::Resolve { queued } => queued,
+                        JobKind::Folder => Vec::new(),
+                    };
+                    steps.push(self.resolved(resolution, &queued));
+                }
             }
         }
-        // A newer open of the user's wins over advancing the old playlist.
-        if std::mem::take(&mut self.advance_due)
-            && !steps.iter().any(|step| matches!(step, Background::Open(_)))
+        // An end of file waits for a read in flight: the rest of the folder,
+        // or the open being read, decides what plays next.
+        if !self.advance_due || self.active.is_some() {
+            return steps;
+        }
+        self.advance_due = false;
+        // A newer open of the user's wins over advancing the old playlist, and
+        // nothing advances once the session has left the item that ended.
+        if !steps.iter().any(|step| matches!(step, Background::Open(_)))
+            && ended.is_some_and(|ended| self.list.current() == Some(ended))
             && let Some(index) = self.list.auto_advance_target_index()
             && let Some(item) = self.list.get(index)
         {
@@ -430,13 +469,44 @@ impl SessionPlaylist {
         steps
     }
 
+    /// What a finished open's read plays: its items, then whatever of
+    /// `queued` is still in the playlist, in playlist order.
+    fn resolved(&self, resolution: scan::Resolution, queued: &[PlaylistItem]) -> Background {
+        let queued = self
+            .list
+            .items()
+            .iter()
+            .filter(|item| queued.contains(item))
+            .cloned();
+        match resolution {
+            scan::Resolution::Folder(path) => Background::Open(PlannedOpen {
+                item: PlaylistItem::Local(path),
+                effect: Effect::Folder {
+                    queued: queued.collect(),
+                },
+            }),
+            scan::Resolution::List(mut items) => {
+                for item in queued {
+                    if !items.contains(&item) {
+                        items.push(item);
+                    }
+                }
+                Background::Open(PlannedOpen {
+                    item: items[0].clone(),
+                    effect: Effect::List(items),
+                })
+            }
+            scan::Resolution::Nothing => Background::NothingPlayable,
+        }
+    }
+
     fn plan_open(&mut self, sources: &[MediaSource]) -> Step {
         let items: Vec<PlaylistItem> = sources.iter().map(MediaSource::to_item).collect();
         match scan::classify(&items) {
             Classified::Resolved(scan::Resolution::Nothing) => Step::Reply(DispatchResult::NoOp {}),
             Classified::Resolved(scan::Resolution::Folder(path)) => Step::Open(PlannedOpen {
                 item: PlaylistItem::Local(path),
-                effect: Effect::Folder,
+                effect: Effect::Folder { queued: Vec::new() },
             }),
             Classified::Resolved(scan::Resolution::List(items)) => Step::Open(PlannedOpen {
                 item: items[0].clone(),
@@ -498,10 +568,23 @@ impl SessionPlaylist {
             QueueMode::Append => QueueInsertMode::Append,
             QueueMode::PlayNext => QueueInsertMode::PlayNext,
         };
-        let queued = self
+        let inserted = self
             .list
-            .queue_insert(current_file, current_url, additions, mode);
-        self.edited(queued.is_some())
+            .queue_insert(current_file, current_url, additions.clone(), mode);
+        // While an open is read, what is queued is kept for the opened list.
+        if inserted.is_some()
+            && let Some(ActiveJob {
+                kind: JobKind::Resolve { queued },
+                ..
+            }) = &mut self.active
+        {
+            for item in additions {
+                if item != *current && !queued.contains(&item) {
+                    queued.push(item);
+                }
+            }
+        }
+        self.edited(inserted.is_some())
     }
 
     /// Fill in a finished folder listing: the folder's media in natural order,
@@ -537,6 +620,10 @@ impl SessionPlaylist {
     /// Start `job` as the one in flight.
     fn start(&mut self, job: Job) {
         self.next_job += 1;
+        let kind = match job {
+            Job::Folder(_) => JobKind::Folder,
+            Job::Resolve(_) => JobKind::Resolve { queued: Vec::new() },
+        };
         let cancel = Arc::new(AtomicBool::new(false));
         let started = scan::spawn(
             Arc::clone(&self.fs),
@@ -550,6 +637,7 @@ impl SessionPlaylist {
             self.active = Some(ActiveJob {
                 id: self.next_job,
                 cancel,
+                kind,
             });
         }
     }

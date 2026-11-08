@@ -427,7 +427,11 @@ impl State {
     /// Play what finished folder reads and an end of file call for, and queue
     /// the playlist if it changed.
     fn advance_playlist(&mut self, engine: &dyn Engine) {
-        for step in self.playlist.poll() {
+        let core = self.machine.machine();
+        let ended = (core.status() == PlaybackStatus::Ended)
+            .then(|| core.snapshot().source.clone())
+            .flatten();
+        for step in self.playlist.poll(ended.as_ref()) {
             match step {
                 Background::Open(open) => {
                     // An engine refusal is already queued as an error event.

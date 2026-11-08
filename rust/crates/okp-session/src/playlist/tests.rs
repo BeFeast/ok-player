@@ -89,7 +89,7 @@ fn appended_url_is_reached_by_auto_advance() {
 
     // The current file ends: auto-advance reaches the queued URL.
     playlist.end_of_file();
-    let steps = playlist.poll();
+    let steps = playlist.poll(Some(&current));
     let [Background::Open(open)] = steps.as_slice() else {
         panic!("expected one open, got {steps:?}")
     };
@@ -296,18 +296,21 @@ fn local_file_requests_keep_the_menu_action_semantics() {
 
 #[test]
 fn an_end_without_an_auto_advance_target_plays_nothing() {
-    let (mut playlist, _) = playing_local(vec![local("/media/current.mkv")]);
+    let (mut playlist, current) = playing_local(vec![local("/media/current.mkv")]);
     playlist.list.set_auto_advance(false);
     playlist.end_of_file();
-    assert!(playlist.poll().is_empty());
+    assert!(playlist.poll(Some(&current)).is_empty());
 
-    let (mut playlist, _) =
+    let (mut playlist, current) =
         playing_local(vec![local("/media/first.mkv"), local("/media/current.mkv")]);
     playlist.end_of_file();
-    assert!(playlist.poll().is_empty(), "the last item with repeat off");
+    assert!(
+        playlist.poll(Some(&current)).is_empty(),
+        "the last item with repeat off"
+    );
     // The flag is spent: a later poll does not advance either.
     playlist.list.set_repeat(CoreRepeatMode::All);
-    assert!(playlist.poll().is_empty());
+    assert!(playlist.poll(Some(&current)).is_empty());
 }
 
 #[test]
@@ -317,6 +320,7 @@ fn a_finished_job_that_is_no_longer_in_flight_is_ignored() {
     playlist.active = Some(ActiveJob {
         id: 4,
         cancel: Arc::new(AtomicBool::new(false)),
+        kind: JobKind::Folder,
     });
     let folder = |file: &str, siblings: &[&str]| Outcome::Folder {
         file: PathBuf::from(file),
@@ -326,7 +330,7 @@ fn a_finished_job_that_is_no_longer_in_flight_is_ignored() {
         job: 3,
         outcome: folder("/old/x.mkv", &["/old/w.mkv", "/old/x.mkv"]),
     });
-    assert!(playlist.poll().is_empty());
+    assert!(playlist.poll(None).is_empty());
     assert_eq!(playlist.list.items(), [local("/media/current.mkv")]);
     assert!(
         playlist.state().scanning,
@@ -340,7 +344,7 @@ fn a_finished_job_that_is_no_longer_in_flight_is_ignored() {
             &["/media/a.mkv", "/media/current.mkv"],
         ),
     });
-    assert!(playlist.poll().is_empty());
+    assert!(playlist.poll(None).is_empty());
     assert_eq!(
         playlist.list.items(),
         [local("/media/a.mkv"), local("/media/current.mkv")]

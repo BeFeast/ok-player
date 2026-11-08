@@ -154,6 +154,11 @@ Opening:
 - Folders and playlist files are read on a scan thread too. The reply is
   `applied`; the first item opens when the read finishes, and an `error` event
   (`load_failed`, no `request_id`) reports a read that found nothing playable.
+- While an open's folders and playlist files are read, the playlist it
+  replaces stays. `jump`, `next` and `previous` play from it and drop the
+  read. Sources queued meanwhile show in it at once and follow the opened
+  items when the read finishes; the other edits change only the playlist being
+  replaced.
 - A newer open or a `close` supersedes a read in flight: it is cancelled, and
   whatever it reports is dropped. A listing reads at most 20,000 directory
   entries; a bigger folder is not listed.
@@ -161,7 +166,11 @@ Opening:
 
 When the current item reaches its end without an error, the next item in play
 order plays (`repeat` `all` wraps to the first), and `one` restarts the same
-item. A plain `open` of anything other than a local media file makes a
+item. An end while a folder or playlist file is being read waits for the read:
+after a folder listing, the next item comes from the filled-in playlist; after
+an open's read, its first item plays, or the old playlist goes on if the read
+found nothing playable. An open or a `close` in the meantime cancels the
+advance. A plain `open` of anything other than a local media file makes a
 one-item playlist (libmpv is handed the source as it is, so folders and
 playlist files belong in a playlist `open`); `close` empties it.
 

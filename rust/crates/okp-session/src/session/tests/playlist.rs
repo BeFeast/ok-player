@@ -703,3 +703,191 @@ fn shuffle_with_a_seed_steps_through_the_same_order_every_time() {
         "every item plays once: {first:?}"
     );
 }
+
+#[test]
+fn an_end_of_file_before_the_folder_is_listed_plays_the_next_file_once_it_is() {
+    for repeat in [RepeatMode::Off, RepeatMode::All] {
+        let (folders, gate) = FakeFolders::default()
+            .folder("/m", &["a.mkv", "b.mkv"])
+            .gated("/m");
+        let _release = ReleaseOnDrop(Arc::clone(&gate));
+        let (session, engine, folders) = session_with(folders);
+        let _ = act(&session, PlaylistAction::SetRepeat { mode: repeat });
+        let _ = session.dispatch(&open("/m/a.mkv"));
+        assert!(wait_for(|| folders.reading.load(Ordering::SeqCst) == 1));
+        playing(&session, &engine);
+
+        // A short clip ends while its folder is still being listed.
+        end_of_file(&engine);
+        assert!(wait_for(|| session.snapshot().status == Status::Ended));
+        thread::sleep(Duration::from_millis(30));
+        assert_eq!(
+            opened(&engine),
+            ["/m/a.mkv"],
+            "{repeat:?}: nothing plays before the folder is listed"
+        );
+        assert!(playlist(&session).scanning);
+
+        gate.release();
+        assert!(
+            wait_for(|| opened(&engine) == ["/m/a.mkv", "/m/b.mkv"]),
+            "{repeat:?}: the next file of the folder plays: {:?}",
+            opened(&engine)
+        );
+        assert_eq!(
+            settled_on(&session, &["/m/a.mkv", "/m/b.mkv"]).current_index,
+            Some(1)
+        );
+    }
+}
+
+#[test]
+fn an_end_of_file_waiting_for_a_listing_is_dropped_by_a_newer_open() {
+    let (folders, gate) = FakeFolders::default()
+        .folder("/m", &["a.mkv", "b.mkv"])
+        .folder("/n", &["x.mkv", "y.mkv"])
+        .gated("/m");
+    let _release = ReleaseOnDrop(Arc::clone(&gate));
+    let (session, engine, _) = session_with(folders);
+    let _ = session.dispatch(&open("/m/a.mkv"));
+    playing(&session, &engine);
+    end_of_file(&engine);
+    assert!(wait_for(|| session.snapshot().status == Status::Ended));
+
+    // The user opens something else before the folder of the clip is listed.
+    let _ = session.dispatch(&open("/n/x.mkv"));
+    settled_on(&session, &["/n/x.mkv", "/n/y.mkv"]);
+    gate.release();
+    thread::sleep(Duration::from_millis(50));
+    let _ = session.snapshot();
+    assert_eq!(
+        opened(&engine),
+        ["/m/a.mkv", "/n/x.mkv"],
+        "the end of the clip does not skip the newly opened file"
+    );
+}
+
+/// A session playing `/a/1.mkv` from the folder playlist `[/a/1.mkv, /a/2.mkv]`
+/// whose playlist `open` of the folder `/slow` (holding `slow`) is held in its
+/// read: a sleeping network mount.
+fn reading_a_slow_open(slow: &[&str]) -> (Session, Arc<FakeState>, Arc<FakeFolders>, Arc<Gate>) {
+    let (folders, gate) = FakeFolders::default()
+        .folder("/a", &["1.mkv", "2.mkv"])
+        .folder("/slow", slow)
+        .gated("/slow");
+    let (session, engine, folders) = session_with(folders);
+    let _ = session.dispatch(&open("/a/1.mkv"));
+    settled_on(&session, &["/a/1.mkv", "/a/2.mkv"]);
+    playing(&session, &engine);
+    assert_eq!(
+        act(
+            &session,
+            PlaylistAction::Open {
+                sources: vec![source("/slow")],
+            }
+        ),
+        DispatchResult::Applied {}
+    );
+    assert!(
+        wait_for(|| folders.reading.load(Ordering::SeqCst) == 2),
+        "the read of /slow started"
+    );
+    assert!(playlist(&session).scanning);
+    (session, engine, folders, gate)
+}
+
+#[test]
+fn a_jump_while_an_open_is_read_drops_the_read() {
+    let (session, engine, folders, gate) = reading_a_slow_open(&["x.mkv", "y.mkv"]);
+    let _release = ReleaseOnDrop(Arc::clone(&gate));
+
+    assert!(matches!(
+        act(&session, PlaylistAction::Jump { index: 1 }),
+        DispatchResult::Accepted { .. }
+    ));
+    let picked = playlist(&session);
+    assert_eq!(locations(&picked), ["/a/1.mkv", "/a/2.mkv"]);
+    assert_eq!(picked.current_index, Some(1));
+    assert!(!picked.scanning, "the read was dropped");
+
+    gate.release();
+    assert!(
+        wait_for(|| folders.released.load(Ordering::SeqCst) == 2),
+        "the dropped read let go of its listing"
+    );
+    thread::sleep(Duration::from_millis(50));
+    assert_eq!(opened(&engine), ["/a/1.mkv", "/a/2.mkv"]);
+    assert_eq!(playlist(&session), picked);
+}
+
+#[test]
+fn an_end_of_file_while_an_open_is_read_waits_for_the_read() {
+    let (session, engine, _, gate) = reading_a_slow_open(&["x.mkv", "y.mkv"]);
+    let _release = ReleaseOnDrop(Arc::clone(&gate));
+
+    end_of_file(&engine);
+    assert!(wait_for(|| session.snapshot().status == Status::Ended));
+    thread::sleep(Duration::from_millis(30));
+    assert_eq!(
+        opened(&engine),
+        ["/a/1.mkv"],
+        "the playlist being replaced does not advance"
+    );
+
+    gate.release();
+    settled_on(&session, &["/slow/x.mkv", "/slow/y.mkv"]);
+    assert_eq!(opened(&engine), ["/a/1.mkv", "/slow/x.mkv"]);
+}
+
+#[test]
+fn an_end_of_file_while_an_open_finds_nothing_plays_on_in_the_old_playlist() {
+    let (session, engine, _, gate) = reading_a_slow_open(&["cover.jpg"]);
+    let _release = ReleaseOnDrop(Arc::clone(&gate));
+
+    end_of_file(&engine);
+    assert!(wait_for(|| session.snapshot().status == Status::Ended));
+    thread::sleep(Duration::from_millis(30));
+    assert_eq!(opened(&engine), ["/a/1.mkv"], "the read decides first");
+
+    gate.release();
+    assert!(
+        wait_for(|| opened(&engine) == ["/a/1.mkv", "/a/2.mkv"]),
+        "{:?}",
+        opened(&engine)
+    );
+    let list = settled_on(&session, &["/a/1.mkv", "/a/2.mkv"]);
+    assert_eq!(list.current_index, Some(1));
+}
+
+#[test]
+fn what_is_queued_while_an_open_is_read_follows_the_opened_items() {
+    let (session, engine, _, gate) = reading_a_slow_open(&["x.mkv", "y.mkv"]);
+    let _release = ReleaseOnDrop(Arc::clone(&gate));
+
+    for extra in ["/q/extra.mkv", "/q/gone.mkv"] {
+        assert_eq!(
+            act(
+                &session,
+                PlaylistAction::Queue {
+                    sources: vec![source(extra)],
+                    mode: QueueMode::Append,
+                }
+            ),
+            DispatchResult::Applied {}
+        );
+    }
+    assert_eq!(
+        act(&session, PlaylistAction::Remove { index: 3 }),
+        DispatchResult::Applied {}
+    );
+    assert_eq!(
+        locations(&playlist(&session)),
+        ["/a/1.mkv", "/a/2.mkv", "/q/extra.mkv"],
+        "the queue shows at once"
+    );
+
+    gate.release();
+    let list = settled_on(&session, &["/slow/x.mkv", "/slow/y.mkv", "/q/extra.mkv"]);
+    assert_eq!(list.current_index, Some(0));
+    assert_eq!(opened(&engine), ["/a/1.mkv", "/slow/x.mkv"]);
+}
