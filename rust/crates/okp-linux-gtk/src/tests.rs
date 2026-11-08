@@ -2287,13 +2287,23 @@ fn uri_scheme_row_reflects_toggle_registration_and_default_handler() {
             ("Missing", _, IntegrationStatus::Bad)
         ));
     }
-    // Turned off in Settings: the desktop no longer offers OK Player, whatever xdg-mime says.
-    for default in [None, Some(true), Some(false)] {
+    // Turned off in Settings, and xdg-mime does not name OK Player either.
+    for default in [None, Some(false)] {
         assert!(matches!(
             uri_scheme_state(true, false, default).row_content(),
             ("Off", _, IntegrationStatus::Warning)
         ));
     }
+    // Turned off, but xdg-mime still names OK Player: the row must not claim the links are gone.
+    let (value, detail, status) = uri_scheme_state(true, false, Some(true)).row_content();
+    assert!(matches!(
+        (value, status),
+        ("Partly off", IntegrationStatus::Warning)
+    ));
+    assert!(
+        detail.contains("xdg-mime still names OK Player") && detail.contains("xdg-open"),
+        "{detail}"
+    );
     assert!(matches!(
         uri_scheme_state(true, true, Some(true)).row_content(),
         ("Default", _, IntegrationStatus::Good)
@@ -2326,9 +2336,18 @@ fn copy_diagnostics_reports_contract_handling_and_registration() {
             uri_scheme_state(true, true, None),
             "v1, handling on; registered (default unknown)",
         ),
-        // Off unregisters, even where xdg-mime still names OK Player.
+        // Off removes the association for GIO, but xdg-mime ignores that and still names OK
+        // Player, so xdg-open on a desktop it does not recognise still reaches the player.
         (
             uri_scheme_state(true, false, Some(true)),
+            "v1, handling off; still reachable via xdg-mime",
+        ),
+        (
+            uri_scheme_state(true, false, Some(false)),
+            "v1, handling off; missing",
+        ),
+        (
+            uri_scheme_state(true, false, None),
             "v1, handling off; missing",
         ),
         (
@@ -2494,7 +2513,7 @@ fn gio_scheme_report(gio: &Path, root: &Path) -> String {
 }
 
 #[test]
-fn the_desktop_stops_offering_ok_player_for_links_while_handling_is_off() {
+fn gio_stops_offering_ok_player_for_links_while_handling_is_off() {
     let Some(gio) = find_executable("gio") else {
         eprintln!("skipped: gio is not installed, so the GIO lookup cannot be exercised");
         return;
@@ -2551,6 +2570,484 @@ fn the_desktop_stops_offering_ok_player_for_links_while_handling_is_off() {
     assert!(
         names_ok_player_as_default(&on),
         "links on must make OK Player the default again:\n{on}"
+    );
+}
+
+/// A competing handler for the scheme in [`LinkDesktop`].
+const OTHER_LINK_HANDLER: &str = "org.example.otherplayer.desktop";
+
+/// An isolated XDG tree for running the real xdg-utils, GIO and OK Player's own integration code
+/// against. It holds an OK Player desktop entry whose `Exec` writes the link it receives to
+/// `handler.out`, a competing handler, a `mimeinfo.cache` like the one the package's
+/// `update-desktop-database` run leaves behind, an empty config directory, empty system
+/// directories, and a settings file of its own.
+struct LinkDesktop {
+    root: tempfile::TempDir,
+}
+
+impl LinkDesktop {
+    /// `cached_handlers` is the `mimeinfo.cache` value for the scheme, most preferred first.
+    fn new(prefix: &str, cached_handlers: &[&str]) -> Self {
+        let root = unique_temp_dir(prefix);
+        let applications = root.path().join("data/applications");
+        fs::create_dir_all(&applications).expect("applications dir");
+        fs::create_dir_all(root.path().join("system")).expect("empty system dirs");
+        fs::create_dir_all(root.path().join("config")).expect("config dir");
+        let handler = root.path().join("handler.sh");
+        fs::write(
+            &handler,
+            format!(
+                "printf '%s\\n' \"$@\" > '{}'\n",
+                root.path().join("handler.out").display()
+            ),
+        )
+        .expect("handler script");
+        // `/bin/sh` runs the script, so it is never executed directly: exec'ing a file another
+        // test thread's fork may still hold open for writing fails with ETXTBSY.
+        fs::write(
+            applications.join(LINUX_DESKTOP_ID),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=OK Player\nExec=/bin/sh {} %U\nMimeType={};{LINUX_URI_SCHEME_MIME};\n",
+                handler.display(),
+                LINUX_KEY_MEDIA_MIME_TYPES.join(";")
+            ),
+        )
+        .expect("OK Player desktop entry");
+        fs::write(
+            applications.join(OTHER_LINK_HANDLER),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Other\nExec=/bin/true %U\nMimeType={LINUX_URI_SCHEME_MIME};\n"
+            ),
+        )
+        .expect("competing desktop entry");
+        fs::write(
+            applications.join("mimeinfo.cache"),
+            format!(
+                "[MIME Cache]\n{LINUX_URI_SCHEME_MIME}={};\n",
+                cached_handlers.join(";")
+            ),
+        )
+        .expect("mimeinfo.cache");
+        Self { root }
+    }
+
+    fn path(&self) -> &Path {
+        self.root.path()
+    }
+
+    fn config(&self) -> PathBuf {
+        self.path().join("config")
+    }
+
+    fn mimeapps(&self) -> mimeapps::MimeAppsList {
+        mimeapps::read_mimeapps(&mimeapps::user_mimeapps_path(&self.config()))
+            .expect("mimeapps.list")
+    }
+
+    fn settings_path(&self) -> PathBuf {
+        self.path().join("settings/settings.json")
+    }
+
+    /// The settings as OK Player reads them at startup.
+    fn settings(&self) -> settings::SettingsStore {
+        settings::SettingsStore::open_at(self.settings_path())
+    }
+
+    fn desktop_entry(&self) -> String {
+        fs::read_to_string(self.path().join("data/applications").join(LINUX_DESKTOP_ID))
+            .expect("OK Player desktop entry")
+    }
+
+    /// The whole environment a tool gets: this tree and `XDG_CURRENT_DESKTOP=desktop`.
+    fn environment(&self, desktop: &str) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+        let root = self.path();
+        [
+            ("PATH", env::var_os("PATH").unwrap_or_default()),
+            ("HOME", root.into()),
+            ("LC_ALL", "C".into()),
+            ("XDG_CONFIG_HOME", root.join("config").into()),
+            ("XDG_CONFIG_DIRS", root.join("system").into()),
+            ("XDG_DATA_HOME", root.join("data").into()),
+            ("XDG_DATA_DIRS", root.join("system").into()),
+            ("XDG_CURRENT_DESKTOP", desktop.into()),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.into(), value))
+        .collect()
+    }
+
+    fn xdg_mime(&self, program: &Path, desktop: &str) -> XdgMime {
+        XdgMime::with_environment(program.to_path_buf(), self.environment(desktop))
+    }
+
+    /// What OK Player reports for this tree, through the real xdg-mime on `desktop`.
+    fn state(&self, xdg_mime: &XdgMime) -> UriSchemeState {
+        UriSchemeState::read(
+            Some(&self.desktop_entry()),
+            Some(&self.config()),
+            Some(xdg_mime),
+        )
+    }
+
+    /// Open `link` with the real `xdg-open` on `desktop`, the way a browser hands it over, and
+    /// report whether xdg-open succeeded. `BROWSER=false` keeps every browser fallback from
+    /// running; the display variable only satisfies xdg-open's display check.
+    fn xdg_open(&self, program: &Path, desktop: &str, link: &str) -> bool {
+        let mut command = Command::new(program);
+        command
+            .arg(link)
+            .env_clear()
+            .envs(self.environment(desktop))
+            .env("WAYLAND_DISPLAY", "okp-test-no-display")
+            .env("BROWSER", "false")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn().expect("xdg-open should start");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(status) = child.try_wait().expect("xdg-open should be waitable") {
+                return status.success();
+            }
+            if Instant::now() > deadline {
+                let _ = child.kill();
+                panic!("xdg-open did not finish within 30 s");
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// The link OK Player's desktop entry was started with, waiting up to `patience` for a
+    /// launcher that does not wait for its child (GIO).
+    fn handler_received(&self, patience: Duration) -> Option<String> {
+        let out = self.path().join("handler.out");
+        let deadline = Instant::now() + patience;
+        loop {
+            if let Ok(text) = fs::read_to_string(&out)
+                && !text.is_empty()
+            {
+                fs::remove_file(&out).expect("handler.out should be removable");
+                return Some(text.trim_end().to_owned());
+            }
+            if Instant::now() > deadline {
+                return None;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+/// A Make Default that records the MIME types it was asked to claim instead of running xdg-mime.
+fn recorded_make_default(
+    config: Option<&Path>,
+    settings: &mut settings::SettingsStore,
+) -> (MakeDefaultOutcome, Vec<String>) {
+    let mut claimed = Vec::new();
+    let outcome = apply_make_default(config, settings, |mime| {
+        claimed.push(mime.to_owned());
+        Ok(())
+    })
+    .expect("Make Default should succeed");
+    (outcome, claimed)
+}
+
+#[test]
+fn make_default_claims_links_while_on_and_keeps_the_claim_for_later_while_off() {
+    let desktop = LinkDesktop::new("okp-uri-make-default", &[OTHER_LINK_HANDLER]);
+    let config = desktop.config();
+
+    let mut settings = desktop.settings();
+    let (outcome, claimed) = recorded_make_default(Some(&config), &mut settings);
+    assert_eq!(outcome.uri_scheme, UriSchemeClaim::Claimed);
+    assert!(claimed.iter().any(|mime| mime == LINUX_URI_SCHEME_MIME));
+    for mime in LINUX_KEY_MEDIA_MIME_TYPES {
+        assert!(claimed.iter().any(|claimed| claimed == mime), "{mime}");
+    }
+    assert!(!settings.restore_uri_scheme_default());
+    assert!(
+        outcome.status().contains("ok-player:// links."),
+        "{}",
+        outcome.status()
+    );
+
+    apply_link_toggle(&config, &mut settings, false).expect("turn links off");
+    let (outcome, claimed) = recorded_make_default(Some(&config), &mut settings);
+    assert_eq!(outcome.uri_scheme, UriSchemeClaim::Deferred);
+    assert!(outcome.settings_saved);
+    assert!(
+        !claimed.iter().any(|mime| mime == LINUX_URI_SCHEME_MIME),
+        "Make Default must not claim the scheme while links are off: {claimed:?}"
+    );
+    assert_eq!(claimed.len(), LINUX_KEY_MEDIA_MIME_TYPES.len());
+    assert!(
+        outcome.status().contains("when you turn them on"),
+        "{}",
+        outcome.status()
+    );
+
+    // The claim survives a restart and is honoured when links are turned back on.
+    let mut restarted = desktop.settings();
+    assert!(restarted.restore_uri_scheme_default());
+    let on = apply_link_toggle(&config, &mut restarted, true).expect("turn links on");
+    assert!(on.change.restored_default);
+    assert_eq!(
+        desktop
+            .mimeapps()
+            .entries(mimeapps::DEFAULT_APPLICATIONS, LINUX_URI_SCHEME_MIME),
+        vec![LINUX_DESKTOP_ID.to_owned()]
+    );
+    assert!(!desktop.settings().restore_uri_scheme_default());
+}
+
+#[test]
+fn make_default_reports_failed_types_and_keeps_no_pending_claim() {
+    let desktop = LinkDesktop::new("okp-uri-make-default-fail", &[OTHER_LINK_HANDLER]);
+    let config = desktop.config();
+    let mut settings = desktop.settings();
+    apply_link_toggle(&config, &mut settings, false).expect("turn links off");
+
+    let error = apply_make_default(Some(&config), &mut settings, |mime| {
+        if mime == "video/mp4" {
+            Err(format!("{mime} (exit status: 4)"))
+        } else {
+            Ok(())
+        }
+    })
+    .expect_err("a failed type fails Make Default");
+    assert_eq!(error, "video/mp4 (exit status: 4)");
+    assert!(!settings.restore_uri_scheme_default());
+}
+
+#[test]
+fn the_pending_default_restore_survives_a_restart() {
+    let desktop = LinkDesktop::new("okp-uri-restore-restart", &[LINUX_DESKTOP_ID]);
+    let config = desktop.config();
+    fs::write(
+        mimeapps::user_mimeapps_path(&config),
+        "[Default Applications]\nx-scheme-handler/ok-player=com.befeast.okplayer.desktop;\n",
+    )
+    .expect("mimeapps.list after Make Default");
+
+    let off = apply_link_toggle(&config, &mut desktop.settings(), false).expect("turn links off");
+    assert!(off.change.restore_default_on_enable);
+    assert!(off.settings_saved);
+
+    let mut restarted = desktop.settings();
+    assert!(
+        restarted.restore_uri_scheme_default(),
+        "turning links off while OK Player was their default must be remembered on disk"
+    );
+    let on = apply_link_toggle(&config, &mut restarted, true).expect("turn links on");
+    assert!(on.change.restored_default);
+    assert_eq!(
+        desktop
+            .mimeapps()
+            .entries(mimeapps::DEFAULT_APPLICATIONS, LINUX_URI_SCHEME_MIME),
+        vec![LINUX_DESKTOP_ID.to_owned()]
+    );
+    assert!(!desktop.settings().restore_uri_scheme_default());
+}
+
+#[test]
+fn link_switch_status_never_says_links_are_gone_while_xdg_mime_still_reaches_ok_player() {
+    let off = UriSchemeHandlingChange {
+        restore_default_on_enable: true,
+        restored_default: false,
+    };
+    let reachable = link_toggle_status(false, off, uri_scheme_state(true, false, Some(true)));
+    assert!(
+        reachable.contains("xdg-mime still names OK Player") && reachable.contains("xdg-open"),
+        "{reachable}"
+    );
+    assert!(
+        !reachable.contains("removed as their handler"),
+        "{reachable}"
+    );
+    for default in [None, Some(false)] {
+        let gone = link_toggle_status(false, off, uri_scheme_state(true, false, default));
+        assert!(gone.contains("removed as their handler"), "{gone}");
+    }
+    let restored = UriSchemeHandlingChange {
+        restore_default_on_enable: false,
+        restored_default: true,
+    };
+    assert!(
+        link_toggle_status(true, restored, uri_scheme_state(true, true, Some(true)))
+            .contains("default again")
+    );
+}
+
+#[test]
+fn make_default_makes_xdg_mime_name_ok_player_for_links() {
+    let Some(xdg_mime) = find_executable("xdg-mime") else {
+        eprintln!("skipped: xdg-mime is not installed");
+        return;
+    };
+    let desktop = LinkDesktop::new(
+        "okp-uri-make-default-xdg",
+        &[OTHER_LINK_HANDLER, LINUX_DESKTOP_ID],
+    );
+    let xdg = desktop.xdg_mime(&xdg_mime, "Hyprland");
+    assert_eq!(
+        xdg.query_default(LINUX_URI_SCHEME_MIME).as_deref(),
+        Some(OTHER_LINK_HANDLER),
+        "the fixture starts with another application as the default"
+    );
+
+    let outcome = apply_make_default(Some(&desktop.config()), &mut desktop.settings(), |mime| {
+        xdg.set_default(LINUX_DESKTOP_ID, mime)
+    })
+    .expect("Make Default with the real xdg-mime");
+    assert_eq!(outcome.uri_scheme, UriSchemeClaim::Claimed);
+
+    // Acceptance criterion 1 of #850, through the real tool.
+    assert_eq!(
+        xdg.query_default(LINUX_URI_SCHEME_MIME).as_deref(),
+        Some(LINUX_DESKTOP_ID)
+    );
+    assert_eq!(
+        count_default_key_media_mimes(&xdg),
+        LINUX_KEY_MEDIA_MIME_TYPES.len()
+    );
+    assert_eq!(
+        desktop.state(&xdg).diagnostics(),
+        "v1, handling on; registered (default)"
+    );
+    if let Some(gio) = find_executable("gio") {
+        let report = gio_scheme_report(&gio, desktop.path());
+        assert!(
+            report
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .ends_with(LINUX_DESKTOP_ID),
+            "GIO should agree:\n{report}"
+        );
+    }
+}
+
+#[test]
+fn make_default_while_links_are_off_leaves_them_off_until_they_are_turned_on() {
+    let Some(xdg_mime) = find_executable("xdg-mime") else {
+        eprintln!("skipped: xdg-mime is not installed");
+        return;
+    };
+    let desktop = LinkDesktop::new(
+        "okp-uri-make-default-off-xdg",
+        &[OTHER_LINK_HANDLER, LINUX_DESKTOP_ID],
+    );
+    let config = desktop.config();
+    let xdg = desktop.xdg_mime(&xdg_mime, "Hyprland");
+    let mut settings = desktop.settings();
+    apply_link_toggle(&config, &mut settings, false).expect("turn links off");
+
+    let outcome = apply_make_default(Some(&config), &mut settings, |mime| {
+        xdg.set_default(LINUX_DESKTOP_ID, mime)
+    })
+    .expect("Make Default with the real xdg-mime");
+    assert_eq!(outcome.uri_scheme, UriSchemeClaim::Deferred);
+    assert_eq!(
+        xdg.query_default(LINUX_URI_SCHEME_MIME).as_deref(),
+        Some(OTHER_LINK_HANDLER),
+        "Make Default must not claim links while they are off"
+    );
+    assert!(
+        !desktop.mimeapps().contains(
+            mimeapps::DEFAULT_APPLICATIONS,
+            LINUX_URI_SCHEME_MIME,
+            LINUX_DESKTOP_ID
+        ),
+        "a default beside the removed association would turn links back on for GIO"
+    );
+    assert_eq!(
+        count_default_key_media_mimes(&xdg),
+        LINUX_KEY_MEDIA_MIME_TYPES.len()
+    );
+    if let Some(gio) = find_executable("gio") {
+        let report = gio_scheme_report(&gio, desktop.path());
+        assert!(
+            !report.contains(LINUX_DESKTOP_ID),
+            "links stay off for GIO:\n{report}"
+        );
+    }
+
+    let on = apply_link_toggle(&config, &mut desktop.settings(), true).expect("turn links on");
+    assert!(on.change.restored_default);
+    assert_eq!(
+        xdg.query_default(LINUX_URI_SCHEME_MIME).as_deref(),
+        Some(LINUX_DESKTOP_ID)
+    );
+    if let Some(gio) = find_executable("gio") {
+        let report = gio_scheme_report(&gio, desktop.path());
+        assert!(
+            report
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .ends_with(LINUX_DESKTOP_ID),
+            "GIO should name OK Player once links are on:\n{report}"
+        );
+    }
+}
+
+#[test]
+fn links_off_still_reach_ok_player_where_xdg_open_falls_back_to_xdg_mime_and_the_report_says_so() {
+    let (Some(xdg_mime), Some(xdg_open)) =
+        (find_executable("xdg-mime"), find_executable("xdg-open"))
+    else {
+        eprintln!("skipped: xdg-utils is not installed");
+        return;
+    };
+    let gio = find_executable("gio");
+    let link = "ok-player://open?url=http%3A%2F%2Fexample.org%2Fa.mp4";
+    let desktop = LinkDesktop::new("okp-uri-xdg-open", &[LINUX_DESKTOP_ID]);
+    let config = desktop.config();
+    fs::write(
+        mimeapps::user_mimeapps_path(&config),
+        "[Default Applications]\nx-scheme-handler/ok-player=com.befeast.okplayer.desktop;\n",
+    )
+    .expect("mimeapps.list after Make Default");
+    // Hyprland is a session xdg-open does not recognise, so it uses its xdg-mime lookup.
+    let xdg = desktop.xdg_mime(&xdg_mime, "Hyprland");
+
+    if gio.is_some() {
+        // On GNOME xdg-open calls `gio open`; with links on it reaches the player.
+        assert!(desktop.xdg_open(&xdg_open, "GNOME", link));
+        assert_eq!(
+            desktop.handler_received(Duration::from_secs(10)).as_deref(),
+            Some(link)
+        );
+    }
+
+    let off = apply_link_toggle(&config, &mut desktop.settings(), false).expect("turn links off");
+
+    // xdg-mime ignores [Removed Associations] and falls back to mimeinfo.cache, so xdg-open
+    // still hands the link to OK Player on such a session.
+    assert!(desktop.xdg_open(&xdg_open, "Hyprland", link));
+    assert_eq!(
+        desktop.handler_received(Duration::ZERO).as_deref(),
+        Some(link)
+    );
+    // GIO honours the removal: on GNOME the link no longer reaches the player.
+    if gio.is_some() {
+        assert!(!desktop.xdg_open(&xdg_open, "GNOME", link));
+        assert_eq!(desktop.handler_received(Duration::ZERO), None);
+    }
+
+    // So the report must not call the links gone.
+    let state = desktop.state(&xdg);
+    assert_eq!(
+        state.diagnostics(),
+        "v1, handling off; still reachable via xdg-mime"
+    );
+    assert!(matches!(state.row_content(), ("Partly off", _, _)));
+    let status = link_toggle_status(false, off.change, state);
+    assert!(status.contains("xdg-open"), "{status}");
+
+    apply_link_toggle(&config, &mut desktop.settings(), true).expect("turn links on");
+    assert_eq!(
+        desktop.state(&xdg).diagnostics(),
+        "v1, handling on; registered (default)"
     );
 }
 

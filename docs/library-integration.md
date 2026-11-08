@@ -151,7 +151,9 @@ Registration and diagnostics:
   has a matching line, reporting whether link handling is on, whether the scheme is
   advertised by an installed desktop entry and, where `xdg-mime` is available, whether OK
   Player is its current handler. The *Open ok-player:// links* switch turns handling off by
-  removing the association in the user's `mimeapps.list`; see
+  removing the association in the user's `mimeapps.list`. GIO honours that; `xdg-mime` does
+  not, so where `xdg-open` falls back to it a link can still reach the player, and the report
+  says `still reachable via xdg-mime`; see
   [ok-player-links.md](ok-player-links.md#registration-on-linux).
 - **Handling.** Every entry point (the launch command line, a second-instance invocation,
   an `org.mpris…OpenUri` call, and the in-app Open URL box) goes through the same parser and

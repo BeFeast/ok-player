@@ -52,7 +52,11 @@ impl Default for SettingsStore {
 
 impl SettingsStore {
     pub fn open() -> Self {
-        let path = settings_path();
+        Self::open_at(settings_path())
+    }
+
+    /// The settings document at `path`; a missing or unreadable file reads as the defaults.
+    pub fn open_at(path: PathBuf) -> Self {
         let data = fs::read_to_string(&path)
             .ok()
             .and_then(|json| Settings::load(&json))

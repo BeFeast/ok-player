@@ -325,15 +325,26 @@ accepted:
   OK Player to `[Removed Associations]` for the scheme in `$XDG_CONFIG_HOME/mimeapps.list`
   (`~/.config/mimeapps.list`) and drops it from `[Default Applications]`; on removes the
   entry and makes OK Player the default again if it was the default before, or if Make
-  Default was chosen while links were off. Every other line of the file is left as it was. GIO lookups honour the removal: Firefox, `gio open`, and
-  `xdg-open` on GNOME and Cinnamon, which calls `gio open`. `xdg-mime query default` does
-  not read `[Removed Associations]`, so where `xdg-open` falls back to `xdg-mime` (a session
-  it does not recognise as a known desktop) a link can still reach the player.
+  Default was chosen while links were off. Every other line of the file is left as it was.
+- The switch is not honoured everywhere. GIO lookups honour the removal: Firefox,
+  `gio open`, and `xdg-open` on GNOME and Cinnamon, which calls `gio open`. `xdg-mime query
+  default` does not read `[Removed Associations]` and falls back to `mimeinfo.cache`, which
+  the package fills. `xdg-open` uses that lookup on every session it does not recognise as a
+  known desktop (Hyprland, Sway and other window managers), and Chromium-based browsers open
+  external links through `xdg-open`. On such a session a link still starts OK Player with
+  the switch off. Settings and Copy Diagnostics report that case instead of calling the
+  links gone.
 - Settings → Integration and Copy Diagnostics report the state on one line, for example
-  `URI scheme (ok-player://): v1, handling on; registered (default)`. The registration part
-  is `registered (default)`, `registered (not default)` or `missing` (no installed desktop
-  entry advertises the scheme, or handling is off); without `xdg-mime` it reads
-  `registered (default unknown)`.
+  `URI scheme (ok-player://): v1, handling on; registered (default)`. The part after the
+  semicolon is one of:
+  - `registered (default)` or `registered (not default)`: handling is on, and `xdg-mime`
+    does or does not name OK Player;
+  - `registered (default unknown)`: handling is on and `xdg-mime` is not installed;
+  - `still reachable via xdg-mime`: handling is off, but `xdg-mime` still names OK Player,
+    so `xdg-open` can still hand it links as described above (the Settings row reads
+    *Partly off*);
+  - `missing`: no installed desktop entry advertises the scheme, or handling is off and
+    `xdg-mime` does not name OK Player.
 - The Flatpak build does not handle links in v1: a link shows a toast saying so.
 - AppImage builds do not register the scheme in v1.
 

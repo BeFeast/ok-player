@@ -2337,16 +2337,20 @@ impl LinuxIntegrationSnapshot {
             .as_deref()
             .map(count_registered_key_media_mimes)
             .unwrap_or_default();
-        let xdg_mime_available = find_executable("xdg-mime").is_some();
-        let default_key_mimes = xdg_mime_available.then(count_default_key_media_mimes);
-        let uri_scheme = UriSchemeState::capture(desktop_entry.as_deref(), xdg_mime_available);
+        let xdg_mime = XdgMime::find();
+        let default_key_mimes = xdg_mime.as_ref().map(count_default_key_media_mimes);
+        let uri_scheme = UriSchemeState::read(
+            desktop_entry.as_deref(),
+            mimeapps::user_config_home().as_deref(),
+            xdg_mime.as_ref(),
+        );
 
         Self {
             desktop_entry_path,
             registered_key_mimes,
             default_key_mimes,
             uri_scheme,
-            xdg_mime_available,
+            xdg_mime_available: xdg_mime.is_some(),
             update_desktop_database_available: find_executable("update-desktop-database").is_some(),
         }
     }

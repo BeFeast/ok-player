@@ -125,9 +125,10 @@ pub(crate) fn settings_integration_section(
     let make_default_scheme_row = scheme_row.clone();
     make_default.connect_clicked(move |button| {
         button.set_sensitive(false);
-        let uri_scheme_handling = user_uri_scheme_handling_enabled();
-        match set_linux_default_app(uri_scheme_handling) {
-            Ok(count) => {
+        let result = make_default_for_user(&mut make_default_state.borrow_mut().settings);
+        match result {
+            Ok(outcome) => {
+                let count = outcome.key_media_types;
                 set_integration_state_pill(
                     &make_default_value,
                     &format!("{count}/{} key types", LINUX_KEY_MEDIA_MIME_TYPES.len()),
@@ -137,21 +138,12 @@ pub(crate) fn settings_integration_section(
                         IntegrationStatus::Warning
                     },
                 );
-                if uri_scheme_handling {
-                    make_default_status.set_text(&format!(
-                        "OK Player set as default for {count} key media types and {LINUX_RESERVED_URI_SCHEME} links."
-                    ));
+                make_default_status.set_text(&outcome.status());
+                make_default_toast.show(if outcome.settings_saved {
+                    "Default media app updated"
                 } else {
-                    // A default for a removed association would contradict the toggle, so the
-                    // choice waits until links are turned back on.
-                    let mut state = make_default_state.borrow_mut();
-                    state.settings.set_restore_uri_scheme_default(true);
-                    save_settings_or_toast(&mut state, &make_default_toast);
-                    make_default_status.set_text(&format!(
-                        "OK Player set as default for {count} key media types. {LINUX_RESERVED_URI_SCHEME} links are off; OK Player becomes their default when you turn them on."
-                    ));
-                }
-                make_default_toast.show("Default media app updated");
+                    "Could not save settings"
+                });
             }
             Err(error) => {
                 make_default_status.set_text(&format!("Could not update defaults: {error}"));
@@ -380,64 +372,156 @@ pub(crate) fn desktop_registers_uri_scheme(desktop_entry: &str) -> bool {
         .any(|mime| mime == LINUX_URI_SCHEME_MIME)
 }
 
-pub(crate) fn uri_scheme_default_is_ok_player() -> bool {
-    query_default_app_for_mime(LINUX_URI_SCHEME_MIME)
-        .as_deref()
-        .is_some_and(default_app_matches_ok_player)
+/// Runs `xdg-mime`. The app runs it with its own environment; a test runs the real tool with an
+/// environment of its own, so that it reads and writes only an isolated XDG tree.
+#[derive(Clone, Debug)]
+pub(crate) struct XdgMime {
+    program: PathBuf,
+    /// When set, the whole environment the tool sees; nothing is inherited.
+    environment: Option<Vec<(std::ffi::OsString, std::ffi::OsString)>>,
+}
+
+impl XdgMime {
+    /// The `xdg-mime` on `PATH`, run with the app's environment.
+    pub(crate) fn find() -> Option<Self> {
+        find_executable("xdg-mime").map(|program| Self {
+            program,
+            environment: None,
+        })
+    }
+
+    /// `program` run with exactly `environment`.
+    #[cfg(test)]
+    pub(crate) fn with_environment(
+        program: PathBuf,
+        environment: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+    ) -> Self {
+        Self {
+            program,
+            environment: Some(environment),
+        }
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.program);
+        if let Some(environment) = &self.environment {
+            command.env_clear().envs(environment.iter().cloned());
+        }
+        command
+    }
+
+    /// `xdg-mime query default <mime>`: the desktop ID it names, if any.
+    pub(crate) fn query_default(&self, mime: &str) -> Option<String> {
+        let output = self
+            .command()
+            .arg("query")
+            .arg("default")
+            .arg(mime)
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        (!value.is_empty()).then_some(value)
+    }
+
+    /// Whether `xdg-mime query default <mime>` names OK Player.
+    pub(crate) fn names_ok_player(&self, mime: &str) -> bool {
+        self.query_default(mime)
+            .as_deref()
+            .is_some_and(default_app_matches_ok_player)
+    }
+
+    /// `xdg-mime default <desktop_id> <mime>`.
+    pub(crate) fn set_default(&self, desktop_id: &str, mime: &str) -> Result<(), String> {
+        match self
+            .command()
+            .arg("default")
+            .arg(desktop_id)
+            .arg(mime)
+            .status()
+        {
+            Ok(status) if status.success() => Ok(()),
+            Ok(status) => Err(format!("{mime} ({status})")),
+            Err(error) => Err(format!("{mime} ({error})")),
+        }
+    }
 }
 
 /// The `ok-player://` contract version this shell executes (epic #845).
 pub(crate) const URI_SCHEME_CONTRACT: &str = "v1";
 
+/// What the Settings row and status line add while handling is off but xdg-mime still names OK
+/// Player (see [`UriSchemeState`]).
+const XDG_MIME_STILL_REACHES: &str = "xdg-mime still names OK Player, so where xdg-open falls back to it (Hyprland, Sway and other desktops it does not recognise) a link can still open OK Player.";
+
 /// Where `ok-player://` links stand on this desktop, as Settings and Copy Diagnostics report it.
+///
+/// Two lookups decide where a link goes, and only one of them honours the link switch. GIO
+/// (Firefox, `gio open`, and `xdg-open` on GNOME and Cinnamon, which calls `gio open`) reads the
+/// `[Removed Associations]` entry the switch writes. `xdg-mime query default` does not: with no
+/// `[Default Applications]` entry it falls back to `mimeinfo.cache`, which the package's desktop
+/// entry fills. `xdg-open` uses that lookup on every session it does not recognise as a known
+/// desktop (Hyprland and Sway among them), so there a link still starts OK Player with the
+/// switch off. The report says so instead of claiming the links are gone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct UriSchemeState {
     /// An installed desktop entry lists `x-scheme-handler/ok-player` in `MimeType=`.
     pub(crate) advertised: bool,
-    /// The Settings toggle: the user's `mimeapps.list` does not remove the association.
+    /// The Settings switch: the user's `mimeapps.list` does not remove the association.
     pub(crate) handling: bool,
-    /// `xdg-mime query default` names OK Player; `None` when xdg-mime is unavailable.
+    /// `xdg-mime query default` names OK Player; `None` when xdg-mime is unavailable. It does
+    /// not read `[Removed Associations]`, so it can stay true with handling off.
     pub(crate) default: Option<bool>,
 }
 
 impl UriSchemeState {
-    pub(crate) fn capture(desktop_entry: Option<&str>, xdg_mime_available: bool) -> Self {
+    /// Read the state from the installed desktop entry's text, the `mimeapps.list` under
+    /// `config_home` (handling counts as on without one) and `xdg_mime`.
+    pub(crate) fn read(
+        desktop_entry: Option<&str>,
+        config_home: Option<&Path>,
+        xdg_mime: Option<&XdgMime>,
+    ) -> Self {
         Self {
             advertised: desktop_entry.is_some_and(desktop_registers_uri_scheme),
-            handling: user_uri_scheme_handling_enabled(),
-            default: xdg_mime_available.then(uri_scheme_default_is_ok_player),
+            handling: config_home.is_none_or(uri_scheme_handling_enabled),
+            default: xdg_mime.map(|xdg_mime| xdg_mime.names_ok_player(LINUX_URI_SCHEME_MIME)),
         }
     }
 
-    /// A fresh reading, for refreshing the Settings row after a change.
+    /// A fresh reading of this user's desktop, for refreshing the Settings row after a change.
     pub(crate) fn current() -> Self {
         let desktop_entry =
             linux_desktop_entry_path().and_then(|path| fs::read_to_string(path).ok());
-        Self::capture(
+        Self::read(
             desktop_entry.as_deref(),
-            find_executable("xdg-mime").is_some(),
+            mimeapps::user_config_home().as_deref(),
+            XdgMime::find().as_ref(),
         )
     }
 
-    /// Whether the desktop routes links to OK Player at all. Turning handling off is what
-    /// unregisters it, so an advertised scheme with handling off is not registered.
-    pub(crate) fn registered(self) -> bool {
-        self.advertised && self.handling
+    /// Handling is off, yet `xdg-mime query default` still names OK Player, so `xdg-open` on a
+    /// session it does not recognise still hands links to OK Player.
+    pub(crate) fn reachable_via_xdg_mime_while_off(self) -> bool {
+        self.advertised && !self.handling && self.default == Some(true)
     }
 
-    /// The Copy Diagnostics value:
-    /// `v1, handling on|off; registered (default)|registered (not default)|missing`.
-    /// Without xdg-mime the default handler cannot be checked, which reads
-    /// `registered (default unknown)`.
+    /// The Copy Diagnostics value: `v1, handling on|off;` followed by `registered (default)`,
+    /// `registered (not default)`, `registered (default unknown)` (no xdg-mime to ask),
+    /// `still reachable via xdg-mime` (handling off, but xdg-mime still names OK Player) or
+    /// `missing` (no installed desktop entry advertises the scheme, or handling is off and
+    /// neither lookup names OK Player).
     pub(crate) fn diagnostics(self) -> String {
-        let registration = if !self.registered() {
-            "missing"
-        } else {
-            match self.default {
-                Some(true) => "registered (default)",
-                Some(false) => "registered (not default)",
-                None => "registered (default unknown)",
-            }
+        let registration = match (self.advertised, self.handling, self.default) {
+            (false, _, _) => "missing",
+            (true, true, Some(true)) => "registered (default)",
+            (true, true, Some(false)) => "registered (not default)",
+            (true, true, None) => "registered (default unknown)",
+            (true, false, Some(true)) => "still reachable via xdg-mime",
+            (true, false, _) => "missing",
         };
         format!(
             "{URI_SCHEME_CONTRACT}, handling {}; {registration}",
@@ -456,11 +540,20 @@ impl UriSchemeState {
                 IntegrationStatus::Bad,
             );
         }
+        if self.reachable_via_xdg_mime_while_off() {
+            return (
+                "Partly off",
+                format!(
+                    "{LINUX_RESERVED_URI_SCHEME} links are off for GIO, which Firefox and GNOME use. {XDG_MIME_STILL_REACHES}"
+                ),
+                IntegrationStatus::Warning,
+            );
+        }
         if !self.handling {
             return (
                 "Off",
                 format!(
-                    "{LINUX_RESERVED_URI_SCHEME} links are turned off; browsers no longer offer OK Player for them."
+                    "{LINUX_RESERVED_URI_SCHEME} links are turned off; OK Player is removed as their handler."
                 ),
                 IntegrationStatus::Warning,
             );
@@ -513,8 +606,10 @@ impl UriSchemeRow {
 }
 
 /// The "Open ok-player:// links" switch. Off writes a `[Removed Associations]` entry to the
-/// user's `mimeapps.list`, so the desktop stops offering OK Player for the scheme; on removes it
-/// again. It is not a player-side refusal: with handling off a link never reaches the player.
+/// user's `mimeapps.list`, so GIO stops offering OK Player for the scheme; on removes it again.
+/// It is not a player-side refusal. Where `xdg-open` falls back to `xdg-mime`, which ignores
+/// that entry, a link can still start the player; the row and the status line say so (see
+/// [`UriSchemeState`]).
 fn uri_links_toggle_row(
     active: bool,
     state: Rc<RefCell<PlayerState>>,
@@ -566,34 +661,22 @@ fn uri_links_toggle_row(
             status_toast.show("Could not change links");
             return;
         };
-        let restore_default = state.borrow().settings.restore_uri_scheme_default();
-        match set_uri_scheme_handling(&config_home, enabled, restore_default) {
-            Ok(change) => {
-                {
-                    let mut state = state.borrow_mut();
-                    state
-                        .settings
-                        .set_restore_uri_scheme_default(change.restore_default_on_enable);
-                    save_settings_or_toast(&mut state, &status_toast);
-                }
+        let result = apply_link_toggle(&config_home, &mut state.borrow_mut().settings, enabled);
+        match result {
+            Ok(outcome) => {
                 set_settings_switch_active(button, enabled);
                 state_label.set_text(if enabled { "On" } else { "Off" });
-                status.set_text(&if !enabled {
-                    format!(
-                        "{LINUX_RESERVED_URI_SCHEME} links turned off; browsers no longer offer OK Player for them."
-                    )
-                } else if change.restored_default {
-                    format!(
-                        "{LINUX_RESERVED_URI_SCHEME} links turned on; OK Player is their default again."
-                    )
+                let after = UriSchemeState::current();
+                status.set_text(&link_toggle_status(enabled, outcome.change, after));
+                if outcome.settings_saved {
+                    status_toast.show(&format!(
+                        "{LINUX_RESERVED_URI_SCHEME} links {}",
+                        if enabled { "on" } else { "off" }
+                    ));
                 } else {
-                    format!("{LINUX_RESERVED_URI_SCHEME} links turned on.")
-                });
-                status_toast.show(&format!(
-                    "{LINUX_RESERVED_URI_SCHEME} links {}",
-                    if enabled { "on" } else { "off" }
-                ));
-                scheme_row.show(UriSchemeState::current());
+                    status_toast.show("Could not save settings");
+                }
+                scheme_row.show(after);
             }
             Err(error) => {
                 eprintln!("ok-player:// handling: could not update mimeapps.list: {error}");
@@ -621,10 +704,6 @@ pub(crate) fn uri_scheme_handling_enabled(config_home: &Path) -> bool {
             true
         }
     }
-}
-
-pub(crate) fn user_uri_scheme_handling_enabled() -> bool {
-    mimeapps::user_config_home().is_none_or(|home| uri_scheme_handling_enabled(&home))
 }
 
 /// What a change of the link toggle did, for the caller to persist and report.
@@ -696,29 +775,151 @@ pub(crate) fn set_uri_scheme_handling(
     })
 }
 
-pub(crate) fn count_default_key_media_mimes() -> usize {
-    LINUX_KEY_MEDIA_MIME_TYPES
-        .iter()
-        .filter(|mime| {
-            query_default_app_for_mime(mime)
-                .as_deref()
-                .is_some_and(default_app_matches_ok_player)
-        })
-        .count()
+/// What the link switch did: the `mimeapps.list` change and whether the settings were saved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LinkToggleOutcome {
+    pub(crate) change: UriSchemeHandlingChange,
+    /// The pending default restore reached the settings file. A failed save is logged; the
+    /// `mimeapps.list` change stands.
+    pub(crate) settings_saved: bool,
 }
 
-pub(crate) fn query_default_app_for_mime(mime: &str) -> Option<String> {
-    let output = Command::new("xdg-mime")
-        .arg("query")
-        .arg("default")
-        .arg(mime)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+/// The link switch: turn handling on or off in the `mimeapps.list` under `config_home`, then keep
+/// the pending default restore in `settings` and save them.
+pub(crate) fn apply_link_toggle(
+    config_home: &Path,
+    settings: &mut settings::SettingsStore,
+    enabled: bool,
+) -> std::io::Result<LinkToggleOutcome> {
+    let change =
+        set_uri_scheme_handling(config_home, enabled, settings.restore_uri_scheme_default())?;
+    settings.set_restore_uri_scheme_default(change.restore_default_on_enable);
+    Ok(LinkToggleOutcome {
+        change,
+        settings_saved: save_integration_settings(settings),
+    })
+}
+
+/// The status line after the link switch changed, from the change and a fresh reading.
+pub(crate) fn link_toggle_status(
+    enabled: bool,
+    change: UriSchemeHandlingChange,
+    after: UriSchemeState,
+) -> String {
+    if enabled {
+        if change.restored_default {
+            format!(
+                "{LINUX_RESERVED_URI_SCHEME} links turned on; OK Player is their default again."
+            )
+        } else {
+            format!("{LINUX_RESERVED_URI_SCHEME} links turned on.")
+        }
+    } else if after.reachable_via_xdg_mime_while_off() {
+        format!(
+            "{LINUX_RESERVED_URI_SCHEME} links turned off for GIO, which Firefox and GNOME use. {XDG_MIME_STILL_REACHES}"
+        )
+    } else {
+        format!(
+            "{LINUX_RESERVED_URI_SCHEME} links turned off; OK Player is removed as their handler."
+        )
     }
-    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    (!value.is_empty()).then_some(value)
+}
+
+/// What Make Default did about `ok-player://` links.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UriSchemeClaim {
+    /// OK Player is now the scheme's default handler.
+    Claimed,
+    /// Links are off. A default for a removed association would turn them back on for GIO and
+    /// xdg-mime, so the claim waits in the settings until the user turns links on.
+    Deferred,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MakeDefaultOutcome {
+    /// The number of key media types claimed.
+    pub(crate) key_media_types: usize,
+    pub(crate) uri_scheme: UriSchemeClaim,
+    /// A deferred claim reached the settings file (true when there was nothing to save).
+    pub(crate) settings_saved: bool,
+}
+
+impl MakeDefaultOutcome {
+    /// The Settings status line.
+    pub(crate) fn status(self) -> String {
+        let count = self.key_media_types;
+        match self.uri_scheme {
+            UriSchemeClaim::Claimed => format!(
+                "OK Player set as default for {count} key media types and {LINUX_RESERVED_URI_SCHEME} links."
+            ),
+            UriSchemeClaim::Deferred => format!(
+                "OK Player set as default for {count} key media types. {LINUX_RESERVED_URI_SCHEME} links are off; OK Player becomes their default when you turn them on."
+            ),
+        }
+    }
+}
+
+/// Make Default: run `make_default` (an `xdg-mime default` call in the app) for the key media
+/// types and, while link handling is on in the `mimeapps.list` under `config_home`, for
+/// `x-scheme-handler/ok-player`. While links are off the scheme is left alone and the claim is
+/// kept in `settings`, which are saved, for the next time links are turned on.
+pub(crate) fn apply_make_default(
+    config_home: Option<&Path>,
+    settings: &mut settings::SettingsStore,
+    mut make_default: impl FnMut(&str) -> Result<(), String>,
+) -> Result<MakeDefaultOutcome, String> {
+    let handling = config_home.is_none_or(uri_scheme_handling_enabled);
+    let failures: Vec<String> = default_app_mime_types(handling)
+        .into_iter()
+        .filter_map(|mime| make_default(mime).err())
+        .collect();
+    if !failures.is_empty() {
+        return Err(failures.join(", "));
+    }
+    let uri_scheme = if handling {
+        UriSchemeClaim::Claimed
+    } else {
+        settings.set_restore_uri_scheme_default(true);
+        UriSchemeClaim::Deferred
+    };
+    Ok(MakeDefaultOutcome {
+        key_media_types: LINUX_KEY_MEDIA_MIME_TYPES.len(),
+        uri_scheme,
+        settings_saved: save_integration_settings(settings),
+    })
+}
+
+/// Make Default as the Settings button runs it: this user's config directory and the
+/// `xdg-mime` on `PATH`.
+fn make_default_for_user(
+    settings: &mut settings::SettingsStore,
+) -> Result<MakeDefaultOutcome, String> {
+    if linux_desktop_entry_path().is_none() {
+        return Err(format!("{LINUX_DESKTOP_ID} is not installed"));
+    }
+    let xdg_mime = XdgMime::find().ok_or_else(|| "xdg-mime is not installed".to_owned())?;
+    apply_make_default(mimeapps::user_config_home().as_deref(), settings, |mime| {
+        xdg_mime.set_default(LINUX_DESKTOP_ID, mime)
+    })
+}
+
+/// Save `settings` after an integration change. A failure is logged and reported to the caller;
+/// it does not undo the change already made to the desktop's associations.
+fn save_integration_settings(settings: &mut settings::SettingsStore) -> bool {
+    match settings.save() {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("Failed to save settings: {error}");
+            false
+        }
+    }
+}
+
+pub(crate) fn count_default_key_media_mimes(xdg_mime: &XdgMime) -> usize {
+    LINUX_KEY_MEDIA_MIME_TYPES
+        .iter()
+        .filter(|mime| xdg_mime.names_ok_player(mime))
+        .count()
 }
 
 pub(crate) fn default_app_matches_ok_player(desktop_id: &str) -> bool {
@@ -733,34 +934,6 @@ pub(crate) fn default_app_mime_types(claim_uri_scheme: bool) -> Vec<&'static str
         mimes.push(LINUX_URI_SCHEME_MIME);
     }
     mimes
-}
-
-/// Make OK Player the default for the key media types and, with `claim_uri_scheme`, for
-/// `ok-player://` links. Returns the number of key media types claimed.
-pub(crate) fn set_linux_default_app(claim_uri_scheme: bool) -> Result<usize, String> {
-    if linux_desktop_entry_path().is_none() {
-        return Err(format!("{LINUX_DESKTOP_ID} is not installed"));
-    }
-    let xdg_mime =
-        find_executable("xdg-mime").ok_or_else(|| "xdg-mime is not installed".to_owned())?;
-    let mut failures = Vec::new();
-    for mime in default_app_mime_types(claim_uri_scheme) {
-        match Command::new(&xdg_mime)
-            .arg("default")
-            .arg(LINUX_DESKTOP_ID)
-            .arg(mime)
-            .status()
-        {
-            Ok(status) if status.success() => {}
-            Ok(status) => failures.push(format!("{mime} ({status})")),
-            Err(error) => failures.push(format!("{mime} ({error})")),
-        }
-    }
-    if failures.is_empty() {
-        Ok(LINUX_KEY_MEDIA_MIME_TYPES.len())
-    } else {
-        Err(failures.join(", "))
-    }
 }
 
 pub(crate) fn refresh_linux_desktop_database() -> Result<String, String> {
