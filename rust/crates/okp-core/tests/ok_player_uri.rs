@@ -237,22 +237,30 @@ fn outcome(input: &str, probe: &FakeFs, flavor: PathFlavor) -> Outcome {
         reason: Some(reason.as_str().to_owned()),
         ..Outcome::default()
     };
-    let request = match ok_player_uri::interpret(input) {
-        None => {
-            return Outcome {
-                result: "not_ours".to_owned(),
-                ..Outcome::default()
-            };
-        }
-        Some(Request::Unsupported { action }) => {
+    let Some(parsed) = ok_player_uri::interpret(input) else {
+        return Outcome {
+            result: "not_ours".to_owned(),
+            ..Outcome::default()
+        };
+    };
+    let rejection = parsed.rejection();
+    let request = match parsed {
+        Request::Unsupported { action } => {
             return Outcome {
                 result: "unsupported".to_owned(),
                 action: Some(action),
+                reason: rejection.map(|reason| reason.as_str().to_owned()),
                 ..Outcome::default()
             };
         }
-        Some(Request::Malformed { action, reason }) => return reject(action, reason),
-        Some(Request::Action(request)) => request,
+        Request::Malformed { action, reason } => {
+            assert_eq!(rejection, Some(reason), "{input}");
+            return reject(action, reason);
+        }
+        Request::Action(request) => {
+            assert_eq!(rejection, None, "{input}");
+            request
+        }
     };
     let validated = match ok_player_uri::evaluate(&request, probe, flavor) {
         Ok(validated) => validated,
@@ -463,7 +471,7 @@ fn every_launch_case_yields_its_documented_shape() {
 }
 
 /// The real probe against a real directory: the policy plays the original (symlink) path,
-/// not a canonical one, and refuses a FIFO and a directory.
+/// not a canonical one, and refuses a FIFO and a directory, even one named like a clip.
 #[cfg(unix)]
 #[test]
 fn the_real_probe_drives_the_policy_on_a_real_filesystem() {
@@ -474,6 +482,8 @@ fn the_real_probe_drives_the_policy_on_a_real_filesystem() {
     fs::write(&clip, b"x").expect("write clip");
     let alias = dir.path().join("alias.mkv");
     std::os::unix::fs::symlink(&clip, &alias).expect("symlink");
+    let folder = dir.path().join("folder.mkv");
+    fs::create_dir(&folder).expect("create a folder named like a clip");
     let fifo = dir.path().join("pipe.mkv");
     let fifo_c = std::ffi::CString::new(fifo.as_os_str().as_bytes()).expect("fifo path");
     // SAFETY: `fifo_c` is a valid NUL-terminated path that outlives the call.
@@ -494,7 +504,8 @@ fn the_real_probe_drives_the_policy_on_a_real_filesystem() {
 
     assert_eq!(judge(&clip), Ok(Target::Path(clip.clone().into())));
     assert_eq!(judge(&alias), Ok(Target::Path(alias.clone().into())));
-    assert_eq!(judge(dir.path()), Err(Reason::Directory));
+    assert_eq!(judge(&folder), Err(Reason::Directory));
+    assert_eq!(judge(dir.path()), Err(Reason::NotMediaFile));
     assert_eq!(judge(&fifo), Err(Reason::NotRegularFile));
     assert_eq!(judge(&dir.path().join("gone.mkv")), Err(Reason::NotFound));
 }

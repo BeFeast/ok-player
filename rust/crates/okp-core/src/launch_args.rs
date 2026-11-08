@@ -97,8 +97,10 @@ pub struct LaunchArgs {
 /// A request applied before the shell's handler returns is acknowledged at once, so this only
 /// bounds a request applied asynchronously (work off the UI thread) whose completion never arrives:
 /// its worker died or its callback was dropped. Without it every later launch would wait forever.
-/// Asynchronous work must finish, or time out on its own and report failure, well inside it.
-pub const LAUNCH_APPLY_DEADLINE: Duration = Duration::from_secs(10);
+/// Asynchronous work must finish, or time out on its own and report failure, well inside it: the
+/// filesystem check of an `ok-player:` link gives up after
+/// [`crate::ok_player_uri::StdFsProbe::DEFAULT_TIMEOUT`], five seconds before this.
+pub const LAUNCH_APPLY_DEADLINE: Duration = Duration::from_secs(15);
 
 /// Identifies one request [`LaunchDelivery`] released. The shell hands it back to
 /// [`LaunchDelivery::mark_applied`] once that request has been applied.
@@ -205,12 +207,35 @@ impl<T> LaunchDelivery<T> {
         self.release()
     }
 
+    /// Put the request released with `ticket` back at the head of the queue, unapplied: the
+    /// shell's asynchronous work finished but the player went away meanwhile (window closing,
+    /// engine torn down to be rebuilt), so there is nothing to apply it to yet. It comes out
+    /// again, still ahead of every later request, once the player is ready; the return value is
+    /// that release when the player can take it now. A ticket that is not in flight (the shell
+    /// gave up on it already) changes nothing: the request is dropped and `None` returned, so a
+    /// late completion can never reorder the queue.
+    #[must_use = "a released request must be applied and then reported with mark_applied"]
+    pub fn requeue(&mut self, ticket: LaunchTicket, request: T) -> Option<ReleasedLaunch<T>> {
+        if self.in_flight != Some(ticket) {
+            return None;
+        }
+        self.in_flight = None;
+        self.pending.push_front(request);
+        self.release()
+    }
+
     /// Whether the request released with `ticket` is still being applied. An asynchronous
     /// completion checks this before it applies anything: `false` means the shell gave up on the
     /// request and later requests may already have been applied.
     #[must_use]
     pub fn is_in_flight(&self, ticket: LaunchTicket) -> bool {
         self.in_flight == Some(ticket)
+    }
+
+    /// Whether no request is waiting and none is being applied.
+    #[must_use]
+    pub fn is_idle(&self) -> bool {
+        self.pending.is_empty() && self.in_flight.is_none()
     }
 
     /// Requests still waiting, not counting one that has been released and is being applied.
@@ -492,8 +517,10 @@ mod tests {
         assert_eq!(request, "add C");
         assert_eq!(delivery.mark_applied(b), None);
         assert!(delivery.is_in_flight(c));
+        assert!(!delivery.is_idle(), "C is still being applied");
         assert_eq!(delivery.mark_applied(c), None);
         assert!(!delivery.is_in_flight(c));
+        assert!(delivery.is_idle());
     }
 
     #[test]
@@ -512,6 +539,57 @@ mod tests {
         assert_eq!(delivery.push("C"), None, "B is still being applied");
         let (request, _) = released(delivery.mark_applied(b));
         assert_eq!(request, "C");
+    }
+
+    #[test]
+    fn a_request_requeued_for_a_missing_player_comes_out_first_once_the_player_is_back() {
+        let mut delivery = LaunchDelivery::new();
+        assert_eq!(delivery.mark_window_mapped(), None);
+        assert_eq!(delivery.mark_player_ready(), None);
+        let (request, a) = released(delivery.push("open A"));
+        assert_eq!(request, "open A");
+        assert_eq!(delivery.push("add B"), None);
+
+        // A's check finishes after the engine was detached: A goes back, ahead of B.
+        delivery.mark_player_unavailable();
+        assert_eq!(delivery.requeue(a, "open A"), None);
+        assert!(!delivery.is_in_flight(a));
+        assert_eq!(delivery.len(), 2);
+        // A late report for the old ticket neither releases nor drops anything.
+        assert_eq!(delivery.mark_applied(a), None);
+        assert_eq!(delivery.len(), 2);
+
+        let again = released(delivery.mark_player_ready());
+        assert_ne!(again.1, a, "the second release carries a fresh ticket");
+        assert_eq!(apply_all(&mut delivery, again), ["open A", "add B"]);
+    }
+
+    #[test]
+    fn requeue_releases_at_once_when_the_player_is_ready_and_ignores_stale_tickets() {
+        let mut delivery = LaunchDelivery::new();
+        assert_eq!(delivery.mark_window_mapped(), None);
+        assert_eq!(delivery.mark_player_ready(), None);
+        let (_, a) = released(delivery.push("A"));
+        let (request, a_again) = released(delivery.requeue(a, "A"));
+        assert_eq!(request, "A");
+        assert!(delivery.is_in_flight(a_again));
+
+        // The shell gave up on A (deadline) and B is in flight: a late requeue of A is dropped.
+        assert_eq!(delivery.mark_applied(a_again), None);
+        let (b_request, b) = released(delivery.push("B"));
+        assert_eq!(b_request, "B");
+        assert_eq!(delivery.requeue(a_again, "A"), None);
+        assert!(delivery.is_in_flight(b));
+        assert!(delivery.is_empty());
+    }
+
+    #[test]
+    fn the_apply_deadline_outlasts_the_link_filesystem_check() {
+        // An in-flight link waits for its filesystem check, which answers (at worst "timed
+        // out") before the shell gives up on the request, so a slow disk rejects the link
+        // instead of releasing the next request under it.
+        let probe = crate::ok_player_uri::StdFsProbe::DEFAULT_TIMEOUT;
+        assert!(probe + Duration::from_secs(3) <= LAUNCH_APPLY_DEADLINE);
     }
 
     #[test]

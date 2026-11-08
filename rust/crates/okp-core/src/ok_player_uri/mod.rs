@@ -53,6 +53,14 @@ pub const SCHEME: &str = "ok-player";
 /// The largest link accepted, in bytes of the raw (still percent-encoded) text.
 pub const MAX_LINK_BYTES: usize = 4096;
 
+/// At most this many ignored key names are kept for the log line; further unknown keys are
+/// still ignored, just not named.
+pub const MAX_IGNORED_KEYS: usize = 16;
+
+/// A name the log line repeats from a link (an ignored key, an unsupported action) is cut to
+/// this many characters, after escaping.
+pub const MAX_LOGGED_NAME_CHARS: usize = 64;
+
 /// What a link asks the player to do with its target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Action {
@@ -101,6 +109,9 @@ pub struct ActionRequest {
     /// `t` was present but malformed, so it was dropped; the shell shows a notice.
     pub start_dropped: bool,
     /// Keys the link carried that v1 does not know, in link order. Logged, never forwarded.
+    /// Each name is made safe for a log line: everything but printable ASCII is escaped
+    /// (`\n`, `\u{e9}`), it is cut to [`MAX_LOGGED_NAME_CHARS`], and at most
+    /// [`MAX_IGNORED_KEYS`] names are kept.
     pub ignored_keys: Vec<String>,
 }
 
@@ -110,7 +121,8 @@ pub enum Request {
     /// A well-formed request for a v1 action.
     Action(ActionRequest),
     /// A well-formed authority naming an action v1 does not have (`pause`, `play`, …). The
-    /// rest of the link is not read.
+    /// rest of the link is not read. `action` is the lowercased name, made safe for a log line
+    /// like an ignored key; a shell reports [`Reason::UnsupportedAction`] and never shows it.
     Unsupported { action: String },
     /// The link is ours but breaks the grammar. `action` is the v1 action when the link got
     /// far enough to name one, so the shell can raise (or not) exactly as it would for an
@@ -119,6 +131,28 @@ pub enum Request {
         action: Option<Action>,
         reason: Reason,
     },
+}
+
+impl Request {
+    /// The v1 action the link names, when it got far enough to name one.
+    pub fn action(&self) -> Option<Action> {
+        match self {
+            Self::Action(request) => Some(request.action),
+            Self::Unsupported { .. } => None,
+            Self::Malformed { action, .. } => *action,
+        }
+    }
+
+    /// Why the link is rejected before its target is judged; `None` for a well-formed v1
+    /// request, which still has to pass [`evaluate`]. The toast is the reason's fixed
+    /// [`Reason::message`], so nothing from the link reaches the screen.
+    pub fn rejection(&self) -> Option<Reason> {
+        match self {
+            Self::Action(_) => None,
+            Self::Unsupported { .. } => Some(Reason::UnsupportedAction),
+            Self::Malformed { reason, .. } => Some(*reason),
+        }
+    }
 }
 
 /// Why a link (or a launch carrying one) was rejected. [`Reason::as_str`] is the stable name
@@ -139,6 +173,8 @@ pub enum Reason {
     MissingAction,
     /// The action contains characters an action name cannot contain.
     InvalidAction,
+    /// A well-formed action name that v1 does not have (`pause`, `play`, …).
+    UnsupportedAction,
     /// A `%` not followed by two hex digits.
     BadPercentEncoding,
     /// A URL nested in the path form (`ok-player://open/https://…`).
@@ -169,6 +205,9 @@ pub enum Reason {
     PlaylistTarget,
     /// A subtitle file.
     SubtitleTarget,
+    /// A local file whose name has no known media extension (the list the file chooser and
+    /// Up Next use), so the player would refuse to open or queue it.
+    NotMediaFile,
     /// Nothing exists at the path.
     NotFound,
     /// The path names a directory.
@@ -197,6 +236,7 @@ impl Reason {
         Self::Port,
         Self::MissingAction,
         Self::InvalidAction,
+        Self::UnsupportedAction,
         Self::BadPercentEncoding,
         Self::NestedUrl,
         Self::DuplicateKey,
@@ -212,6 +252,7 @@ impl Reason {
         Self::AlternateDataStream,
         Self::PlaylistTarget,
         Self::SubtitleTarget,
+        Self::NotMediaFile,
         Self::NotFound,
         Self::Directory,
         Self::NotRegularFile,
@@ -232,6 +273,7 @@ impl Reason {
             Self::Port => "port",
             Self::MissingAction => "missing_action",
             Self::InvalidAction => "invalid_action",
+            Self::UnsupportedAction => "unsupported_action",
             Self::BadPercentEncoding => "bad_percent_encoding",
             Self::NestedUrl => "nested_url",
             Self::DuplicateKey => "duplicate_key",
@@ -247,6 +289,7 @@ impl Reason {
             Self::AlternateDataStream => "alternate_data_stream",
             Self::PlaylistTarget => "playlist_target",
             Self::SubtitleTarget => "subtitle_target",
+            Self::NotMediaFile => "not_media_file",
             Self::NotFound => "not_found",
             Self::Directory => "directory",
             Self::NotRegularFile => "not_regular_file",
@@ -267,6 +310,7 @@ impl Reason {
             Self::Fragment => "Link ignored: it has a # fragment",
             Self::Userinfo | Self::Port => "Link ignored: the action is malformed",
             Self::MissingAction | Self::InvalidAction => "Link ignored: it names no valid action",
+            Self::UnsupportedAction => "Link ignored: OK Player does not support this action",
             Self::BadPercentEncoding => "Link ignored: malformed % encoding",
             Self::NestedUrl => "Link ignored: a URL must be passed as url=",
             Self::DuplicateKey => "Link ignored: a parameter appears twice",
@@ -282,6 +326,7 @@ impl Reason {
             Self::DevicePath => "Link ignored: device paths are not supported",
             Self::PlaylistTarget => "Link ignored: playlists cannot be opened from a link",
             Self::SubtitleTarget => "Link ignored: subtitle files cannot be opened from a link",
+            Self::NotMediaFile => "Link ignored: the file is not a media file",
             Self::NotFound => "Link ignored: the file does not exist",
             Self::Directory => "Link ignored: folders cannot be opened from a link",
             Self::NotRegularFile => "Link ignored: the path is not a regular file",
@@ -307,32 +352,13 @@ pub fn is_link(token: &OsStr) -> bool {
         && bytes[SCHEME.len()] == b':'
 }
 
-/// True when the last path segment of `url` ends in a known media extension
-/// ([`crate::media_formats::extensions`]), e.g. `https://cam.lan/clips/a.MP4?token=1`.
+/// True when `url` is a direct media URL: its last path segment, decoded as the server reads
+/// it, has a known media extension (`https://cam.lan/clips/a.MP4?token=1`). The one shared
+/// definition lives in [`crate::media_formats::is_direct_media_url`].
 ///
-/// Such a direct media URL opened from a link does not arm the replay cache; a page URL
+/// Such a URL opened or queued from a link never arms the replay cache; a page URL
 /// (`https://youtu.be/…`) keeps the normal behaviour.
-pub fn is_direct_media_url(url: &str) -> bool {
-    let Some(segment) = url_last_segment(url) else {
-        return false;
-    };
-    let Some((stem, extension)) = segment.rsplit_once('.') else {
-        return false;
-    };
-    !stem.is_empty()
-        && crate::media_formats::extensions()
-            .any(|known| known[1..].eq_ignore_ascii_case(extension))
-}
-
-/// The last path segment of an absolute URL, still percent-encoded and without the query
-/// or fragment (`a.MP4` for `https://h/c/a.MP4?x=1`); `None` when the URL has no path. The
-/// policy reads a target's file name from the same segment.
-fn url_last_segment(url: &str) -> Option<&str> {
-    let (_, rest) = url.split_once("://")?;
-    let rest = rest.split(['?', '#']).next().unwrap_or_default();
-    let (_, path) = rest.split_once('/')?;
-    path.rsplit('/').next()
-}
+pub use crate::media_formats::is_direct_media_url;
 
 #[cfg(test)]
 mod tests {
@@ -371,29 +397,6 @@ mod tests {
     }
 
     #[test]
-    fn direct_media_urls_are_told_apart_from_page_urls() {
-        for url in [
-            "https://cam.example/clips/2026-11-08/A001.MP4",
-            "http://cam.example:8080/c/clip.mov?token=abc#t=5",
-            "https://cdn.example/audio/song.flac",
-        ] {
-            assert!(is_direct_media_url(url), "{url}");
-        }
-        for url in [
-            "https://youtu.be/abc123",
-            "https://www.youtube.com/watch?v=abc&f=a.mp4",
-            "https://cam.example/clip.mp4/",
-            "https://cam.example/notes.txt",
-            "https://cam.example",
-            "https://cam.example/.mp4",
-            "https://cam.example/clips.d/index",
-            "not a url.mp4",
-        ] {
-            assert!(!is_direct_media_url(url), "{url}");
-        }
-    }
-
-    #[test]
     fn every_reason_has_a_distinct_name_and_link_free_message() {
         // Adding a variant breaks this match until it is also listed in `Reason::ALL`.
         let listed = |reason: Reason| match reason {
@@ -404,6 +407,7 @@ mod tests {
             | Reason::Port
             | Reason::MissingAction
             | Reason::InvalidAction
+            | Reason::UnsupportedAction
             | Reason::BadPercentEncoding
             | Reason::NestedUrl
             | Reason::DuplicateKey
@@ -419,6 +423,7 @@ mod tests {
             | Reason::AlternateDataStream
             | Reason::PlaylistTarget
             | Reason::SubtitleTarget
+            | Reason::NotMediaFile
             | Reason::NotFound
             | Reason::Directory
             | Reason::NotRegularFile
@@ -434,6 +439,6 @@ mod tests {
             assert!(names.insert(reason.as_str()), "{reason:?} name repeats");
             assert!(reason.message().starts_with("Link ignored: "), "{reason:?}");
         }
-        assert_eq!(names.len(), 30);
+        assert_eq!(names.len(), 32);
     }
 }

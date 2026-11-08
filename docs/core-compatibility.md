@@ -60,6 +60,10 @@ behaves identically on both sides.
   The Rust flag defaults to on, and Repeat=One bypasses it.
   Construction sorts by the full path/URL string with the ported natural comparer, exactly the
   C# sort; Rust's sort is stable where `List<T>.Sort` is not (same refinement noted for Lrc).
+- **Direct media URL labels.** `PlaylistItem::display_name` labels a URL whose last path segment
+  names a media file by that decoded name. Whether a URL is such a direct media URL has one
+  definition, `media_formats::is_direct_media_url` (the segment decoded the way a server reads
+  it, so `clip.m%70%34` is `clip.mp4`), which `ok_player_uri` uses too. C# has no URL labels.
 - **`CurrentIndex` sentinel.** C# returns `-1` for "no current item"; `current_index()` returns
   `Option<usize>` with `None` for the same case (the `Option` convention used across `okp-core`).
 - **Path matching case.** C# `SetCurrent`/`IndexOf` match paths with
@@ -163,7 +167,10 @@ behaves identically on both sides.
   is recorded as loaded before an engine exists. The shell reports each applied request with the
   ticket it was released with, and a ticket that is no longer in flight is ignored, so a request
   applied asynchronously holds later ones until its own completion reports it; if that completion
-  never arrives, the shell gives up after `LAUNCH_APPLY_DEADLINE`. Windows achieves the same
+  never arrives, the shell gives up after `LAUNCH_APPLY_DEADLINE` (15 s, longer than the 10 s an
+  `ok-player:` link's filesystem check may take). A completion that finds the player gone puts
+  its request back at the head of the queue with `requeue`, so it runs, still first, once a
+  player is ready again; a stale ticket there drops the request. Windows achieves the same
   user-facing ordering for its initial file through its `MainWindow` activation and queued
   initial-file lifecycle rather than this Rust helper.
 

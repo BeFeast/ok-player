@@ -3,7 +3,10 @@
 
 use std::ffi::OsString;
 
-use super::{Action, ActionRequest, MAX_LINK_BYTES, Reason, Request, SCHEME, Target};
+use super::{
+    Action, ActionRequest, MAX_IGNORED_KEYS, MAX_LINK_BYTES, MAX_LOGGED_NAME_CHARS, Reason,
+    Request, SCHEME, Target,
+};
 use crate::time_code;
 
 /// How a literal `+` decodes.
@@ -40,35 +43,6 @@ pub(super) fn percent_decode(raw: &str, plus: Plus) -> Option<Vec<u8>> {
         }
     }
     Some(decoded)
-}
-
-/// Percent-decode `raw` the way an HTTP server reads a request path: every valid `%XX`
-/// decodes, a stray `%` stays literal, and `+` stays `+`. Only for judging the name a URL
-/// points at; the link layer itself always decodes strictly with [`percent_decode`].
-pub(super) fn percent_decode_lenient(raw: &str) -> Vec<u8> {
-    let bytes = raw.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        let escaped = (bytes[index] == b'%')
-            .then(|| {
-                let high = hex_value(*bytes.get(index + 1)?)?;
-                let low = hex_value(*bytes.get(index + 2)?)?;
-                Some(high << 4 | low)
-            })
-            .flatten();
-        match escaped {
-            Some(byte) => {
-                decoded.push(byte);
-                index += 3;
-            }
-            None => {
-                decoded.push(bytes[index]);
-                index += 1;
-            }
-        }
-    }
-    decoded
 }
 
 fn hex_value(byte: u8) -> Option<u8> {
@@ -113,8 +87,9 @@ pub(super) fn strip_scheme(text: &str) -> Option<&str> {
 ///
 /// The checks run in a fixed order, so one link always yields the same reason (the shared
 /// fixture depends on it): length, raw characters, fragment, authority (userinfo, port,
-/// action), path form, then the query — decode every pair, then duplicate keys, then
-/// targets.
+/// action), path form, then the query — decode every key and every value but `t`'s, then
+/// duplicate keys, then targets. A `t` (or `resume`) value that does not decode is dropped
+/// with a notice like any other malformed `t` (rule 7), not rejected.
 pub fn interpret(text: &str) -> Option<Request> {
     let token = text.trim();
     let rest = strip_scheme(token)?;
@@ -165,7 +140,7 @@ fn parse(token: &str, rest: &str) -> Result<Request, Failure> {
     }
     let Some(action) = Action::from_name(authority) else {
         return Ok(Request::Unsupported {
-            action: authority.to_ascii_lowercase(),
+            action: log_safe_name(authority.to_ascii_lowercase().as_bytes()),
         });
     };
     let fail = |reason| (Some(action), reason);
@@ -183,15 +158,19 @@ fn parse(token: &str, rest: &str) -> Result<Request, Failure> {
         Some(bytes)
     };
 
+    // `None` as a value: a `t` value that did not decode, dropped below with a notice. Every
+    // other key and value decodes strictly or rejects the link.
     let pairs = query
         .split('&')
         .filter(|pair| !pair.is_empty())
         .map(|pair| {
             let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-            Some((
-                percent_decode(key, Plus::Space)?,
-                percent_decode(value, Plus::Space)?,
-            ))
+            let key = percent_decode(key, Plus::Space)?;
+            let value = percent_decode(value, Plus::Space);
+            if value.is_none() && canonical_key(&key) != b"t" {
+                return None;
+            }
+            Some((key, value))
         })
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| fail(Reason::BadPercentEncoding))?;
@@ -213,17 +192,19 @@ fn parse(token: &str, rest: &str) -> Result<Request, Failure> {
     let mut start_dropped = false;
     let mut ignored_keys = Vec::new();
     for (key, value) in pairs {
-        match canonical_key(&key) {
-            b"url" => targets.push(RawTarget::Url(value)),
-            b"path" => targets.push(RawTarget::Path(value)),
-            b"t" => {
+        match (canonical_key(&key), value) {
+            (b"url", Some(value)) => targets.push(RawTarget::Url(value)),
+            (b"path", Some(value)) => targets.push(RawTarget::Path(value)),
+            (b"t", value) => {
                 // A malformed optional parameter is dropped with a notice, never fatal.
-                start = std::str::from_utf8(&value)
-                    .ok()
+                start = value
+                    .as_deref()
+                    .and_then(|value| std::str::from_utf8(value).ok())
                     .and_then(|value| time_code::parse(Some(value)));
                 start_dropped = start.is_none();
             }
-            _ => ignored_keys.push(String::from_utf8_lossy(&key).into_owned()),
+            _ if ignored_keys.len() < MAX_IGNORED_KEYS => ignored_keys.push(log_safe_name(&key)),
+            _ => {}
         }
     }
 
@@ -250,6 +231,30 @@ fn parse(token: &str, rest: &str) -> Result<Request, Failure> {
         start_dropped,
         ignored_keys,
     }))
+}
+
+/// A name from a link, made safe to repeat in a log line: printable ASCII stays, everything
+/// else (control characters, bidi overrides, any non-ASCII) is escaped like
+/// [`char::escape_default`], bytes that are not UTF-8 become U+FFFD first, and the result is
+/// cut to [`MAX_LOGGED_NAME_CHARS`] characters with a trailing `...`.
+fn log_safe_name(name: &[u8]) -> String {
+    let mut escaped = String::with_capacity(name.len());
+    for c in String::from_utf8_lossy(name).chars() {
+        if c.is_ascii_graphic() || c == ' ' {
+            escaped.push(c);
+        } else {
+            escaped.extend(c.escape_default());
+        }
+    }
+    if escaped.chars().count() <= MAX_LOGGED_NAME_CHARS {
+        return escaped;
+    }
+    let mut cut = escaped
+        .chars()
+        .take(MAX_LOGGED_NAME_CHARS - 3)
+        .collect::<String>();
+    cut.push_str("...");
+    cut
 }
 
 enum RawTarget {
@@ -302,15 +307,6 @@ mod tests {
         for raw in ["%G1", "%1G", "%", "%4", "abc%", "%%41", "a%2"] {
             assert_eq!(percent_decode(raw, Plus::Space), None, "{raw}");
         }
-    }
-
-    #[test]
-    fn lenient_decoding_keeps_a_stray_percent_and_decodes_the_rest() {
-        assert_eq!(percent_decode_lenient("list.m3%75"), b"list.m3u");
-        assert_eq!(percent_decode_lenient("%zz.m3%55"), b"%zz.m3U");
-        assert_eq!(percent_decode_lenient("a%2"), b"a%2");
-        assert_eq!(percent_decode_lenient("%%41+"), b"%A+");
-        assert_eq!(percent_decode_lenient("%252F"), b"%2F");
     }
 
     #[test]
@@ -388,6 +384,77 @@ mod tests {
                 action: Some(Action::Add),
                 reason: Reason::BadPercentEncoding,
             })
+        );
+    }
+
+    #[test]
+    fn logged_names_escape_everything_but_printable_ascii_and_are_capped() {
+        assert_eq!(log_safe_name(b"autoplay"), "autoplay");
+        assert_eq!(log_safe_name(b"a b\"c"), "a b\"c");
+        assert_eq!(log_safe_name(b"x\ny\r\t"), "x\\ny\\r\\t");
+        assert_eq!(log_safe_name(b"\x1b[31m"), "\\u{1b}[31m");
+        assert_eq!(
+            log_safe_name("caf\u{e9}\u{202e}".as_bytes()),
+            "caf\\u{e9}\\u{202e}"
+        );
+        assert_eq!(log_safe_name(b"\xff"), "\\u{fffd}");
+
+        let long = log_safe_name("k".repeat(500).as_bytes());
+        assert_eq!(long.chars().count(), MAX_LOGGED_NAME_CHARS);
+        assert!(long.ends_with("..."));
+        // The cap counts the escaped form, so escapes cannot stretch the line either.
+        let escaped = log_safe_name("\n".repeat(200).as_bytes());
+        assert_eq!(escaped.chars().count(), MAX_LOGGED_NAME_CHARS);
+        assert!(escaped.starts_with("\\n\\n"));
+    }
+
+    #[test]
+    fn ignored_keys_reach_the_request_sanitized_and_capped_in_number() {
+        let link = format!(
+            "ok-player://open?url=https%3A%2F%2Fh.example%2Fa.mp4&evil%0Akey=1&{}",
+            (0..40)
+                .map(|index| format!("k{index}=1"))
+                .collect::<Vec<_>>()
+                .join("&")
+        );
+        let Some(Request::Action(request)) = interpret(&link) else {
+            panic!("the link must parse");
+        };
+        assert_eq!(request.ignored_keys.len(), MAX_IGNORED_KEYS);
+        assert_eq!(request.ignored_keys[0], "evil\\nkey");
+        assert_eq!(request.ignored_keys[1], "k0");
+        assert!(
+            request
+                .ignored_keys
+                .iter()
+                .all(|key| !key.chars().any(char::is_control))
+        );
+    }
+
+    #[test]
+    fn a_malformed_escape_in_t_drops_t_but_nowhere_else() {
+        for t in ["t=%ZZ", "t=1%3", "resume=%G1", "t=%"] {
+            let link = format!("ok-player://open?url=https%3A%2F%2Fh.example%2Fa.mp4&{t}");
+            let Some(Request::Action(request)) = interpret(&link) else {
+                panic!("{link} must parse");
+            };
+            assert_eq!(request.start, None, "{t}");
+            assert!(request.start_dropped, "{t}");
+        }
+        // The key itself still decodes strictly, as does every other value.
+        for tail in ["%ZZ=1", "x=%ZZ", "path=%ZZ"] {
+            let link = format!("ok-player://open?url=https%3A%2F%2Fh.example%2Fa.mp4&{tail}");
+            assert_eq!(
+                interpret(&link).and_then(|request| request.rejection()),
+                Some(Reason::BadPercentEncoding),
+                "{tail}"
+            );
+        }
+        // A dropped t still counts as the t key.
+        assert_eq!(
+            interpret("ok-player://open?url=https%3A%2F%2Fh.example%2Fa.mp4&t=%ZZ&resume=5")
+                .and_then(|request| request.rejection()),
+            Some(Reason::DuplicateKey)
         );
     }
 

@@ -3,9 +3,9 @@
 
 use std::io::ErrorKind;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -36,6 +36,10 @@ pub trait FsProbe {
 /// mount) cannot be cancelled: its worker thread is left to finish on its own, and at most
 /// `max_in_flight` such workers exist per probe; beyond that the probe answers
 /// [`FsKind::Unavailable`] at once instead of spawning more.
+///
+/// Clones share one in-flight count. A shell uses [`StdFsProbe::shared`], the one probe of
+/// the process, so a burst of links at a hung mount cannot each build a fresh probe and
+/// bypass the cap.
 #[derive(Clone, Debug)]
 pub struct StdFsProbe {
     timeout: Duration,
@@ -44,8 +48,16 @@ pub struct StdFsProbe {
 }
 
 impl StdFsProbe {
-    pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
+    /// Long enough for a spun-down NAS disk to wake and answer. The caller is off the UI
+    /// thread, so waiting this long never freezes the window.
+    pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
     pub const DEFAULT_MAX_IN_FLIGHT: usize = 4;
+
+    /// The process-wide probe, with the default timeout and in-flight cap.
+    pub fn shared() -> &'static StdFsProbe {
+        static SHARED: OnceLock<StdFsProbe> = OnceLock::new();
+        SHARED.get_or_init(StdFsProbe::default)
+    }
 
     pub fn new(timeout: Duration, max_in_flight: usize) -> Self {
         Self {
@@ -146,6 +158,16 @@ mod tests {
         });
         assert_eq!(kind, FsKind::TimedOut);
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn the_shared_probe_is_one_instance_whose_clones_share_the_cap() {
+        let first = StdFsProbe::shared();
+        let second = StdFsProbe::shared();
+        assert!(std::ptr::eq(first, second));
+        assert!(Arc::ptr_eq(&first.in_flight, &first.clone().in_flight));
+        assert_eq!(first.timeout, StdFsProbe::DEFAULT_TIMEOUT);
+        assert!(StdFsProbe::DEFAULT_TIMEOUT >= Duration::from_secs(10));
     }
 
     #[test]

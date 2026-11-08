@@ -44,7 +44,8 @@ t      = seconds (90, 90.5) | m:ss | h:mm:ss  ; alias: resume
    Python `urlencode` and PHP. A real plus is `%2B`.
 5. A non-empty fragment rejects. In practice that is an unencoded `#`.
 6. Unknown keys are ignored (logged) and never forwarded. No engine option ever travels
-   through a link (compare IINA advisory GHSA-w5xh-98j7-jp5q).
+   through a link (compare IINA advisory GHSA-w5xh-98j7-jp5q). The log line escapes their
+   names and cuts each to 64 characters, and names at most 16 of them.
 7. A malformed optional parameter (`t` or its alias `resume`) is dropped with a notice and
    the target still plays. That includes a malformed `%` escape inside its value, such as
    `t=1%G0`. A malformed target rejects the request.
@@ -104,7 +105,8 @@ Everything below is checked in `okp-core` before anything executes.
   file, even when the file itself would play. Otherwise the player could accept a link for
   a file that Up Next then refuses to queue.
 - It must name an existing regular file: a directory, a FIFO or anything under `/dev`
-  rejects. The check runs off the UI thread with a timeout. The player plays and records
+  rejects. The check runs off the UI thread and gives up
+  after 10 seconds, long enough for a sleeping network disk to wake. The player plays and records
   the path exactly as given, not its canonical form, so History keys match other opens of
   the same path. The current working directory is never joined to a link's path.
 - **Playlist files** (`.m3u .m3u8 .pls .cue .edl`) and **subtitle files** are not targets
@@ -151,6 +153,7 @@ how to test a link that a browser would rewrite first, as the browser notes expl
   queued. Page URLs for sites the player resolves through yt-dlp keep their usual
   behaviour; a queued page URL arms the Replay cache when playback reaches it, as an opened
   one does.
+- A queued link shows "Added to Up Next" (`add`) or "Plays next" (`next`).
 
 ### Rejections
 

@@ -144,13 +144,21 @@ impl PlaylistItem {
                 .filter(|name| !name.is_empty())
                 .map(str::to_owned)
                 .unwrap_or_else(|| path.display().to_string()),
-            Self::Url(url) => direct_media_file_name(url).unwrap_or_else(|| {
-                url.rsplit('/')
+            Self::Url(url) => match media_formats::direct_media_url_name(url) {
+                // A name a label cannot show (not UTF-8, or control characters) keeps the raw
+                // segment, still without the query.
+                Some(name) => String::from_utf8(name)
+                    .ok()
+                    .filter(|name| !name.chars().any(char::is_control))
+                    .or_else(|| media_formats::url_last_segment(url).map(str::to_owned))
+                    .unwrap_or_else(|| url.to_owned()),
+                None => url
+                    .rsplit('/')
                     .next()
                     .filter(|name| !name.is_empty())
                     .map(str::to_owned)
-                    .unwrap_or_else(|| url.to_owned())
-            }),
+                    .unwrap_or_else(|| url.to_owned()),
+            },
         }
     }
 
@@ -177,44 +185,6 @@ impl PlaylistItem {
             Self::Url(url) => Some(url.as_str()),
         }
     }
-}
-
-/// The last path segment of `url` when it names a media file, decoded for display; `None` for
-/// URLs without a path or whose last segment has no media extension.
-fn direct_media_file_name(url: &str) -> Option<String> {
-    let (_, rest) = url.split_once("://")?;
-    let end = rest.find(['?', '#']).unwrap_or(rest.len());
-    let (_, path) = rest[..end].split_once('/')?;
-    let segment = path
-        .rsplit('/')
-        .next()
-        .filter(|segment| !segment.is_empty())?;
-    let name = percent_decoded_label(segment).unwrap_or_else(|| segment.to_owned());
-    media_formats::is_media(Path::new(&name)).then_some(name)
-}
-
-/// Undo percent-escapes for a label. `None` (show the raw text instead) when an escape is
-/// malformed, the bytes are not UTF-8, or the result would carry control characters.
-fn percent_decoded_label(text: &str) -> Option<String> {
-    let bytes = text.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let hex = bytes.get(index + 1..index + 3)?;
-            if !hex.iter().all(u8::is_ascii_hexdigit) {
-                return None;
-            }
-            let hex = std::str::from_utf8(hex).ok()?;
-            decoded.push(u8::from_str_radix(hex, 16).ok()?);
-            index += 3;
-        } else {
-            decoded.push(bytes[index]);
-            index += 1;
-        }
-    }
-    let decoded = String::from_utf8(decoded).ok()?;
-    (!decoded.chars().any(char::is_control)).then_some(decoded)
 }
 
 // Non-zero fallback so shuffle stays usable when a shell never seeds (xorshift locks on zero;
@@ -1303,34 +1273,6 @@ mod tests {
             url("not a url"),
         ] {
             assert!(!item.is_queueable(), "{item:?} should not be queueable");
-        }
-    }
-
-    #[test]
-    fn direct_media_url_labels_drop_query_and_decode_escapes() {
-        for (source, label) in [
-            ("http://clips.example/cam/C0001.MP4", "C0001.MP4"),
-            (
-                "http://clips.example/cam/C0001.MP4?token=abc#t=5",
-                "C0001.MP4",
-            ),
-            ("https://clips.example/My%20Clip.MOV", "My Clip.MOV"),
-            ("https://clips.example/caf%C3%A9.mkv?x=1", "café.mkv"),
-            // Undecodable escapes or control characters keep the raw segment.
-            ("https://clips.example/100%.mp4", "100%.mp4"),
-            ("https://clips.example/a%0Ab.mp4", "a%0Ab.mp4"),
-            ("https://clips.example/%FF.mp4", "%FF.mp4"),
-            // Not a direct media URL: the raw last segment, query included, as before.
-            ("https://video.example/watch?v=abc", "watch?v=abc"),
-            ("https://video.example/play?file=a.mp4", "play?file=a.mp4"),
-            (
-                "https://stream.example/live/channel-one.m3u8?t=1",
-                "channel-one.m3u8?t=1",
-            ),
-            ("https://video.example/", "https://video.example/"),
-        ] {
-            assert_eq!(url(source).display_name(), label, "label for {source}");
-            assert_eq!(url(source).display_location(), source);
         }
     }
 

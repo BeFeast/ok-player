@@ -6,11 +6,13 @@
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
-use super::parse::{Plus, os_string_from_bytes, percent_decode, percent_decode_lenient};
+use super::parse::{Plus, os_string_from_bytes, percent_decode};
 use super::probe::{FsKind, FsProbe};
 use super::{Action, ActionRequest, Reason, Target};
 use crate::media_download::validate_public_http_url;
-use crate::media_formats::SUBTITLE_EXTENSIONS;
+use crate::media_formats::{
+    SUBTITLE_EXTENSIONS, has_media_extension, percent_decode_lenient, url_last_segment,
+};
 
 /// Playlist files never open from a link in v1: a playlist would smuggle further targets
 /// (and mpv-internal protocols) past the single-target policy.
@@ -75,15 +77,16 @@ impl Validated {
 }
 
 /// Judge `request`'s target. `url=` must be `http`/`https` with a host and no credentials
-/// (a local `file:` URL converts to a path); a path must be absolute in `flavor`'s form and
-/// name an existing regular file according to `probe`. Neither may name a playlist or
-/// subtitle file: a URL by its last path segment, a path by its last component.
+/// (a local `file:` URL converts to a path); a path must be absolute in `flavor`'s form, have
+/// a known media extension (the list the file chooser and Up Next use), and name an existing
+/// regular file according to `probe`. Neither may name a playlist or subtitle file: a URL by
+/// its last path segment, a path by its last component.
 ///
 /// `probe` is consulted at most once, and only after every syntactic rule passed. A real
 /// probe can block for its timeout, so call this off the UI thread.
 pub fn evaluate(
     request: &ActionRequest,
-    probe: &impl FsProbe,
+    probe: &(impl FsProbe + ?Sized),
     flavor: PathFlavor,
 ) -> Result<Validated, Reason> {
     let path = match &request.target {
@@ -158,7 +161,7 @@ fn url_target(url: &str, flavor: PathFlavor) -> Result<UrlTarget, Reason> {
     // A playlist or subtitle file rejects by the name the server will look up, exactly as a
     // local one does. The name decodes as the server reads it, so `list.m3%75` is `list.m3u`.
     // The query is not a name: `https://h/play?f=list.m3u` passes.
-    if let Some(segment) = super::url_last_segment(url) {
+    if let Some(segment) = url_last_segment(url) {
         check_extension(&percent_decode_lenient(segment))?;
     }
     Ok(UrlTarget::Remote)
@@ -225,7 +228,7 @@ fn check_posix_path(path: &[u8]) -> Result<(), Reason> {
     if path == b"/dev" || path.starts_with(b"/dev/") {
         return Err(Reason::DevicePath);
     }
-    check_extension(last_component(path, b"/"))
+    check_local_file_name(last_component(path, b"/"))
 }
 
 fn check_windows_path(path: &str) -> Result<(), Reason> {
@@ -260,13 +263,24 @@ fn check_windows_path(path: &str) -> Result<(), Reason> {
         .iter()
         .rposition(|byte| !matches!(byte, b'.' | b' '))
         .map_or(0, |last| last + 1);
-    check_extension(&name[..kept])
+    check_local_file_name(&name[..kept])
 }
 
 fn last_component<'a>(path: &'a [u8], separators: &[u8]) -> &'a [u8] {
     path.rsplit(|byte| separators.contains(byte))
         .next()
         .unwrap_or(path)
+}
+
+/// A local target's name: no playlist or subtitle, and a known media extension, so the plan
+/// never asks the shell to open or queue a file it would refuse.
+fn check_local_file_name(file_name: &[u8]) -> Result<(), Reason> {
+    check_extension(file_name)?;
+    if has_media_extension(file_name) {
+        Ok(())
+    } else {
+        Err(Reason::NotMediaFile)
+    }
 }
 
 fn check_extension(file_name: &[u8]) -> Result<(), Reason> {
@@ -364,11 +378,45 @@ mod tests {
             check_windows_path(r"C:\m\a.cue"),
             Err(Reason::PlaylistTarget)
         );
-        // A directory that merely looks like a playlist does not count, nor does a hidden
-        // file without an extension.
+        // A directory that merely looks like a playlist does not count. A hidden file
+        // without an extension is no playlist either, and no media file.
         assert_eq!(check_posix_path(b"/m/list.m3u/a.mkv"), Ok(()));
-        assert_eq!(check_posix_path(b"/m/.m3u"), Ok(()));
+        assert_eq!(check_posix_path(b"/m/.m3u"), Err(Reason::NotMediaFile));
         assert_eq!(check_windows_path(r"C:\m.pls\a.mkv"), Ok(()));
+    }
+
+    #[test]
+    fn local_targets_need_a_known_media_extension() {
+        for path in [
+            &b"/m/a.MKV"[..],
+            b"/m/song.flac",
+            b"/m/\xff.mp4",
+            b"/m/a b.Mov",
+        ] {
+            assert_eq!(check_posix_path(path), Ok(()), "{}", path.escape_ascii());
+        }
+        for path in [
+            &b"/m/notes.txt"[..],
+            b"/m/clip",
+            b"/m/clip.mkv.part",
+            b"/m/.mkv",
+            b"/m/archive.tar.gz",
+        ] {
+            assert_eq!(
+                check_posix_path(path),
+                Err(Reason::NotMediaFile),
+                "{}",
+                path.escape_ascii()
+            );
+        }
+        assert_eq!(
+            check_windows_path(r"C:\m\notes.txt"),
+            Err(Reason::NotMediaFile)
+        );
+        assert_eq!(check_windows_path(r"C:\m\clip.MP4"), Ok(()));
+        // A playlist or subtitle keeps its own, more telling reason.
+        assert_eq!(check_posix_path(b"/m/a.m3u"), Err(Reason::PlaylistTarget));
+        assert_eq!(check_posix_path(b"/m/a.vtt"), Err(Reason::SubtitleTarget));
     }
 
     #[test]
@@ -385,10 +433,11 @@ mod tests {
             Err(Reason::SubtitleTarget)
         );
         assert_eq!(check_windows_path(r"C:\m\clip.mkv."), Ok(()));
-        assert_eq!(check_windows_path(r"C:\m\.m3u."), Ok(()));
-        assert_eq!(check_windows_path(r"C:\m\..."), Ok(()));
-        // POSIX names are exact: a trailing dot is part of the name.
-        assert_eq!(check_posix_path(b"/m/list.m3u."), Ok(()));
+        assert_eq!(check_windows_path(r"C:\m\.m3u."), Err(Reason::NotMediaFile));
+        assert_eq!(check_windows_path(r"C:\m\..."), Err(Reason::NotMediaFile));
+        // POSIX names are exact: a trailing dot is part of the name, which then has no
+        // extension at all.
+        assert_eq!(check_posix_path(b"/m/list.m3u."), Err(Reason::NotMediaFile));
     }
 
     #[test]
