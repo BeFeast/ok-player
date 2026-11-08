@@ -1,0 +1,257 @@
+name: macOS player preview
+
+# The Apple Silicon preview app built on a GitHub-hosted arm64 runner. The Forgejo
+# workflow of the same name (.forgejo/workflows/macos-player-preview.yml) builds the
+# same app on a single self-hosted Mac from packages that live next to that Forgejo
+# instance; this variant needs neither, so a macOS build does not wait for one machine.
+#
+# Every input comes from a public source and is pinned by SHA-256:
+#   * the libmpv runtime: the upstream media-kit/libmpv-darwin-build v0.7.2 dylibs and
+#     the mpv 0.36.0 headers, assembled into the prefix layout the build script expects
+#     (lib/*.dylib, include/mpv/*.h, provenance.json). provenance.json is regenerated
+#     here from the dylibs themselves and must hash to the value below, which is the
+#     hash of the provenance.json inside the Forgejo runtime package. It records the
+#     SHA-256 and load commands of every dylib, so a match proves the dylibs are
+#     byte-identical to the ones the Forgejo build bundles. The package's README is
+#     the only file not reproduced; the build does not read it.
+#   * the H.264/AAC smoke fixture: generated on the runner by a static ffmpeg taken
+#     from the imageio-ffmpeg wheel on PyPI (12 s, 640x360 at 30 fps, H.264 High,
+#     AAC-LC 48 kHz mono), in place of the Forgejo fixture package.
+# The Rust toolchain is the version the Rust workspace job pins, installed with rustup.
+#
+# Not a required check. It runs on pull requests that touch the macOS shell, its build
+# inputs or the Rust crates it links, and on demand.
+on:
+  workflow_dispatch:
+    inputs:
+      run_smoke:
+        description: Open a bounded local-fixture playback window and close it automatically
+        required: true
+        default: true
+        type: boolean
+  pull_request:
+    paths:
+      - 'macos/**'
+      - 'scripts/build-macos-preview.sh'
+      - 'scripts/generate-macos-palette.py'
+      - 'brand/**'
+      - 'rust/crates/okp-ffi/**'
+      - 'rust/crates/okp-mpv/**'
+      - 'rust/crates/okp-core/**'
+      - '.github/workflows/macos-player-preview.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-player-preview-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  player:
+    name: Build Apple Silicon app (GitHub-hosted)
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      # Pull requests build the head commit itself, not the merge preview, so the
+      # artifact is bound to a commit that exists on the branch.
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      RUN_SMOKE: ${{ github.event_name != 'workflow_dispatch' || inputs.run_smoke }}
+      RUST_TOOLCHAIN: 1.98.1
+      RUNTIME_URL: https://github.com/media-kit/libmpv-darwin-build/releases/download/v0.7.2/libmpv-libs_v0.7.2_macos-arm64-video-full.tar.gz
+      RUNTIME_SHA256: 9dfda56bd9ec860b8f66c9b73bba16a61cec9bcf3ffc5ad9630e180123bf0a4f
+      HEADERS_URL: https://github.com/mpv-player/mpv/archive/refs/tags/v0.36.0.tar.gz
+      HEADERS_SHA256: 29abc44f8ebee013bb2f9fe14d80b30db19b534c679056e4851ceadf5a5e8bf6
+      PROVENANCE_SHA256: 6889455464efd32cbe1fc75b6deb0a9a3719f7138dc1cdb82c925aaed1bd166b
+      FFMPEG_WHEEL_URL: https://files.pythonhosted.org/packages/2b/47/9f9b654f853598bae0850fa22bba168103e45d31b5a2a893ed474f28d54a/imageio_ffmpeg-0.8.1-py3-none-macosx_12_0_arm64.whl
+      FFMPEG_WHEEL_SHA256: 5636d691e36e5274b13fe38182b1f627b2e35dcecc63944012c2470f9484fc45
+      FFMPEG_WHEEL_MEMBER: imageio_ffmpeg/binaries/ffmpeg-macos-aarch64-v9.0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+
+      - name: Prepare directories and the pinned Rust toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(uname -m)" = arm64
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          receipt="$RUNNER_TEMP/receipt"
+          mkdir -p "$receipt" "$RUNNER_TEMP/target" "$RUNNER_TEMP/inputs"
+          {
+            echo "OKP_MACOS_OUTPUT=$receipt"
+            echo "CARGO_TARGET_DIR=$RUNNER_TEMP/target"
+            echo "RUSTUP_TOOLCHAIN=$RUST_TOOLCHAIN"
+          } >> "$GITHUB_ENV"
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target aarch64-apple-darwin
+          printf '%s\n' "$SOURCE_SHA" > "$receipt/source-sha.txt"
+          { sw_vers; RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN" rustc -vV; xcrun swiftc --version; xcrun --sdk macosx --show-sdk-version; } > "$receipt/toolchain.txt"
+          cat "$receipt/toolchain.txt"
+
+      - name: Assemble the pinned libmpv runtime from upstream
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          inputs="$RUNNER_TEMP/inputs"
+          prefix="$RUNNER_TEMP/ok-player-macos-runtime"
+          curl --fail --silent --show-error --location --retry 3 "$RUNTIME_URL" -o "$inputs/libs.tar.gz"
+          printf '%s  %s\n' "$RUNTIME_SHA256" "$inputs/libs.tar.gz" | shasum -a 256 -c -
+          curl --fail --silent --show-error --location --retry 3 "$HEADERS_URL" -o "$inputs/mpv.tar.gz"
+          printf '%s  %s\n' "$HEADERS_SHA256" "$inputs/mpv.tar.gz" | shasum -a 256 -c -
+          mkdir -p "$inputs/libs" "$inputs/mpv" "$prefix/lib" "$prefix/include/mpv"
+          tar -xzf "$inputs/libs.tar.gz" -C "$inputs/libs"
+          cp "$inputs/libs/libmpv-libs_v0.7.2_macos-arm64-video-full/"*.dylib "$prefix/lib/"
+          tar -xzf "$inputs/mpv.tar.gz" -C "$inputs/mpv" mpv-0.36.0/libmpv
+          for header in client render render_gl stream_cb; do
+            cp "$inputs/mpv/mpv-0.36.0/libmpv/$header.h" "$prefix/include/mpv/"
+          done
+          python3 -I - "$prefix" "$RUNTIME_URL" "$RUNTIME_SHA256" "$HEADERS_URL" "$HEADERS_SHA256" <<'PYTHON'
+          import hashlib, json, pathlib, struct, sys
+
+          prefix = pathlib.Path(sys.argv[1])
+
+          def load_commands(path):
+              # LC_ID_DYLIB, LC_LOAD_DYLIB and LC_RPATH, in load-command order.
+              data = path.read_bytes()
+              magic, _, _, _, ncmds, _, _, _ = struct.unpack_from("<8I", data, 0)
+              if magic != 0xFEEDFACF:
+                  raise SystemExit(f"{path.name} is not a 64-bit Mach-O file")
+              offset, result = 32, []
+              for _ in range(ncmds):
+                  cmd, size = struct.unpack_from("<2I", data, offset)
+                  if cmd in (0xC, 0xD, 0x8000001C):
+                      start = offset + struct.unpack_from("<I", data, offset + 8)[0]
+                      value = data[start:data.index(b"\0", start)].decode()
+                      result.append({"command": hex(cmd), "value": value})
+                  offset += size
+              return result
+
+          libraries = [
+              {
+                  "name": lib.name,
+                  "sha256": hashlib.sha256(lib.read_bytes()).hexdigest(),
+                  "load_commands": load_commands(lib),
+              }
+              for lib in sorted((prefix / "lib").glob("*.dylib"))
+          ]
+          provenance = {
+              "runtime": "media-kit/libmpv-darwin-build v0.7.2 macos-arm64-video-full",
+              "mpv_version": "0.36.0",
+              "upstream_url": sys.argv[2],
+              "upstream_sha256": sys.argv[3],
+              "matching_header_source": sys.argv[4],
+              "matching_header_archive_sha256": sys.argv[5],
+              "header_version_provenance": "https://github.com/media-kit/libmpv-darwin-build/blob/v0.7.2/packages.lock.nix",
+              "architecture": "arm64",
+              "libraries": libraries,
+              "native_execution": "pending",
+          }
+          (prefix / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
+          PYTHON
+          # Same provenance bytes as the Forgejo runtime package: same dylib set and contents.
+          printf '%s  %s\n' "$PROVENANCE_SHA256" "$prefix/provenance.json" | shasum -a 256 -c -
+          echo "OKP_MPV_PREFIX=$prefix" >> "$GITHUB_ENV"
+
+      - name: Build app
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash scripts/build-macos-preview.sh
+
+      - name: Check bundled libraries, rpaths and signature
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          app="$OKP_MACOS_OUTPUT/OK Player.app"
+          status=0
+          for binary in "$app/Contents/MacOS/ok-player" "$app/Contents/Frameworks/"*.dylib; do
+            test "$(lipo -archs "$binary")" = arm64 || { echo "::error::${binary##*/} is not arm64-only"; status=1; }
+            while IFS= read -r dep; do
+              case "$dep" in
+                /System/*|/usr/lib/*) ;;
+                @rpath/*) test -f "$app/Contents/Frameworks/${dep#@rpath/}" || { echo "::error::${binary##*/} needs missing $dep"; status=1; } ;;
+                *) echo "::error::${binary##*/} loads $dep from outside the app"; status=1 ;;
+              esac
+            done < <(otool -L "$binary" | tail -n +2 | awk '{print $1}')
+            while IFS= read -r rpath; do
+              case "$rpath" in
+                @executable_path/*|@loader_path/*|/usr/lib/*|/System/*) ;;
+                *) echo "::error::${binary##*/} keeps build rpath $rpath"; status=1 ;;
+              esac
+            done < <(otool -l "$binary" | awk '/cmd LC_RPATH/{p=1;next} p && /path /{print $2;p=0}')
+          done
+          codesign --verify --deep --strict --verbose=2 "$app"
+          exit "$status"
+
+      - name: Generate the H.264/AAC smoke fixture with a pinned ffmpeg
+        if: env.RUN_SMOKE == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          inputs="$RUNNER_TEMP/inputs"
+          curl --fail --silent --show-error --location --retry 3 "$FFMPEG_WHEEL_URL" -o "$inputs/ffmpeg.whl"
+          printf '%s  %s\n' "$FFMPEG_WHEEL_SHA256" "$inputs/ffmpeg.whl" | shasum -a 256 -c -
+          mkdir -p "$inputs/ffmpeg"
+          unzip -q -j "$inputs/ffmpeg.whl" "$FFMPEG_WHEEL_MEMBER" -d "$inputs/ffmpeg"
+          ffmpeg="$inputs/ffmpeg/${FFMPEG_WHEEL_MEMBER##*/}"
+          chmod +x "$ffmpeg"
+          "$ffmpeg" -hide_banner -version > "$inputs/ffmpeg-version.txt"
+          head -n 1 "$inputs/ffmpeg-version.txt" | tee -a "$OKP_MACOS_OUTPUT/toolchain.txt"
+          "$ffmpeg" -nostdin -hide_banner -loglevel error \
+            -f lavfi -i testsrc2=size=640x360:rate=30:duration=12 \
+            -f lavfi -i sine=frequency=440:sample_rate=48000:duration=12 \
+            -map 0:v -map 1:a -c:v libx264 -profile:v high -pix_fmt yuv420p -threads 1 \
+            -c:a aac -b:a 96k -ac 1 -map_metadata -1 -fflags +bitexact -flags +bitexact \
+            -movflags +faststart "$inputs/smoke.mp4"
+          (cd "$inputs" && shasum -a 256 smoke.mp4) | tee "$OKP_MACOS_OUTPUT/fixture-sha256.txt"
+
+      - name: Bounded smoke from a relocated copy
+        if: env.RUN_SMOKE == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          relocated="$(mktemp -d "$RUNNER_TEMP/okp-relocated.XXXXXX")"
+          mkdir -p "$OKP_MACOS_OUTPUT/snapshots"
+          ditto "$OKP_MACOS_OUTPUT/OK Player.app" "$relocated/OK Player.app"
+          status=0
+          python3 -I - "$relocated/OK Player.app/Contents/MacOS/ok-player" "$RUNNER_TEMP/inputs/smoke.mp4" "$OKP_MACOS_OUTPUT/smoke.log" "$OKP_MACOS_OUTPUT/snapshots" <<'PYTHON' || status=$?
+          import os, subprocess, sys
+          env = os.environ.copy()
+          env.pop("DYLD_LIBRARY_PATH", None)
+          with open(sys.argv[3], "w") as log:
+              # The app renders its own window in light and dark into the snapshot directory.
+              result = subprocess.run([sys.argv[1], "--smoke-test", "--snapshot-dir=" + sys.argv[4], sys.argv[2]], env=env, stdout=log, stderr=subprocess.STDOUT, timeout=40)
+          raise SystemExit(result.returncode)
+          PYTHON
+          cat "$OKP_MACOS_OUTPUT/smoke.log"
+          ls -l "$OKP_MACOS_OUTPUT/snapshots"
+          exit "$status"
+
+      - name: Record the app checksum
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if test -f "$OKP_MACOS_OUTPUT/SHA256SUMS.txt"; then
+            cat "$OKP_MACOS_OUTPUT/SHA256SUMS.txt"
+            {
+              echo "### ok-player-macos-arm64.zip"
+              echo
+              echo "Source \`$SOURCE_SHA\`, SHA-256 \`$(awk '{print $1}' "$OKP_MACOS_OUTPUT/SHA256SUMS.txt")\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload player and native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-player-${{ env.SOURCE_SHA }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/receipt/ok-player-macos-arm64.zip
+            ${{ runner.temp }}/receipt/*.log
+            ${{ runner.temp }}/receipt/*.txt
+            ${{ runner.temp }}/receipt/snapshots/*.png
+          if-no-files-found: error
+          retention-days: 30
