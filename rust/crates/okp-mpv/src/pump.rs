@@ -71,6 +71,10 @@ const OBSERVED_PROPERTIES: &[(&str, libc::c_int)] = &[
     ("audio-device", ffi::MPV_FORMAT_STRING),
 ];
 
+/// Called on the pump thread after each pass has published fresh observations
+/// and queued its lifecycle events. See [`crate::Mpv::set_observation_listener`].
+pub(crate) type ObservationListener = Arc<dyn Fn() + Send + Sync>;
+
 const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_millis(250);
 const SHUTDOWN_JOIN_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
@@ -153,6 +157,7 @@ struct PumpShared {
     /// it by then (#768). Cleared on `FileLoaded`, taken by `EndFile`.
     last_duration: Mutex<Option<f64>>,
     audio_device_current: Mutex<String>,
+    listener: Mutex<Option<ObservationListener>>,
     wake: Mutex<bool>,
     condvar: Condvar,
     running: AtomicBool,
@@ -191,6 +196,7 @@ impl EventPump {
             media_source: Mutex::new(None),
             last_duration: Mutex::new(None),
             audio_device_current: Mutex::new("auto".to_owned()),
+            listener: Mutex::new(None),
             // Start "pending" so the pump populates the snapshot immediately.
             wake: Mutex::new(true),
             condvar: Condvar::new(),
@@ -307,6 +313,10 @@ impl EventPump {
         std::mem::take(&mut *lock(&self.shared.events))
     }
 
+    pub(crate) fn set_observation_listener(&self, listener: Option<ObservationListener>) {
+        *lock(&self.shared.listener) = listener;
+    }
+
     /// Record the local path backing the current media so `media-info` reports
     /// the same title/path the shell would have passed synchronously. Source
     /// identity is a local projection, so update it without another libmpv
@@ -390,6 +400,12 @@ fn pump_loop(shared: &Arc<PumpShared>) {
         recompute(shared, flags);
         if !lifecycle.is_empty() {
             lock(&shared.events).extend(lifecycle);
+        }
+        // Clone out of the lock so a listener that reads the pump snapshot (or
+        // replaces itself) cannot deadlock against this thread.
+        let listener = lock(&shared.listener).clone();
+        if let Some(listener) = listener {
+            listener();
         }
     }
 }

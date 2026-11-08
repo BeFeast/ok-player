@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "app": { "name": "OK Player", "platform": "macos" },
+  "data_dir": "/Users/example/Library/Application Support/OK Player",
+  "config_dir": "/Users/example/Library/Preferences/OK Player",
+  "cache_dir": "/Users/example/Library/Caches/OK Player",
+  "hwdec": "videotoolbox",
+  "mpv_options": [
+    { "name": "ao", "value": "coreaudio" }
+  ]
+}

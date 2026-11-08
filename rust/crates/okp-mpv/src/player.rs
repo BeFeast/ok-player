@@ -1402,6 +1402,19 @@ impl Mpv {
             .unwrap_or_default()
     }
 
+    /// Register a callback the event pump invokes on its own thread after every
+    /// pass that refreshed the observed state, once that pass's lifecycle events
+    /// are queued. It lets an owner react to engine changes instead of polling
+    /// the `observed_*` reads; the callback must be cheap and must not block, as
+    /// the pump waits for it. `None` removes it. Without a started pump (see
+    /// [`Self::start_event_pump`]) there is nothing to observe and the call is
+    /// ignored.
+    pub fn set_observation_listener(&self, listener: Option<Arc<dyn Fn() + Send + Sync>>) {
+        if let Some(pump) = self.pump.as_ref() {
+            pump.set_observation_listener(listener);
+        }
+    }
+
     /// Tell the pump which local path backs the current media so `media-info`
     /// reports the same title/path the shell used to pass synchronously.
     pub fn set_media_source(&self, source: Option<PathBuf>) {

@@ -146,6 +146,8 @@ pub enum PlayerCommand {
     SetSpeed(f64),
     /// Set the output volume, as a percentage.
     SetVolume(f64),
+    /// Mute (`true`) or unmute (`false`) the audio output without changing the volume.
+    SetMute(bool),
     /// Request a screenshot (optionally with subtitles burned in).
     RequestScreenshot { include_subtitles: bool },
 }
@@ -166,6 +168,8 @@ pub enum PropertyChange {
     Speed(Option<f64>),
     /// Subtitle delay (seconds).
     SubtitleDelay(f64),
+    /// The audio mute flag.
+    Mute(bool),
 }
 
 /// A media track as reported by the engine.
@@ -278,6 +282,8 @@ pub struct PlaybackSnapshot {
     pub time_pos: Option<f64>,
     pub duration: Option<f64>,
     pub volume: Option<f64>,
+    /// Whether audio output is muted. Engine-global like volume.
+    pub mute: bool,
     pub speed: Option<f64>,
     pub subtitle_delay: f64,
     pub tracks: Vec<TrackInfo>,
@@ -334,14 +340,17 @@ impl PlayerMachine {
                 {
                     return CommandOutcome::Rejected(RejectReason::NotFinite);
                 }
-                // Volume and speed are engine-global and persist across loads; keep them.
+                // Volume, mute and speed are engine-global and persist across loads;
+                // keep them.
                 let volume = self.snapshot.volume;
+                let mute = self.snapshot.mute;
                 let speed = self.snapshot.speed;
                 self.snapshot = PlaybackSnapshot {
                     status: PlaybackStatus::Opening,
                     source: Some(request.source.clone()),
                     time_pos: request.resume_from,
                     volume,
+                    mute,
                     speed,
                     ..PlaybackSnapshot::default()
                 };
@@ -352,9 +361,11 @@ impl PlayerMachine {
                     return CommandOutcome::NoOp;
                 }
                 let volume = self.snapshot.volume;
+                let mute = self.snapshot.mute;
                 let speed = self.snapshot.speed;
                 self.snapshot = PlaybackSnapshot {
                     volume,
+                    mute,
                     speed,
                     ..PlaybackSnapshot::default()
                 };
@@ -383,6 +394,12 @@ impl PlayerMachine {
                 } else {
                     CommandOutcome::Rejected(RejectReason::NotFinite)
                 }
+            }
+            // Mute is engine-global like volume. The engine does not report it back
+            // (OK Player owns every mute change), so the transition is applied here.
+            PlayerCommand::SetMute(muted) => {
+                self.snapshot.mute = *muted;
+                self.accept()
             }
         }
     }
@@ -440,6 +457,7 @@ impl PlayerMachine {
             PropertyChange::Volume(value) => self.snapshot.volume = value,
             PropertyChange::Speed(value) => self.snapshot.speed = value,
             PropertyChange::SubtitleDelay(value) => self.snapshot.subtitle_delay = value,
+            PropertyChange::Mute(muted) => self.snapshot.mute = muted,
         }
     }
 
@@ -916,5 +934,32 @@ mod tests {
         // A fresh open clears per-file state.
         assert_eq!(machine.snapshot().subtitle_delay, 0.0);
         assert!(machine.snapshot().tracks.is_empty());
+    }
+
+    #[test]
+    fn mute_is_settable_without_media_and_survives_open_and_close() {
+        let mut machine = PlayerMachine::new();
+        assert!(matches!(
+            machine.apply_command(&PlayerCommand::SetMute(true)),
+            CommandOutcome::Accepted { .. }
+        ));
+        assert!(machine.snapshot().mute);
+        assert_eq!(machine.status(), PlaybackStatus::Idle);
+
+        let _ = machine.apply_command(&PlayerCommand::Open(OpenRequest::new(local(
+            "/media/a.mkv",
+        ))));
+        assert!(machine.snapshot().mute, "open keeps the engine-global mute");
+        machine.apply_event(PlayerEvent::Loaded {
+            duration: Some(10.0),
+        });
+        let _ = machine.apply_command(&PlayerCommand::Close);
+        assert!(
+            machine.snapshot().mute,
+            "close keeps the engine-global mute"
+        );
+
+        machine.apply_event(PlayerEvent::Property(PropertyChange::Mute(false)));
+        assert!(!machine.snapshot().mute);
     }
 }

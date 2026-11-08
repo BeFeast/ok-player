@@ -1,0 +1,1034 @@
+//! The session: engine, core state machine, event thread and coalescing queue.
+
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::thread::{self, JoinHandle};
+use std::time::Instant;
+
+use okp_core::player::{
+    ChapterInfo, CommandOutcome, CommandReply, CommandResult, EndReason as CoreEndReason,
+    PlaybackStatus, PlayerCommand, PlayerError, PlayerErrorKind, PlayerEvent, PropertyChange,
+    TrackInfo, TrackKind as CoreTrackKind,
+};
+use okp_core::playlist::PlaylistItem;
+use okp_mpv::{MpvEvent, error_description};
+
+use crate::coalesce::Coalescer;
+use crate::engine::{Engine, MpvEngine, Observation};
+use crate::machine::SessionMachine;
+use crate::protocol::{
+    Command, CommandEnvelope, DispatchReply, DispatchResult, ErrorKind, Event, EventBatch,
+    MediaSource, Query, QueryEnvelope, QueryReply, QueryResult, RejectReason, SCHEMA_VERSION,
+    SessionConfig, SessionSnapshot, Track, VideoGeometry, parse_envelope, to_json,
+};
+use crate::reconcile::{core_end_reason, endfile_error, event_matches_source};
+
+/// Called from the session's event thread when a new batch of events is ready.
+/// It should only schedule a drain on the shell's own thread.
+pub type Wakeup = Box<dyn Fn() + Send + Sync>;
+
+/// One playback session. Create it with [`Session::new`] or
+/// [`Session::from_config_json`]; dropping it stops the event thread, discards
+/// undrained events and shuts the engine down.
+///
+/// Threading: [`Session::dispatch`], [`Session::query`] and
+/// [`Session::drain_events`] may be called from any thread. The wakeup runs on
+/// the session's event thread, never on the caller's, and never after
+/// [`Session::set_wakeup`] has replaced it or the session has been dropped. A
+/// wakeup may call `drain_events`, `dispatch` and `query`, but must not call
+/// `set_wakeup`.
+pub struct Session {
+    shared: Arc<Shared>,
+    thread: Option<JoinHandle<()>>,
+}
+
+struct Shared {
+    engine: Box<dyn Engine>,
+    state: Mutex<State>,
+    signal: Arc<Signal>,
+    wakeup: Mutex<Option<Wakeup>>,
+    running: AtomicBool,
+}
+
+struct State {
+    machine: SessionMachine,
+    queue: Coalescer,
+    /// The shell has drained the previous batch, so the next one gets a wakeup.
+    armed: bool,
+    /// The engine's pause flag as last observed. Pause is applied optimistically
+    /// on dispatch, so only a change in the engine's report may override it.
+    observed_paused: Option<bool>,
+}
+
+/// Wakes the event thread: set by the engine listener, by commands and by
+/// shutdown.
+#[derive(Default)]
+struct Signal {
+    pending: Mutex<bool>,
+    condvar: Condvar,
+}
+
+impl Signal {
+    fn notify(&self) {
+        *lock(&self.pending) = true;
+        self.condvar.notify_one();
+    }
+
+    fn wait(&self, deadline: Option<Instant>) {
+        let mut pending = lock(&self.pending);
+        while !*pending {
+            match deadline {
+                None => {
+                    pending = self
+                        .condvar
+                        .wait(pending)
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                }
+                Some(deadline) => {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        break;
+                    }
+                    pending = self
+                        .condvar
+                        .wait_timeout(pending, deadline - now)
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .0;
+                }
+            }
+        }
+        *pending = false;
+    }
+}
+
+impl Session {
+    /// Start libmpv with `config` and the session's event thread.
+    pub fn new(config: &SessionConfig) -> Result<Self, String> {
+        validate_config(config)?;
+        let engine = MpvEngine::new(config)?;
+        Ok(Self::with_engine(Box::new(engine)))
+    }
+
+    /// [`Session::new`] from a config document.
+    pub fn from_config_json(text: &str) -> Result<Self, String> {
+        let config: SessionConfig = parse_envelope(text)
+            .map_err(|(_, message)| format!("invalid session config: {message}"))?;
+        Self::new(&config)
+    }
+
+    pub(crate) fn with_engine(engine: Box<dyn Engine>) -> Self {
+        let signal = Arc::new(Signal::default());
+        let listener_signal = Arc::clone(&signal);
+        engine.set_listener(Some(Arc::new(move || listener_signal.notify())));
+        let shared = Arc::new(Shared {
+            engine,
+            state: Mutex::new(State {
+                machine: SessionMachine::new(),
+                queue: Coalescer::new(),
+                armed: true,
+                observed_paused: None,
+            }),
+            signal,
+            wakeup: Mutex::new(None),
+            running: AtomicBool::new(true),
+        });
+        // Publish the engine's initial state (volume, speed) without waiting for
+        // the first engine change.
+        shared.signal.notify();
+        let thread_shared = Arc::clone(&shared);
+        let thread = thread::Builder::new()
+            .name("okp-session-events".to_owned())
+            .spawn(move || event_loop(&thread_shared))
+            .expect("spawning the session event thread must succeed");
+        Self {
+            shared,
+            thread: Some(thread),
+        }
+    }
+
+    /// Install, replace or (with `None`) remove the wakeup. When this returns,
+    /// the previous wakeup is not running and will not be called again. If
+    /// events are already waiting, the new wakeup fires promptly.
+    pub fn set_wakeup(&self, wakeup: Option<Wakeup>) {
+        *lock(&self.shared.wakeup) = wakeup;
+        self.shared.signal.notify();
+    }
+
+    /// Validate `command` with the core state machine and, only if it accepts,
+    /// hand it to the engine.
+    pub fn dispatch(&self, command: &Command) -> DispatchResult {
+        let core = command.to_core();
+        let engine = &*self.shared.engine;
+        let mut state = lock(&self.shared.state);
+        let (outcome, engine_result) = state
+            .machine
+            .dispatch(&core, |_, request_id| engine.forward(command, request_id));
+        let result = match (outcome, engine_result) {
+            (CommandOutcome::Accepted { request_id }, Ok(())) => {
+                DispatchResult::Accepted { request_id }
+            }
+            (CommandOutcome::Accepted { request_id }, Err(message)) => {
+                state.queue.push(Event::Error {
+                    kind: if matches!(core, PlayerCommand::Open(_)) {
+                        ErrorKind::LoadFailed
+                    } else {
+                        ErrorKind::CommandFailed
+                    },
+                    message: message.clone(),
+                    request_id: Some(request_id),
+                });
+                DispatchResult::Failed {
+                    request_id,
+                    message,
+                }
+            }
+            (CommandOutcome::NoOp, _) => DispatchResult::NoOp {},
+            (CommandOutcome::Rejected(reason), _) => rejected(reason.into()),
+        };
+        drop(state);
+        self.shared.signal.notify();
+        result
+    }
+
+    pub fn query(&self, query: &Query) -> QueryResult {
+        match query {
+            Query::Snapshot {} => QueryResult::Snapshot {
+                snapshot: self.snapshot(),
+            },
+        }
+    }
+
+    /// The full state, including every change not yet drained. Answering folds
+    /// in the engine's latest report first, so it reflects a command dispatched
+    /// just before.
+    pub fn snapshot(&self) -> SessionSnapshot {
+        let mut state = lock(&self.shared.state);
+        state.refresh(&*self.shared.engine, Instant::now());
+        let snapshot = state.queue.published().clone();
+        let pending = state.queue.has_pending();
+        drop(state);
+        if pending {
+            self.shared.signal.notify();
+        }
+        snapshot
+    }
+
+    /// Take every queued event as one batch and re-arm the wakeup.
+    pub fn drain_events(&self) -> Vec<Event> {
+        let mut state = lock(&self.shared.state);
+        state.armed = true;
+        state.queue.drain()
+    }
+
+    /// [`Session::dispatch`] for a command document; returns a reply document.
+    pub fn dispatch_json(&self, text: &str) -> String {
+        let result = match parse_envelope::<CommandEnvelope>(text) {
+            Ok(envelope) => self.dispatch(&envelope.command),
+            Err((reason, message)) => DispatchResult::Rejected { reason, message },
+        };
+        to_json(&DispatchReply {
+            schema_version: SCHEMA_VERSION,
+            result,
+        })
+    }
+
+    /// [`Session::query`] for a query document; returns a reply document.
+    pub fn query_json(&self, text: &str) -> String {
+        let result = match parse_envelope::<QueryEnvelope>(text) {
+            Ok(envelope) => self.query(&envelope.query),
+            Err((reason, message)) => QueryResult::Rejected { reason, message },
+        };
+        to_json(&QueryReply {
+            schema_version: SCHEMA_VERSION,
+            result,
+        })
+    }
+
+    /// [`Session::drain_events`] as an event batch document.
+    pub fn drain_events_json(&self) -> String {
+        to_json(&EventBatch {
+            schema_version: SCHEMA_VERSION,
+            events: self.drain_events(),
+        })
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.shared.running.store(false, Ordering::Release);
+        self.shared.engine.set_listener(None);
+        self.shared.signal.notify();
+        if let Some(thread) = self.thread.take() {
+            // A wakeup that drops its own session runs on the event thread, which
+            // cannot join itself; it exits after the wakeup returns instead.
+            if thread.thread().id() != thread::current().id() {
+                let _ = thread.join();
+            }
+        }
+    }
+}
+
+fn event_loop(shared: &Arc<Shared>) {
+    let mut deadline = None;
+    loop {
+        shared.signal.wait(deadline);
+        if !shared.running.load(Ordering::Acquire) {
+            break;
+        }
+        // The wakeup slot is held across the call so that `set_wakeup` returning
+        // guarantees the replaced wakeup is no longer running.
+        let wakeup = lock(&shared.wakeup);
+        let fire = {
+            let mut state = lock(&shared.state);
+            deadline = state.refresh(&*shared.engine, Instant::now());
+            let fire = wakeup.is_some() && state.armed && state.queue.has_pending();
+            if fire {
+                state.armed = false;
+            }
+            fire
+        };
+        if fire && let Some(wakeup) = wakeup.as_ref() {
+            wakeup();
+        }
+    }
+}
+
+impl State {
+    /// Fold the engine's latest report into the machine and the queue. Returns
+    /// when a held playhead update falls due.
+    fn refresh(&mut self, engine: &dyn Engine, now: Instant) -> Option<Instant> {
+        let observation = engine.observe();
+        for event in engine.take_events() {
+            self.reconcile_event(event, &observation);
+        }
+        self.reconcile_observation(&observation);
+        let current = self.project(&observation);
+        self.queue.observe(&current, now)
+    }
+
+    fn reconcile_event(&mut self, event: MpvEvent, observation: &Observation) {
+        match event {
+            MpvEvent::FileLoaded { .. } => {
+                self.machine.apply_event(PlayerEvent::Loaded {
+                    duration: observation.playback.duration,
+                });
+                // Pause persists across loads in the engine; take its current
+                // value for the new media whatever it was before.
+                self.observed_paused = None;
+            }
+            MpvEvent::EndFile {
+                reason,
+                diagnostic_messages,
+                path,
+                ..
+            } => {
+                if !event_matches_source(
+                    self.machine.machine().snapshot().source.as_ref(),
+                    path.as_deref(),
+                ) {
+                    return;
+                }
+                if let Some(message) = endfile_error(reason, &diagnostic_messages) {
+                    self.machine.apply_event(PlayerEvent::Error(PlayerError {
+                        kind: PlayerErrorKind::LoadFailed,
+                        message: message.clone(),
+                    }));
+                    self.queue.push(Event::Error {
+                        kind: ErrorKind::LoadFailed,
+                        message,
+                        request_id: None,
+                    });
+                }
+                self.machine
+                    .apply_event(PlayerEvent::Ended(core_end_reason(reason)));
+            }
+            MpvEvent::CommandReply { request_id, error } => {
+                let result = if error < 0 {
+                    let message = error_description(error);
+                    self.queue.push(Event::Error {
+                        kind: ErrorKind::CommandFailed,
+                        message: message.clone(),
+                        request_id: Some(request_id),
+                    });
+                    CommandResult::Failed(message)
+                } else {
+                    CommandResult::Ok
+                };
+                self.machine
+                    .apply_event(PlayerEvent::Reply(CommandReply { request_id, result }));
+            }
+            MpvEvent::Shutdown => {
+                self.machine
+                    .apply_event(PlayerEvent::Ended(CoreEndReason::Quit));
+                self.queue.push(Event::Shutdown {});
+            }
+            MpvEvent::PlaybackRestart { .. }
+            | MpvEvent::DecoderWarning { .. }
+            | MpvEvent::VideoReconfig { .. } => {}
+        }
+    }
+
+    fn reconcile_observation(&mut self, observation: &Observation) {
+        let playback = observation.playback;
+        // Volume and speed are engine-global and hold without media.
+        self.machine
+            .apply_event(PlayerEvent::Property(PropertyChange::Volume(
+                playback.volume,
+            )));
+        self.machine
+            .apply_event(PlayerEvent::Property(PropertyChange::Speed(playback.speed)));
+        // Until the engine has loaded the current media, its per-file report
+        // still describes the previous one.
+        if !is_loaded(self.machine.machine().status()) {
+            return;
+        }
+        self.machine
+            .apply_event(PlayerEvent::Property(PropertyChange::TimePos(
+                playback.time_pos,
+            )));
+        self.machine
+            .apply_event(PlayerEvent::Property(PropertyChange::Duration(
+                playback.duration,
+            )));
+        if self.observed_paused != Some(playback.paused) {
+            self.observed_paused = Some(playback.paused);
+            self.machine
+                .apply_event(PlayerEvent::Property(PropertyChange::Paused(
+                    playback.paused,
+                )));
+        }
+        self.machine
+            .apply_event(PlayerEvent::Property(PropertyChange::SubtitleDelay(
+                observation.subtitle_delay,
+            )));
+        self.machine.apply_event(PlayerEvent::Tracks(
+            observation.tracks.iter().map(core_track).collect(),
+        ));
+        self.machine.apply_event(PlayerEvent::Chapters(
+            observation
+                .chapters
+                .iter()
+                .map(|chapter| ChapterInfo {
+                    index: chapter.index,
+                    time: chapter.time,
+                    title: chapter.title.clone(),
+                })
+                .collect(),
+        ));
+    }
+
+    fn project(&self, observation: &Observation) -> SessionSnapshot {
+        let core = self.machine.machine().snapshot();
+        let idle = core.status == PlaybackStatus::Idle;
+        let loaded = is_loaded(core.status);
+        SessionSnapshot {
+            status: core.status.into(),
+            source: core.source.as_ref().map(MediaSource::from_item),
+            time_pos: core.time_pos,
+            duration: core.duration,
+            volume: core.volume,
+            mute: core.mute,
+            speed: core.speed,
+            subtitle_delay: core.subtitle_delay,
+            tracks: core.tracks.iter().map(Track::from).collect(),
+            chapters: core.chapters.iter().map(Into::into).collect(),
+            end_reason: core.end_reason.map(Into::into),
+            title: if idle {
+                None
+            } else {
+                observation
+                    .title
+                    .clone()
+                    .or_else(|| core.source.as_ref().map(source_title))
+            },
+            video: observation
+                .video
+                .filter(|_| loaded)
+                .map(|video| VideoGeometry {
+                    width: video.width,
+                    height: video.height,
+                    display_aspect: f64::from(video.width) / f64::from(video.height),
+                }),
+            buffering: !idle && observation.buffering,
+            cache_ahead: observation.playback.cache_duration.filter(|_| loaded),
+        }
+    }
+}
+
+fn is_loaded(status: PlaybackStatus) -> bool {
+    matches!(
+        status,
+        PlaybackStatus::Playing | PlaybackStatus::Paused | PlaybackStatus::Ended
+    )
+}
+
+fn core_track(track: &okp_mpv::Track) -> TrackInfo {
+    TrackInfo {
+        id: track.id,
+        kind: match track.kind {
+            okp_mpv::TrackKind::Audio => CoreTrackKind::Audio,
+            okp_mpv::TrackKind::Subtitle => CoreTrackKind::Subtitle,
+        },
+        selected: track.selected,
+        external: track.external,
+        default: track.default,
+        title: track.title.clone(),
+        lang: track.lang.clone(),
+    }
+}
+
+/// A title for media the engine has not named yet: the file name, or the URL.
+fn source_title(source: &PlaylistItem) -> String {
+    match source {
+        PlaylistItem::Local(path) => path
+            .file_name()
+            .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy())
+            .into_owned(),
+        PlaylistItem::Url(url) => url.clone(),
+    }
+}
+
+fn rejected(reason: RejectReason) -> DispatchResult {
+    DispatchResult::Rejected {
+        reason,
+        message: reason.describe().to_owned(),
+    }
+}
+
+fn validate_config(config: &SessionConfig) -> Result<(), String> {
+    if config.schema_version != SCHEMA_VERSION {
+        return Err(format!(
+            "schema_version {} is not supported; this session speaks {SCHEMA_VERSION}",
+            config.schema_version
+        ));
+    }
+    for (name, dir) in [
+        ("data_dir", &config.data_dir),
+        ("config_dir", &config.config_dir),
+        ("cache_dir", &config.cache_dir),
+    ] {
+        if !Path::is_absolute(dir) {
+            return Err(format!("{name} must be an absolute path"));
+        }
+    }
+    Ok(())
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::ChangeListener;
+    use crate::protocol::{EndReason, SnapshotChange, SourceKind, Status, TrackKind};
+    use okp_mpv::{Chapter, EndFileReason, VideoDimensions};
+    use std::sync::atomic::AtomicUsize;
+    use std::time::Duration;
+
+    /// A scripted engine. The test keeps the `Arc<FakeState>` and plays the part
+    /// of the libmpv event pump through [`FakeState::publish`].
+    #[derive(Default)]
+    struct FakeState {
+        forwarded: Mutex<Vec<(Command, u64)>>,
+        observation: Mutex<Observation>,
+        events: Mutex<Vec<MpvEvent>>,
+        listener: Mutex<Option<ChangeListener>>,
+        refuse_with: Mutex<Option<String>>,
+        observations: AtomicUsize,
+        dropped: AtomicBool,
+    }
+
+    impl FakeState {
+        /// Change what the engine reports, queue lifecycle events, and notify the
+        /// session the way the pump does after each pass.
+        fn publish(&self, change: impl FnOnce(&mut Observation), events: Vec<MpvEvent>) {
+            change(&mut lock(&self.observation));
+            lock(&self.events).extend(events);
+            let listener = lock(&self.listener).clone();
+            if let Some(listener) = listener {
+                listener();
+            }
+        }
+
+        fn forwarded(&self) -> Vec<Command> {
+            lock(&self.forwarded)
+                .iter()
+                .map(|(command, _)| command.clone())
+                .collect()
+        }
+    }
+
+    struct FakeEngine(Arc<FakeState>);
+
+    impl Engine for FakeEngine {
+        fn forward(&self, command: &Command, request_id: u64) -> Result<(), String> {
+            lock(&self.0.forwarded).push((command.clone(), request_id));
+            match lock(&self.0.refuse_with).take() {
+                Some(message) => Err(message),
+                None => Ok(()),
+            }
+        }
+
+        fn observe(&self) -> Observation {
+            self.0.observations.fetch_add(1, Ordering::SeqCst);
+            lock(&self.0.observation).clone()
+        }
+
+        fn take_events(&self) -> Vec<MpvEvent> {
+            std::mem::take(&mut *lock(&self.0.events))
+        }
+
+        fn set_listener(&self, listener: Option<ChangeListener>) {
+            *lock(&self.0.listener) = listener;
+        }
+    }
+
+    impl Drop for FakeEngine {
+        fn drop(&mut self) {
+            self.0.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn fake_session() -> (Session, Arc<FakeState>) {
+        let state = Arc::new(FakeState::default());
+        lock(&state.observation).playback.volume = Some(100.0);
+        let session = Session::with_engine(Box::new(FakeEngine(Arc::clone(&state))));
+        (session, state)
+    }
+
+    fn counting_wakeup(session: &Session) -> Arc<AtomicUsize> {
+        let count = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&count);
+        session.set_wakeup(Some(Box::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        })));
+        count
+    }
+
+    fn wait_for(mut condition: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if condition() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        condition()
+    }
+
+    /// Publish like the pump, then wait until the event thread has read it.
+    fn publish_and_settle(engine: &FakeState, change: impl FnOnce(&mut Observation)) {
+        let seen = engine.observations.load(Ordering::SeqCst);
+        engine.publish(change, vec![]);
+        assert!(
+            wait_for(|| engine.observations.load(Ordering::SeqCst) > seen),
+            "the event thread never processed the change"
+        );
+        // Let the pass that read it finish deciding whether to wake the shell.
+        thread::sleep(Duration::from_millis(30));
+    }
+
+    fn open(path: &str) -> Command {
+        Command::Open {
+            source: MediaSource {
+                kind: SourceKind::Local,
+                location: path.to_owned(),
+            },
+            resume_from: None,
+            audio_track: None,
+            subtitle_track: None,
+        }
+    }
+
+    fn loaded(engine: &FakeState, duration: f64) {
+        engine.publish(
+            |observation| observation.playback.duration = Some(duration),
+            vec![MpvEvent::FileLoaded {
+                video_dimensions: None,
+            }],
+        );
+    }
+
+    fn changes(events: &[Event]) -> Vec<SnapshotChange> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::SnapshotChanged { changes } => Some(changes.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+
+    #[test]
+    fn a_rejected_command_never_reaches_the_engine() {
+        let (session, engine) = fake_session();
+        for command in [
+            Command::TogglePause {},
+            Command::SetPaused { paused: true },
+            Command::Seek {
+                seconds: 5.0,
+                mode: crate::protocol::SeekMode::Relative,
+                precision: crate::protocol::SeekPrecision::Keyframe,
+            },
+            Command::SelectTrack {
+                kind: TrackKind::Audio,
+                id: Some(1),
+            },
+            Command::SetSubtitleDelay { seconds: 0.5 },
+        ] {
+            assert_eq!(
+                session.dispatch(&command),
+                DispatchResult::Rejected {
+                    reason: RejectReason::NoActiveMedia,
+                    message: RejectReason::NoActiveMedia.describe().to_owned(),
+                },
+                "{command:?}"
+            );
+        }
+        assert_eq!(
+            session.dispatch(&Command::Close {}),
+            DispatchResult::NoOp {}
+        );
+        assert!(engine.forwarded().is_empty(), "{:?}", engine.forwarded());
+
+        // The same commands go through once media is loaded.
+        assert!(matches!(
+            session.dispatch(&open("/media/a.mkv")),
+            DispatchResult::Accepted { request_id: 1 }
+        ));
+        loaded(&engine, 10.0);
+        assert!(wait_for(|| session.snapshot().status == Status::Playing));
+        assert!(matches!(
+            session.dispatch(&Command::TogglePause {}),
+            DispatchResult::Accepted { request_id: 2 }
+        ));
+        assert_eq!(
+            engine.forwarded(),
+            vec![open("/media/a.mkv"), Command::TogglePause {}]
+        );
+    }
+
+    #[test]
+    fn the_wakeup_fires_once_per_coalesced_batch() {
+        let (session, engine) = fake_session();
+        let wakeups = counting_wakeup(&session);
+        assert!(wait_for(|| wakeups.load(Ordering::SeqCst) == 1));
+
+        // More changes before the shell drains join the announced batch.
+        for volume in [10.0, 20.0, 30.0] {
+            publish_and_settle(&engine, |observation| {
+                observation.playback.volume = Some(volume);
+            });
+        }
+        assert_eq!(wakeups.load(Ordering::SeqCst), 1);
+
+        // The initial 100 % and the three updates collapse into the latest value.
+        assert_eq!(
+            session.drain_events(),
+            vec![Event::SnapshotChanged {
+                changes: vec![SnapshotChange::Volume { value: Some(30.0) }],
+            }]
+        );
+
+        // Draining re-arms it: the next change is a new batch with a new wakeup.
+        engine.publish(
+            |observation| observation.playback.volume = Some(40.0),
+            vec![],
+        );
+        assert!(wait_for(|| wakeups.load(Ordering::SeqCst) == 2));
+        thread::sleep(Duration::from_millis(30));
+        assert_eq!(wakeups.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            changes(&session.drain_events()),
+            vec![SnapshotChange::Volume { value: Some(40.0) }]
+        );
+    }
+
+    #[test]
+    fn dropping_a_session_with_pending_events_stops_the_wakeup_and_the_engine() {
+        let (session, engine) = fake_session();
+        let wakeups = counting_wakeup(&session);
+        assert!(matches!(
+            session.dispatch(&open("/media/a.mkv")),
+            DispatchResult::Accepted { .. }
+        ));
+        assert!(wait_for(|| wakeups.load(Ordering::SeqCst) == 1));
+        engine.publish(
+            |observation| observation.playback.volume = Some(5.0),
+            vec![],
+        );
+
+        drop(session);
+        assert!(
+            engine.dropped.load(Ordering::SeqCst),
+            "the engine shut down"
+        );
+        assert!(
+            lock(&engine.listener).is_none(),
+            "the engine listener is gone"
+        );
+        let after_drop = wakeups.load(Ordering::SeqCst);
+        engine.publish(
+            |observation| observation.playback.volume = Some(6.0),
+            vec![],
+        );
+        thread::sleep(Duration::from_millis(30));
+        assert_eq!(wakeups.load(Ordering::SeqCst), after_drop);
+    }
+
+    #[test]
+    fn a_replaced_wakeup_is_never_called_again() {
+        let (session, engine) = fake_session();
+        let first = counting_wakeup(&session);
+        assert!(wait_for(|| first.load(Ordering::SeqCst) == 1));
+        let second = counting_wakeup(&session);
+        session.drain_events();
+        engine.publish(
+            |observation| observation.playback.volume = Some(7.0),
+            vec![],
+        );
+        assert!(wait_for(|| second.load(Ordering::SeqCst) == 1));
+        assert_eq!(first.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn tracks_chapters_and_media_facts_arrive_once_the_file_has_loaded() {
+        let (session, engine) = fake_session();
+        // The engine still describes the previous file while the new one opens.
+        engine.publish(
+            |observation| {
+                observation.tracks = vec![okp_mpv::Track {
+                    id: 9,
+                    kind: okp_mpv::TrackKind::Audio,
+                    selected: true,
+                    external: false,
+                    external_filename: None,
+                    default: false,
+                    title: Some("stale".to_owned()),
+                    lang: None,
+                    codec: None,
+                    audio_channels: None,
+                }];
+                observation.video = Some(VideoDimensions {
+                    width: 4,
+                    height: 3,
+                });
+            },
+            vec![],
+        );
+        let _ = session.dispatch(&open("/media/film.mkv"));
+        let opening = session.snapshot();
+        assert_eq!(opening.status, Status::Opening);
+        assert!(opening.tracks.is_empty(), "no stale tracks while opening");
+        assert_eq!(opening.video, None);
+        assert_eq!(opening.title.as_deref(), Some("film.mkv"));
+
+        engine.publish(
+            |observation| {
+                observation.tracks = vec![
+                    okp_mpv::Track {
+                        id: 1,
+                        kind: okp_mpv::TrackKind::Audio,
+                        selected: true,
+                        external: false,
+                        external_filename: None,
+                        default: true,
+                        title: None,
+                        lang: Some("eng".to_owned()),
+                        codec: Some("aac".to_owned()),
+                        audio_channels: None,
+                    },
+                    okp_mpv::Track {
+                        id: 1,
+                        kind: okp_mpv::TrackKind::Subtitle,
+                        selected: false,
+                        external: true,
+                        external_filename: Some("/media/film.srt".to_owned()),
+                        default: false,
+                        title: None,
+                        lang: None,
+                        codec: Some("subrip".to_owned()),
+                        audio_channels: None,
+                    },
+                ];
+                observation.chapters = vec![Chapter {
+                    index: 0,
+                    time: 0.0,
+                    title: Some("Intro".to_owned()),
+                }];
+                observation.video = Some(VideoDimensions {
+                    width: 1920,
+                    height: 800,
+                });
+                observation.title = Some("Film".to_owned());
+                observation.playback.duration = Some(60.0);
+                observation.playback.cache_duration = Some(12.5);
+                observation.buffering = true;
+            },
+            vec![MpvEvent::FileLoaded {
+                video_dimensions: None,
+            }],
+        );
+        let wakeups = counting_wakeup(&session);
+        assert!(wait_for(|| wakeups.load(Ordering::SeqCst) == 1));
+        let mut state = opening;
+        for change in changes(&session.drain_events()) {
+            state.apply(&change);
+        }
+        assert_eq!(state.status, Status::Playing);
+        assert_eq!(state.tracks.len(), 2);
+        assert_eq!(state.tracks[1].kind, TrackKind::Subtitle);
+        assert!(state.tracks[1].external);
+        assert_eq!(state.chapters[0].title.as_deref(), Some("Intro"));
+        assert_eq!(state.title.as_deref(), Some("Film"));
+        assert_eq!(state.duration, Some(60.0));
+        assert_eq!(state.cache_ahead, Some(12.5));
+        assert!(state.buffering);
+        let video = state.video.clone().expect("video geometry is reported");
+        assert_eq!((video.width, video.height), (1920, 800));
+        assert_eq!(video.display_aspect, 2.4);
+        assert_eq!(state, session.snapshot(), "events and query agree");
+    }
+
+    #[test]
+    fn a_stale_engine_report_does_not_undo_a_pause() {
+        let (session, engine) = fake_session();
+        let _ = session.dispatch(&open("/media/a.mkv"));
+        loaded(&engine, 10.0);
+        assert!(wait_for(|| session.snapshot().status == Status::Playing));
+
+        let _ = session.dispatch(&Command::SetPaused { paused: true });
+        // A pass from before the engine processed the pause still says playing.
+        publish_and_settle(&engine, |observation| {
+            observation.playback.time_pos = Some(1.0);
+        });
+        assert_eq!(session.snapshot().status, Status::Paused);
+
+        // A change in the engine's own report does win.
+        publish_and_settle(&engine, |observation| observation.playback.paused = true);
+        publish_and_settle(&engine, |observation| observation.playback.paused = false);
+        assert_eq!(session.snapshot().status, Status::Playing);
+    }
+
+    #[test]
+    fn an_engine_refusal_answers_failed_and_ends_the_load_with_an_error_event() {
+        let (session, engine) = fake_session();
+        *lock(&engine.refuse_with) = Some("loadfile refused".to_owned());
+        let reply = session.dispatch(&open("/media/a.mkv"));
+        assert_eq!(
+            reply,
+            DispatchResult::Failed {
+                request_id: 1,
+                message: "loadfile refused".to_owned(),
+            }
+        );
+        let snapshot = session.snapshot();
+        assert_eq!(snapshot.status, Status::Ended);
+        assert_eq!(snapshot.end_reason, Some(EndReason::Error));
+        let events = session.drain_events();
+        assert!(events.contains(&Event::Error {
+            kind: ErrorKind::LoadFailed,
+            message: "loadfile refused".to_owned(),
+            request_id: Some(1),
+        }));
+    }
+
+    #[test]
+    fn asynchronous_failures_and_shutdown_become_events() {
+        let (session, engine) = fake_session();
+        let _ = session.dispatch(&open("/media/a.mkv"));
+        loaded(&engine, 10.0);
+        engine.publish(
+            |_| {},
+            vec![
+                MpvEvent::CommandReply {
+                    request_id: 1,
+                    error: -12,
+                },
+                // A failure of a source the user already replaced is dropped.
+                MpvEvent::EndFile {
+                    reason: EndFileReason::Error(-13),
+                    path: Some("/media/old.mkv".to_owned()),
+                    diagnostic_messages: vec![],
+                    last_duration: None,
+                },
+                MpvEvent::Shutdown,
+            ],
+        );
+        // A query folds in the engine's report on the calling thread.
+        assert_eq!(session.snapshot().end_reason, Some(EndReason::Quit));
+        let events = session.drain_events();
+        let errors: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Error {
+                    kind, request_id, ..
+                } => Some((*kind, *request_id)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(errors, vec![(ErrorKind::CommandFailed, Some(1))]);
+        assert_eq!(events.last(), Some(&Event::Shutdown {}));
+    }
+
+    #[test]
+    fn mute_is_owned_by_the_session_and_forwarded() {
+        let (session, engine) = fake_session();
+        assert!(matches!(
+            session.dispatch(&Command::SetMute { muted: true }),
+            DispatchResult::Accepted { .. }
+        ));
+        assert!(session.snapshot().mute);
+        assert_eq!(engine.forwarded(), vec![Command::SetMute { muted: true }]);
+    }
+
+    #[test]
+    fn json_documents_are_checked_before_dispatch() {
+        let (session, engine) = fake_session();
+        let reply = session.dispatch_json(r#"{"schema_version":1,"command":{"set_volume":{}}}"#);
+        assert!(reply.contains(r#""reason":"malformed""#), "{reply}");
+        let reply = session.dispatch_json(r#"{"schema_version":9,"command":{"close":{}}}"#);
+        assert!(
+            reply.contains(r#""reason":"unsupported_schema_version""#),
+            "{reply}"
+        );
+        assert!(engine.forwarded().is_empty());
+
+        let reply = session
+            .dispatch_json(r#"{"schema_version":1,"command":{"set_volume":{"volume":55.0}}}"#);
+        assert_eq!(
+            reply,
+            r#"{"schema_version":1,"result":{"accepted":{"request_id":1}}}"#
+        );
+    }
+
+    #[test]
+    fn a_config_needs_absolute_directories_and_the_current_schema() {
+        let mut config = SessionConfig {
+            schema_version: SCHEMA_VERSION,
+            app: okp_core::app::AppIdentity {
+                name: "OK Player".to_owned(),
+                platform: "macos".to_owned(),
+            },
+            data_dir: "/data".into(),
+            config_dir: "relative/config".into(),
+            cache_dir: "/cache".into(),
+            hwdec: None,
+            mpv_options: Vec::new(),
+        };
+        assert_eq!(
+            validate_config(&config),
+            Err("config_dir must be an absolute path".to_owned())
+        );
+        config.config_dir = "/config".into();
+        assert_eq!(validate_config(&config), Ok(()));
+        config.schema_version = 2;
+        assert!(validate_config(&config).is_err());
+    }
+}

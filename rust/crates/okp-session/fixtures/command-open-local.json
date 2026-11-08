@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "command": {
+    "open": {
+      "source": { "kind": "local", "location": "/Users/example/Movies/film.mkv" },
+      "resume_from": 754.5,
+      "audio_track": 2,
+      "subtitle_track": 3
+    }
+  }
+}

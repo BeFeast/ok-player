@@ -1,0 +1,16 @@
+{
+  "status": ["idle", "opening", "playing", "paused", "ended"],
+  "end_reason": ["eof", "stopped", "quit", "error", "redirect"],
+  "reject_reason": [
+    "no_active_media",
+    "not_finite",
+    "malformed",
+    "unsupported_schema_version",
+    "invalid_argument"
+  ],
+  "error_kind": ["load_failed", "command_failed", "engine"],
+  "track_kind": ["audio", "subtitle"],
+  "source_kind": ["local", "url"],
+  "seek_mode": ["absolute", "relative"],
+  "seek_precision": ["exact", "keyframe"]
+}

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "result": {
+    "rejected": {
+      "reason": "unsupported_schema_version",
+      "message": "schema_version 2 is not supported; this session speaks 1"
+    }
+  }
+}

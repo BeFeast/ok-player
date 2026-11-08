@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "events": [
+    {
+      "snapshot_changed": {
+        "changes": [
+          { "status": { "value": "ended" } },
+          { "source": { "value": { "kind": "url", "location": "https://example.com/a.mp4" } } },
+          { "time_pos": { "value": null } },
+          { "duration": { "value": 61.0 } },
+          { "volume": { "value": 70.0 } },
+          { "mute": { "value": true } },
+          { "speed": { "value": 2.0 } },
+          { "subtitle_delay": { "value": 0.5 } },
+          {
+            "tracks": {
+              "value": [
+                {
+                  "id": 2,
+                  "kind": "audio",
+                  "selected": true,
+                  "external": false,
+                  "default": false,
+                  "title": null,
+                  "lang": "deu"
+                }
+              ]
+            }
+          },
+          { "chapters": { "value": [] } },
+          { "end_reason": { "value": "eof" } },
+          { "title": { "value": "a.mp4" } },
+          { "video": { "value": null } },
+          { "buffering": { "value": true } },
+          { "cache_ahead": { "value": 3.5 } }
+        ]
+      }
+    },
+    {
+      "error": {
+        "kind": "load_failed",
+        "message": "loading failed",
+        "request_id": null
+      }
+    },
+    {
+      "error": {
+        "kind": "command_failed",
+        "message": "property unavailable",
+        "request_id": 4
+      }
+    },
+    { "shutdown": {} }
+  ]
+}

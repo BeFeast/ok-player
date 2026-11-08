@@ -1,0 +1,20 @@
+[package]
+name = "okp-session"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+okp-core = { path = "../okp-core" }
+okp-mpv = { path = "../okp-mpv" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# The C ABI tests drive the exported `okp_session_*` functions. The `live-mpv`
+# feature is what exports them, so a workspace test run also builds and tests
+# okp-ffi with the engine linked.
+okp-ffi = { path = "../okp-ffi", features = ["live-mpv"] }
+okp-test-fixtures = { path = "../okp-test-fixtures" }
