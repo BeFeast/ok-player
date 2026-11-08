@@ -108,6 +108,20 @@ impl PlaylistItem {
         Self::local(PathBuf::from(entry))
     }
 
+    /// Whether a queue request (Add to Up Next / Play Next) may insert this entry.
+    ///
+    /// A local file needs a recognized media extension, the rule the local load path applies.
+    /// A URL must be a credential-free `http`/`https` URL with a host, the rule media downloads
+    /// apply. Every other scheme stays out of the queue even when mpv could open it: an
+    /// mpv-internal protocol (`edl://`, `lavfi://`, `memory://`), a share (`smb://`), or a nested
+    /// `ok-player://` request would otherwise reach the engine when the queue advances to it.
+    pub fn is_queueable(&self) -> bool {
+        match self {
+            Self::Local(path) => media_formats::is_media(path),
+            Self::Url(url) => crate::media_download::validate_public_http_url(url).is_ok(),
+        }
+    }
+
     /// Whether this entry is the loaded media, given what the player reports as current.
     pub fn is_current(&self, current_file: Option<&Path>, current_url: Option<&str>) -> bool {
         match self {
@@ -1252,6 +1266,44 @@ mod tests {
             ]
         );
         assert_eq!(playlist.current_index(), Some(0));
+    }
+
+    #[test]
+    fn queueable_entries_are_media_files_and_public_http_urls_only() {
+        for item in [
+            local("/media/current.mkv"),
+            local("/media/Clip.MOV"),
+            url("https://clips.example/cam/C0001.MP4?token=abc"),
+            url("HTTP://clips.example:8080/clip.mov"),
+            url("https://video.example/watch?v=abc"),
+        ] {
+            assert!(item.is_queueable(), "{item:?} should be queueable");
+        }
+
+        for item in [
+            // Local paths the local load path refuses.
+            local("/media/notes.txt"),
+            local("/media/no-extension"),
+            local("/media/subs.srt"),
+            local("/media/list.m3u"),
+            // mpv-internal protocols and other schemes mpv would open.
+            url("edl://clip.mp4,0,10;clip.mp4,20,10"),
+            url("lavfi://testsrc"),
+            url("memory://data"),
+            url("smb://nas/share/clip.mp4"),
+            url("rtsp://camera.example/stream"),
+            url("ftp://files.example/clip.mp4"),
+            url("file:///media/clip.mp4"),
+            url("ok-player://open?url=https%3A%2F%2Fclips.example%2Fa.mp4"),
+            // http(s) without a usable host, with credentials, or with whitespace.
+            url("https:///clip.mp4"),
+            url("https://user@clips.example/clip.mp4"),
+            url("https://clips.example\\evil/clip.mp4"),
+            url("https://clips.example/a clip.mp4"),
+            url("not a url"),
+        ] {
+            assert!(!item.is_queueable(), "{item:?} should not be queueable");
+        }
     }
 
     #[test]

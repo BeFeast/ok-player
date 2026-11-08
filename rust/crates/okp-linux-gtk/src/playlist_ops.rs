@@ -755,19 +755,22 @@ pub(crate) fn save_m3u_playlist(
 pub(crate) enum QueueRequestOutcome {
     /// This many new entries are in Up Next.
     Queued(usize),
-    /// None of the requested entries is something the load path can play.
-    NothingPlayable,
+    /// None of the requested entries may join the queue (see [`PlaylistItem::is_queueable`]).
+    NothingQueueable,
     /// No media is loaded, so there is no queue to insert into.
     NothingLoaded,
     /// Every requested entry is already playing or already queued.
     AlreadyQueued,
 }
 
-/// Queue local files and stream URLs around the loaded media per `mode`.
+/// Queue local media files and http(s) URLs around the loaded media per `mode`.
 ///
-/// Entries the load path would refuse (a path without a media extension, a string that is not
-/// a playable URL) are dropped first, as are repeats within the request, so the queue only
-/// holds items that [`load_playlist_item_with_playlist`] can open when they are reached.
+/// Entries that are not [`PlaylistItem::is_queueable`] are dropped first, as are repeats
+/// within the request: a local path without a media extension (the local load path refuses
+/// it) and any URL that is not a credential-free http(s) URL with a host. Other schemes stay
+/// out even when the URL load path would hand them to the engine, so a queued `edl://`,
+/// `lavfi://` or `ok-player://` string never reaches `loadfile` on advance. What remains plays
+/// through [`load_playlist_item_with_playlist`] when it is reached.
 pub(crate) fn queue_playlist_items(
     state: &Rc<RefCell<PlayerState>>,
     items: Vec<PlaylistItem>,
@@ -775,12 +778,12 @@ pub(crate) fn queue_playlist_items(
 ) -> QueueRequestOutcome {
     let mut additions = Vec::new();
     for item in items {
-        if is_playable_playlist_item(&item) && !additions.contains(&item) {
+        if item.is_queueable() && !additions.contains(&item) {
             additions.push(item);
         }
     }
     if additions.is_empty() {
-        return QueueRequestOutcome::NothingPlayable;
+        return QueueRequestOutcome::NothingQueueable;
     }
 
     let mut state = state.borrow_mut();
@@ -800,13 +803,6 @@ pub(crate) fn queue_playlist_items(
     }
 }
 
-fn is_playable_playlist_item(item: &PlaylistItem) -> bool {
-    match item {
-        PlaylistItem::Local(path) => is_media_path(path),
-        PlaylistItem::Url(url) => is_media_url(url),
-    }
-}
-
 pub(crate) fn queue_media_paths(
     state: &Rc<RefCell<PlayerState>>,
     paths: Vec<PathBuf>,
@@ -816,7 +812,7 @@ pub(crate) fn queue_media_paths(
     let items = paths.into_iter().map(PlaylistItem::Local).collect();
     let count = match queue_playlist_items(state, items, mode) {
         QueueRequestOutcome::Queued(count) => count,
-        QueueRequestOutcome::NothingPlayable => {
+        QueueRequestOutcome::NothingQueueable => {
             status_toast.show("Choose media files");
             return false;
         }
@@ -1895,7 +1891,7 @@ mod queue_tests {
                 ],
                 QueueInsertMode::Append,
             ),
-            QueueRequestOutcome::NothingPlayable
+            QueueRequestOutcome::NothingQueueable
         );
         // Repeats inside one request count once.
         assert_eq!(
@@ -1911,6 +1907,53 @@ mod queue_tests {
         assert_eq!(
             queue_playlist_items(&state, vec![clip()], QueueInsertMode::Append),
             QueueRequestOutcome::AlreadyQueued
+        );
+        assert_eq!(
+            state.borrow().playlist.items(),
+            [local("/media/current.mkv"), clip()]
+        );
+    }
+
+    #[test]
+    fn only_http_urls_join_the_queue_never_engine_protocols_or_nested_requests() {
+        let root = tempfile::tempdir().expect("temporary history directory");
+        let state = playing_local(
+            history::HistoryStore::open_test(root.path().join("history.json")),
+            vec![local("/media/current.mkv")],
+        );
+        let hostile = [
+            "edl://clip.mp4,0,10;clip.mp4,20,10",
+            "lavfi://testsrc",
+            "memory://data",
+            "smb://nas/share/clip.mp4",
+            "rtsp://camera.example/stream",
+            "ok-player://open?url=https%3A%2F%2Fclips.example%2Fa.mp4",
+            "https://user@clips.example/clip.mp4",
+        ];
+
+        for mode in [QueueInsertMode::Append, QueueInsertMode::PlayNext] {
+            for url in hostile {
+                assert_eq!(
+                    queue_playlist_items(&state, vec![PlaylistItem::Url(url.to_owned())], mode),
+                    QueueRequestOutcome::NothingQueueable,
+                    "{url} must not be queued ({mode:?})"
+                );
+            }
+        }
+        assert_eq!(
+            state.borrow().playlist.items(),
+            [local("/media/current.mkv")]
+        );
+
+        // A mixed request keeps the http(s) clip and drops the rest, so advancing can only
+        // ever reach the clip.
+        let mut request = hostile
+            .map(|url| PlaylistItem::Url(url.to_owned()))
+            .to_vec();
+        request.insert(3, clip());
+        assert_eq!(
+            queue_playlist_items(&state, request, QueueInsertMode::Append),
+            QueueRequestOutcome::Queued(1)
         );
         assert_eq!(
             state.borrow().playlist.items(),
