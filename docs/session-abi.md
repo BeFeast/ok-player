@@ -122,7 +122,10 @@ are published with it at once.
 The session keeps the watch history in `history.json` under `data_dir`, in the
 same document the Linux build writes (`okp_core::history::History`), so the
 file moves between the two. Writes go to a temporary file that is flushed and
-renamed over the old one; a shell never touches the file.
+renamed over the old one; a shell never touches the file. The session writes
+it on a thread of its own, so `dispatch`, `query` and `drain_events` never
+wait for the disk. Two calls do: `okp_session_free`, which waits for the last
+save, and `history.remove`, which waits for its own write to answer.
 
 What the session does on its own:
 
@@ -134,19 +137,27 @@ What the session does on its own:
   `open`, `okp_session_free` and the engine quitting. Playing to the end marks
   the entry finished, so it opens from the start next time.
 - `select_track`, `set_subtitle_delay`, `set_volume` and `set_speed` are
-  remembered for the current media. Reopening it sets the volume and speed
-  with the open, and selects the tracks (only those the file has) and sets the
-  subtitle delay once it has loaded; tracks named in the open win.
+  remembered for the current media and written with the next save, or 10 s
+  after the first unsaved one, so a dragged slider writes once. Reopening it
+  sets the volume and speed with the open, and selects the tracks (only those
+  the file has) and sets the subtitle delay once it has loaded; tracks named in
+  the open win.
 - While the private session is on, nothing new is recorded and nothing
   remembered is applied. The history stays readable and entries can still be
   removed. It starts off with every session.
+- A `history.json` that is there but cannot be read (damaged, written by a
+  newer build, or unreadable when the session starts) is never written over.
+  The first save renames it to `history.json.unreadable-<unix seconds>` and
+  then writes a new file; if the rename fails, nothing is written and
+  `save_failed` follows. The page reports `read_failed` and, once the file has
+  been moved, its new path in `unreadable_copy`.
 
 | Document | Shape |
 |---|---|
 | Command | `{"command":{"history":{"action":{...}}}}`: `set_private {enabled}`, `remove {source}` (the media is untouched; removing the media that plays stops recording it until it is opened again) |
 | Reply | `{"result":{"history":{"result":{...}}}}`: `done {}`, `unchanged {}` or `failed {message}` (the file could not be written; nothing changed) |
 | Query | `{"query":{"history":{"query":{...}}}}`: `welcome_shelf {limit, utc_offset_seconds}`, `page {search, utc_offset_seconds}` (`search` may be left out) |
-| Query reply | `{"result":{"history":{"result":{...}}}}`: `welcome_shelf {private_session, entries}` or `page {private_session, read_failed, summary, end_cap, sections}`; a section is `{bucket, header, entries}`, newest first |
+| Query reply | `{"result":{"history":{"result":{...}}}}`: `welcome_shelf {private_session, entries}` or `page {private_session, read_failed, unreadable_copy, summary, end_cap, sections}`; a section is `{bucket, header, entries}`, newest first |
 | Event | `{"history":{"event":{...}}}`: `resumed {position}`, `changed {}` (query again), `private_session {enabled}`, `save_failed {message}` (once until a save succeeds) |
 
 An entry carries `source`, `title`, `location` (the folder breadcrumb),
