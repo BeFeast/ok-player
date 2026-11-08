@@ -181,10 +181,13 @@ class BridgeOutcomeTests(unittest.TestCase):
         self.assertNotIn(REF, remote.refs)
 
     def test_an_earlier_green_run_of_the_same_commit_is_not_taken_for_this_one(self):
-        github = FakeGitHub([("completed", "failure")], artifact_zip(), existing=[99])
+        # The new run shows up only on the third poll, so the first polls see nothing
+        # but the earlier green run 99 and must keep waiting.
+        github = FakeGitHub([("completed", "failure")], artifact_zip(), existing=[99], start_after=3)
         passed, report, _, _ = run_bridge(github)
         self.assertFalse(passed)
         self.assertIn("GitHub run: https://github.example/runs/100", report)
+        self.assertNotIn("GitHub run: https://github.example/runs/99", report)
 
     def test_branch_already_at_the_commit_is_recreated_so_the_push_starts_a_run(self):
         remote = FakeRemote(existing_sha=SHA)
@@ -219,6 +222,18 @@ class CommandLineTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1, result.stderr)
             self.assertIn("MAC_CI_GITHUB_TOKEN is not set", result.stderr)
             self.assertIn("MAC_CI_GITHUB_TOKEN is not set", summary.read_text())
+
+    def test_missing_token_with_skip_builds_nothing_and_passes_with_a_warning(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            summary, mirror = Path(scratch, "summary.md"), Path(scratch, "mirror.git")
+            subprocess.run(["git", "init", "-q", "--bare", str(mirror)], check=True)
+            result = self.run_script("run", "--sha", SHA, "--ref", REF, "--repo", scratch,
+                                     "--remote", str(mirror), "--summary", str(summary),
+                                     "--without-token", "skip")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("::warning::MAC_CI_GITHUB_TOKEN is not set", result.stdout)
+            self.assertIn("was not built", summary.read_text())
+            self.assertEqual(git(mirror, "for-each-ref"), "", "nothing may be pushed")
 
     def test_bridge_branch_outside_mac_ci_is_refused(self):
         result = self.run_script("run", "--sha", SHA, "--ref", "main",
@@ -255,7 +270,8 @@ class ScopeTests(unittest.TestCase):
         output = Path(self.scratch.name, "output")
         output.write_text("")
         result = subprocess.run([sys.executable, str(SCRIPT), "scope", "--repo", str(self.repo),
-                                 "--base", base or self.base, "--head", head, "--github-output", str(output)],
+                                 "--base", self.base if base is None else base, "--head", head,
+                                 "--github-output", str(output)],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return output.read_text().strip()
@@ -272,17 +288,32 @@ class ScopeTests(unittest.TestCase):
         head = commit(self.repo, "docs/notes.md", "docs\n")
         self.assertEqual(self.relevant(head, base="f" * 40), "relevant=true")
 
+    def test_run_without_a_base_builds(self):
+        # A manual run passes an empty base; a new branch's push event the zero commit.
+        head = commit(self.repo, "docs/notes.md", "docs\n")
+        self.assertEqual(self.relevant(head, base=""), "relevant=true")
+        self.assertEqual(self.relevant(head, base="0" * 40), "relevant=true")
+
+    def test_push_compares_with_the_previous_tip(self):
+        before = commit(self.repo, "macos/README.md", "mac\n")
+        head = commit(self.repo, "docs/notes.md", "docs\n")
+        self.assertEqual(self.relevant(head, base=before), "relevant=false")
+        self.assertEqual(self.relevant(head, base=self.base), "relevant=true")
+
     def test_path_set(self):
         needs = [
             "macos/Package.swift", "scripts/build-macos-preview.sh", "scripts/generate-macos-icon.py",
-            "scripts/macos-signing-identity.sh", "scripts/mac-ci-bridge.py", "brand/palette.json",
+            "scripts/macos-signing-identity.sh", "scripts/tests/macos-signing-identity.Tests.sh",
+            "scripts/mac-ci-bridge.py", "brand/palette.json",
             "rust/Cargo.lock", "rust/crates/okp-session/src/lib.rs", "rust/crates/okp-ffi/src/live.rs",
             "rust/crates/okp-mpv/src/player.rs", "rust/crates/okp-core/src/branding.rs",
             ".github/workflows/macos-player-preview.yml", ".forgejo/workflows/macos-pr-check.yml",
         ]
         skips = [
             "docs/qa-records/x.md", "scripts/generate-chrome-icons.py", "rust/crates/okp-linux-gtk/src/main.rs",
-            "src/OkPlayer.App/App.xaml.cs", ".github/workflows/rust.yml", "scripts/tests/macos-x.sh",
+            "src/OkPlayer.App/App.xaml.cs", ".github/workflows/rust.yml",
+            # Both run on Linux in the Rust job, not in the Mac build.
+            "scripts/tests/macos-bundle.Tests.py", "scripts/tests/mac-ci-bridge.Tests.py",
         ]
         self.assertEqual(bridge.macos_relevant(needs), needs)
         self.assertEqual(bridge.macos_relevant(skips), [])

@@ -21,9 +21,10 @@ name: macOS player preview
 #
 # It runs on pull requests that touch the macOS shell, its build inputs or the Rust crates
 # it links, on demand, and on pushes to mac-ci/** branches. Those branches are how Forgejo
-# pull requests get a Mac build: scripts/mac-ci-bridge.py pushes the pull request's head
-# commit to mac-ci/pr-<number>, waits for this run and deletes the branch again. The paths
-# below are the bridge's MACOS_PATHS; scripts/tests/mac-ci-bridge.Tests.py keeps them equal.
+# pull requests and main commits get a Mac build: scripts/mac-ci-bridge.py pushes the
+# commit to mac-ci/pr-<number> or mac-ci/main, waits for this run and deletes the branch
+# again. The paths below are the bridge's MACOS_PATHS; scripts/tests/mac-ci-bridge.Tests.py
+# keeps them equal.
 #
 # The app is signed with the stable self-signed identity in the MACOS_SIGNING_P12_BASE64
 # and MACOS_SIGNING_P12_PASSWORD secrets when they exist, and ad hoc otherwise; the job
@@ -45,6 +46,7 @@ on:
       - 'scripts/build-macos-preview.sh'
       - 'scripts/generate-macos-*.py'
       - 'scripts/macos-*.sh'
+      - 'scripts/tests/macos-*.sh'
       - 'scripts/mac-ci-bridge.py'
       - 'brand/**'
       - 'rust/Cargo.toml'

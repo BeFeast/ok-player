@@ -18,18 +18,21 @@ the packaged app.
 
 ## Install a build on a Mac
 
-Every pull request that touches the Mac build gets an artifact on its Forgejo check
-run (see [Forgejo pull request check](#forgejo-pull-request-check)), named
+Once the bridge token is configured, every pull request head and every main commit
+that touches the Mac build gets an artifact on its Forgejo check run (see
+[Forgejo pull request check](#forgejo-pull-request-check)), named
 `macos-player-<commit SHA>`. Download it from a shell, not a browser: `curl` and
 `ditto` set no quarantine flag, so Gatekeeper does not hold the app back and no
 administrator rights are needed. `jq` ships with macOS 15; on macOS 14 copy the
 artifact link from the run page instead.
 
 ```sh
-sha=<full commit SHA the check built>
 api=https://<forgejo host>/api/v1/repos/BeFeast/ok-player
+sha=<full commit SHA the check built>                       # or, for the main tip:
+# sha="$(curl -fsS "$api/branches/main" | jq -r .commit.id)"
 work="$(mktemp -d)"
-url="$(curl -fsS "$api/actions/artifacts?name=macos-player-$sha" | jq -r '.[0].archive_download_url')"
+url="$(curl -fsS "$api/actions/artifacts?name=macos-player-$sha" |
+  jq -er '[.[] | select(.expired | not)][0].archive_download_url')"   # fails when there is none
 curl -fsSL -o "$work/artifact.zip" "$url"
 ditto -x -k "$work/artifact.zip" "$work/artifact"
 (cd "$work/artifact" && shasum -a 256 -c SHA256SUMS.txt)   # must print: ok-player-macos-arm64.zip: OK
@@ -38,6 +41,16 @@ rm -rf "$HOME/Applications/OK Player.app"                   # replace the previo
 mkdir -p "$HOME/Applications"
 ditto -x -k "$work/artifact/ok-player-macos-arm64.zip" "$HOME/Applications"
 open "$HOME/Applications/OK Player.app"
+```
+
+A main commit that changed nothing the Mac build reads has no build of its own. To
+get one for the main tip, start the check by hand on `main` (any account with write
+access, from the workflow's page in the Forgejo Actions tab or through the API below),
+wait for the run to finish and download as above:
+
+```sh
+curl -fsS -X POST -H "Authorization: token $FORGEJO_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"ref":"main"}' "$api/actions/workflows/macos-pr-check.yml/dispatches"
 ```
 
 To see which build is installed, read its version, `CFBundleVersion` and source
@@ -165,12 +178,21 @@ openssl x509 -in cert.pem -noout -fingerprint -sha1   # the H"..." in the design
 - The downloaded artifact is published again as `macos-player-<commit SHA>` on the
   Forgejo run.
 
-One-time setup: create a GitHub fine-grained token for `BeFeast/ok-player` with
-**Contents**, **Workflows** and **Actions** set to read and write (Workflows because a
-pushed commit may change workflow files), and store it as the Forgejo repository
-Actions secret `MAC_CI_GITHUB_TOKEN`. Until it exists, a macOS-relevant pull request
-fails with a message that names the secret. Once the check is green, add its name
-above to the required checks of `main`.
+The same job runs on every push to `main`, with the path set compared against the
+previous tip and the bridge branch `mac-ci/main`, so main commits that change the Mac
+build get their own artifact. Main runs queue rather than cancel each other. Started by
+hand (`workflow_dispatch`), it builds the tip of the chosen branch without the path
+check, through `mac-ci/<branch>`.
+
+One-time setup: store a GitHub token that can push to `BeFeast/ok-player`, including
+workflow files, and read and cancel its Actions runs (a classic token with the `repo`
+and `workflow` scopes, or a fine-grained one with **Contents**, **Workflows** and
+**Actions** set to read and write) as the Forgejo repository Actions secret
+`MAC_CI_GITHUB_TOKEN`. Until it exists, the job builds nothing and passes with a
+warning that names the secret, so the check gates nothing yet and blocks no pull
+request. Once the secret is set, every failed, cancelled or timed-out Mac run is red;
+when the check is green on a macOS-relevant pull request, add its name above to the
+required checks of `main`.
 
 The bridge also runs by hand, for example before the secret exists, from a clone that
 has the pull request's head commit. With `--forgejo-status` it posts the result as the

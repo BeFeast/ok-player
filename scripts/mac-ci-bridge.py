@@ -11,8 +11,9 @@ GitHub pull request:
           exit code, download its artifact and delete the bridge branch
 
 The Forgejo workflow .forgejo/workflows/macos-pr-check.yml calls both on every pull
-request. A worker can call `run` by hand for a Forgejo pull request too; with
---forgejo-status the result is posted as a commit status on that commit.
+request and every push to main, and `run` alone when it is started by hand. A worker
+can call `run` by hand for a Forgejo pull request too; with --forgejo-status the result
+is posted as a commit status on that commit.
 
 Environment:
   MAC_CI_GITHUB_TOKEN  GitHub token able to push branches (including workflow
@@ -21,7 +22,10 @@ Environment:
 
 The bridge never reports success unless the GitHub run concluded `success` and its
 artifact holds the app archive with a matching SHA-256. A failed, cancelled or
-timed-out run, a run that never starts, or a missing token is a failure.
+timed-out run, or a run that never starts, is a failure. A missing token is a failure
+too, unless `--without-token skip` is given: then nothing is built, the log carries a
+warning and the exit code is 0, so a repository that has not configured the token yet
+gets no failing check from it.
 """
 import argparse
 import hashlib
@@ -45,6 +49,7 @@ MACOS_PATHS = (
     "scripts/build-macos-preview.sh",
     "scripts/generate-macos-*.py",
     "scripts/macos-*.sh",
+    "scripts/tests/macos-*.sh",
     "scripts/mac-ci-bridge.py",
     "brand/**",
     "rust/Cargo.toml",
@@ -62,6 +67,7 @@ CHECKSUMS = "SHA256SUMS.txt"
 ARTIFACT_PREFIX = "macos-player-"
 STATUS_CONTEXT = "macOS PR check / manual bridge"
 SHA = re.compile(r"^[0-9a-f]{40}$")
+NO_COMMIT = "0" * 40
 BRIDGE_REF = re.compile(r"^mac-ci/[A-Za-z0-9._/-]+$")
 
 
@@ -95,8 +101,14 @@ def changed_paths(repo, base, head):
 
 
 def scope(args):
-    paths = changed_paths(args.repo, args.base, args.head)
-    if paths is None:
+    # A manual run has no base, and a new branch's push event names the zero commit.
+    # An empty base must not reach git: `...<head>` diffs against HEAD, which is <head>.
+    no_base = args.base in ("", NO_COMMIT)
+    paths = None if no_base else changed_paths(args.repo, args.base, args.head)
+    if no_base:
+        print("No base commit to compare with; building.")
+        relevant = True
+    elif paths is None:
         print(f"Cannot diff {args.base}...{head_label(args.head)}; building to be safe.")
         relevant = True
     else:
@@ -398,12 +410,14 @@ def run(args):
             return 2
         forgejo = Forgejo(args.forgejo_api, args.forgejo_repo, os.environ["FORGEJO_TOKEN"])
     if not token:
-        message = ("MAC_CI_GITHUB_TOKEN is not set, so this macOS-relevant change cannot be built. "
+        # No status is posted: a missing credential says nothing about the commit.
+        message = ("MAC_CI_GITHUB_TOKEN is not set, so this macOS-relevant change was not built. "
                    "See 'Forgejo pull request check' in macos/README.md for the one-time setup.")
-        print(f"error: {message}", file=sys.stderr)
         write_summary(args.summary, [f"### macOS build of {args.sha}", message])
-        if forgejo:
-            forgejo.status(args.sha, "error", "MAC_CI_GITHUB_TOKEN is not set")
+        if args.without_token == "skip":
+            print(f"::warning::{message}")
+            return 0
+        print(f"error: {message}", file=sys.stderr)
         return 1
     bridge = Bridge(GitHub(args.github_repo, token), GitRemote(args.repo, args.remote),
                     poll_seconds=args.poll_seconds, forgejo=forgejo)
@@ -429,7 +443,8 @@ def main(argv):
     parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
     scope_parser = commands.add_parser("scope", help="does the change need a Mac build?")
-    scope_parser.add_argument("--base", required=True)
+    scope_parser.add_argument("--base", required=True,
+                              help="base commit; empty or all zeros means none, which builds")
     scope_parser.add_argument("--head", required=True)
     scope_parser.add_argument("--repo", default=".")
     scope_parser.add_argument("--github-output", help="append relevant=true|false here")
@@ -448,6 +463,9 @@ def main(argv):
                             help=f"post the result as the '{STATUS_CONTEXT}' commit status")
     run_parser.add_argument("--forgejo-api", help="Forgejo API base URL, ending in /api/v1")
     run_parser.add_argument("--forgejo-repo", default="BeFeast/ok-player")
+    run_parser.add_argument("--without-token", choices=("fail", "skip"), default="fail",
+                            help="without MAC_CI_GITHUB_TOKEN: fail (default), or build nothing "
+                                 "and exit 0 with a warning")
     args = parser.parse_args(argv[1:])
     # A CI log should show progress while the bridge waits, not only when it exits.
     sys.stdout.reconfigure(line_buffering=True)
