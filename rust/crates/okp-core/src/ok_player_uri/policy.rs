@@ -6,7 +6,7 @@
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
-use super::parse::{Plus, os_string_from_bytes, percent_decode};
+use super::parse::{Plus, os_string_from_bytes, percent_decode, percent_decode_lenient};
 use super::probe::{FsKind, FsProbe};
 use super::{Action, ActionRequest, Reason, Target};
 use crate::media_download::validate_public_http_url;
@@ -75,8 +75,9 @@ impl Validated {
 }
 
 /// Judge `request`'s target. `url=` must be `http`/`https` with a host and no credentials
-/// (a local `file:` URL converts to a path); a path must be absolute in `flavor`'s form,
-/// not a playlist or subtitle, and name an existing regular file according to `probe`.
+/// (a local `file:` URL converts to a path); a path must be absolute in `flavor`'s form and
+/// name an existing regular file according to `probe`. Neither may name a playlist or
+/// subtitle file: a URL by its last path segment, a path by its last component.
 ///
 /// `probe` is consulted at most once, and only after every syntactic rule passed. A real
 /// probe can block for its timeout, so call this off the UI thread.
@@ -153,6 +154,12 @@ fn url_target(url: &str, flavor: PathFlavor) -> Result<UrlTarget, Reason> {
     };
     if host.is_empty() {
         return Err(Reason::InvalidUrl);
+    }
+    // A playlist or subtitle file rejects by the name the server will look up, exactly as a
+    // local one does. The name decodes as the server reads it, so `list.m3%75` is `list.m3u`.
+    // The query is not a name: `https://h/play?f=list.m3u` passes.
+    if let Some(segment) = super::url_last_segment(url) {
+        check_extension(&percent_decode_lenient(segment))?;
     }
     Ok(UrlTarget::Remote)
 }
@@ -246,7 +253,14 @@ fn check_windows_path(path: &str) -> Result<(), Reason> {
     if path[2..].contains(':') {
         return Err(Reason::AlternateDataStream);
     }
-    check_extension(last_component(bytes, b"/\\"))
+    // Win32 drops trailing dots and spaces from the last component, so `list.m3u. ` opens
+    // `list.m3u`: judge the name Windows will open. The original path is still the target.
+    let name = last_component(bytes, b"/\\");
+    let kept = name
+        .iter()
+        .rposition(|byte| !matches!(byte, b'.' | b' '))
+        .map_or(0, |last| last + 1);
+    check_extension(&name[..kept])
 }
 
 fn last_component<'a>(path: &'a [u8], separators: &[u8]) -> &'a [u8] {
@@ -355,6 +369,60 @@ mod tests {
         assert_eq!(check_posix_path(b"/m/list.m3u/a.mkv"), Ok(()));
         assert_eq!(check_posix_path(b"/m/.m3u"), Ok(()));
         assert_eq!(check_windows_path(r"C:\m.pls\a.mkv"), Ok(()));
+    }
+
+    #[test]
+    fn windows_judges_the_last_component_without_trailing_dots_and_spaces() {
+        for path in [r"C:\m\list.m3u.", r"C:\m\list.m3u ", r"C:\m\list.M3U8. . "] {
+            assert_eq!(
+                check_windows_path(path),
+                Err(Reason::PlaylistTarget),
+                "{path}"
+            );
+        }
+        assert_eq!(
+            check_windows_path(r"C:\m\subs.srt."),
+            Err(Reason::SubtitleTarget)
+        );
+        assert_eq!(check_windows_path(r"C:\m\clip.mkv."), Ok(()));
+        assert_eq!(check_windows_path(r"C:\m\.m3u."), Ok(()));
+        assert_eq!(check_windows_path(r"C:\m\..."), Ok(()));
+        // POSIX names are exact: a trailing dot is part of the name.
+        assert_eq!(check_posix_path(b"/m/list.m3u."), Ok(()));
+    }
+
+    #[test]
+    fn urls_naming_a_playlist_or_subtitle_reject_by_their_last_segment() {
+        for url in [
+            "https://cam.example/x.m3u8",
+            "https://cam.example/x.M3U?token=1",
+            "http://cam.example/x.edl#t=5",
+            "https://cam.example/list.m3%75",
+            "https://cam.example/%zz.m3%75",
+        ] {
+            assert!(
+                matches!(
+                    url_target(url, PathFlavor::Posix),
+                    Err(Reason::PlaylistTarget)
+                ),
+                "{url}"
+            );
+        }
+        assert!(matches!(
+            url_target("https://cam.example/subs.srt", PathFlavor::Posix),
+            Err(Reason::SubtitleTarget)
+        ));
+        for url in [
+            "https://cam.example/play?f=list.m3u",
+            "https://cam.example/list.m3u/clip.mp4",
+            "https://cam.example/list.m3u%2",
+            "https://cam.example",
+        ] {
+            assert!(
+                matches!(url_target(url, PathFlavor::Posix), Ok(UrlTarget::Remote)),
+                "{url}"
+            );
+        }
     }
 
     #[test]

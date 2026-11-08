@@ -313,20 +313,25 @@ pub fn is_link(token: &OsStr) -> bool {
 /// Such a direct media URL opened from a link does not arm the replay cache; a page URL
 /// (`https://youtu.be/…`) keeps the normal behaviour.
 pub fn is_direct_media_url(url: &str) -> bool {
-    let Some((_, rest)) = url.split_once("://") else {
+    let Some(segment) = url_last_segment(url) else {
         return false;
     };
-    let rest = rest.split(['?', '#']).next().unwrap_or_default();
-    let Some((_, path)) = rest.split_once('/') else {
-        return false;
-    };
-    let segment = path.rsplit('/').next().unwrap_or_default();
     let Some((stem, extension)) = segment.rsplit_once('.') else {
         return false;
     };
     !stem.is_empty()
         && crate::media_formats::extensions()
             .any(|known| known[1..].eq_ignore_ascii_case(extension))
+}
+
+/// The last path segment of an absolute URL, still percent-encoded and without the query
+/// or fragment (`a.MP4` for `https://h/c/a.MP4?x=1`); `None` when the URL has no path. The
+/// policy reads a target's file name from the same segment.
+fn url_last_segment(url: &str) -> Option<&str> {
+    let (_, rest) = url.split_once("://")?;
+    let rest = rest.split(['?', '#']).next().unwrap_or_default();
+    let (_, path) = rest.split_once('/')?;
+    path.rsplit('/').next()
 }
 
 #[cfg(test)]

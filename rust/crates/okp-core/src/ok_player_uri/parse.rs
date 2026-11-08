@@ -42,6 +42,35 @@ pub(super) fn percent_decode(raw: &str, plus: Plus) -> Option<Vec<u8>> {
     Some(decoded)
 }
 
+/// Percent-decode `raw` the way an HTTP server reads a request path: every valid `%XX`
+/// decodes, a stray `%` stays literal, and `+` stays `+`. Only for judging the name a URL
+/// points at; the link layer itself always decodes strictly with [`percent_decode`].
+pub(super) fn percent_decode_lenient(raw: &str) -> Vec<u8> {
+    let bytes = raw.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let escaped = (bytes[index] == b'%')
+            .then(|| {
+                let high = hex_value(*bytes.get(index + 1)?)?;
+                let low = hex_value(*bytes.get(index + 2)?)?;
+                Some(high << 4 | low)
+            })
+            .flatten();
+        match escaped {
+            Some(byte) => {
+                decoded.push(byte);
+                index += 3;
+            }
+            None => {
+                decoded.push(bytes[index]);
+                index += 1;
+            }
+        }
+    }
+    decoded
+}
+
 fn hex_value(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
@@ -273,6 +302,15 @@ mod tests {
         for raw in ["%G1", "%1G", "%", "%4", "abc%", "%%41", "a%2"] {
             assert_eq!(percent_decode(raw, Plus::Space), None, "{raw}");
         }
+    }
+
+    #[test]
+    fn lenient_decoding_keeps_a_stray_percent_and_decodes_the_rest() {
+        assert_eq!(percent_decode_lenient("list.m3%75"), b"list.m3u");
+        assert_eq!(percent_decode_lenient("%zz.m3%55"), b"%zz.m3U");
+        assert_eq!(percent_decode_lenient("a%2"), b"a%2");
+        assert_eq!(percent_decode_lenient("%%41+"), b"%A+");
+        assert_eq!(percent_decode_lenient("%252F"), b"%2F");
     }
 
     #[test]
