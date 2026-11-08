@@ -86,7 +86,7 @@ bash "$signing" sign "$app"
   else
     echo "mode=self-signed identity=$OKP_CODESIGN_IDENTITY"
   fi
-  codesign -d -r- "$app" 2>&1 | sed -n 's/^designated => /designated_requirement=/p'
+  codesign -d -r- "$app" 2>&1 | sed -n 's/^#* *designated => /designated_requirement=/p'
 } | tee "$output/signing.txt"
 {
   for binary in "$app/Contents/MacOS/ok-player" "$app/Contents/Frameworks/"*.dylib; do
