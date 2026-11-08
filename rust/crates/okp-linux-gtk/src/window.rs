@@ -282,17 +282,18 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
     connect_chrome_activity(&overlay, Rc::clone(&chrome));
 
     let launch_reserved_notice = launch_args.reserved_notice().map(str::to_owned);
-    let startup_launch = Rc::new(RefCell::new(launch_args::StartupLaunchDelivery::new(
-        launch_args,
-    )));
-    let mapped_launch = Rc::clone(&startup_launch);
+    let launch_delivery: LaunchDeliveryGate = Rc::new(RefCell::new(
+        launch_args::LaunchDelivery::with_startup(LaunchRequest::Args(launch_args)),
+    ));
+    let mapped_launch = Rc::clone(&launch_delivery);
     let mapped_state = Rc::clone(&state);
     window.connect_map(move |_| mark_startup_window_mapped(&mapped_launch, &mapped_state));
     state.borrow_mut().presentation_recorder = PresentationRecorder::from_env(video_host.backend());
     if env::var_os("OKP_PRESENT_EXERCISE").is_some() {
         state.borrow_mut().presentation_exercise = Some(Default::default());
     }
-    connect_mpv(&video_host, &window, Rc::clone(&state), startup_launch);
+    let player_launch = Rc::clone(&launch_delivery);
+    connect_mpv(&video_host, &window, Rc::clone(&state), player_launch);
     let suppress_video_click = connect_player_window_move(&overlay, &window);
     connect_video_clicks(
         video_host.widget(),
@@ -686,6 +687,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch_args: LaunchArgs) -> A
         window,
         state,
         status_toast,
+        launch_delivery,
     }
 }
 
@@ -1238,14 +1240,57 @@ fn schedule_explicit_player_window_fit(
     });
 }
 
-pub(crate) fn open_runtime_launch_args(runtime: &AppRuntime, launch_args: &LaunchArgs) {
+pub(crate) fn open_runtime_launch_args(runtime: &AppRuntime, launch_args: LaunchArgs) {
     runtime.window.present();
     if let Some(notice) = launch_args.reserved_notice() {
         eprintln!("Ignoring reserved ok-player:// request: {notice}");
         runtime.status_toast.show(notice);
     }
     if launch_args.has_payload() {
-        apply_launch_args(&runtime.state, launch_args);
+        deliver_launch_request(
+            &runtime.launch_delivery,
+            &runtime.state,
+            LaunchRequest::Args(launch_args),
+        );
+    }
+}
+
+/// Hand a launch forwarded by a later process to the ordered delivery queue. It can arrive before
+/// this instance's engine exists, or while an earlier launch is still waiting for it, so it never
+/// goes to the engine directly: it is applied once everything before it has been applied and the
+/// player is ready.
+pub(crate) fn deliver_launch_request(
+    delivery: &LaunchDeliveryGate,
+    state: &Rc<RefCell<PlayerState>>,
+    request: LaunchRequest,
+) {
+    let released = {
+        let mut delivery = delivery.borrow_mut();
+        // Closing the window detaches the engine before the process quits. A launch forwarded
+        // after that waits instead of being recorded as loaded with nothing to play it.
+        if state.borrow().mpv.is_none() {
+            delivery.mark_player_unavailable();
+        }
+        delivery.push(request)
+    };
+    apply_released_launch_requests(delivery, state, released);
+}
+
+/// Apply a request the delivery queue released, then every request it releases after it, one at a
+/// time. The queue is not borrowed while a request is applied, so a launch that arrives meanwhile
+/// is queued behind it rather than applied out of order.
+pub(crate) fn apply_released_launch_requests(
+    delivery: &LaunchDeliveryGate,
+    state: &Rc<RefCell<PlayerState>>,
+    mut released: Option<LaunchRequest>,
+) {
+    while let Some(request) = released {
+        match request {
+            LaunchRequest::Args(launch_args) => {
+                apply_launch_args(state, &launch_args);
+            }
+        }
+        released = delivery.borrow_mut().mark_applied();
     }
 }
 

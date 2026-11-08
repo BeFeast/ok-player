@@ -305,7 +305,7 @@ pub(crate) fn connect_mpv(
     video_host: &VideoHost,
     window: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
-    startup_launch: StartupLaunchGate,
+    launch_delivery: LaunchDeliveryGate,
 ) {
     let fullscreen_area = match video_host {
         VideoHost::Native { area, .. } => Some(area.clone()),
@@ -348,39 +348,46 @@ pub(crate) fn connect_mpv(
             area,
             container,
             auto_fallback,
-        } => connect_native_mpv(area, container, *auto_fallback, state, startup_launch),
-        VideoHost::Gtk(area) => connect_gtk_mpv(area, state, startup_launch),
-        VideoHost::Software(area) => connect_software_mpv(area, state, startup_launch),
+        } => connect_native_mpv(area, container, *auto_fallback, state, launch_delivery),
+        VideoHost::Gtk(area) => connect_gtk_mpv(area, state, launch_delivery),
+        VideoHost::Software(area) => connect_software_mpv(area, state, launch_delivery),
     }
 }
 
 pub(crate) fn mark_startup_window_mapped(
-    startup_launch: &StartupLaunchGate,
+    launch_delivery: &LaunchDeliveryGate,
     state: &Rc<RefCell<PlayerState>>,
 ) {
     if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
         eprintln!("startup launch lifecycle: window mapped");
     }
-    let launch_args = startup_launch.borrow_mut().mark_window_mapped();
-    apply_ready_startup_launch(state, launch_args);
+    let released = launch_delivery.borrow_mut().mark_window_mapped();
+    apply_ready_startup_launch(launch_delivery, state, released);
 }
 
-fn mark_startup_player_ready(startup_launch: &StartupLaunchGate, state: &Rc<RefCell<PlayerState>>) {
+pub(crate) fn mark_startup_player_ready(
+    launch_delivery: &LaunchDeliveryGate,
+    state: &Rc<RefCell<PlayerState>>,
+) {
     if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
         eprintln!("startup launch lifecycle: player ready");
     }
-    let launch_args = startup_launch.borrow_mut().mark_player_ready();
-    apply_ready_startup_launch(state, launch_args);
+    let released = launch_delivery.borrow_mut().mark_player_ready();
+    apply_ready_startup_launch(launch_delivery, state, released);
 }
 
-fn apply_ready_startup_launch(state: &Rc<RefCell<PlayerState>>, launch_args: Option<LaunchArgs>) {
-    let Some(launch_args) = launch_args else {
+fn apply_ready_startup_launch(
+    launch_delivery: &LaunchDeliveryGate,
+    state: &Rc<RefCell<PlayerState>>,
+    released: Option<LaunchRequest>,
+) {
+    if released.is_none() {
         return;
-    };
+    }
     if env::var_os("OKP_DEBUG_WINDOW_FIT").is_some() {
         eprintln!("startup launch lifecycle: delivering after map and player readiness");
     }
-    apply_launch_args(state, &launch_args);
+    apply_released_launch_requests(launch_delivery, state, released);
 }
 
 fn connect_native_mpv(
@@ -388,7 +395,7 @@ fn connect_native_mpv(
     container: &gtk::Stack,
     auto_fallback: bool,
     state: Rc<RefCell<PlayerState>>,
-    startup_launch: StartupLaunchGate,
+    launch_delivery: LaunchDeliveryGate,
 ) {
     // The Wayland embed contract fixes the surface size into the engine when it
     // is created, and mpv keeps configuring against that size until a later
@@ -405,7 +412,7 @@ fn connect_native_mpv(
     let realize_container = container.clone();
     let realize_started = Rc::clone(&started);
     let realize_fallback_started = Rc::clone(&fallback_started);
-    let realize_launch = Rc::clone(&startup_launch);
+    let realize_launch = Rc::clone(&launch_delivery);
     video_area.connect_realize(move |area| {
         start_native_mpv(
             area,
@@ -422,7 +429,7 @@ fn connect_native_mpv(
     let start_container = container.clone();
     let start_started = Rc::clone(&started);
     let start_fallback_started = Rc::clone(&fallback_started);
-    let start_launch = Rc::clone(&startup_launch);
+    let start_launch = Rc::clone(&launch_delivery);
     let resize_state = Rc::clone(&state);
     video_area.connect_resize(move |area, width, height| {
         debug_assert_eq!((width, height), (area.width(), area.height()));
@@ -511,7 +518,7 @@ fn start_native_mpv(
     container: &gtk::Stack,
     auto_fallback: bool,
     state: &Rc<RefCell<PlayerState>>,
-    startup_launch: &StartupLaunchGate,
+    launch_delivery: &LaunchDeliveryGate,
     started: &Rc<Cell<bool>>,
     fallback_started: &Rc<Cell<bool>>,
 ) {
@@ -528,7 +535,7 @@ fn start_native_mpv(
                 container,
                 fallback_started,
                 state,
-                startup_launch,
+                launch_delivery,
                 auto_fallback,
                 format!("Failed to create the native Wayland/EGL video plane: {error}"),
             );
@@ -540,7 +547,7 @@ fn start_native_mpv(
             container,
             fallback_started,
             state,
-            startup_launch,
+            launch_delivery,
             auto_fallback,
             "Failed to activate the native Wayland/EGL video context".to_owned(),
         );
@@ -560,7 +567,7 @@ fn start_native_mpv(
             container,
             fallback_started,
             state,
-            startup_launch,
+            launch_delivery,
             auto_fallback,
             "GDK Wayland native display is unavailable for direct VAAPI interop".to_owned(),
         );
@@ -571,7 +578,7 @@ fn start_native_mpv(
             container,
             fallback_started,
             state,
-            startup_launch,
+            launch_delivery,
             auto_fallback,
             format!("Failed to create mpv native render context: {error}"),
         );
@@ -585,7 +592,7 @@ fn start_native_mpv(
                 container,
                 fallback_started,
                 state,
-                startup_launch,
+                launch_delivery,
                 auto_fallback,
                 format!("Failed to capture the mpv native render handle: {error}"),
             );
@@ -598,7 +605,7 @@ fn start_native_mpv(
             container,
             fallback_started,
             state,
-            startup_launch,
+            launch_delivery,
             auto_fallback,
             "Failed to transfer the native Wayland/EGL context to the render thread".to_owned(),
         );
@@ -613,7 +620,7 @@ fn start_native_mpv(
                 container,
                 fallback_started,
                 state,
-                startup_launch,
+                launch_delivery,
                 auto_fallback,
                 error,
             );
@@ -634,7 +641,7 @@ fn start_native_mpv(
             container,
             fallback_started,
             state,
-            startup_launch,
+            launch_delivery,
             auto_fallback,
             format!("Failed to install the mpv native render callback: {error}"),
         );
@@ -674,7 +681,7 @@ fn start_native_mpv(
     }
     schedule_audio_device_restore(state);
     try_pending_audio_device_restore(state);
-    mark_startup_player_ready(startup_launch, state);
+    mark_startup_player_ready(launch_delivery, state);
     area.queue_draw();
 }
 
@@ -915,7 +922,7 @@ fn schedule_gtk_mpv_fallback(
     container: &gtk::Stack,
     fallback_started: &Rc<Cell<bool>>,
     state: &Rc<RefCell<PlayerState>>,
-    startup_launch: &StartupLaunchGate,
+    launch_delivery: &LaunchDeliveryGate,
     auto_fallback: bool,
     reason: String,
 ) {
@@ -930,13 +937,13 @@ fn schedule_gtk_mpv_fallback(
     eprintln!("{reason}; falling back to GtkGLArea");
     let container = container.clone();
     let state = Rc::clone(state);
-    let startup_launch = Rc::clone(startup_launch);
+    let launch_delivery = Rc::clone(launch_delivery);
     glib::idle_add_local_once(move || {
         state.borrow_mut().presentation_recorder = PresentationRecorder::from_env(
             okp_core::presentation_evidence::PresentationBackend::GtkGlArea,
         );
         let area = gtk_video_area();
-        connect_gtk_mpv(&area, Rc::clone(&state), startup_launch);
+        connect_gtk_mpv(&area, Rc::clone(&state), launch_delivery);
         container.add_named(&area, Some("gtk-glarea-fallback"));
         container.set_visible_child(&area);
         // A child added during native fallback may not realize until a later layout pass. Start
@@ -949,7 +956,7 @@ fn schedule_gtk_mpv_fallback(
 fn connect_gtk_mpv(
     video_area: &gtk::GLArea,
     state: Rc<RefCell<PlayerState>>,
-    startup_launch: StartupLaunchGate,
+    launch_delivery: LaunchDeliveryGate,
 ) {
     let timing = Rc::new(RefCell::new(None::<GtkPresentationTiming>));
     let sequence = Rc::new(std::cell::Cell::new(0_u64));
@@ -1015,7 +1022,7 @@ fn connect_gtk_mpv(
         realize_state.borrow_mut().mpv = Some(mpv);
         schedule_audio_device_restore(&realize_state);
         try_pending_audio_device_restore(&realize_state);
-        mark_startup_player_ready(&startup_launch, &realize_state);
+        mark_startup_player_ready(&launch_delivery, &realize_state);
     });
 
     let resize_state = Rc::clone(&state);
@@ -1140,7 +1147,7 @@ fn finish_gtk_timing(
 fn connect_software_mpv(
     video_area: &gtk::DrawingArea,
     state: Rc<RefCell<PlayerState>>,
-    startup_launch: StartupLaunchGate,
+    launch_delivery: LaunchDeliveryGate,
 ) {
     let realize_state = Rc::clone(&state);
     video_area.connect_realize(move |_| {
@@ -1167,7 +1174,7 @@ fn connect_software_mpv(
         realize_state.borrow_mut().mpv = Some(mpv);
         schedule_audio_device_restore(&realize_state);
         try_pending_audio_device_restore(&realize_state);
-        mark_startup_player_ready(&startup_launch, &realize_state);
+        mark_startup_player_ready(&launch_delivery, &realize_state);
     });
 
     let frame = Rc::new(RefCell::new(None::<cairo::ImageSurface>));

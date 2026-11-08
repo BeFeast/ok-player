@@ -6,6 +6,8 @@
 //! engine-agnostic; the caller validates which positional is a real file (URL / exists on
 //! disk) and applies the result.
 
+use std::collections::VecDeque;
+
 use crate::time_code;
 
 /// Why a resume target was selected. Explicit companion launch positions are applied exactly for
@@ -88,45 +90,108 @@ pub struct LaunchArgs {
     pub audio: Option<TrackSelection>,
 }
 
-/// One cold-start launch payload waiting for both presentation and engine readiness.
+/// Launch requests waiting for the player, released one at a time in arrival order.
 ///
-/// Native shells can construct their window and media engine in either order. A file-association
-/// launch must not reach the engine while the primary window is still unmapped, and it must not be
-/// lost when the window maps before engine initialization finishes. This gate releases the payload
-/// exactly once after both lifecycle edges have occurred, regardless of their order.
+/// Native shells can construct their window and media engine in either order, and a running
+/// single-instance shell receives launches forwarded by later processes at any moment: before its
+/// engine exists, while an earlier launch is still waiting, or in quick succession. A launch must
+/// not reach the engine while the primary window is unmapped or the engine is not ready, must not
+/// be lost when those edges arrive in an unexpected order, and must not overtake an earlier one.
+///
+/// The queue releases its oldest request once the window is mapped, the player is ready and no
+/// earlier request is still being applied. The shell applies the released request, then reports it
+/// with [`LaunchDelivery::mark_applied`], which releases the next one. Every request comes out
+/// exactly once. `T` is the shell's own request type, typically an enum, so further request kinds
+/// share the same ordering.
 #[derive(Debug)]
-pub struct StartupLaunchDelivery<T> {
-    payload: Option<T>,
+pub struct LaunchDelivery<T> {
+    pending: VecDeque<T>,
     window_mapped: bool,
     player_ready: bool,
+    applying: bool,
 }
 
-impl<T> StartupLaunchDelivery<T> {
+impl<T> Default for LaunchDelivery<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> LaunchDelivery<T> {
+    /// An empty queue whose window is not mapped and whose player is not ready yet.
     #[must_use]
-    pub const fn new(payload: T) -> Self {
+    pub const fn new() -> Self {
         Self {
-            payload: Some(payload),
+            pending: VecDeque::new(),
             window_mapped: false,
             player_ready: false,
+            applying: false,
         }
     }
 
+    /// A queue holding the cold-start launch as its first request.
+    #[must_use]
+    pub fn with_startup(request: T) -> Self {
+        let mut delivery = Self::new();
+        delivery.pending.push_back(request);
+        delivery
+    }
+
+    /// Queue a request behind every earlier one. Returns it straight back when the player can take
+    /// it now: window mapped, player ready, nothing earlier waiting or being applied.
+    #[must_use = "a released request must be applied and then reported with mark_applied"]
+    pub fn push(&mut self, request: T) -> Option<T> {
+        self.pending.push_back(request);
+        self.release()
+    }
+
     /// Record that the primary window is mapped and eligible to receive a launch.
+    #[must_use = "a released request must be applied and then reported with mark_applied"]
     pub fn mark_window_mapped(&mut self) -> Option<T> {
         self.window_mapped = true;
-        self.take_ready()
+        self.release()
     }
 
-    /// Record that the media engine can accept the launch payload.
+    /// Record that the media engine can accept a launch.
+    #[must_use = "a released request must be applied and then reported with mark_applied"]
     pub fn mark_player_ready(&mut self) -> Option<T> {
         self.player_ready = true;
-        self.take_ready()
+        self.release()
     }
 
-    fn take_ready(&mut self) -> Option<T> {
-        (self.window_mapped && self.player_ready)
-            .then(|| self.payload.take())
-            .flatten()
+    /// Record that the media engine is gone again (detached for shutdown, or torn down to be
+    /// rebuilt). Later requests wait until [`LaunchDelivery::mark_player_ready`] is reported again.
+    pub fn mark_player_unavailable(&mut self) {
+        self.player_ready = false;
+    }
+
+    /// Record that the request released last has been applied. Returns the next request when the
+    /// player can take it now.
+    #[must_use = "a released request must be applied and then reported with mark_applied"]
+    pub fn mark_applied(&mut self) -> Option<T> {
+        self.applying = false;
+        self.release()
+    }
+
+    /// Requests still waiting, not counting one that has been released and is being applied.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Whether no request is waiting.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+
+    fn release(&mut self) -> Option<T> {
+        if self.applying || !self.window_mapped || !self.player_ready {
+            return None;
+        }
+        let request = self.pending.pop_front()?;
+        self.applying = true;
+        Some(request)
     }
 }
 
@@ -238,15 +303,96 @@ mod tests {
 
     #[test]
     fn startup_launch_waits_for_window_and_player_in_either_order() {
-        let mut window_first = StartupLaunchDelivery::new("window-first");
+        let mut window_first = LaunchDelivery::with_startup("window-first");
         assert_eq!(window_first.mark_window_mapped(), None);
         assert_eq!(window_first.mark_player_ready(), Some("window-first"));
         assert_eq!(window_first.mark_player_ready(), None);
+        assert_eq!(window_first.mark_applied(), None);
 
-        let mut player_first = StartupLaunchDelivery::new("player-first");
+        let mut player_first = LaunchDelivery::with_startup("player-first");
         assert_eq!(player_first.mark_player_ready(), None);
         assert_eq!(player_first.mark_window_mapped(), Some("player-first"));
         assert_eq!(player_first.mark_window_mapped(), None);
+        assert_eq!(player_first.mark_applied(), None);
+    }
+
+    #[test]
+    fn forwarded_launch_before_readiness_is_released_after_readiness() {
+        let mut delivery = LaunchDelivery::new();
+        assert_eq!(delivery.push("forwarded"), None);
+        assert_eq!(delivery.mark_window_mapped(), None);
+        assert_eq!(delivery.len(), 1);
+
+        assert_eq!(delivery.mark_player_ready(), Some("forwarded"));
+        assert!(delivery.is_empty());
+        assert_eq!(delivery.mark_applied(), None);
+    }
+
+    #[test]
+    fn launches_keep_arrival_order_and_wait_for_the_previous_one() {
+        let mut delivery = LaunchDelivery::with_startup("startup");
+        assert_eq!(delivery.mark_window_mapped(), None);
+        assert_eq!(delivery.push("first"), None);
+        assert_eq!(delivery.push("second"), None);
+
+        assert_eq!(delivery.mark_player_ready(), Some("startup"));
+        // Arrives while the startup launch is still being applied: it queues behind the others.
+        assert_eq!(delivery.push("third"), None);
+        assert_eq!(delivery.len(), 3);
+
+        assert_eq!(delivery.mark_applied(), Some("first"));
+        assert_eq!(delivery.mark_applied(), Some("second"));
+        assert_eq!(delivery.mark_applied(), Some("third"));
+        assert_eq!(delivery.mark_applied(), None);
+        assert!(delivery.is_empty());
+    }
+
+    #[test]
+    fn launch_while_playing_is_released_at_once() {
+        let mut delivery = LaunchDelivery::with_startup("startup");
+        assert_eq!(delivery.mark_player_ready(), None);
+        assert_eq!(delivery.mark_window_mapped(), Some("startup"));
+        assert_eq!(delivery.mark_applied(), None);
+
+        assert_eq!(delivery.push("replacement"), Some("replacement"));
+        assert_eq!(delivery.mark_applied(), None);
+        assert_eq!(delivery.push("another"), Some("another"));
+        assert_eq!(delivery.mark_applied(), None);
+    }
+
+    #[test]
+    fn launches_wait_while_the_player_is_unavailable() {
+        let mut delivery = LaunchDelivery::new();
+        assert_eq!(delivery.mark_window_mapped(), None);
+        assert_eq!(delivery.mark_player_ready(), None);
+
+        delivery.mark_player_unavailable();
+        assert_eq!(delivery.push("held"), None);
+        assert_eq!(delivery.push("next"), None);
+
+        assert_eq!(delivery.mark_player_ready(), Some("held"));
+        assert_eq!(delivery.mark_applied(), Some("next"));
+        assert_eq!(delivery.mark_applied(), None);
+    }
+
+    #[test]
+    fn launch_request_kinds_share_one_ordered_queue() {
+        #[derive(Debug, PartialEq)]
+        enum Request {
+            Args(&'static str),
+            Other(u8),
+        }
+
+        let mut delivery = LaunchDelivery::new();
+        assert_eq!(delivery.push(Request::Args("file")), None);
+        assert_eq!(delivery.push(Request::Other(7)), None);
+        assert_eq!(delivery.push(Request::Args("url")), None);
+        assert_eq!(delivery.mark_window_mapped(), None);
+
+        assert_eq!(delivery.mark_player_ready(), Some(Request::Args("file")));
+        assert_eq!(delivery.mark_applied(), Some(Request::Other(7)));
+        assert_eq!(delivery.mark_applied(), Some(Request::Args("url")));
+        assert_eq!(delivery.mark_applied(), None);
     }
 
     #[test]

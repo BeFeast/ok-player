@@ -153,11 +153,14 @@ behaves identically on both sides.
   still parse as switches. Unknown `-`-prefixed tokens are ignored on both sides. The ported
   unknown-switch test asserts the dash forms; a stray `/foo` becomes positional in Rust,
   where the caller's URL/exists-on-disk validation filters it.
-- **Cold-start delivery.** `StartupLaunchDelivery<T>` has no C# parser counterpart. It is the
-  portable two-edge gate used by the Linux shell so a parsed launch is delivered exactly once only
-  after both the primary window map and media-engine readiness, regardless of which arrives first.
-  Windows achieves the same user-facing ordering through its `MainWindow` activation and queued
-  initial-file lifecycle rather than this Rust helper.
+- **Launch delivery.** `LaunchDelivery<T>` has no C# parser counterpart. It is the portable
+  ordered queue the Linux shell puts every launch through: the cold-start command line and every
+  command line a second instance forwards. A request is released only after both the primary
+  window map and media-engine readiness, regardless of which arrives first, and only after the
+  request before it has been applied, so rapid launches reach the player in arrival order and none
+  is recorded as loaded before an engine exists. Windows achieves the same user-facing ordering for
+  its initial file through its `MainWindow` activation and queued initial-file lifecycle rather
+  than this Rust helper.
 
 ## ImageLuma → `okp_core::image_luma`
 
@@ -222,9 +225,9 @@ behaves identically on both sides.
 - **Linux initial-fit lifecycle has no C# counterpart.** `InitialFitState` owns the one-shot
   request per media generation. GTK consumes it only after the main window is mapped, when the
   compositor context is authoritative; the final fit arithmetic and one-request-per-source rule
-  remain shared-core policy. Cold file-association delivery is separately gated by
-  `launch_args::StartupLaunchDelivery`, which releases the payload only after both the window map
-  and media-engine readiness edges. This intentionally permits a visible load-time resize instead
+  remain shared-core policy. File-association delivery is separately gated by
+  `launch_args::LaunchDelivery`, which releases each launch only after both the window map and
+  media-engine readiness edges. This intentionally permits a visible load-time resize instead
   of starting playback behind an unmapped or transparent Wayland toplevel. These helpers add
   platform-neutral lifecycle policy around the ported arithmetic without changing any C# test case.
 

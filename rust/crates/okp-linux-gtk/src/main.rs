@@ -418,9 +418,18 @@ struct AppRuntime {
     window: gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
+    launch_delivery: LaunchDeliveryGate,
 }
 
-type StartupLaunchGate = Rc<RefCell<launch_args::StartupLaunchDelivery<LaunchArgs>>>;
+/// One launch waiting in the ordered delivery queue. The cold-start command line and every
+/// command line a later process forwards share the queue, so each reaches the player in arrival
+/// order and only once the window is mapped and the engine is ready. Another kind of launch
+/// request becomes another variant.
+enum LaunchRequest {
+    Args(LaunchArgs),
+}
+
+type LaunchDeliveryGate = Rc<RefCell<launch_args::LaunchDelivery<LaunchRequest>>>;
 
 #[derive(Clone)]
 struct MprisController {
@@ -2054,7 +2063,7 @@ fn main() -> glib::ExitCode {
         let launch_args = parse_launch_args_from_cwd(args, cwd.as_deref());
 
         if let Some(runtime) = runtime.borrow().as_ref() {
-            open_runtime_launch_args(runtime, &launch_args);
+            open_runtime_launch_args(runtime, launch_args);
         } else {
             runtime.replace(Some(build_window(app, launch_args)));
         }

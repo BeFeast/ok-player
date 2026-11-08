@@ -60,7 +60,7 @@ fn file_association_launches_present_before_media_delivery() {
         .expect("startup should present the GTK window");
     assert!(map_hook < present);
     assert!(player_hook < present);
-    assert!(build.contains("StartupLaunchDelivery::new"));
+    assert!(build.contains("LaunchDelivery::with_startup"));
     assert!(!build.contains("defer_initial_map"));
     assert!(!window.contains("set_opacity(0.0)"));
 
@@ -69,7 +69,7 @@ fn file_association_launches_present_before_media_delivery() {
         .nth(1)
         .expect("secondary launch handler");
     let present = secondary.find("runtime.window.present();").unwrap();
-    let load = secondary.find("apply_launch_args").unwrap();
+    let load = secondary.find("deliver_launch_request").unwrap();
     assert!(
         present < load,
         "secondary launches must present before loading"
@@ -4051,6 +4051,101 @@ fn load_launch_args_uses_explicit_playlist_for_multiple_items() {
     assert_eq!(state.current_file, Some(PathBuf::from("/media/a.mkv")));
     assert_eq!(state.current_url, None);
     assert_eq!(state.playlist.items(), launch.items.as_slice());
+}
+
+fn forwarded_launch(path: &Path) -> LaunchRequest {
+    LaunchRequest::Args(LaunchArgs {
+        items: vec![PlaylistItem::Local(path.to_path_buf())],
+        ..LaunchArgs::default()
+    })
+}
+
+fn launch_delivery_without_startup_media() -> LaunchDeliveryGate {
+    Rc::new(RefCell::new(launch_args::LaunchDelivery::with_startup(
+        LaunchRequest::Args(LaunchArgs::default()),
+    )))
+}
+
+#[test]
+fn forwarded_launches_wait_for_the_player_and_apply_in_arrival_order() {
+    let root = tempfile::tempdir().expect("test folder should be created");
+    let first = root.path().join("First.mkv");
+    let second = root.path().join("Second.mkv");
+    let during_playback = root.path().join("Third.mkv");
+    for path in [&first, &second, &during_playback] {
+        fs::write(path, []).expect("test media should be written");
+    }
+    let state = Rc::new(RefCell::new(PlayerState {
+        history: history::HistoryStore::open_test(root.path().join("history.json")),
+        ..PlayerState::default()
+    }));
+    // A cold start without media whose window maps before its engine exists.
+    let delivery = launch_delivery_without_startup_media();
+    mark_startup_window_mapped(&delivery, &state);
+
+    deliver_launch_request(&delivery, &state, forwarded_launch(&first));
+    deliver_launch_request(&delivery, &state, forwarded_launch(&second));
+    {
+        let state = state.borrow();
+        assert_eq!(
+            state.current_file, None,
+            "a forwarded launch must not be recorded as loaded before the player exists"
+        );
+        assert_eq!(state.source_generation, 0);
+    }
+
+    state.borrow_mut().mpv =
+        Some(Mpv::new().expect("libmpv is required by the existing GTK suite"));
+    mark_startup_player_ready(&delivery, &state);
+    {
+        let state = state.borrow();
+        assert_eq!(
+            state.source_generation, 2,
+            "both held launches are applied once the player is ready"
+        );
+        assert_eq!(
+            state.current_file.as_deref(),
+            Some(second.as_path()),
+            "the later launch is applied after the earlier one"
+        );
+    }
+
+    deliver_launch_request(&delivery, &state, forwarded_launch(&during_playback));
+    let state = state.borrow();
+    assert_eq!(state.source_generation, 3);
+    assert_eq!(
+        state.current_file.as_deref(),
+        Some(during_playback.as_path()),
+        "a launch while playing still replaces the current file at once"
+    );
+}
+
+#[test]
+fn forwarded_launch_after_the_engine_is_detached_waits_for_an_engine() {
+    let root = tempfile::tempdir().expect("test folder should be created");
+    let clip = root.path().join("Clip.mkv");
+    fs::write(&clip, []).expect("test media should be written");
+    let state = Rc::new(RefCell::new(PlayerState {
+        history: history::HistoryStore::open_test(root.path().join("history.json")),
+        mpv: Some(Mpv::new().expect("libmpv is required by the existing GTK suite")),
+        ..PlayerState::default()
+    }));
+    let delivery = launch_delivery_without_startup_media();
+    mark_startup_player_ready(&delivery, &state);
+    mark_startup_window_mapped(&delivery, &state);
+
+    // Closing the window detaches the engine before the process quits.
+    let engine = state.borrow_mut().mpv.take();
+    deliver_launch_request(&delivery, &state, forwarded_launch(&clip));
+    assert_eq!(
+        state.borrow().current_file,
+        None,
+        "a launch with no engine to play it must not be recorded as loaded"
+    );
+
+    state.borrow_mut().mpv = engine;
+    mark_startup_player_ready(&delivery, &state);
+    assert_eq!(state.borrow().current_file.as_deref(), Some(clip.as_path()));
 }
 
 #[test]
