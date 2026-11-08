@@ -25,6 +25,7 @@ const CHECKED: &[&str] = &[
     "query-transport-at.json",
     "query-reply-transport.json",
     "command-nudge-volume.json",
+    "command-toggle-mute.json",
 ];
 
 fn golden<T>(name: &str, expected: T)
@@ -73,6 +74,17 @@ fn the_nudge_command_matches_its_fixture() {
         CommandEnvelope {
             schema_version: SCHEMA_VERSION,
             command: Command::NudgeVolume { delta: -2.0 },
+        },
+    );
+}
+
+#[test]
+fn the_mute_toggle_matches_its_fixture() {
+    golden(
+        "command-toggle-mute.json",
+        CommandEnvelope {
+            schema_version: SCHEMA_VERSION,
+            command: Command::ToggleMute {},
         },
     );
 }

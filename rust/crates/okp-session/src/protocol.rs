@@ -129,6 +129,10 @@ pub enum Command {
     NudgeVolume {
         delta: f64,
     },
+    /// Mute as the core does: a level of 0 that remembers the last level above
+    /// it, which the next toggle restores. Forwarded as a `set_volume`, or as
+    /// `set_mute(false)` while libmpv's own mute flag is on.
+    ToggleMute {},
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -470,6 +474,8 @@ impl Command {
             // The session turns a nudge into a `set_volume` before validation
             // (`transport::VolumeTarget`); validated on its own, it is a level.
             Self::NudgeVolume { delta } => core::PlayerCommand::SetVolume(*delta),
+            // Resolved by the session as well; on its own it is the mute level.
+            Self::ToggleMute {} => core::PlayerCommand::SetVolume(okp_core::volume::MIN_VOLUME),
             Self::SetMute { muted } => core::PlayerCommand::SetMute(*muted),
             Self::SetSpeed { speed } => core::PlayerCommand::SetSpeed(*speed),
             Self::SelectTrack { kind, id } => core::PlayerCommand::SelectTrack {

@@ -214,50 +214,102 @@ fn format_speed(speed: f64) -> String {
     format!("{:.2}×", speed.clamp(0.25, 4.0))
 }
 
-/// The volume level the session last asked the engine for, until the engine
-/// reports it. libmpv reports a volume change asynchronously, so nudges that
-/// arrive faster than its reports build on the level already asked for instead
-/// of the stale report (core `volume::reconcile_observed_level`).
-#[derive(Debug, Default)]
+/// The volume the session asks the engine for, with the core's mute rule: mute
+/// is a level of 0 that remembers the last level above it, and unmuting goes
+/// back there (`volume::VolumeState::toggle_mute`, as on Linux).
+///
+/// libmpv reports a volume change asynchronously, so the level asked for leads
+/// until the engine reports it: nudges and mute toggles that arrive faster than
+/// its reports build on that level instead of the stale report (core
+/// `volume::reconcile_observed_level`).
+#[derive(Debug)]
 pub(crate) struct VolumeTarget {
+    /// The level asked for and not yet reported.
     pending: Option<f64>,
+    /// The last level above zero, asked for or reported; unmuting restores it.
+    remembered: f64,
+}
+
+impl Default for VolumeTarget {
+    fn default() -> Self {
+        Self {
+            pending: None,
+            remembered: volume::DEFAULT_RESTORE_VOLUME,
+        }
+    }
 }
 
 impl VolumeTarget {
-    /// The command the engine gets for `command`: a `nudge_volume` becomes a
-    /// `set_volume` to the nudged level, clamped by the core to 0-130 %. Every
-    /// other command passes through. A non-finite nudge becomes a non-finite
-    /// `set_volume`, which the core state machine rejects.
+    /// The command the engine gets for `command`, given the level the engine
+    /// reported last (`observed`) and libmpv's own mute flag (`muted`):
+    ///
+    /// - `nudge_volume` becomes a `set_volume` to the nudged level, clamped by
+    ///   the core to 0-130 %. A non-finite nudge becomes a non-finite
+    ///   `set_volume`, which the core state machine rejects.
+    /// - `toggle_mute` becomes a `set_volume` to 0, or back to the remembered
+    ///   level from 0. While libmpv's mute flag is on (a `set_mute` asked for
+    ///   it) it becomes `set_mute(false)` instead, so the first toggle always
+    ///   unmutes.
+    /// - Every other command passes through; a `set_volume` moves the level the
+    ///   next nudge builds on.
     pub(crate) fn resolve<'a>(
         &mut self,
         command: &'a Command,
         observed: Option<f64>,
+        muted: bool,
     ) -> std::borrow::Cow<'a, Command> {
         use std::borrow::Cow;
         match command {
             Command::NudgeVolume { delta } if delta.is_finite() => {
-                let base = self
-                    .pending
-                    .or(observed)
-                    .unwrap_or(volume::DEFAULT_RESTORE_VOLUME);
-                let volume = VolumeState::new(base).nudge(*delta);
-                self.pending = Some(volume);
+                let mut state = self.state(observed);
+                let volume = state.nudge(*delta);
+                self.ask(state);
                 Cow::Owned(Command::SetVolume { volume })
             }
             Command::NudgeVolume { delta } => Cow::Owned(Command::SetVolume { volume: *delta }),
             Command::SetVolume { volume } if volume.is_finite() => {
-                self.pending = Some(volume::clamp_level(*volume));
+                let mut state = self.state(observed);
+                state.set_level(*volume);
+                self.ask(state);
                 Cow::Borrowed(command)
+            }
+            Command::ToggleMute {} if muted => Cow::Owned(Command::SetMute { muted: false }),
+            Command::ToggleMute {} => {
+                let mut state = self.state(observed);
+                let volume = state.toggle_mute();
+                self.ask(state);
+                Cow::Owned(Command::SetVolume { volume })
             }
             _ => Cow::Borrowed(command),
         }
     }
 
+    /// The core volume model at the level asked for last, or the reported one,
+    /// remembering the last level above zero.
+    fn state(&self, observed: Option<f64>) -> VolumeState {
+        let mut state = VolumeState::new(self.remembered);
+        state.set_level(
+            self.pending
+                .or(observed)
+                .unwrap_or(volume::DEFAULT_RESTORE_VOLUME),
+        );
+        state
+    }
+
+    fn ask(&mut self, state: VolumeState) {
+        self.pending = Some(state.level());
+        self.remembered = state.remembered_nonzero();
+    }
+
     /// The engine reported `observed`; once it matches the level asked for,
-    /// nudges build on the engine's reports again.
+    /// nudges build on the engine's reports again. A reported level above zero
+    /// is the one unmuting restores.
     pub(crate) fn observe(&mut self, observed: Option<f64>) {
-        if let Some(observed) = observed {
-            let _ = volume::reconcile_observed_level(&mut self.pending, observed);
+        if let Some(observed) = observed
+            && let Some(level) = volume::reconcile_observed_level(&mut self.pending, observed)
+            && level > volume::MIN_VOLUME
+        {
+            self.remembered = level;
         }
     }
 
@@ -499,19 +551,19 @@ mod tests {
         let mut target = VolumeTarget::default();
         let nudge = Command::NudgeVolume { delta: 1.0 };
         assert_eq!(
-            target.resolve(&nudge, Some(80.0)).into_owned(),
+            target.resolve(&nudge, Some(80.0), false).into_owned(),
             Command::SetVolume { volume: 81.0 }
         );
         // The engine still reports 80; the next nudge starts from 81.
         target.observe(Some(80.0));
         assert_eq!(
-            target.resolve(&nudge, Some(80.0)).into_owned(),
+            target.resolve(&nudge, Some(80.0), false).into_owned(),
             Command::SetVolume { volume: 82.0 }
         );
         // Once the engine has caught up, its reports lead again.
         target.observe(Some(82.0));
         assert_eq!(
-            target.resolve(&nudge, Some(60.0)).into_owned(),
+            target.resolve(&nudge, Some(60.0), false).into_owned(),
             Command::SetVolume { volume: 61.0 }
         );
     }
@@ -521,20 +573,20 @@ mod tests {
         let mut target = VolumeTarget::default();
         assert_eq!(
             target
-                .resolve(&Command::NudgeVolume { delta: 5.0 }, Some(128.0))
+                .resolve(&Command::NudgeVolume { delta: 5.0 }, Some(128.0), false)
                 .into_owned(),
             Command::SetVolume { volume: 130.0 }
         );
         assert_eq!(
             target
-                .resolve(&Command::SetVolume { volume: 40.0 }, Some(130.0))
+                .resolve(&Command::SetVolume { volume: 40.0 }, Some(130.0), false)
                 .into_owned(),
             Command::SetVolume { volume: 40.0 },
             "set_volume itself passes through"
         );
         assert_eq!(
             target
-                .resolve(&Command::NudgeVolume { delta: -50.0 }, Some(130.0))
+                .resolve(&Command::NudgeVolume { delta: -50.0 }, Some(130.0), false)
                 .into_owned(),
             Command::SetVolume { volume: 0.0 },
             "the nudge starts from the level set last and stops at zero"
@@ -542,7 +594,7 @@ mod tests {
         target.forget();
         assert_eq!(
             target
-                .resolve(&Command::NudgeVolume { delta: -1.0 }, None)
+                .resolve(&Command::NudgeVolume { delta: -1.0 }, None, false)
                 .into_owned(),
             Command::SetVolume { volume: 99.0 },
             "without any level the core default is the base"
@@ -553,15 +605,103 @@ mod tests {
     fn a_non_finite_nudge_stays_non_finite_for_the_core_to_reject() {
         let mut target = VolumeTarget::default();
         let resolved = target
-            .resolve(&Command::NudgeVolume { delta: f64::NAN }, Some(50.0))
+            .resolve(&Command::NudgeVolume { delta: f64::NAN }, Some(50.0), false)
             .into_owned();
         assert!(matches!(resolved, Command::SetVolume { volume } if volume.is_nan()));
         assert_eq!(
             target
-                .resolve(&Command::NudgeVolume { delta: 1.0 }, Some(50.0))
+                .resolve(&Command::NudgeVolume { delta: 1.0 }, Some(50.0), false)
                 .into_owned(),
             Command::SetVolume { volume: 51.0 },
             "the refused nudge left no target behind"
+        );
+    }
+
+    fn level(command: std::borrow::Cow<'_, Command>) -> f64 {
+        match command.into_owned() {
+            Command::SetVolume { volume } => volume,
+            other => panic!("not a set_volume: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn toggle_mute_goes_to_zero_and_back_to_the_level_before_it() {
+        let mut target = VolumeTarget::default();
+        let toggle = Command::ToggleMute {};
+        assert_eq!(level(target.resolve(&toggle, Some(72.5), false)), 0.0);
+        // libmpv still reports 72.5; the next toggle builds on the 0 asked for.
+        target.observe(Some(72.5));
+        assert_eq!(level(target.resolve(&toggle, Some(72.5), false)), 72.5);
+    }
+
+    #[test]
+    fn unmuting_from_zero_restores_the_last_level_above_it() {
+        let mut target = VolumeTarget::default();
+        // libmpv started at 64 %, and the slider was dragged to 0 %.
+        assert_eq!(
+            level(target.resolve(&Command::SetVolume { volume: 0.0 }, Some(64.0), false)),
+            0.0
+        );
+        target.observe(Some(0.0));
+        assert_eq!(
+            level(target.resolve(&Command::ToggleMute {}, Some(0.0), false)),
+            64.0,
+            "dragged to 0 %, the mute button brings the sound back"
+        );
+
+        // Levels libmpv reported without being asked count as well.
+        let mut reported = VolumeTarget::default();
+        reported.observe(Some(37.0));
+        reported.observe(Some(0.0));
+        assert_eq!(
+            level(reported.resolve(&Command::ToggleMute {}, Some(0.0), false)),
+            37.0
+        );
+
+        // With no level above zero ever seen, the core default comes back.
+        let mut fresh = VolumeTarget::default();
+        fresh.observe(Some(0.0));
+        assert_eq!(
+            level(fresh.resolve(&Command::ToggleMute {}, Some(0.0), false)),
+            volume::DEFAULT_RESTORE_VOLUME
+        );
+    }
+
+    #[test]
+    fn a_nudge_up_from_mute_is_audible_and_leaves_the_mute_level_behind() {
+        let mut target = VolumeTarget::default();
+        assert_eq!(
+            level(target.resolve(&Command::ToggleMute {}, Some(80.0), false)),
+            0.0
+        );
+        assert_eq!(
+            level(target.resolve(&Command::NudgeVolume { delta: 1.0 }, Some(80.0), false)),
+            1.0
+        );
+        assert_eq!(
+            level(target.resolve(&Command::ToggleMute {}, Some(80.0), false)),
+            0.0,
+            "the level is audible again, so the next toggle mutes"
+        );
+        assert_eq!(
+            level(target.resolve(&Command::ToggleMute {}, Some(80.0), false)),
+            1.0
+        );
+    }
+
+    #[test]
+    fn toggle_mute_clears_libmpvs_mute_flag_first() {
+        let mut target = VolumeTarget::default();
+        assert_eq!(
+            target
+                .resolve(&Command::ToggleMute {}, Some(55.0), true)
+                .into_owned(),
+            Command::SetMute { muted: false }
+        );
+        assert_eq!(
+            level(target.resolve(&Command::ToggleMute {}, Some(55.0), false)),
+            0.0,
+            "the flag did not move the level"
         );
     }
 }

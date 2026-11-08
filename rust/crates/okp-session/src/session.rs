@@ -183,8 +183,11 @@ impl Session {
     pub fn dispatch(&self, command: &Command) -> DispatchResult {
         let engine = &*self.shared.engine;
         let mut state = lock(&self.shared.state);
-        let observed_volume = state.machine.machine().snapshot().volume;
-        let resolved = state.volume.resolve(command, observed_volume);
+        let (observed_volume, muted) = {
+            let core = state.machine.machine().snapshot();
+            (core.volume, core.mute)
+        };
+        let resolved = state.volume.resolve(command, observed_volume, muted);
         let command: &Command = &resolved;
         let core = command.to_core();
         let mut load = None;
@@ -1026,6 +1029,52 @@ mod tests {
             4,
             "a refused nudge reaches nothing"
         );
+    }
+
+    #[test]
+    fn toggle_mute_follows_the_core_mute_level_and_restores_the_level_before_it() {
+        let (session, engine) = fake_session();
+        assert!(wait_for(|| session.snapshot().volume == Some(100.0)));
+        let accepted = |command: Command| {
+            let reply = session.dispatch(&command);
+            assert!(
+                matches!(reply, DispatchResult::Accepted { .. }),
+                "{command:?}: {reply:?}"
+            );
+        };
+        accepted(Command::SetVolume { volume: 72.5 });
+        // Faster than the engine reports: the second toggle builds on the first.
+        accepted(Command::ToggleMute {});
+        accepted(Command::ToggleMute {});
+        // The slider dragged to 0 %: the button brings the sound back.
+        accepted(Command::SetVolume { volume: 0.0 });
+        publish_and_settle(&engine, |observation| {
+            observation.playback.volume = Some(0.0);
+        });
+        accepted(Command::ToggleMute {});
+        // Muted with the button, a nudge up is audible again.
+        publish_and_settle(&engine, |observation| {
+            observation.playback.volume = Some(72.5);
+        });
+        accepted(Command::ToggleMute {});
+        accepted(Command::NudgeVolume { delta: 1.0 });
+        assert_eq!(
+            engine.forwarded(),
+            [72.5, 0.0, 72.5, 0.0, 72.5, 0.0, 1.0].map(|volume| Command::SetVolume { volume })
+        );
+        assert!(!session.snapshot().mute, "libmpv's mute flag is left alone");
+
+        // A client that set libmpv's mute flag: the first toggle clears it.
+        accepted(Command::SetMute { muted: true });
+        accepted(Command::ToggleMute {});
+        assert_eq!(
+            engine.forwarded()[7..],
+            [
+                Command::SetMute { muted: true },
+                Command::SetMute { muted: false }
+            ]
+        );
+        assert!(!session.snapshot().mute);
     }
 
     #[test]

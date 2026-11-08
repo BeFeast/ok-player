@@ -79,7 +79,7 @@ written as `null` and may be left out on input.
 | Document | Shape |
 |---|---|
 | Config (`okp_session_new`) | `schema_version`, `app` (`name`, `platform`), absolute `data_dir`, `config_dir`, `cache_dir`, optional `hwdec`, ordered `mpv_options` (`name`, `value`) applied after the session defaults |
-| Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay`, `nudge_volume` (see Transport controls) |
+| Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay`, `nudge_volume` and `toggle_mute` (see Transport controls) |
 | Reply | `{"schema_version":1,"result":{...}}`: `accepted {request_id}`, `no_op {}`, `rejected {reason, message}`, or `failed {request_id, message}` when the engine refused an accepted command at once |
 | Query (`okp_session_query`) | `{"schema_version":1,"query":{"snapshot":{}}}`, answered with `result.snapshot.snapshot` (the full state) or `result.rejected`; `{"transport":{"at":null}}`, answered with `result.transport.transport` (see Transport controls) |
 | Event batch (`okp_session_drain_events`) | `{"schema_version":1,"events":[...]}` |
@@ -131,6 +131,16 @@ as a `set_volume` and answered like one. libmpv reports volume changes
 asynchronously, so nudges that arrive faster than its reports (a scroll wheel)
 all count instead of each building on the same stale report
 (`volume::reconcile_observed_level`).
+
+`{"toggle_mute":{}}` mutes the way the core and the Linux player do: mute is a
+level of 0 that remembers the last level above it, and the next toggle goes
+back there (`volume::VolumeState::toggle_mute`). The remembered level is the
+last level above 0 that was asked for or reported, so a slider dragged to 0 %
+or a level nudged down to 0 is unmuted by the same toggle, and a nudge or a
+`set_volume` above 0 is audible again. It is forwarded as a `set_volume` and
+built on the level asked for last, like a nudge. `set_mute` is libmpv's
+separate mute flag, which leaves the level alone; while it is on, `toggle_mute`
+is forwarded as `set_mute(false)` instead, so the first toggle always clears it.
 
 The documents are pinned by `rust/crates/okp-session/fixtures/transport/`.
 

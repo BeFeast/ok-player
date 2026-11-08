@@ -88,6 +88,9 @@ enum Command: Codable, Equatable {
     case setSubtitleDelay(seconds: Double)
     /// Change the volume by `delta` percent; the session clamps it (OSC/TransportProtocol.swift).
     case nudgeVolume(delta: Double)
+    /// Mute as the core does: a level of 0 that the next toggle takes back to the
+    /// last level above it (docs/session-abi.md, "Transport controls").
+    case toggleMute
 }
 
 struct CommandEnvelope: Codable, Equatable {

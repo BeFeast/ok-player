@@ -7,6 +7,7 @@ import XCTest
 final class TransportProtocolTests: XCTestCase {
     private static let covered: Set<String> = [
         "query-transport.json", "query-transport-at.json", "query-reply-transport.json", "command-nudge-volume.json",
+        "command-toggle-mute.json",
     ]
 
     func testEveryTransportFixtureIsCoveredHere() throws {
@@ -25,11 +26,14 @@ final class TransportProtocolTests: XCTestCase {
         }
     }
 
-    func testTheNudgeCommandRoundTrips() throws {
-        let path = "transport/command-nudge-volume.json"
-        let envelope = CommandEnvelope(command: .nudgeVolume(delta: -2))
-        XCTAssertEqual(try GoldenFixtures.decode(CommandEnvelope.self, path), envelope)
-        XCTAssertEqual(try GoldenFixtures.encodedObject(envelope), try GoldenFixtures.object(path))
+    func testTheVolumeCommandsRoundTrip() throws {
+        for (name, command) in [("command-nudge-volume.json", Command.nudgeVolume(delta: -2)),
+                                ("command-toggle-mute.json", Command.toggleMute)] {
+            let path = "transport/\(name)"
+            let envelope = CommandEnvelope(command: command)
+            XCTAssertEqual(try GoldenFixtures.decode(CommandEnvelope.self, path), envelope, name)
+            XCTAssertEqual(try GoldenFixtures.encodedObject(envelope), try GoldenFixtures.object(path), name)
+        }
     }
 
     func testTheTransportReplyDecodesEveryField() throws {

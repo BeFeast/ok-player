@@ -204,6 +204,10 @@ impl Engine for MpvEngine {
             Command::NudgeVolume { .. } => {
                 return Err("a volume nudge must be resolved by the session".to_owned());
             }
+            // And a mute toggle into a `set_volume` or a `set_mute`.
+            Command::ToggleMute {} => {
+                return Err("a mute toggle must be resolved by the session".to_owned());
+            }
         };
         result.map(|()| None).map_err(|error| error.to_string())
     }
