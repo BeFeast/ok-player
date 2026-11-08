@@ -79,8 +79,9 @@ Its inputs come from public sources, each pinned by SHA-256:
 
 After `scripts/build-macos-preview.sh`, the job fails if a bundled binary is not arm64,
 loads a library from outside the app or keeps a build rpath, or if the signature does
-not verify. The bounded smoke runs as in the Forgejo workflow, and the artifact carries
-the same files plus the generated fixture's SHA-256.
+not verify. The bounded smoke runs as in the Forgejo workflow, but the step also fails
+unless the app wrote both window snapshots. The artifact carries the same files plus
+the generated fixture's SHA-256.
 
 ## Verification boundary
 
