@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use serde::{Deserialize, Serialize};
 
 /// A platform whose shell runs on okp-core. Per-platform defaults (the shortcut table, the
@@ -37,47 +39,61 @@ impl Platform {
 /// network), Launch Services registration and user defaults on it, so it must never change.
 pub const MACOS_BUNDLE_ID: &str = "uk.oklabs.ok-player";
 
+/// Name of the app's own directory under the Linux XDG base directories, as the GTK shell
+/// already uses it (`$XDG_STATE_HOME/ok-player`, `$XDG_CACHE_HOME/ok-player`).
+pub const LINUX_SUPPORT_DIR_NAME: &str = "ok-player";
+
+/// Who the app is on a platform. The bundle id and the support directory name are derived from
+/// the platform rather than stored, so a shell that passes `{"name":…,"platform":"macos"}`
+/// gets the same directory as core code that calls [`AppIdentity::macos`], and no document can
+/// name a second one.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AppIdentity {
     pub name: String,
-    pub platform: String,
-    /// The app bundle identifier on macOS. `None` on Linux, where the GTK shell owns its
-    /// application id.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bundle_id: Option<String>,
-    /// The app's directory name under the platform support root (`~/Library/Application
-    /// Support` on macOS). `None` on Linux, where the shell resolves its XDG directories.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub support_dir_name: Option<String>,
+    pub platform: Platform,
 }
 
 impl AppIdentity {
     pub fn linux() -> Self {
-        Self {
-            name: "OK Player".to_owned(),
-            platform: Platform::Linux.id().to_owned(),
-            bundle_id: None,
-            support_dir_name: None,
-        }
+        Self::for_platform(Platform::Linux)
     }
 
-    /// The macOS identity. The Application Support directory is named after the bundle
-    /// identifier, as Apple's file-system guidelines recommend, so it survives a rename of the
-    /// display name.
     pub fn macos() -> Self {
-        Self {
-            name: "OK Player".to_owned(),
-            platform: Platform::MacOs.id().to_owned(),
-            bundle_id: Some(MACOS_BUNDLE_ID.to_owned()),
-            support_dir_name: Some(MACOS_BUNDLE_ID.to_owned()),
-        }
+        Self::for_platform(Platform::MacOs)
     }
 
     pub fn for_platform(platform: Platform) -> Self {
-        match platform {
-            Platform::Linux => Self::linux(),
-            Platform::MacOs => Self::macos(),
+        Self {
+            name: "OK Player".to_owned(),
+            platform,
         }
+    }
+
+    /// The app bundle identifier: [`MACOS_BUNDLE_ID`] on macOS, `None` on Linux, where the GTK
+    /// shell owns its application id.
+    pub const fn bundle_id(&self) -> Option<&'static str> {
+        match self.platform {
+            Platform::Linux => None,
+            Platform::MacOs => Some(MACOS_BUNDLE_ID),
+        }
+    }
+
+    /// Name of the app's own directory under each per-user base directory. On macOS it is the
+    /// bundle identifier, as Apple's file-system guidelines recommend for Application Support
+    /// and Caches, so a rename of the display name keeps the user's history and settings.
+    pub const fn support_dir_name(&self) -> &'static str {
+        match self.platform {
+            Platform::Linux => LINUX_SUPPORT_DIR_NAME,
+            Platform::MacOs => MACOS_BUNDLE_ID,
+        }
+    }
+
+    /// The app's own directory under a per-user base directory the shell resolved:
+    /// `~/Library/Application Support` or `~/Library/Caches` on macOS
+    /// (`FileManager.urls(for:in:)`), an XDG base directory on Linux. Session code derives its
+    /// per-user paths through this, so the directory name is chosen in one place.
+    pub fn dir_under(&self, base: &Path) -> PathBuf {
+        base.join(self.support_dir_name())
     }
 }
 
@@ -90,19 +106,20 @@ mod tests {
         let identity = AppIdentity::linux();
 
         assert_eq!(identity.name, "OK Player");
-        assert_eq!(identity.platform, "linux");
+        assert_eq!(identity.platform, Platform::Linux);
+        assert_eq!(identity.bundle_id(), None);
+        assert_eq!(identity.support_dir_name(), "ok-player");
     }
 
     #[test]
     fn linux_identity_serializes_to_its_original_shape() {
-        // The macOS-only fields are skipped when absent, so the Linux document is unchanged.
         assert_eq!(
             serde_json::to_value(AppIdentity::linux()).expect("identity serializes"),
             serde_json::json!({ "name": "OK Player", "platform": "linux" })
         );
         let parsed: AppIdentity =
             serde_json::from_str(r#"{"name":"OK Player","platform":"linux"}"#)
-                .expect("a document without the macOS fields still parses");
+                .expect("the Linux document parses");
         assert_eq!(parsed, AppIdentity::linux());
     }
 
@@ -111,12 +128,9 @@ mod tests {
         let identity = AppIdentity::macos();
 
         assert_eq!(identity.name, "OK Player");
-        assert_eq!(identity.platform, "macos");
-        assert_eq!(identity.bundle_id.as_deref(), Some("uk.oklabs.ok-player"));
-        assert_eq!(
-            identity.support_dir_name.as_deref(),
-            Some("uk.oklabs.ok-player")
-        );
+        assert_eq!(identity.platform, Platform::MacOs);
+        assert_eq!(identity.bundle_id(), Some("uk.oklabs.ok-player"));
+        assert_eq!(identity.support_dir_name(), "uk.oklabs.ok-player");
         assert!(
             !MACOS_BUNDLE_ID.ends_with(".preview"),
             "the preview suffix must not reach the final bundle id"
@@ -126,19 +140,54 @@ mod tests {
     #[test]
     fn macos_identity_round_trips_through_serde() {
         let identity = AppIdentity::macos();
-        let json = serde_json::to_string(&identity).expect("identity serializes");
-        let parsed: AppIdentity = serde_json::from_str(&json).expect("identity parses");
+        let json = serde_json::to_value(&identity).expect("identity serializes");
 
-        assert_eq!(parsed, identity);
         assert_eq!(
-            serde_json::to_value(&identity).expect("identity serializes"),
-            serde_json::json!({
-                "name": "OK Player",
-                "platform": "macos",
-                "bundle_id": "uk.oklabs.ok-player",
-                "support_dir_name": "uk.oklabs.ok-player",
-            })
+            json,
+            serde_json::json!({ "name": "OK Player", "platform": "macos" })
         );
+        assert_eq!(
+            serde_json::from_value::<AppIdentity>(json).expect("identity parses"),
+            identity
+        );
+    }
+
+    #[test]
+    fn a_shell_document_resolves_the_same_directories_as_core() {
+        // What the Swift shell sends in its session config: only the name and the platform.
+        let from_shell: AppIdentity =
+            serde_json::from_str(r#"{"name":"OK Player","platform":"macos"}"#)
+                .expect("the shell document parses");
+        let application_support = Path::new("/Users/example/Library/Application Support");
+        let caches = Path::new("/Users/example/Library/Caches");
+
+        assert_eq!(
+            from_shell.dir_under(application_support),
+            PathBuf::from("/Users/example/Library/Application Support/uk.oklabs.ok-player")
+        );
+        assert_eq!(
+            from_shell.dir_under(caches),
+            PathBuf::from("/Users/example/Library/Caches/uk.oklabs.ok-player")
+        );
+        assert_eq!(
+            from_shell.dir_under(application_support),
+            AppIdentity::macos().dir_under(application_support)
+        );
+        assert_eq!(
+            AppIdentity::linux().dir_under(Path::new("/home/example/.local/state")),
+            PathBuf::from("/home/example/.local/state/ok-player")
+        );
+    }
+
+    #[test]
+    fn an_identity_names_a_known_platform() {
+        for platform in ["test", "macOS", "MacOs", ""] {
+            let document = format!(r#"{{"name":"OK Player","platform":"{platform}"}}"#);
+            assert!(
+                serde_json::from_str::<AppIdentity>(&document).is_err(),
+                "{platform:?} is not a platform"
+            );
+        }
     }
 
     #[test]
@@ -146,10 +195,9 @@ mod tests {
         for platform in [Platform::Linux, Platform::MacOs] {
             let identity = AppIdentity::for_platform(platform);
             assert_eq!(
-                serde_json::to_value(platform).expect("platform serializes"),
-                serde_json::Value::String(identity.platform.clone())
+                serde_json::to_value(&identity).expect("identity serializes")["platform"],
+                serde_json::Value::String(platform.id().to_owned())
             );
-            assert_eq!(identity.platform, platform.id());
         }
     }
 
