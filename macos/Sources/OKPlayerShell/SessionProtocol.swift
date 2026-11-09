@@ -157,6 +157,10 @@ enum Query: Codable, Equatable {
     case playlist
     /// What the transport controls show; with `at`, the readout at that position.
     case transport(at: Double? = nil)
+    /// The file types the Open panel offers (Open/OpenProtocol.swift).
+    case openFormats
+    /// What opening these local paths does (Open/OpenRouter.swift).
+    case openPaths(paths: [String])
 }
 
 struct QueryEnvelope: Codable, Equatable {
@@ -173,6 +177,8 @@ enum QueryResult: Codable, Equatable {
     case history(result: HistoryQueryResult)
     case playlist(playlist: PlaylistState)
     case transport(transport: TransportView)
+    case openFormats(formats: OpenFormats)
+    case openPaths(plan: OpenPlan)
     case rejected(reason: RejectReason, message: String)
 }
 

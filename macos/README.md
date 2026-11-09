@@ -2,8 +2,9 @@
 
 The first Apple Silicon shell is a small native AppKit window over the Rust session
 (`okp-session`, through the JSON session ABI in [docs/session-abi.md](../docs/session-abi.md))
-and the same libmpv engine as the Linux player. It opens local videos through
-**File → Open**, the Open button, a file argument, or Finder's Open With action.
+and the same libmpv engine as the Linux player. It opens local media through
+**File → Open** and **File → Open Folder**, the Open button, a drop onto the window,
+a file argument, Finder's Open With and the Dock icon (see [Opening files](#opening-files)).
 The video fills the window and the transport controls float over it (see
 [Transport controls](#transport-controls)); **Space** and their play button toggle
 pause. Closing the window stops playback,
@@ -88,13 +89,16 @@ prefix (`OKP_MPV_PREFIX`), into an empty `OKP_MACOS_OUTPUT`, with an isolated
 1. It runs the okp-ffi tests and builds its opt-in `live-mpv` dylib.
 2. It copies that dylib and the whole runtime dylib closure into a staging directory
    and rewrites install names and absolute references to `@rpath`.
-3. It writes the Swift package's two generated inputs, both ignored by git:
+3. It runs okp-core's library tests and writes the document types okp-core generates
+   from `media_formats` (`okp-macos-document-types`), then the Swift package's two
+   generated inputs, both ignored by git:
    `Sources/COKPCore/okp_core.h` (the FFI header) and
    `Sources/OKPlayerShell/Generated/Palette.swift` (see [Colours](#colours)).
 4. `swift build -c release` builds the `ok-player` executable and `swift test` runs
    the XCTest target against the staged dylibs.
 5. It assembles `OK Player.app`: executable, dylibs, `Info.plist` stamped by
-   `scripts/generate-macos-info-plist.py`, `Resources/AppIcon.icns`, licence, this
+   `scripts/generate-macos-info-plist.py` with the version and the generated document
+   types (checked with `plutil -lint`), `Resources/AppIcon.icns`, licence, this
    README and the runtime provenance. Every rpath that points into a build machine is
    removed.
 6. It signs every dylib, the executable and the bundle with one identity, records the
@@ -125,6 +129,13 @@ The Swift package (`Package.swift`, no Xcode project) has three targets:
   and below. It is checked in, because rasterising needs librsvg; rerun the script
   after the icon source changes.
 - `NSLocalNetworkUsageDescription` explains the local network prompt.
+- **Document types.** `CFBundleDocumentTypes` (a Video and an Audio viewer at rank
+  Default) and `UTImportedTypeDeclarations` (mkv, webm and the other extensions macOS
+  declares no type for) come from okp-core's `media_formats` at build time and replace
+  both keys; the `Info.plist` template carries neither. After the build, the GitHub
+  workflow registers the app with Launch Services and runs `ok-player
+  --check-document-types`: every video and audio extension must resolve to a declared
+  type conforming to `public.movie` or `public.audio`.
 
 ## Signing
 
@@ -351,6 +362,29 @@ Swift side only turns input into commands and keeps the hide timer.
   them. Hidden controls take no clicks, and clicks outside the bar always reach the
   video.
 
+## Opening files
+
+Every way in goes through one router (`Sources/OKPlayerShell/Open/`): it asks the
+session's `open_paths` query what the files do (`docs/session-abi.md`, "Opening
+files") and sends the command the answer names. Which files are media, subtitles or
+playlists is okp-core's rule; the shell has no extension list.
+
+- **File → Open** (Command-O) takes several files, filtered to the media, subtitle and
+  playlist types of the session's `open_formats`. **File → Open Folder** takes one
+  or more folders.
+- **Drop** files, folders or an `.m3u`/`.m3u8` anywhere on the window. While the drag
+  is over the window an accent frame shows, only if the drop would open something.
+- **Open events**: `application(_:open:)` takes Finder's Open With, a double click
+  on a file OK Player is the default app for, a drop on the Dock icon and files the
+  app is launched with. Events that arrive while the app launches are held and opened
+  together once the session exists.
+
+Several files, folders or a playlist file become one session playlist (`playlist`
+`open`); one file plays with its folder as the playlist. A subtitle file dropped or
+opened on its own while media plays is planned onto that media (`add_subtitles`), but
+the session has no command to load it yet, so the drop is refused until #882 adds
+one. Subtitle files dropped together with media are left out.
+
 ## System integration
 
 `System/SystemIntegration.swift` connects the player to macOS. It is handed the
@@ -388,6 +422,9 @@ The optional bounded smoke mode opens the deterministic local fixture in a nativ
 window and checks, from the session's events and the video layer's counters:
 
 - no render calls while idle, before the file is open;
+- the fixture, opened through `application(_:open:)` as Finder opens a file, was
+  planned by the session as a playlist open and is the playlist's current item; a
+  subtitle beside it is planned onto it while it plays; the window takes file drops;
 - the position and the render calls advance while playing;
 - while playing, the system's Now Playing reports the fixture as playing video,
   IOKit lists the display-sleep assertion, and `MPRemoteCommandCenter` has play,

@@ -21,6 +21,7 @@ pub use crate::history::{
     HistoryAction, HistoryActionResult, HistoryBucket, HistoryEntry, HistoryEvent, HistoryQuery,
     HistoryQueryResult, HistorySection, HistoryState,
 };
+pub use crate::open_paths::{OpenFormats, OpenPlan};
 pub use crate::playlist::{PlaylistAction, PlaylistEntry, PlaylistState, QueueMode, RepeatMode};
 pub use crate::transport::{OscSurface, OscView, SpeedChoice, TransportView, VolumeView};
 pub use crate::window::{VideoClickIntent, WindowRect, WindowSize};
@@ -304,6 +305,13 @@ pub enum Query {
         #[serde(default)]
         at: Option<f64>,
     },
+    /// The file types an open panel offers ([`OpenFormats`]). Reads no
+    /// session state.
+    OpenFormats {},
+    /// What opening these local paths does: an open panel's selection, a drop
+    /// onto the window or the system's open events ([`crate::open_paths::plan`]).
+    /// Reads the session status, never the filesystem.
+    OpenPaths { paths: Vec<String> },
 }
 
 /// `{"schema_version":1,"result":{...}}`, the answer to a query.
@@ -343,6 +351,12 @@ pub enum QueryResult {
     },
     Transport {
         transport: TransportView,
+    },
+    OpenFormats {
+        formats: OpenFormats,
+    },
+    OpenPaths {
+        plan: OpenPlan,
     },
     Rejected {
         reason: RejectReason,

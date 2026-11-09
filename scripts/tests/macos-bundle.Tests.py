@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The macOS bundle: version from git, final identity in Info.plist, and the app icon."""
+"""The macOS bundle: version from git, final identity and document types in Info.plist, and the app icon."""
 import importlib.util
 from pathlib import Path
 import plistlib
@@ -35,12 +35,31 @@ def commit(repo, message):
     return git(repo, "rev-parse", "HEAD")
 
 
-def stamp(repo, build_number="0", template=TEMPLATE):
+# The shape okp-core's okp-macos-document-types writes (its own tests pin the content).
+DOCUMENT_TYPES = {
+    "CFBundleDocumentTypes": [
+        {"CFBundleTypeName": "Video", "CFBundleTypeRole": "Viewer", "LSHandlerRank": "Default",
+         "LSItemContentTypes": ["public.movie", "org.matroska.mkv"]},
+        {"CFBundleTypeName": "Audio", "CFBundleTypeRole": "Viewer", "LSHandlerRank": "Default",
+         "LSItemContentTypes": ["public.audio", "public.mp3"]},
+    ],
+    "UTImportedTypeDeclarations": [
+        {"UTTypeIdentifier": "org.matroska.mkv", "UTTypeDescription": "Matroska video",
+         "UTTypeConformsTo": ["public.movie"],
+         "UTTypeTagSpecification": {"public.filename-extension": ["mkv"]}},
+    ],
+}
+
+
+def stamp(repo, build_number="0", template=TEMPLATE, document_types=None):
     """Run the generator as the build script does; return (exit code, plist or None, stderr)."""
     with tempfile.TemporaryDirectory() as scratch:
         output = Path(scratch, "Info.plist")
+        types = Path(scratch, "document-types.plist")
+        types.write_bytes(plistlib.dumps(DOCUMENT_TYPES if document_types is None else document_types))
         result = subprocess.run([sys.executable, str(PLIST_SCRIPT), str(template), str(output),
-                                 "--repo", str(repo), "--build-number", build_number],
+                                 "--repo", str(repo), "--build-number", build_number,
+                                 "--document-types", str(types)],
                                 capture_output=True, text=True)
         info = plistlib.loads(output.read_bytes()) if output.exists() else None
     return result.returncode, info, result.stderr
@@ -110,13 +129,19 @@ class BundleVersionTests(unittest.TestCase):
 
 
 class InfoPlistTests(unittest.TestCase):
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        self.repo = Path(self.scratch.name, "repo")
+        self.repo.mkdir()
+        git(self.repo, "init", "-q")
+        commit(self.repo, "one")
+        git(self.repo, "tag", "v2.0.0")
+
+    def tearDown(self):
+        self.scratch.cleanup()
+
     def test_built_plist_carries_the_final_identity_icon_and_network_description(self):
-        with tempfile.TemporaryDirectory() as scratch:
-            repo = Path(scratch)
-            git(repo, "init", "-q")
-            commit(repo, "one")
-            git(repo, "tag", "v2.0.0")
-            code, info, stderr = stamp(repo, "3")
+        code, info, stderr = stamp(self.repo, "3")
         self.assertEqual(code, 0, stderr)
         self.assertEqual(info["CFBundleIdentifier"], "uk.oklabs.ok-player")
         self.assertEqual(info["CFBundleExecutable"], "ok-player")
@@ -124,7 +149,42 @@ class InfoPlistTests(unittest.TestCase):
         self.assertEqual(info["LSMinimumSystemVersion"], "14.0")
         self.assertTrue(info["NSLocalNetworkUsageDescription"].strip())
         self.assertEqual((info["CFBundleShortVersionString"], info["CFBundleVersion"]), ("2.0.0", "1.3"))
-        self.assertEqual(info["CFBundleDocumentTypes"][0]["CFBundleTypeRole"], "Viewer")
+
+    def test_the_template_carries_no_document_types(self):
+        template = plistlib.loads(TEMPLATE.read_bytes())
+        self.assertNotIn("CFBundleDocumentTypes", template)
+        self.assertNotIn("UTImportedTypeDeclarations", template)
+
+    def test_the_generated_document_types_are_the_whole_of_both_keys(self):
+        code, info, stderr = stamp(self.repo)
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(info["CFBundleDocumentTypes"], DOCUMENT_TYPES["CFBundleDocumentTypes"])
+        self.assertEqual(info["UTImportedTypeDeclarations"], DOCUMENT_TYPES["UTImportedTypeDeclarations"])
+
+    def test_stale_document_types_in_a_template_are_replaced_not_merged(self):
+        stale = plistlib.loads(TEMPLATE.read_bytes())
+        stale["CFBundleDocumentTypes"] = [{"CFBundleTypeName": "Old", "LSHandlerRank": "Alternate",
+                                           "LSItemContentTypes": ["public.video"]}]
+        stale["UTImportedTypeDeclarations"] = [{"UTTypeIdentifier": "com.example.old"}]
+        template = Path(self.scratch.name, "Info.plist")
+        template.write_bytes(plistlib.dumps(stale))
+        code, info, stderr = stamp(self.repo, template=template)
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(info["CFBundleDocumentTypes"], DOCUMENT_TYPES["CFBundleDocumentTypes"])
+        self.assertEqual(info["UTImportedTypeDeclarations"], DOCUMENT_TYPES["UTImportedTypeDeclarations"])
+
+    def test_document_types_without_either_key_are_refused(self):
+        for key in ("CFBundleDocumentTypes", "UTImportedTypeDeclarations"):
+            partial = {name: value for name, value in DOCUMENT_TYPES.items() if name != key}
+            code, info, stderr = stamp(self.repo, document_types=partial)
+            self.assertNotEqual(code, 0, key)
+            self.assertIsNone(info, key)
+            self.assertIn(f"has no {key}", stderr)
+
+    def test_document_types_with_other_keys_are_refused(self):
+        code, _, stderr = stamp(self.repo, document_types={**DOCUMENT_TYPES, "CFBundleIdentifier": "x"})
+        self.assertNotEqual(code, 0)
+        self.assertIn("other than the document types: CFBundleIdentifier", stderr)
 
 
 class IconTests(unittest.TestCase):

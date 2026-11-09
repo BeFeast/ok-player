@@ -110,7 +110,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let osc = TransportOverlay()
     var statusRole = PaletteRole.textMuted
     var client: SessionClient?
-    var pendingPath: String?
+    /// Where opened, dropped and Finder-opened files go (Open/).
+    let openRouter = OpenRouter()
     let smoke = CommandLine.arguments.contains("--smoke-test")
     let snapshotDirectory = CommandLine.arguments.first { $0.hasPrefix("--snapshot-dir=") }
         .map { String($0.dropFirst("--snapshot-dir=".count)) }
@@ -139,6 +140,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let fileMenu = NSMenu(title: "File")
         let openItem = fileMenu.addItem(withTitle: "Open…", action: #selector(openFile), keyEquivalent: "o")
         openItem.target = self
+        fileMenu.addItem(withTitle: "Open Folder…", action: #selector(openFolder), keyEquivalent: "").target = self
         fileMenu.addItem(system.makeOpenRecentItem())
         let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: ""); fileItem.submenu = fileMenu
         menu.addItem(fileItem); NSApp.mainMenu = menu
@@ -147,7 +149,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.title = "OK Player"; window.delegate = self; window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 420, height: 280)
         window.backgroundColor = PaletteRole.canvas.color
-        let root = PaletteSurface(fill: .canvas); window.contentView = root
+        let root = PaletteSurface(fill: .canvas); window.contentView = makeDropTarget(content: root)
         // The video area keeps its place in the layout even when no renderer exists.
         let surface = GLSurface.make()
         let videoArea: NSView = surface.map { VideoView(surface: $0) as NSView } ?? NSView()
@@ -202,22 +204,14 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         video.videoLayer.onError = { [weak self] message in self?.fail(message) }
         if let handle = client.handle { video.videoLayer.attach(session: handle) }
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
-        let path = pendingPath ?? args.first
         if smoke {
+            // The smoke opens its fixture itself, once it has checked the idle state.
+            let path = openRouter.takeHeld().first?.path ?? args.first
+            connectOpenRouter(client)
             smokeRun = SmokeRun(app: self, path: path)
             smokeRun?.start()
-        } else if let path {
-            play(path)
-        }
-    }
-    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
-        if client != nil { play(filename) } else { pendingPath = filename }
-        return true
-    }
-    @objc func openFile() {
-        let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
-        panel.beginSheetModal(for: window) { [weak self] response in
-            if response == .OK, let path = panel.url?.path { self?.play(path) }
+        } else if !connectOpenRouter(client), let path = args.first {
+            open([URL(fileURLWithPath: path)])
         }
     }
     func play(_ path: String) {
@@ -227,7 +221,11 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         case .accepted, .noOp, .perform, .history, .applied: break
         case .rejected(_, let message), .failed(_, let message): fail(message); return
         }
-        window.title = "\((path as NSString).lastPathComponent) — OK Player"
+        showOpening((path as NSString).lastPathComponent)
+    }
+    /// A file or folder named `name` is opening.
+    func showOpening(_ name: String) {
+        window.title = "\(name) — OK Player"
         showStatus("Opening…", .textMuted)
         prompt.isHidden = false
     }
@@ -330,8 +328,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 /// The bounded smoke the macOS workflows run (`--smoke-test`). Each step is checked
 /// against what the session reported and what the video layer counted:
 ///
-/// 1. idle: no render calls before a file is open;
-/// 2. playing: the position and the render calls advance; Now Playing shows the file
+/// 1. idle: no render calls before a file is open; the fixture is then opened as
+///    Finder opens a file (`application(_:open:)`);
+/// 2. playing: the position and the render calls advance; the open went through the
+///    open router (`smokeOpenFailure`); Now Playing shows the file
 ///    as playing video, the display-sleep assertion is held and the system offers the
 ///    remote commands; the pause is sent through the handler the system holds for its
 ///    pause command;
@@ -390,7 +390,8 @@ final class SmokeRun {
         after(0.6) { [self] in
             guard renders == 0 else { fail("\(renders) render calls while idle"); return }
             phase = .playing
-            app?.play(path)
+            // Opened the way Finder's Open With opens a file.
+            app?.application(NSApplication.shared, open: [URL(fileURLWithPath: path)])
         }
     }
 
@@ -400,6 +401,7 @@ final class SmokeRun {
         switch phase {
         case .playing where snapshot.status == .playing && position > 0.7 && renders > 10:
             if let failure = app?.windowBehaviour?.smokeFitFailure(video: snapshot.video) { fail(failure); return }
+            if let path, let failure = app?.smokeOpenFailure(fixture: path) { fail(failure); return }
             phase = .pausing
             playingRenders = renders
             // Now Playing and the display-sleep assertion, then pause as a media key would.
@@ -559,6 +561,7 @@ final class SmokeRun {
 public enum PlayerLauncher {
     @MainActor
     public static func run() {
+        if let status = DocumentTypeCheck.runIfRequested(CommandLine.arguments) { exit(status) }
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
         let delegate = PlayerApp()

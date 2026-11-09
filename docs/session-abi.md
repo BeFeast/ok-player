@@ -81,7 +81,7 @@ written as `null` and may be left out on input.
 | Config (`okp_session_new`) | `schema_version`, `app` (`name`, `platform`), absolute `data_dir`, `config_dir`, `cache_dir`, optional `hwdec`, ordered `mpv_options` (`name`, `value`) applied after the session defaults, optional `shell_commands` (see Command registry) |
 | Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay`, `invoke_command {id}`, `playlist` (see Playlist), `nudge_volume` and `toggle_mute` (see Transport controls) |
 | Reply | `{"schema_version":1,"result":{...}}`: `accepted {request_id}`, `no_op {}`, `rejected {reason, message}`, `failed {request_id, message}` when the engine refused an accepted command at once, `perform {}` (`invoke_command` only), or `applied {}` when the session carried the command out itself and nothing reached libmpv yet |
-| Query (`okp_session_query`) | `{"schema_version":1,"query":{...}}`: `snapshot {}`, answered with `result.snapshot.snapshot` (the full state); `command_registry {fullscreen, mini_player}` (both optional), answered with `result.command_registry.commands`; `shortcut_table {}`, answered with `result.shortcut_table.shortcuts`; `playlist {}`, answered with `result.playlist.playlist`; `transport {at}` (`at` optional), answered with `result.transport.transport` (see Transport controls); `window_fit`, `initial_window_fit` and `video_click` (see Window queries); or `result.rejected`; `history` queries are below |
+| Query (`okp_session_query`) | `{"schema_version":1,"query":{...}}`: `snapshot {}`, answered with `result.snapshot.snapshot` (the full state); `command_registry {fullscreen, mini_player}` (both optional), answered with `result.command_registry.commands`; `shortcut_table {}`, answered with `result.shortcut_table.shortcuts`; `playlist {}`, answered with `result.playlist.playlist`; `transport {at}` (`at` optional), answered with `result.transport.transport` (see Transport controls); `window_fit`, `initial_window_fit` and `video_click` (see Window queries); `open_formats {}` and `open_paths {paths}` (see Opening files); or `result.rejected`; `history` queries are below |
 | Event batch (`okp_session_drain_events`) | `{"schema_version":1,"events":[...]}` |
 
 An open source is `{"kind":"local"|"url","location":"..."}`. A URL is handed
@@ -327,6 +327,27 @@ playlist files belong in a playlist `open`); `close` empties it.
 The query `{"schema_version":1,"query":{"playlist":{}}}` answers
 `result.playlist.playlist`: `items` (`source`, `title`), `current_index`,
 `repeat`, `shuffle`, and `scanning` (a folder or playlist file is being read).
+
+## Opening files
+
+Two queries tell a shell what to offer and what opened files do, with
+okp-core's `media_formats` rules, so a shell keeps no extension lists. Neither
+reads the filesystem.
+
+- `open_formats {}` answers `result.open_formats.formats`: `video`, `audio`,
+  `subtitle` and `playlist` (`m3u`, `m3u8`), each a list of lowercase
+  extensions without the dot, for an open panel's filter.
+- `open_paths {paths}` answers `result.open_paths.plan` for local paths from an
+  open panel, a drop onto the window or the system's open events:
+  - `open {sources}`: every path that is not a subtitle file, as local
+    sources in the given order and each once. The shell sends them as a
+    playlist `open` (see Playlist), which plays media files, lists folders and
+    reads M3U files on its scan thread. Subtitle files among them are left out.
+  - `add_subtitles {paths}`: only subtitle files were given and media is
+    `playing` or `paused`: they belong to that media.
+  - `nothing {}`: no paths, or only subtitle files with nothing loaded.
+
+The documents are pinned by `rust/crates/okp-session/fixtures/open/`.
 
 ## Watch history
 

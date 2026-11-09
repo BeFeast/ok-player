@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "query": {
+    "open_paths": {
+      "paths": [
+        "/Users/example/Movies/Show",
+        "/Users/example/Movies/film.mkv",
+        "/Users/example/Movies/film.en.srt",
+        "/Users/example/Music/queue.m3u8"
+      ]
+    }
+  }
+}

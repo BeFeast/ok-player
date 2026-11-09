@@ -19,6 +19,7 @@ use crate::commands::{CommandRegistry, Invocation, WindowState};
 use crate::engine::{Engine, MpvEngine, Observation};
 use crate::history::{HistoryAction, HistoryActionResult, Report, SessionHistory};
 use crate::machine::SessionMachine;
+use crate::open_paths::{self, OpenFormats};
 use crate::playlist::{Background, PlannedOpen, SessionPlaylist, Step};
 use crate::protocol::{
     Command, CommandEnvelope, DispatchReply, DispatchResult, ErrorKind, Event, EventBatch,
@@ -297,6 +298,12 @@ impl Session {
             },
             Query::ShortcutTable {} => QueryResult::ShortcutTable {
                 shortcuts: self.commands.shortcut_table(),
+            },
+            Query::OpenFormats {} => QueryResult::OpenFormats {
+                formats: OpenFormats::current(),
+            },
+            Query::OpenPaths { paths } => QueryResult::OpenPaths {
+                plan: open_paths::plan(paths, self.snapshot().status),
             },
         }
     }
@@ -2040,6 +2047,8 @@ mod tests {
         }
     }
 
+    /// The open panel's types and the plan for opened paths, through the session.
+    mod open_paths;
     /// The playlist through the session: folder scans, auto-advance, commands.
     mod playlist;
 }
