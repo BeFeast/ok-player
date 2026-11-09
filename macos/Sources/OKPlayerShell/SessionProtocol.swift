@@ -101,6 +101,12 @@ enum Command: Codable, Equatable {
     /// Mute as the core does: a level of 0 that the next toggle takes back to the
     /// last level above it (docs/session-abi.md, "Transport controls").
     case toggleMute
+    /// Load a subtitle file for the current media and select it (Tracks/).
+    case addSubtitle(path: String)
+    /// Subtitle size as a factor, 1 = 100 %; the session keeps it within 0.25-4.
+    case setSubtitleScale(scale: Double)
+    /// Change the subtitle size by `delta` from the size the session asked for last.
+    case nudgeSubtitleScale(delta: Double)
 }
 
 struct CommandEnvelope: Codable, Equatable {
@@ -151,6 +157,8 @@ enum Query: Codable, Equatable {
     case commandRegistry(fullscreen: Bool = false, miniPlayer: Bool = false)
     /// Every bindable action with its chords on the config's platform.
     case shortcutTable
+    /// The actions whose key repeats while held; every other one runs once per press.
+    case repeatingShortcuts
     /// A watch-history query, answered with `QueryResult.history`.
     case history(query: HistoryQuery)
     /// The playlist as it is now.
@@ -162,6 +170,8 @@ enum Query: Codable, Equatable {
     /// What opening these local paths does, `folders` being those known to be
     /// folders (Open/OpenRouter.swift).
     case openPaths(paths: [String], folders: [String])
+    /// What the audio and subtitle menus show (Tracks/TracksProtocol.swift).
+    case tracks
 }
 
 struct QueryEnvelope: Codable, Equatable {
@@ -175,11 +185,14 @@ enum QueryResult: Codable, Equatable {
     case videoClick(intent: VideoClickIntent)
     case commandRegistry(commands: [RegistryCommand])
     case shortcutTable(shortcuts: [ShortcutRow])
+    /// Shortcut action ids (`ShortcutRow.action`).
+    case repeatingShortcuts(actions: [String])
     case history(result: HistoryQueryResult)
     case playlist(playlist: PlaylistState)
     case transport(transport: TransportView)
     case openFormats(formats: OpenFormats)
     case openPaths(plan: OpenPlan)
+    case tracks(tracks: TracksView)
     case rejected(reason: RejectReason, message: String)
 }
 

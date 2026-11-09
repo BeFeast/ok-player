@@ -79,9 +79,9 @@ written as `null` and may be left out on input.
 | Document | Shape |
 |---|---|
 | Config (`okp_session_new`) | `schema_version`, `app` (`name`, `platform`), absolute `data_dir`, `config_dir`, `cache_dir`, optional `hwdec`, ordered `mpv_options` (`name`, `value`) applied after the session defaults, optional `shell_commands` (see Command registry) |
-| Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay`, `invoke_command {id}`, `playlist` (see Playlist), `nudge_volume` and `toggle_mute` (see Transport controls) |
+| Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay`, `invoke_command {id}`, `playlist` (see Playlist), `nudge_volume` and `toggle_mute` (see Transport controls), `add_subtitle`, `set_subtitle_scale` and `nudge_subtitle_scale` (see Tracks and subtitles) |
 | Reply | `{"schema_version":1,"result":{...}}`: `accepted {request_id}`, `no_op {}`, `rejected {reason, message}`, `failed {request_id, message}` when the engine refused an accepted command at once, `perform {}` (`invoke_command` only), or `applied {}` when the session carried the command out itself and nothing reached libmpv yet |
-| Query (`okp_session_query`) | `{"schema_version":1,"query":{...}}`: `snapshot {}`, answered with `result.snapshot.snapshot` (the full state); `command_registry {fullscreen, mini_player}` (both optional), answered with `result.command_registry.commands`; `shortcut_table {}`, answered with `result.shortcut_table.shortcuts`; `playlist {}`, answered with `result.playlist.playlist`; `transport {at}` (`at` optional), answered with `result.transport.transport` (see Transport controls); `window_fit`, `initial_window_fit` and `video_click` (see Window queries); `open_formats {}` and `open_paths {paths}` (see Opening files); or `result.rejected`; `history` queries are below |
+| Query (`okp_session_query`) | `{"schema_version":1,"query":{...}}`: `snapshot {}`, answered with `result.snapshot.snapshot` (the full state); `command_registry {fullscreen, mini_player}` (both optional), answered with `result.command_registry.commands`; `shortcut_table {}`, answered with `result.shortcut_table.shortcuts`; `repeating_shortcuts {}`, answered with `result.repeating_shortcuts.actions`; `playlist {}`, answered with `result.playlist.playlist`; `transport {at}` (`at` optional), answered with `result.transport.transport` (see Transport controls); `tracks {}`, answered with `result.tracks.tracks` (see Tracks and subtitles); `window_fit`, `initial_window_fit` and `video_click` (see Window queries); `open_formats {}` and `open_paths {paths}` (see Opening files); or `result.rejected`; `history` queries are below |
 | Event batch (`okp_session_drain_events`) | `{"schema_version":1,"events":[...]}` |
 
 An open source is `{"kind":"local"|"url","location":"..."}`. A URL is handed
@@ -177,15 +177,23 @@ under their shortcut action ids. Each `command_registry` row carries `id`,
 keyboard-only command), `label`, `available`, `enabled`, `checked` and
 `shortcut`, the primary chord bound to it on the config's platform.
 `enabled`, `checked` and the state-dependent labels ("Mute" checked while
-muted, "Exit fullscreen") are resolved against the session state at the time
-of the query. The window state is the shell's, so it passes `fullscreen` and
+muted, that is while libmpv's mute flag is on or the level is 0, as the
+transport view's `muted`; "Exit fullscreen") are resolved against the session state at the time
+of the query, the session playlist included: `next-item` and `previous-item`
+are enabled while it holds two items or more. The window state is the shell's, so it passes `fullscreen` and
 `mini_player` in the query. Query when a menu opens; no event announces a
 change.
 
 The session runs some commands itself: `play-pause`, `close-media`,
-`seek-back`/`seek-forward` (5 s), `volume-down`/`volume-up` (5 points, within
-0-130), `mute`, `subtitle-delay-back`/`subtitle-delay-forward` (0.05 s). For
-these, `enabled` is exactly when the session accepts the command:
+`seek-back`/`seek-forward` (5 s), `volume-down`/`volume-up` (a
+`nudge_volume` of 5 points), `mute` (a `toggle_mute`),
+`subtitle-delay-back`/`subtitle-delay-forward` (0.05 s, from the delay asked
+for last), `subtitle-size-down`/`subtitle-size-up` (0.1, as
+`nudge_subtitle_scale`). The volume steps and mute go through the same volume
+model as the transport controls (see Transport controls): a step builds on the
+level asked for last, and `mute` unmutes a mute made from the controls and the
+other way round. For these, `enabled` is exactly when the session accepts the
+command:
 `play-pause`, the seeks and the subtitle nudges while the status is `playing`
 or `paused` (not while a file opens, after it ends or after a load error,
 although the source stays set), `close-media` while the status is not `idle`,
@@ -209,6 +217,12 @@ the platform defaults and `secondary` is `null`. A chord is
 the canonical key name (`space`, `comma`, `Left`, `o`) and `label` the display
 text (`Shift+Cmd+O`). On macOS menu commands use Cmd chords and in-window keys
 stay single keys.
+
+`repeating_shortcuts` lists the actions whose key repeats while held (the
+seek, frame, volume and subtitle delay, size and cue steps): each auto-repeat
+runs the action again. Every other action runs once per physical press (core
+`key_press`), so a held Space, M or F toggles once. The list is pinned by
+`query-reply-repeating-shortcuts.json`.
 
 ## Transport controls
 
@@ -251,6 +265,51 @@ separate mute flag, which leaves the level alone; while it is on, `toggle_mute`
 is forwarded as `set_mute(false)` instead, so the first toggle always clears it.
 
 The documents are pinned by `rust/crates/okp-session/fixtures/transport/`.
+
+## Tracks and subtitles
+
+The `tracks` query answers what the audio and subtitle menus show, with the
+core's rules, so a shell neither labels a track nor formats a readout. A shell
+asks for it when a menu opens, after each drained batch while one is shown,
+and after it changed the delay or the size.
+
+| Field | Meaning (core rule) |
+|---|---|
+| `audio` | the audio tracks in libmpv's order, each `{id, label, selected}`; empty without loaded media |
+| `subtitles` | `Off` (`id: null`, selected while no subtitle track is) first, then the subtitle tracks the same way |
+| `label` | the one-line descriptor: name (title, else language, else `Track N`), language, channels and codec for audio; format, `Image`, `Native style` and `EXT` or `Default` for subtitles (`track_label`) |
+| `subtitle_delay` | `{value, label, reported}`: seconds and `+250 ms` / `0 ms` (`subtitle_delay::format_label`) |
+| `subtitle_scale` | `{value, label, reported}`: the size factor and `110%` |
+| `adjustable` | media is `playing` or `paused`, so a file can be added and the delay and size changed |
+
+A row's `id` goes to `select_track` with the menu's kind; `null` turns subtitles
+off.
+
+- `{"add_subtitle":{"path":"/…/film.en.srt"}}` loads a subtitle file for the
+  current media and selects it (`sub-add … select`). A path whose extension is
+  not a subtitle's (`.srt`, `.ass`, `.ssa`, `.sub`, `.vtt`, `.idx`, `.sup`) is
+  `rejected` with `invalid_argument`; without loaded media it is `rejected`
+  with `no_active_media`. libmpv reads the file after the reply: a file it
+  cannot read is reported by an `error` event (`command_failed`) with the
+  command's `request_id`.
+- `{"set_subtitle_scale":{"scale":1.2}}` sets the subtitle size, kept within
+  0.25-4 (`subtitle_style::normalized_scale`). `{"nudge_subtitle_scale":{"delta":0.1}}`
+  changes it from the size asked for last, or the reported one, to the nearest
+  hundredth, and is forwarded as a `set_subtitle_scale`. Both need loaded media
+  and a finite value. The size holds across files and is not part of the
+  snapshot: `tracks` reports it.
+- Subtitle files named after the media load with it: `movie.srt`,
+  `movie.en.srt` and the other languages next to `movie.mkv` (libmpv
+  `sub-auto=exact`, which okp-mpv sets). They are listed as external tracks.
+
+libmpv reports the delay and the size asynchronously. Until it does, the
+values asked for lead: delay and size keys pressed faster than its reports all
+count, and `tracks` reads the new value at once in `value` and `label`.
+`reported` is libmpv's own last report (`null` before its first), so a shell or
+a test can tell when a change has reached libmpv. The snapshot's
+`subtitle_delay` follows when libmpv reports it.
+
+The documents are pinned by `rust/crates/okp-session/fixtures/tracks/`.
 
 ## Events
 

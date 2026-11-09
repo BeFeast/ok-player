@@ -7,7 +7,8 @@ and the same libmpv engine as the Linux player. It opens local media through
 a file argument, Finder's Open With and the Dock icon (see [Opening files](#opening-files)).
 The video fills the window and the transport controls float over it (see
 [Transport controls](#transport-controls)); **Space** and their play button toggle
-pause. Closing the window stops playback,
+pause, and the menu bar and the single-key shortcuts run the player's commands (see
+[Menu bar and keys](#menu-bar-and-keys)). Closing the window stops playback,
 destroys the render context and then frees the session. Errors stay visible until
 another explicit open attempt.
 
@@ -26,7 +27,7 @@ pauses first. The traffic lights and the title strip hide and show with the
 transport controls (`WindowChromeVisibility`); hidden ones take no clicks.
 
 This preview is for local testing. It does not yet contain the Linux shell's URL
-resolver, History, saving/cache UI, subtitle controls or update service. Its chrome
+resolver, History, saving/cache UI, subtitle styling or update service. Its chrome
 uses the shared BeFeast palette in light and dark, following the system appearance;
 the full macOS UI redesign is still ahead. The app needs macOS 14 or later on Apple
 Silicon. It is signed with a stable self-signed identity when one is configured (see
@@ -342,10 +343,11 @@ Swift side only turns input into commands and keeps the hide timer.
 
 - **Scrubber:** a click or drag sends keyframe seeks while the pointer moves and
   one exact seek where it is released; the readout follows the drag position. It
-  shows the buffered range and chapter ticks. While it has keyboard focus,
-  Left/Right step five seconds and Space toggles pause. It gives keyboard focus
-  back to the video as soon as the controls hide or the media can no longer be
-  sought, so Space always reaches the player. If the file ends under a held
+  shows the buffered range and chapter ticks. It handles no keys: while it has
+  keyboard focus, a key press goes on to the player window's shortcut table, as
+  from the video (see [Menu bar and keys](#menu-bar-and-keys)). It gives keyboard
+  focus back to the video as soon as the controls hide or the media can no
+  longer be sought. If the file ends under a held
   press, the drag ends there: nothing seeks on release, and the next file shows
   its own playhead.
 - **Time:** elapsed time and a trailing label that switches between remaining and
@@ -356,7 +358,10 @@ Swift side only turns input into commands and keeps the hide timer.
   and scrolling or dragging up from 0 brings the sound back. Scrolling anywhere
   over the video sends `nudge_volume` steps: a wheel notch is one step however
   fast the wheel spins, trackpad points add up to steps (at most three per event),
-  and the inertia after lifting the fingers changes nothing.
+  and the inertia after lifting the fingers changes nothing. M, Up/Down and the
+  Audio menu's Mute and volume items run as the same `toggle_mute` and
+  `nudge_volume`, so M unmutes what the button muted, and the menu's Mute check
+  mark follows either.
 - **Speed:** 0.5, 0.75, 1, 1.25, 1.5 and 2×, with the current speed checked.
 - **Previous/next item:** send the session playlist's `previous` and `next`
   (`SessionPlaylist`), enabled while the playlist has two items or more.
@@ -387,6 +392,9 @@ playlists is okp-core's rule; the shell has no extension list.
   on a file OK Player is the default app for, a drop on the Dock icon and files the
   app is launched with. Events that arrive while the app launches are held and opened
   together once the session exists.
+- **File → Open** and **File → Open Folder** are the registry's `open-file` and
+  `open-folder` commands, which this shell carries out (see Menu bar and keys). A drop
+  that opens something brings the transport controls back, like a key press.
 
 Several files, folders or a playlist file become one session playlist (`playlist`
 `open`); one file plays with its folder as the playlist. A subtitle file dropped or
@@ -400,6 +408,78 @@ media is loaded, else the Open prompt's status line. That covers a selection the
 session plans nothing for and a folder or playlist file whose read finds nothing
 playable (the session's `nothing_playable` error). Neither is a failure: what plays
 goes on, the window keeps its title and the controls keep following the session.
+
+## Menu bar and keys
+
+`Sources/OKPlayerShell/Menu/` builds the menu bar and handles the player window's keys
+from the session's command registry and shortcut table (`docs/session-abi.md`,
+"Command registry"). Swift keeps no player command's label, chord or enabled rule.
+
+- **Menus:** App, File, Edit, View, Playback, Audio, Subtitles, Window and Help.
+  `MenuBarLayout` only places registry ids among the standard macOS items; a command it
+  does not place goes to the menu of its registry group. A command that neither the
+  session nor this shell carries out is reported unavailable and left out. Each player
+  item sends `performPlayerCommand:` through the responder chain; validating it queries
+  the registry (once per menu opening and per session batch) for the label, the check
+  mark and the enabled state.
+- **Standard items:** About, Services, Hide, Hide Others, Show All, Quit, Open Recent,
+  Close (Command-W), Undo, Redo, Cut, Copy, Paste, Delete, Select All, Minimize
+  (Command-M), Zoom and Bring All to Front, with AppKit's own actions, so text fields get
+  the Edit commands. The Window menu is AppKit's window list and the Help menu carries
+  its menu search.
+- **Key equivalents:** only Command chords of the registry become menu key equivalents
+  (Command-O for Open file).
+- **Single keys:** a key press no view took reaches the player window, which looks it up
+  in the shortcut table and runs the registry command: Space, Left/Right (five seconds),
+  Up/Down (volume), M, F, Escape in fullscreen, Page Up/Down, X and the rest of the table.
+  A key that runs nothing now goes on to the window. Keys are named like the core's
+  table; a layout whose characters are not ASCII uses the key in the same place on the
+  US layout. Every key press, and every command a menu item runs, reveals the transport
+  controls.
+- **Held keys:** the session's `repeating_shortcuts` query lists the steps a held key
+  repeats (seek, volume, frame, subtitle delay, size and cues). Any other command runs
+  once per physical press: AppKit's auto-repeats of a held Space, M or F are taken and
+  run nothing, whether the video or the scrubber has keyboard focus.
+- **Commands this shell carries out:** Open file, Open folder, Fullscreen and Escape
+  fullscreen, Next and Previous item (the session playlist), the Playback speed submenu,
+  Add Subtitle and the Audio track and Subtitles submenus (see Tracks and subtitles).
+  They are registered with `PlayerCommands` before the session starts and passed in the config's
+  `shell_commands`. A `DynamicSubmenuProvider` fills a registry command's submenu each
+  time it opens; the audio and subtitle track menus plug in there.
+
+## Tracks and subtitles
+
+`Sources/OKPlayerShell/Tracks/` adds two buttons at the front of the transport
+controls' trailing group, Audio and Subtitles. Each opens a popover listing the
+tracks with the labels the session's `tracks` query gives them (core
+`track_label`: name, language, channels, codec, `EXT` for a file loaded beside the
+media) and checks the one that plays; choosing one sends `select_track`. The
+subtitle popover starts with Off and ends with **Add Subtitle File…** and the
+delay and size rows, each with the session's readout and a step down and up.
+
+- **Add Subtitle File…** and **S** open a file panel limited to subtitle files
+  (`.srt`, `.ass`, `.ssa`, `.sub`, `.vtt`, `.idx`, `.sup`) while media is loaded;
+  the file goes to the session as `add_subtitle` and becomes the subtitle track.
+  A file the session refuses, or one libmpv cannot read (an `error` event with the
+  request's id), shows "Could not load the subtitle file" in the readout and
+  playback goes on; only errors of no track request reach the app's error alert.
+- Subtitle files named after the media (`movie.srt`, `movie.en.srt`) load with it;
+  libmpv finds them (`sub-auto=exact`).
+- **Z** / **Shift+Z** move subtitles 50 ms later / earlier and **]** / **[** make them
+  10 % larger / smaller (0.25-4). The keys come from the session's shortcut table,
+  the session runs them, and the new value shows for a moment over the top of the
+  video. With a Cyrillic or Hebrew layout active, the key in the same place works.
+- The track buttons and the popover's controls never take keyboard focus. While a
+  popover is the key window, its content view hands every key but Escape to the
+  player window, so Space pauses and Z or ] step the values it shows; when it
+  closes, focus goes back to the video. The popover is rebuilt only when the
+  session's `tracks` view changed, not on every playback batch.
+- The menu bar's Audio and Subtitles menus host the same items as submenus of the
+  registry's `audio-track` and `subtitles` rows: two `DynamicSubmenuProvider`s
+  (`TrackSubmenu`) fill them from the `tracks` view each time they open. `add-subtitle`
+  is registered with `PlayerCommands`, and S, Z, Shift+Z, `[` and `]` run through the
+  shortcut table like every other key; after a delay or size step from a key or a menu
+  item, the readout shows and an error against that request still goes to it.
 
 ## System integration
 
@@ -465,8 +545,18 @@ window and checks, from the session's events and the video layer's counters:
   traffic lights with them, hand the scrubber's keyboard focus back to the video
   as they hide, and come back on activity with the session's time readout, so
   both window snapshots show them;
+- while playing, the menu bar has its nine menus with AppKit's window list and help
+  menu, Play/Pause from the registry validates enabled through the responder chain, and
+  a held Space's auto-repeat sent to the window toggles nothing, with the scrubber
+  focused (it reaches the shortcut table) and with the video focused;
 - F and Escape, sent as key events to the video view, enter native fullscreen and
-  leave it again, and each press reaches the transport controls as activity;
+  leave it again through the shortcut table's registry commands, and each press reaches
+  the transport controls as activity;
+- `]` sent to the window steps the subtitle size through the shortcut table and shows
+  the session's `110%` readout, which libmpv reports a few seconds later; a subtitle
+  file that does not exist is added and its error shows in the readout while playback
+  goes on; and a generated SRT file added during playback is the selected external
+  subtitle track;
 - closing the window during playback tears down in order (close, destroy the
   render context, free the session), after which the center has none of those
   commands enabled and no handler of the app's.

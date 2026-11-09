@@ -13,6 +13,10 @@ class PlayerWindow: NSWindow {
     /// the transport controls count it as activity.
     var onKeyDown: (() -> Void)?
 
+    /// The single-key shortcuts (`PlayerCommands.handle`), offered every key press
+    /// no view took; returns whether it ran a command.
+    var shortcutKeys: ((NSEvent) -> Bool)?
+
     /// The window is in native fullscreen. (Tests stand in a flagged window.)
     var isInFullscreen: Bool { styleMask.contains(.fullScreen) }
 
@@ -22,6 +26,7 @@ class PlayerWindow: NSWindow {
     }
 
     override func keyDown(with event: NSEvent) {
+        if shortcutKeys?(event) == true { return }
         if let command = WindowKeys.command(forKey: event.charactersIgnoringModifiers, keyCode: event.keyCode,
                                             modifiers: event.modifierFlags, isRepeat: event.isARepeat,
                                             isFullscreen: isInFullscreen),

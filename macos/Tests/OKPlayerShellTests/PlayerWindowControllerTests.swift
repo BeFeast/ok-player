@@ -140,7 +140,7 @@ final class PlayerWindowControllerTests: XCTestCase {
         window.onKeyDown = { [unowned self] in reported.append(self.fullscreenToggles) }
         XCTAssertTrue(window.makeFirstResponder(video))
         window.sendEvent(try key("f", keyCode: 3))
-        // Space is the video's own key and X nobody's: both are still reported.
+        // Space and X run nothing here (no shortcut table): both are still reported.
         window.sendEvent(try key(" ", keyCode: 49))
         window.sendEvent(try key("x", keyCode: 7))
         XCTAssertEqual(reported, [0, 1, 1], "each press is reported once, before F toggles fullscreen")

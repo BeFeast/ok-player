@@ -33,8 +33,16 @@ extension PlayerApp {
     func makeDropTarget(content: NSView) -> FileDropView {
         let drop = FileDropView(content: content)
         drop.accepts = { [weak self] urls in self?.openRouter.accepts(urls) ?? false }
-        drop.perform = { [weak self] urls in self?.open(urls) ?? false }
+        drop.perform = { [weak self] urls in self?.dropped(urls) ?? false }
         return drop
+    }
+
+    /// Files dropped on the window: open them, and bring the transport controls back
+    /// like a key press when that opened anything.
+    func dropped(_ urls: [URL]) -> Bool {
+        let opened = open(urls)
+        if opened { osc.noteActivity() }
+        return opened
     }
 
     /// The window's drop target, which holds the open notice.
