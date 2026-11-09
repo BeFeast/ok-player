@@ -38,15 +38,18 @@ final class OpenPanelConfigurationTests: XCTestCase {
     }
 }
 
-/// `--check-document-types`: every video and audio extension has a declared type the
-/// Video or Audio document type claims.
+/// `--check-document-types`: every video, audio and playlist extension has a declared
+/// type its document type claims, and the Folder document type claims folders.
 final class DocumentTypeCheckTests: XCTestCase {
-    private let video = ["public.movie", "com.microsoft.advanced-systems-format"]
-    private let audio = ["public.audio"]
+    private typealias Claims = DocumentTypeCheck.Claims
+    private typealias Failure = DocumentTypeCheck.Failure
+    private let claims = Claims(video: ["public.movie", "com.microsoft.advanced-systems-format"], audio: ["public.audio"],
+                                playlist: ["public.m3u-playlist"], folder: ["public.folder"])
 
     func testTypesMacOSDeclaresPassWithTheSystemsAnswer() {
-        let system = OpenFormats(video: ["mp4", "mov", "avi"], audio: ["mp3", "m4a", "wav"], subtitle: [], playlist: [])
-        XCTAssertEqual(DocumentTypeCheck.failures(system, video: video, audio: audio), [])
+        let system = OpenFormats(video: ["mp4", "mov", "avi"], audio: ["mp3", "m4a", "wav"], subtitle: [],
+                                 playlist: ["m3u"])
+        XCTAssertEqual(DocumentTypeCheck.failures(system, claims: claims), [])
     }
 
     func testATypeIsOfferedByConformanceOrByItsClaimedIdentifier() throws {
@@ -65,29 +68,45 @@ final class DocumentTypeCheckTests: XCTestCase {
             }
         }
         let checked = OpenFormats(video: ["mp4", "txt", "mts", "xyz"], audio: [], subtitle: [], playlist: [])
-        let failures = DocumentTypeCheck.failures(checked, video: video + [claimedByName.identifier], audio: audio,
-                                                  lookup: lookup)
+        var withText = claims
+        withText.video.append(claimedByName.identifier)
+        let failures = DocumentTypeCheck.failures(checked, claims: withText, lookup: lookup)
         XCTAssertEqual(failures, [
-            DocumentTypeCheck.Failure(fileExtension: "mts", documentType: "Video", declared: ["public.mp3"]),
-            DocumentTypeCheck.Failure(fileExtension: "xyz", documentType: "Video", declared: []),
+            Failure(item: ".mts", documentType: "Video", declared: ["public.mp3"]),
+            Failure(item: ".xyz", documentType: "Video", declared: []),
         ])
         XCTAssertTrue(failures[1].description.hasPrefix(".xyz: no type macOS declares for it is claimed by the Video"))
     }
 
-    func testWithoutClaimedTypesEveryExtensionFails() {
-        let formats = OpenFormats(video: ["mp4"], audio: ["mp3"], subtitle: [], playlist: [])
-        XCTAssertEqual(DocumentTypeCheck.failures(formats, video: [], audio: []).map(\.fileExtension), ["mp4", "mp3"])
+    func testPlaylistFilesAndFoldersNeedTheirOwnDocumentTypes() {
+        let formats = OpenFormats(video: [], audio: [], subtitle: [], playlist: ["m3u"])
+        let lookup: DocumentTypeCheck.Lookup = { $0 == "m3u" ? [.m3uPlaylist] : [] }
+        XCTAssertEqual(DocumentTypeCheck.failures(formats, claims: claims, lookup: lookup), [])
+        // Without the Folder and Playlist document types, Finder offers the app for neither.
+        let mediaOnly = Claims(video: claims.video, audio: claims.audio)
+        XCTAssertEqual(DocumentTypeCheck.failures(formats, claims: mediaOnly, lookup: lookup), [
+            Failure(item: ".m3u", documentType: "Playlist", declared: ["public.m3u-playlist"]),
+            Failure(item: "folders", documentType: "Folder", declared: ["public.folder"]),
+        ])
+    }
+
+    func testWithoutClaimedTypesEveryItemFails() {
+        let formats = OpenFormats(video: ["mp4"], audio: ["mp3"], subtitle: [], playlist: ["m3u"])
+        XCTAssertEqual(DocumentTypeCheck.failures(formats, claims: Claims()).map(\.item),
+                       [".mp4", ".mp3", ".m3u", "folders"])
     }
 
     func testTheClaimsAreReadFromTheDocumentTypesOfAnInfoPlist() {
         let info: [String: Any] = ["CFBundleDocumentTypes": [
             ["CFBundleTypeName": "Audio", "LSItemContentTypes": ["public.audio", "org.xiph.flac"]],
             ["CFBundleTypeName": "Video", "LSItemContentTypes": ["public.movie", "org.matroska.mkv"]],
+            ["CFBundleTypeName": "Folder", "LSItemContentTypes": ["public.folder"]],
+            ["CFBundleTypeName": "Playlist", "LSItemContentTypes": ["public.m3u-playlist"]],
         ]]
-        let claims = DocumentTypeCheck.claims(info)
-        XCTAssertEqual(claims.video, ["public.movie", "org.matroska.mkv"])
-        XCTAssertEqual(claims.audio, ["public.audio", "org.xiph.flac"])
-        XCTAssertTrue(DocumentTypeCheck.claims([:]).video.isEmpty)
+        XCTAssertEqual(DocumentTypeCheck.claims(info),
+                       Claims(video: ["public.movie", "org.matroska.mkv"], audio: ["public.audio", "org.xiph.flac"],
+                              playlist: ["public.m3u-playlist"], folder: ["public.folder"]))
+        XCTAssertEqual(DocumentTypeCheck.claims([:]), Claims())
     }
 
     func testTheCheckRunsOnlyWhenAskedFor() {

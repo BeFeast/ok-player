@@ -42,6 +42,10 @@ DOCUMENT_TYPES = {
          "LSItemContentTypes": ["public.movie", "org.matroska.mkv"]},
         {"CFBundleTypeName": "Audio", "CFBundleTypeRole": "Viewer", "LSHandlerRank": "Default",
          "LSItemContentTypes": ["public.audio", "public.mp3"]},
+        {"CFBundleTypeName": "Folder", "CFBundleTypeRole": "Viewer", "LSHandlerRank": "Alternate",
+         "LSItemContentTypes": ["public.folder"]},
+        {"CFBundleTypeName": "Playlist", "CFBundleTypeRole": "Viewer", "LSHandlerRank": "Alternate",
+         "LSItemContentTypes": ["public.m3u-playlist"]},
     ],
     "UTImportedTypeDeclarations": [
         {"UTTypeIdentifier": "org.matroska.mkv", "UTTypeDescription": "Matroska video",

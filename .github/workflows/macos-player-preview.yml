@@ -221,11 +221,11 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app"
           exit "$status"
 
-      # The bundled Info.plist gets its document types from okp-core's media_formats.
-      # Once Launch Services knows the build, every video and audio extension there needs
-      # a type macOS declares that the Video or Audio document type claims (by identifier
-      # or by conformance); a system identifier macOS does not declare fails here, where
-      # Linux cannot see it.
+      # The bundled Info.plist gets its document types from okp-core. Once Launch Services
+      # knows the build, every video, audio and playlist extension the session opens needs
+      # a type macOS declares that the Video, Audio or Playlist document type claims (by
+      # identifier or by conformance), and the Folder type must claim folders; a system
+      # identifier macOS does not declare fails here, where Linux cannot see it.
       - name: Check the document types macOS resolves
         shell: bash
         run: |

@@ -2,14 +2,15 @@ import Foundation
 import UniformTypeIdentifiers
 
 /// `ok-player --check-document-types`, run by the macOS workflow once the built app
-/// is registered with Launch Services: every video and audio extension the
-/// session's `open_formats` lists (okp-core's `media_formats`) must have a type
-/// macOS declares that the bundle's Video or Audio document type claims, by its
-/// identifier or by conformance (to `public.movie`, `public.audio` or another
-/// claimed type). That is what makes Finder offer the app for the file. A system
-/// identifier in okp-core's document-type table that macOS does not declare leaves
-/// its extension without such a type, because the bundle imports no declaration for
-/// it; Linux tests cannot see that.
+/// is registered with Launch Services. Every video, audio and playlist extension the
+/// session's `open_formats` lists (okp-core's `media_formats` and the playlist's M3U
+/// types) must have a type macOS declares that the bundle's Video, Audio or Playlist
+/// document type claims, by its identifier or by conformance (to `public.movie`,
+/// `public.audio` or another claimed type), and the Folder document type must claim
+/// folders. That is what makes Finder offer the app for the file or folder, in Open
+/// With and on the Dock icon. A system identifier in okp-core's document-type table
+/// that macOS does not declare leaves its extension without such a type, because the
+/// bundle imports no declaration for it; Linux tests cannot see that.
 ///
 /// Conformance to `public.movie` alone is not the rule: macOS declares some
 /// containers that hold audio or video (`.asf`) as audiovisual content, which is
@@ -18,16 +19,26 @@ enum DocumentTypeCheck {
     static let argument = "--check-document-types"
 
     struct Failure: Equatable, CustomStringConvertible {
-        var fileExtension: String
-        /// `Video` or `Audio`.
+        /// `.mkv`, or `folders`.
+        var item: String
+        /// `Video`, `Audio`, `Playlist` or `Folder`.
         var documentType: String
-        /// The identifiers of the types macOS declares for the extension.
+        /// The identifiers of the types macOS declares for the item.
         var declared: [String]
 
         var description: String {
-            ".\(fileExtension): no type macOS declares for it is claimed by the \(documentType) document type"
+            "\(item): no type macOS declares for it is claimed by the \(documentType) document type"
                 + (declared.isEmpty ? " (it declares none)" : " (it declares \(declared.joined(separator: ", ")))")
         }
+    }
+
+    /// The content types the bundle's document types claim (`LSItemContentTypes`),
+    /// by `CFBundleTypeName`.
+    struct Claims: Equatable {
+        var video: [String] = []
+        var audio: [String] = []
+        var playlist: [String] = []
+        var folder: [String] = []
     }
 
     /// The types macOS knows for a file extension, declared or dynamic.
@@ -35,33 +46,42 @@ enum DocumentTypeCheck {
 
     static let system: Lookup = { UTType.types(tag: $0, tagClass: .filenameExtension, conformingTo: nil) }
 
-    /// The content types the Video and Audio document types of an `Info.plist`
-    /// claim (`LSItemContentTypes`).
-    static func claims(_ info: [String: Any]) -> (video: [String], audio: [String]) {
+    /// The claims of the Video, Audio, Playlist and Folder document types of an
+    /// `Info.plist`.
+    static func claims(_ info: [String: Any]) -> Claims {
         let types = info["CFBundleDocumentTypes"] as? [[String: Any]] ?? []
         func claimed(_ name: String) -> [String] {
             types.first(where: { $0["CFBundleTypeName"] as? String == name })?["LSItemContentTypes"] as? [String] ?? []
         }
-        return (claimed("Video"), claimed("Audio"))
+        return Claims(video: claimed("Video"), audio: claimed("Audio"), playlist: claimed("Playlist"),
+                      folder: claimed("Folder"))
     }
 
-    /// Every video extension without a declared type the Video document type claims,
-    /// and every audio extension without one the Audio document type claims.
-    static func failures(_ formats: OpenFormats, video: [String], audio: [String],
-                         lookup: Lookup = system) -> [Failure] {
-        let kinds = [(name: "Video", extensions: formats.video, claimed: video),
-                     (name: "Audio", extensions: formats.audio, claimed: audio)]
-        return kinds.flatMap { kind in
-            let claimedTypes = kind.claimed.compactMap { UTType($0) }
-            return kind.extensions.compactMap { ext -> Failure? in
+    /// Whether one of `declared` is claimed, by identifier or by conformance.
+    private static func offered(_ declared: [UTType], claimed: [String]) -> Bool {
+        let claimedTypes = claimed.compactMap { UTType($0) }
+        return declared.contains { type in
+            claimed.contains(type.identifier) || claimedTypes.contains { type.conforms(to: $0) }
+        }
+    }
+
+    /// Every video, audio and playlist extension without a declared type its document
+    /// type claims, and folders when the Folder document type does not claim them.
+    static func failures(_ formats: OpenFormats, claims: Claims, lookup: Lookup = system) -> [Failure] {
+        let kinds = [(name: "Video", extensions: formats.video, claimed: claims.video),
+                     (name: "Audio", extensions: formats.audio, claimed: claims.audio),
+                     (name: "Playlist", extensions: formats.playlist, claimed: claims.playlist)]
+        var found = kinds.flatMap { kind in
+            kind.extensions.compactMap { ext -> Failure? in
                 let declared = lookup(ext).filter { !$0.isDynamic }
-                let offered = declared.contains { type in
-                    kind.claimed.contains(type.identifier) || claimedTypes.contains { type.conforms(to: $0) }
-                }
-                return offered ? nil : Failure(fileExtension: ext, documentType: kind.name,
-                                               declared: declared.map(\.identifier))
+                return offered(declared, claimed: kind.claimed)
+                    ? nil : Failure(item: ".\(ext)", documentType: kind.name, declared: declared.map(\.identifier))
             }
         }
+        if !offered([.folder], claimed: claims.folder) {
+            found.append(Failure(item: "folders", documentType: "Folder", declared: [UTType.folder.identifier]))
+        }
+        return found
     }
 
     /// Runs the check when the app was started for it: prints one line per failure,
@@ -83,22 +103,22 @@ enum DocumentTypeCheck {
             return 1
         }
         let claimed = claims(Bundle.main.infoDictionary ?? [:])
-        let found = Self.failures(formats, video: claimed.video, audio: claimed.audio)
+        let found = Self.failures(formats, claims: claimed)
         for failure in found { print("OKP_DOCUMENT_TYPES failure \(failure)") }
         // Extensions offered only through a claimed identifier, not as a movie or audio.
         for (extensions, umbrella) in [(formats.video, UTType.movie), (formats.audio, UTType.audio)] {
             for ext in extensions {
                 let declared = system(ext).filter { !$0.isDynamic }
                 guard !declared.isEmpty, !declared.contains(where: { $0.conforms(to: umbrella) }) else { continue }
-                let described = declared.map { type -> String in
-                    let supertypes = type.supertypes.map { $0.identifier }.sorted().joined(separator: ",")
-                    return "\(type.identifier)<\(supertypes)>"
-                }
-                print("OKP_DOCUMENT_TYPES not_\(umbrella.identifier) .\(ext) \(described.joined(separator: " "))")
+                print("OKP_DOCUMENT_TYPES not_\(umbrella.identifier) .\(ext) \(describe(declared))")
             }
         }
+        // What each playlist extension is to macOS, for the record.
+        for ext in formats.playlist {
+            print("OKP_DOCUMENT_TYPES playlist .\(ext) \(describe(system(ext).filter { !$0.isDynamic }))")
+        }
         if !found.isEmpty {
-            for identifier in claimed.video + claimed.audio {
+            for identifier in claimed.video + claimed.audio + claimed.playlist + claimed.folder {
                 let type = UTType(identifier)
                 let extensions = (type?.tags[.filenameExtension] ?? []).joined(separator: ",")
                 let supertypes = (type?.supertypes.map { $0.identifier } ?? []).sorted().joined(separator: ",")
@@ -108,8 +128,18 @@ enum DocumentTypeCheck {
             }
         }
         print("OKP_DOCUMENT_TYPES video=\(formats.video.count) audio=\(formats.audio.count) "
-              + "claimed_video=\(claimed.video.count) claimed_audio=\(claimed.audio.count) failures=\(found.count)")
-        let complete = !formats.video.isEmpty && !formats.audio.isEmpty && !claimed.video.isEmpty && !claimed.audio.isEmpty
+              + "playlist=\(formats.playlist.count) claimed_video=\(claimed.video.count) "
+              + "claimed_audio=\(claimed.audio.count) claimed_playlist=\(claimed.playlist.count) "
+              + "claimed_folder=\(claimed.folder.count) failures=\(found.count)")
+        let complete = !formats.video.isEmpty && !formats.audio.isEmpty && !formats.playlist.isEmpty
+            && !claimed.video.isEmpty && !claimed.audio.isEmpty && !claimed.playlist.isEmpty && !claimed.folder.isEmpty
         return found.isEmpty && complete ? 0 : 1
+    }
+
+    /// `identifier<supertype,...>` for each type.
+    private static func describe(_ types: [UTType]) -> String {
+        types.map { type in
+            "\(type.identifier)<\(type.supertypes.map { $0.identifier }.sorted().joined(separator: ","))>"
+        }.joined(separator: " ")
     }
 }
