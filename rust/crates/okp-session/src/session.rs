@@ -27,6 +27,7 @@ use crate::protocol::{
     parse_envelope, to_json,
 };
 use crate::reconcile::{core_end_reason, endfile_error, event_matches_source};
+use crate::window;
 
 /// Called from the session's event thread when a new batch of events is ready.
 /// It should only schedule a drain on the shell's own thread.
@@ -74,6 +75,8 @@ struct State {
     /// Tracks the current open asked for, selected once its file has loaded.
     pending_tracks: Vec<(TrackKind, i64)>,
     playlist: SessionPlaylist,
+    /// The initial window fit the current source is owed.
+    fit: window::SourceFit,
     /// The end of file that ended the current media carried an error.
     end_failed: bool,
     /// Resume, progress, per-file memory and the private session.
@@ -165,6 +168,7 @@ impl Session {
                 load: None,
                 pending_tracks: Vec::new(),
                 playlist: SessionPlaylist::new(Arc::new(move || playlist_signal.notify())),
+                fit: window::SourceFit::default(),
                 end_failed: false,
                 history,
             }),
@@ -238,6 +242,36 @@ impl Session {
             },
             Query::Playlist {} => QueryResult::Playlist {
                 playlist: lock(&self.shared.state).playlist.state(),
+            },
+            Query::WindowFit {
+                video,
+                backing_scale,
+                visible_frame,
+                min_size,
+                chrome,
+            } => QueryResult::WindowFit {
+                frame: window::fit_window(
+                    *video,
+                    *backing_scale,
+                    *visible_frame,
+                    *min_size,
+                    *chrome,
+                ),
+            },
+            Query::InitialWindowFit {
+                backing_scale,
+                visible_frame,
+                min_size,
+                chrome,
+            } => QueryResult::WindowFit {
+                // The event thread records the size before it queues the change
+                // that reports it, so a shell that saw the size can take its fit.
+                frame: lock(&self.shared.state).fit.take_with(|video| {
+                    window::fit_window(video, *backing_scale, *visible_frame, *min_size, *chrome)
+                }),
+            },
+            Query::VideoClick { press_count } => QueryResult::VideoClick {
+                intent: window::video_click_intent(*press_count),
             },
             Query::History { query } => QueryResult::History {
                 result: lock(&self.shared.state).history.query(query),
@@ -446,6 +480,7 @@ impl State {
         }
         self.advance_playlist(engine);
         let current = self.project(&observation);
+        self.fit.observe(current.video.as_ref());
         let held = self.queue.observe(&current, now);
         // A history change waiting for its timed save wakes the thread too.
         match (held, self.history.next_save()) {
@@ -501,6 +536,13 @@ impl State {
         }
         if matches!(outcome, CommandOutcome::Accepted { .. }) {
             self.history_dispatched(&command, engine_result.is_ok(), engine);
+        }
+        if matches!(outcome, CommandOutcome::Accepted { .. })
+            && matches!(*command, Command::Open { .. } | Command::Close {})
+        {
+            // Whatever the engine makes of it, the previous source is gone, and
+            // with it any fit still owed to it.
+            self.fit.begin_source();
         }
         match (outcome, engine_result) {
             (CommandOutcome::Accepted { request_id }, Ok(())) => {
@@ -1565,6 +1607,104 @@ mod tests {
             observation.playback.time_pos = Some(1.0);
         });
         assert_eq!(engine.forwarded().len(), 2);
+    }
+
+    const SCREEN: crate::protocol::WindowRect = crate::protocol::WindowRect {
+        x: 0,
+        y: 0,
+        width: 1512,
+        height: 945,
+    };
+
+    fn initial_fit(session: &Session) -> Option<crate::protocol::WindowRect> {
+        match session.query(&Query::InitialWindowFit {
+            backing_scale: 1.0,
+            visible_frame: SCREEN,
+            min_size: None,
+            chrome: None,
+        }) {
+            QueryResult::WindowFit { frame } => frame,
+            other => panic!("not a fit: {other:?}"),
+        }
+    }
+
+    fn fitted(width: i32, height: i32) -> Option<crate::protocol::WindowRect> {
+        window::fit_window(
+            crate::protocol::WindowSize { width, height },
+            1.0,
+            SCREEN,
+            None,
+            None,
+        )
+    }
+
+    /// Load the current open with a video of `width` by `height` and wait until
+    /// the session reports it playing.
+    fn loaded_with_video(session: &Session, engine: &FakeState, width: i32, height: i32) {
+        engine.publish(
+            |observation| {
+                observation.video = Some(VideoDimensions { width, height });
+                observation.playback.duration = Some(60.0);
+            },
+            vec![file_loaded()],
+        );
+        assert!(wait_for(|| {
+            let snapshot = session.snapshot();
+            snapshot.status == Status::Playing
+                && snapshot
+                    .video
+                    .is_some_and(|video| (video.width, video.height) == (width, height))
+        }));
+    }
+
+    #[test]
+    fn each_open_is_owed_one_initial_fit_to_its_own_video_size() {
+        let (session, engine) = fake_session();
+        assert_eq!(initial_fit(&session), None, "nothing is open");
+
+        let _ = session.dispatch(&open("/media/film.mkv"));
+        assert_eq!(initial_fit(&session), None, "the size is not known yet");
+        loaded_with_video(&session, &engine, 1920, 800);
+        assert_eq!(initial_fit(&session), fitted(1920, 800));
+        assert_eq!(initial_fit(&session), None, "the fit is taken once");
+
+        // The engine still reports the film while the portrait clip opens, and
+        // the session folds that report in (the snapshot query refreshes).
+        let _ = session.dispatch(&open("/media/portrait.mp4"));
+        let opening = session.snapshot();
+        assert_eq!((opening.status, opening.video), (Status::Opening, None));
+        assert_eq!(
+            initial_fit(&session),
+            None,
+            "the film's size is no fit for the clip"
+        );
+        loaded_with_video(&session, &engine, 1080, 1920);
+        assert_eq!(initial_fit(&session), fitted(1080, 1920));
+    }
+
+    #[test]
+    fn a_fit_still_owed_when_the_next_source_opens_or_the_source_closes_is_dropped() {
+        let (session, engine) = fake_session();
+        let _ = session.dispatch(&open("/media/film.mkv"));
+        loaded_with_video(&session, &engine, 1920, 800);
+        // The shell has not asked yet when the next file opens.
+        let _ = session.dispatch(&open("/media/portrait.mp4"));
+        assert_eq!(session.snapshot().status, Status::Opening);
+        assert_eq!(initial_fit(&session), None);
+        loaded_with_video(&session, &engine, 1080, 1920);
+        assert_eq!(initial_fit(&session), fitted(1080, 1920));
+
+        let _ = session.dispatch(&open("/media/film.mkv"));
+        loaded_with_video(&session, &engine, 1920, 800);
+        assert_eq!(
+            session.dispatch(&Command::Close {}),
+            DispatchResult::Accepted { request_id: 4 }
+        );
+        assert_eq!(
+            initial_fit(&session),
+            None,
+            "a closed source is owed nothing"
+        );
     }
 
     #[test]

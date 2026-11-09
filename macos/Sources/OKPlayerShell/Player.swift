@@ -113,6 +113,7 @@ extension SessionConfig {
 
 final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var window: NSWindow!
+    var windowBehaviour: PlayerWindowController?
     var video: VideoView?
     let status = NSTextField(labelWithString: "Open a video to begin")
     let pause = AccentButton(label: "Pause", target: nil, action: nil)
@@ -149,8 +150,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         fileMenu.addItem(system.makeOpenRecentItem())
         let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: ""); fileItem.submenu = fileMenu
         menu.addItem(fileItem); NSApp.mainMenu = menu
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 580),
-                          styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        let behaviour = PlayerWindowController(contentRect: NSRect(x: 0, y: 0, width: 960, height: 580))
+        windowBehaviour = behaviour; window = behaviour.window
         window.title = "OK Player"; window.delegate = self; window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 420, height: 280)
         window.backgroundColor = PaletteRole.canvas.color
@@ -176,6 +177,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             controls.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -12),
             controls.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10), controls.heightAnchor.constraint(equalToConstant: 30)
         ])
+        behaviour.install(in: root, videoArea: videoArea)
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         guard let video else { fail("No OpenGL pixel format is available for video"); return }
         let client: SessionClient
@@ -185,6 +187,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             fail("\(error)"); return
         }
         self.client = client
+        behaviour.connect(client) { [weak self] in self?.togglePause() }
         client.onBatch = { [weak self] batch in self?.sessionChanged(batch) }
         playlist.state = client.store.playlist
         system.playlist = playlist
@@ -235,6 +238,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if batch.events.contains(.shutdown) { fail("The playback engine stopped"); return }
         guard !errorShown else { return }
         let snapshot = client.store.snapshot
+        windowBehaviour?.sessionChanged(snapshot)
         video?.hasVideo = snapshot.video != nil
         let transport = snapshot.status == .paused ? "Play" : "Pause"
         if pause.title != transport { pause.title = transport }
@@ -292,6 +296,9 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         client = nil
     }
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        windowBehaviour?.windowWillResize(to: frameSize) ?? frameSize
+    }
     func windowWillClose(_ notification: Notification) {
         // Terminating closes the window again; the first close does the work.
         guard !closing else { return }
@@ -324,13 +331,17 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 ///    context and has drawn into no context but the layer's own;
 /// 6. presented: every frame drawn reported a swap that reached libmpv (the swap
 ///    count the session returns equals the frames drawn);
-/// 7. closed while playing: teardown runs in order, the system offers no remote
+/// 7. fitted: once playing, the window has the size the fit gave it, the video
+///    view has the video's aspect, and a resize keeps it (checked with step 2);
+/// 8. fullscreen: F and Escape, pressed on the video view, enter and leave
+///    native fullscreen;
+/// 9. closed while playing: teardown runs in order, the system offers no remote
 ///    command any more, and the app exits.
 ///
 /// The timed steps use one-shot timers; the session state itself arrives through
 /// wakeup-driven drains, never through polling.
 final class SmokeRun {
-    enum Phase { case idle, playing, pausing, holding, resuming, resizing, finished }
+    enum Phase { case idle, playing, pausing, holding, resuming, resizing, fullscreen, finished }
 
     private weak var app: PlayerApp?
     private let path: String?
@@ -371,6 +382,7 @@ final class SmokeRun {
         let position = snapshot.timePos ?? 0
         switch phase {
         case .playing where snapshot.status == .playing && position > 0.7 && renders > 10:
+            if let failure = app?.windowBehaviour?.smokeFitFailure(video: snapshot.video) { fail(failure); return }
             phase = .pausing
             playingRenders = renders
             // Now Playing and the display-sleep assertion, then pause as a media key would.
@@ -429,18 +441,25 @@ final class SmokeRun {
         guard counts.swaps == counts.renders else {
             fail("\(counts.swaps) swaps reached libmpv for \(counts.renders) frames drawn"); return
         }
-        phase = .finished
+        guard let behaviour = app.windowBehaviour else { fail("The window has no window behaviour"); return }
+        phase = .fullscreen
         let snapshot = client.store.snapshot
         let pixelFormat = surface.floatColor ? "float16" : "rgba8"
-        print("OKP_SMOKE loaded=true progressed=true pause=true resume=true idle_render_calls=0 paused_render_calls=0 "
-              + "render_calls=\(counts.renders) swaps=\(counts.swaps) before_pause=\(playingRenders) "
-              + "before_resize=\(resizeRenders) ca_contexts_held=\(use.held) ca_context_copies=\(use.copies) "
-              + "draw_contexts=\(use.drawnInto.count) pixel_format=\(pixelFormat) "
-              + "volume=\(Int(snapshot.volume ?? -1)) tracks=\(snapshot.tracks.count)")
-        if let directory = app.snapshotDirectory { app.captureAppearances(to: directory) }
-        // Closing the window during playback runs the real teardown path; the app
-        // reports it once teardown has returned.
-        app.window.close()
+        let line = "OKP_SMOKE loaded=true progressed=true pause=true resume=true idle_render_calls=0 paused_render_calls=0 "
+            + "render_calls=\(counts.renders) swaps=\(counts.swaps) before_pause=\(playingRenders) "
+            + "before_resize=\(resizeRenders) ca_contexts_held=\(use.held) ca_context_copies=\(use.copies) "
+            + "draw_contexts=\(use.drawnInto.count) pixel_format=\(pixelFormat) "
+            + "volume=\(Int(snapshot.volume ?? -1)) tracks=\(snapshot.tracks.count) \(behaviour.smokeFitSummary)"
+        behaviour.smokeFullscreenRoundTrip(timeout: 8) { [weak self] failure in
+            guard let self, let app = self.app, !self.cancelled else { return }
+            if let failure { self.fail(failure); return }
+            self.phase = .finished
+            print(line + " fullscreen=entered_and_left")
+            if let directory = app.snapshotDirectory { app.captureAppearances(to: directory) }
+            // Closing the window during playback runs the real teardown path; the app
+            // reports it once teardown has returned.
+            app.window.close()
+        }
     }
 
     private func fail(_ message: String) {

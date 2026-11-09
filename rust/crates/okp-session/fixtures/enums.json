@@ -15,6 +15,11 @@
   "source_kind": ["local", "url"],
   "seek_mode": ["absolute", "relative"],
   "seek_precision": ["exact", "keyframe"],
+  "video_click_intent": [
+    "ignore",
+    "schedule_play_pause",
+    "cancel_play_pause_and_toggle_fullscreen"
+  ],
   "command_group": [
     "playback_navigation",
     "tracks_subtitles",
