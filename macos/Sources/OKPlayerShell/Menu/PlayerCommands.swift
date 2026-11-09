@@ -71,6 +71,10 @@ final class PlayerCommands {
     private(set) var lastInvocation: Invocation?
     /// How often this shell carried out each command.
     private(set) var performedCounts: [String: Int] = [:]
+    /// Called after a menu item or a key ran a command, through the session or
+    /// this shell (not for one that ran nothing, nor for a held toggle's taken
+    /// auto-repeat). The app counts it as activity for the transport controls.
+    var onRun: ((Invocation) -> Void)?
 
     private var handlers: [String: () -> Void] = [:]
     private var providers: [String: DynamicSubmenuProvider] = [:]
@@ -125,7 +129,12 @@ final class PlayerCommands {
     @discardableResult
     func run(_ id: String) -> Outcome {
         let outcome = carryOut(id)
-        lastInvocation = Invocation(id: id, outcome: outcome)
+        let invocation = Invocation(id: id, outcome: outcome)
+        lastInvocation = invocation
+        switch outcome {
+        case .ran, .performed: onRun?(invocation)
+        case .unavailable, .disabled, .heldRepeat: break
+        }
         return outcome
     }
 

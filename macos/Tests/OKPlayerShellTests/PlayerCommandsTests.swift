@@ -84,6 +84,22 @@ final class PlayerCommandsTests: XCTestCase {
         XCTAssertEqual(commands.submenuCommands, ["audio-track"])
     }
 
+    func testEveryCommandThatRanIsReportedOnce() {
+        var reported: [PlayerCommands.Invocation] = []
+        commands.onRun = { reported.append($0) }
+        commands.run("seek-forward")
+        commands.run("fullscreen")
+        commands.run("zoom-out")
+        commands.run("escape-fullscreen")
+        XCTAssertTrue(commands.handle(KeyPress(key: "space")))
+        XCTAssertTrue(commands.handle(KeyPress(key: "space", isRepeat: true)))
+        XCTAssertEqual(reported, [
+            PlayerCommands.Invocation(id: "seek-forward", outcome: .ran(.accepted(requestId: 1))),
+            PlayerCommands.Invocation(id: "fullscreen", outcome: .performed),
+            PlayerCommands.Invocation(id: "play-pause", outcome: .ran(.accepted(requestId: 1))),
+        ], "unavailable, disabled and a held toggle's repeat ran nothing")
+    }
+
     // MARK: Keys
 
     func testKeysRunTheirCommandsAndAHeldToggleIsTakenWithoutRunning() {

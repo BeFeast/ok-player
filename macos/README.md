@@ -381,7 +381,8 @@ from the session's command registry and shortcut table (`docs/session-abi.md`,
   Up/Down (volume), M, F, Escape in fullscreen, Page Up/Down, X and the rest of the table.
   A key that runs nothing now goes on to the window. Keys are named like the core's
   table; a layout whose characters are not ASCII uses the key in the same place on the
-  US layout. Every key press reveals the transport controls.
+  US layout. Every key press, and every command a menu item runs, reveals the transport
+  controls.
 - **Held keys:** the session's `repeating_shortcuts` query lists the steps a held key
   repeats (seek, volume, frame, subtitle delay, size and cues). Any other command runs
   once per physical press: AppKit's auto-repeats of a held Space, M or F are taken and

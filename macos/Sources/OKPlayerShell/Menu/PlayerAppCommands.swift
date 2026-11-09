@@ -18,6 +18,9 @@ extension PlayerApp: PlayerCommandResponder, NSMenuItemValidation {
     /// command neither the session nor this shell runs as unavailable.
     func registerPlayerCommands() {
         commands.isFullscreen = { [weak self] in self?.windowBehaviour?.window.isInFullscreen ?? false }
+        // A command from the menu bar brings the transport controls back like a
+        // key press does (keys already count through the window's key hook).
+        commands.onRun = { [weak self] _ in self?.osc.noteActivity() }
         commands.register("open-file") { [weak self] in self?.openFile() }
         commands.register("fullscreen") { [weak self] in _ = self?.windowBehaviour?.perform(.toggleFullscreen) }
         commands.register("escape-fullscreen") { [weak self] in _ = self?.windowBehaviour?.perform(.exitFullscreen) }
