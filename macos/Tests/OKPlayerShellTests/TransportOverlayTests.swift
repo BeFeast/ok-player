@@ -166,6 +166,37 @@ final class TransportOverlayTests: XCTestCase {
         XCTAssertFalse(overlay.nextButton.isEnabled, "no action, no button")
     }
 
+    func testTheControlsNeverHoldTheWindowToTheirOwnWidth() {
+        // A window keeps the size it is given at the window-size-stay-put priority;
+        // anything stronger inside it wins, so the content stands in for a window here.
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 2000, height: 1000))
+        let content = NSView()
+        let controls = TransportOverlay(hideTimer: ManualHideTimer())
+        for view in [content, controls] { view.translatesAutoresizingMaskIntoConstraints = false }
+        container.addSubview(content)
+        content.addSubview(controls)
+        let width = content.widthAnchor.constraint(equalToConstant: 1200)
+        let height = content.heightAnchor.constraint(equalToConstant: 600)
+        for size in [width, height] { size.priority = .windowSizeStayPut }
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            content.topAnchor.constraint(equalTo: container.topAnchor),
+            width, height,
+            controls.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            controls.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            controls.topAnchor.constraint(equalTo: content.topAnchor),
+            controls.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+        ])
+        container.layoutSubtreeIfNeeded()
+        XCTAssertEqual(content.frame.width, 1200, accuracy: 0.5, "the window keeps the width it was given")
+        XCTAssertEqual(controls.panel.frame.width, 760, accuracy: 0.5, "the bar stops at its widest")
+
+        width.constant = 700
+        container.layoutSubtreeIfNeeded()
+        XCTAssertEqual(content.frame.width, 700, accuracy: 0.5)
+        XCTAssertEqual(controls.panel.frame.width, 668, accuracy: 0.5, "a narrower window keeps 16 points each side")
+    }
+
     func testTheMuteButtonAsksTheSessionToToggleMute() {
         overlay.sessionChanged(snapshot(.playing, duration: 4000))
         overlay.muteButton.performClick(nil)

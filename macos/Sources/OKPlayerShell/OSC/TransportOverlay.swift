@@ -346,8 +346,11 @@ final class TransportOverlay: NSView {
         scrubber.translatesAutoresizingMaskIntoConstraints = false
         panel.addSubview(scrubber)
 
+        // Below the priority a window keeps the size it was given at (a drag, a fit,
+        // setFrame): stronger, the bar's preferred width would hold every window to
+        // 760 + 32 points.
         let fill = panel.widthAnchor.constraint(equalTo: widthAnchor, constant: -32)
-        fill.priority = .defaultHigh
+        fill.priority = NSLayoutConstraint.Priority(NSLayoutConstraint.Priority.windowSizeStayPut.rawValue - 10)
         NSLayoutConstraint.activate([
             panel.centerXAnchor.constraint(equalTo: centerXAnchor),
             panel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
