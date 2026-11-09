@@ -25,6 +25,10 @@ final class SessionStore {
                 lastError = message
             case .shutdown:
                 shutDown = true
+            case .history, .playlistChanged:
+                // Neither changes a snapshot field; a shell showing the history
+                // or the playlist reads them from the event or queries again.
+                break
             }
         }
     }

@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "query": {
+    "history": { "query": { "page": { "search": "severance", "utc_offset_seconds": -18000 } } }
+  }
+}

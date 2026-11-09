@@ -13,6 +13,12 @@ enum GoldenFixtures {
         .deletingLastPathComponent()  // repository root
         .appendingPathComponent("rust/crates/okp-session/fixtures")
 
+    /// Every fixture, by its path below `directory` (`history/events.json`).
+    static func names() throws -> [String] {
+        let walker = try XCTUnwrap(FileManager.default.enumerator(atPath: directory.path))
+        return walker.compactMap { $0 as? String }.filter { $0.hasSuffix(".json") }
+    }
+
     static func data(_ name: String) throws -> Data {
         try Data(contentsOf: directory.appendingPathComponent(name))
     }
@@ -44,6 +50,7 @@ enum GoldenFixtures {
 final class SessionProtocolTests: XCTestCase {
     static let commands: [String: Command] = [
         "command-close.json": .close,
+        "command-invoke-command.json": .invokeCommand(id: "mute"),
         "command-open-local.json": .open(source: MediaSource(kind: .local, location: "/Users/example/Movies/film.mkv"),
                                          resumeFrom: 754.5, audioTrack: 2, subtitleTrack: 3),
         "command-open-url.json": .open(source: MediaSource(kind: .url, location: "https://example.com/stream.m3u8")),
@@ -57,21 +64,58 @@ final class SessionProtocolTests: XCTestCase {
         "command-set-subtitle-delay.json": .setSubtitleDelay(seconds: -0.25),
         "command-set-volume.json": .setVolume(volume: 85),
         "command-toggle-pause.json": .togglePause,
+        "history/command-remove.json": .history(action: .remove(source: MediaSource(kind: .local, location: "/Users/example/Movies/film.mkv"))),
+        "history/command-set-private.json": .history(action: .setPrivate(enabled: true)),
+        "playlist-command-open.json": .playlist(action: .open(sources: [
+            MediaSource(kind: .local, location: "/Users/example/Movies/Show/Episode 1.mkv"),
+            MediaSource(kind: .local, location: "/Users/example/Movies/Extras"),
+            MediaSource(kind: .local, location: "/Users/example/Music/queue.m3u8"),
+            MediaSource(kind: .url, location: "https://example.com/clip.mp4"),
+        ])),
+        "playlist-command-next.json": .playlist(action: .next),
+        "playlist-command-previous.json": .playlist(action: .previous),
+        "playlist-command-jump.json": .playlist(action: .jump(index: 3)),
+        "playlist-command-queue.json": .playlist(action: .queue(
+            sources: [MediaSource(kind: .local, location: "/Users/example/Movies/next.mkv")], mode: .playNext)),
+        "playlist-command-play-next.json": .playlist(action: .playNext(index: 4)),
+        "playlist-command-move.json": .playlist(action: .move(from: 2, to: 0)),
+        "playlist-command-remove.json": .playlist(action: .remove(index: 1)),
+        "playlist-command-clear-queue.json": .playlist(action: .clearQueue),
+        "playlist-command-set-repeat.json": .playlist(action: .setRepeat(mode: .one)),
+        "playlist-command-set-shuffle.json": .playlist(action: .setShuffle(enabled: true, seed: 42)),
+        "playlist-command-set-shuffle-unseeded.json": .playlist(action: .setShuffle(enabled: false)),
     ]
 
     static let replies: [String: DispatchResult] = [
         "reply-accepted.json": .accepted(requestId: 7),
         "reply-failed.json": .failed(requestId: 8, message: "error running command"),
         "reply-no-op.json": .noOp,
+        "reply-perform.json": .perform,
         "reply-rejected.json": .rejected(reason: .noActiveMedia, message: "the command needs loaded media"),
+        "history/reply-done.json": .history(result: .done),
+        "history/reply-unchanged.json": .history(result: .unchanged),
+        "history/reply-failed.json": .history(result: .failed(message: "the history could not be saved: Permission denied")),
+        "playlist-reply-applied.json": .applied,
+    ]
+
+    static let queries: [String: Query] = [
+        "query-snapshot.json": .snapshot,
+        "query-command-registry.json": .commandRegistry(fullscreen: true, miniPlayer: false),
+        "query-shortcut-table.json": .shortcutTable,
+        "history/query-page.json": .history(query: .page(search: "severance", utcOffsetSeconds: -18000)),
+        "history/query-welcome-shelf.json": .history(query: .welcomeShelf(limit: 8, utcOffsetSeconds: 7200)),
+        "playlist-query.json": .playlist,
     ]
 
     func testEveryFixtureIsCoveredHere() throws {
-        let names = try FileManager.default.contentsOfDirectory(atPath: GoldenFixtures.directory.path)
-            .filter { $0.hasSuffix(".json") }
-        let covered = Set(Self.commands.keys).union(Self.replies.keys).union([
+        let names = try GoldenFixtures.names()
+        let covered = Set(Self.commands.keys).union(Self.replies.keys).union(Self.queries.keys).union([
             "config.json", "enums.json", "events-batch.json", "events-empty.json",
-            "query-snapshot.json", "query-reply-snapshot.json", "query-reply-rejected.json",
+            "query-reply-snapshot.json", "query-reply-rejected.json",
+            "query-reply-command-registry.json", "query-reply-shortcut-table.json",
+            "history/enums.json", "history/events.json",
+            "history/query-reply-page.json", "history/query-reply-welcome-shelf.json",
+            "playlist-enums.json", "playlist-events.json", "playlist-query-reply.json", "playlist-query-reply-empty.json",
         ])
         XCTAssertFalse(names.isEmpty, "no fixtures found in \(GoldenFixtures.directory.path)")
         XCTAssertEqual(Set(names), covered, "a fixture was added or removed without a Swift test")
@@ -93,10 +137,127 @@ final class SessionProtocolTests: XCTestCase {
         }
     }
 
-    func testTheSnapshotQueryRoundTrips() throws {
-        let query = QueryEnvelope(query: .snapshot)
-        XCTAssertEqual(try GoldenFixtures.decode(QueryEnvelope.self, "query-snapshot.json"), query)
-        XCTAssertEqual(try GoldenFixtures.encodedObject(query), try GoldenFixtures.object("query-snapshot.json"))
+    func testEveryQueryFixtureDecodesAndEncodesBackToTheSameDocument() throws {
+        for (name, query) in Self.queries {
+            let envelope = QueryEnvelope(query: query)
+            XCTAssertEqual(try GoldenFixtures.decode(QueryEnvelope.self, name), envelope, name)
+            XCTAssertEqual(try GoldenFixtures.encodedObject(envelope), try GoldenFixtures.object(name), name)
+        }
+    }
+
+    func testTheCommandRegistryReplyDecodesEveryRow() throws {
+        let reply = try GoldenFixtures.decode(QueryReply.self, "query-reply-command-registry.json")
+        guard case .commandRegistry(let commands) = reply.result else {
+            return XCTFail("not a registry reply: \(reply.result)")
+        }
+        XCTAssertEqual(commands.count, 65)
+        let none = ShortcutModifiers()
+        XCTAssertEqual(commands.first, RegistryCommand(
+            id: "play-pause", group: .playbackNavigation, menu: .topLevel, label: "Play / Pause",
+            available: true, enabled: true, checked: false,
+            shortcut: ShortcutChord(key: "space", modifiers: none, label: "Space")))
+        XCTAssertEqual(commands.first { $0.id == "fullscreen" }, RegistryCommand(
+            id: "fullscreen", group: .viewWindow, menu: .topLevel, label: "Exit fullscreen",
+            available: true, enabled: true, checked: true,
+            shortcut: ShortcutChord(key: "f", modifiers: none, label: "F")))
+        XCTAssertEqual(commands.first { $0.id == "open-url" }, RegistryCommand(
+            id: "open-url", group: .mediaFile, menu: .toolsAdvanced, label: "Open URL...",
+            available: false, enabled: true, checked: false,
+            shortcut: ShortcutChord(key: "o", modifiers: ShortcutModifiers(shift: true, cmd: true), label: "Shift+Cmd+O")))
+        XCTAssertNil(try XCTUnwrap(commands.first { $0.id == "seek-back" }).menu, "a keyboard-only command has no menu")
+        XCTAssertNil(try XCTUnwrap(commands.first { $0.id == "zoom-out" }).shortcut)
+        // Written back, the rows are the fixture: no field was dropped on the way in.
+        XCTAssertEqual(try GoldenFixtures.encodedObject(reply), try GoldenFixtures.object("query-reply-command-registry.json"))
+    }
+
+    func testTheShortcutTableReplyDecodesEveryRow() throws {
+        let reply = try GoldenFixtures.decode(QueryReply.self, "query-reply-shortcut-table.json")
+        guard case .shortcutTable(let shortcuts) = reply.result else {
+            return XCTFail("not a shortcut table reply: \(reply.result)")
+        }
+        XCTAssertEqual(shortcuts.count, 28)
+        XCTAssertEqual(shortcuts.first { $0.action == "save-screenshot" }, ShortcutRow(
+            action: "save-screenshot", command: "save-frame",
+            primary: ShortcutChord(key: "c", modifiers: ShortcutModifiers(), label: "C"), secondary: nil))
+        XCTAssertEqual(shortcuts.first { $0.action == "open-settings" }?.primary,
+                       ShortcutChord(key: "comma", modifiers: ShortcutModifiers(cmd: true), label: "Cmd+,"))
+        XCTAssertEqual(try GoldenFixtures.encodedObject(reply), try GoldenFixtures.object("query-reply-shortcut-table.json"))
+    }
+
+    func testTheHistoryShelfReplyDecodesEveryField() throws {
+        let name = "history/query-reply-welcome-shelf.json"
+        let reply = try GoldenFixtures.decode(QueryReply.self, name)
+        let entry = HistoryEntry(
+            source: MediaSource(kind: .local, location: "/Users/example/Movies/Severance/Season 02/Severance S02E03.mkv"),
+            title: "Severance S02E03", location: "Severance › Season 02",
+            position: 1325.5, duration: 3120, progress: 0.42, state: .progress,
+            stateLabel: "30m left", whenLabel: "Today 21:14", updatedAtUnix: 1_699_990_000, resumeFrom: 1325.5)
+        XCTAssertEqual(reply.result, .history(result: .welcomeShelf(privateSession: false, entries: [entry])))
+        XCTAssertEqual(try GoldenFixtures.encodedObject(reply), try GoldenFixtures.object(name))
+    }
+
+    func testTheHistoryPageReplyDecodesEveryField() throws {
+        let name = "history/query-reply-page.json"
+        let reply = try GoldenFixtures.decode(QueryReply.self, name)
+        let entry = HistoryEntry(
+            source: MediaSource(kind: .url, location: "https://example.com/watch?v=abc123"),
+            title: "Example talk", location: "https://example.com/watch?v=abc123",
+            position: 0, duration: 900, progress: 0, state: .finished,
+            stateLabel: "Finished", whenLabel: "12 Jun", updatedAtUnix: 1_686_528_000, resumeFrom: nil)
+        XCTAssertEqual(reply.result, .history(result: .page(
+            privateSession: true, readFailed: false, unreadableCopy: nil,
+            summary: "Everything you’ve opened · kept forever", endCap: "End of history · kept forever",
+            sections: [HistorySection(bucket: .earlier, header: "EARLIER", entries: [entry])])))
+        XCTAssertEqual(try GoldenFixtures.encodedObject(reply), try GoldenFixtures.object(name))
+    }
+
+    func testHistoryEventsDecodeAndLeaveTheSnapshotAlone() throws {
+        let batch = try GoldenFixtures.decode(EventBatch.self, "history/events.json")
+        XCTAssertEqual(batch.events, [
+            .history(event: .resumed(position: 754.5)),
+            .history(event: .changed),
+            .history(event: .privateSession(enabled: true)),
+            .history(event: .saveFailed(message: "the history could not be saved: No space left on device")),
+        ])
+        let store = SessionStore()
+        store.apply(batch)
+        XCTAssertEqual(store.snapshot, SessionSnapshot())
+        XCTAssertNil(store.lastError)
+        XCTAssertFalse(store.shutDown)
+    }
+
+    func testThePlaylistRepliesDecodeEveryField() throws {
+        let replies: [String: PlaylistState] = [
+            "playlist-query-reply.json": PlaylistState(
+                items: [
+                    PlaylistEntry(source: MediaSource(kind: .local, location: "/Users/example/Movies/Show/Episode 1.mkv"),
+                                  title: "Episode 1.mkv"),
+                    PlaylistEntry(source: MediaSource(kind: .local, location: "/Users/example/Movies/Show/Episode 2.mkv"),
+                                  title: "Episode 2.mkv"),
+                    PlaylistEntry(source: MediaSource(kind: .url, location: "https://example.com/clip.mp4?token=a"),
+                                  title: "clip.mp4"),
+                ],
+                currentIndex: 1, repeat: .all, shuffle: true, scanning: false),
+            "playlist-query-reply-empty.json": PlaylistState(),
+        ]
+        for (name, playlist) in replies {
+            let reply = try GoldenFixtures.decode(QueryReply.self, name)
+            XCTAssertEqual(reply.result, .playlist(playlist: playlist), name)
+            XCTAssertEqual(try GoldenFixtures.encodedObject(reply), try GoldenFixtures.object(name), name)
+        }
+    }
+
+    func testAPlaylistEventFollowsTheSnapshotChangesAndLeavesTheSnapshotAlone() throws {
+        let batch = try GoldenFixtures.decode(EventBatch.self, "playlist-events.json")
+        let playlist = PlaylistState(
+            items: [PlaylistEntry(source: MediaSource(kind: .local, location: "/Users/example/Movies/Show/Episode 2.mkv"),
+                                  title: "Episode 2.mkv")],
+            currentIndex: 0, repeat: .off, shuffle: false, scanning: true)
+        XCTAssertEqual(batch.events, [.snapshotChanged(changes: [.status(value: .opening)]),
+                                      .playlistChanged(playlist: playlist)])
+        let store = SessionStore()
+        store.apply(batch)
+        XCTAssertEqual(store.snapshot, SessionSnapshot(status: .opening))
     }
 
     func testTheSnapshotReplyDecodesEveryField() throws {
@@ -153,6 +314,28 @@ final class SessionProtocolTests: XCTestCase {
         XCTAssertTrue(store.shutDown)
     }
 
+    func testAnUnknownEventIsSkippedAndTheRestOfTheBatchKept() throws {
+        let json = #"""
+            {"schema_version": 1, "events": [
+              {"snapshot_changed": {"changes": [{"mute": {"value": true}}]}},
+              {"a_later_event": {"anything": [1, 2]}},
+              {"error": {"kind": "engine", "message": "gone", "request_id": null}},
+              {"shutdown": {}}
+            ]}
+            """#
+        let batch = try SessionJSON.makeDecoder().decode(EventBatch.self, from: Data(json.utf8))
+        XCTAssertEqual(batch.events, [
+            .snapshotChanged(changes: [.mute(value: true)]),
+            .error(kind: .engine, message: "gone", requestId: nil),
+            .shutdown,
+        ])
+    }
+
+    func testAKnownEventThatDoesNotDecodeFailsTheBatch() {
+        let json = #"{"schema_version": 1, "events": [{"shutdown": {}}, {"error": {"kind": "engine"}}]}"#
+        XCTAssertThrowsError(try SessionJSON.makeDecoder().decode(EventBatch.self, from: Data(json.utf8)))
+    }
+
     func testAnEmptyBatchChangesNothing() throws {
         let batch = try GoldenFixtures.decode(EventBatch.self, "events-empty.json")
         XCTAssertEqual(batch, EventBatch(schemaVersion: 1, events: []))
@@ -165,7 +348,8 @@ final class SessionProtocolTests: XCTestCase {
             configDir: "/Users/example/Library/Preferences/OK Player",
             cacheDir: "/Users/example/Library/Caches/OK Player",
             hwdec: "videotoolbox",
-            mpvOptions: [MpvOption(name: "ao", value: "coreaudio")])
+            mpvOptions: [MpvOption(name: "ao", value: "coreaudio")],
+            shellCommands: ["open-file", "fullscreen"])
         XCTAssertEqual(try GoldenFixtures.decode(SessionConfig.self, "config.json"), config)
         XCTAssertEqual(try GoldenFixtures.encodedObject(config), try GoldenFixtures.object("config.json"))
     }
@@ -181,7 +365,25 @@ final class SessionProtocolTests: XCTestCase {
             "source_kind": SourceKind.allCases.map(\.rawValue),
             "seek_mode": SeekMode.allCases.map(\.rawValue),
             "seek_precision": SeekPrecision.allCases.map(\.rawValue),
+            "command_group": CommandGroup.allCases.map(\.rawValue),
+            "command_menu": CommandMenu.allCases.map(\.rawValue),
         ]
         XCTAssertEqual(swift, lists)
+    }
+
+    func testEveryHistoryEnumValueMatchesTheRustList() throws {
+        let lists = try XCTUnwrap(JSONSerialization.jsonObject(with: GoldenFixtures.data("history/enums.json")) as? [String: [String]])
+        XCTAssertEqual(lists, [
+            "history_state": HistoryState.allCases.map(\.rawValue),
+            "history_bucket": HistoryBucket.allCases.map(\.rawValue),
+        ])
+    }
+
+    func testEveryPlaylistEnumValueMatchesTheRustList() throws {
+        let lists = try XCTUnwrap(JSONSerialization.jsonObject(with: GoldenFixtures.data("playlist-enums.json")) as? [String: [String]])
+        XCTAssertEqual(lists, [
+            "repeat_mode": RepeatMode.allCases.map(\.rawValue),
+            "queue_mode": QueueMode.allCases.map(\.rawValue),
+        ])
     }
 }

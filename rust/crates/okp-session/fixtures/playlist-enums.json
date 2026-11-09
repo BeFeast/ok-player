@@ -1,0 +1,4 @@
+{
+  "repeat_mode": ["off", "one", "all"],
+  "queue_mode": ["append", "play_next"]
+}

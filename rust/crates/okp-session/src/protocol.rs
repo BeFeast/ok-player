@@ -16,8 +16,18 @@ use okp_core::player as core;
 use okp_core::playlist::PlaylistItem;
 use serde::{Deserialize, Serialize};
 
+pub use crate::commands::{CommandGroup, CommandMenu, RegistryCommand, ShortcutRow};
+pub use crate::history::{
+    HistoryAction, HistoryActionResult, HistoryBucket, HistoryEntry, HistoryEvent, HistoryQuery,
+    HistoryQueryResult, HistorySection, HistoryState,
+};
+pub use crate::playlist::{PlaylistAction, PlaylistEntry, PlaylistState, QueueMode, RepeatMode};
+
 /// Version of every envelope below. Bump on any change a shell built against
-/// the previous version could not decode or would misread.
+/// the previous version could not decode or would misread. A new command,
+/// query or event, or a reply variant that answers only a new command, keeps
+/// the version: shells skip events they do not know (`docs/session-abi.md`,
+/// "Compatibility within a version").
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// What the shell passes when it creates a session.
@@ -38,6 +48,11 @@ pub struct SessionConfig {
     /// Extra libmpv options, applied in order after the session defaults.
     #[serde(default)]
     pub mpv_options: Vec<MpvOption>,
+    /// The registry commands this shell carries out itself (dialogs, window
+    /// and clipboard actions). A command neither the session nor the shell
+    /// carries out is reported unavailable.
+    #[serde(default)]
+    pub shell_commands: Vec<String>,
 }
 
 /// One libmpv option.
@@ -122,6 +137,18 @@ pub enum Command {
     SetSubtitleDelay {
         seconds: f64,
     },
+    /// Run a command of the registry (`command_registry`) by its id.
+    InvokeCommand {
+        id: String,
+    },
+    /// A watch-history action; see [`HistoryAction`].
+    History {
+        action: HistoryAction,
+    },
+    /// Open, step through and edit the playlist; see [`PlaylistAction`].
+    Playlist {
+        action: PlaylistAction,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +198,15 @@ pub enum DispatchResult {
     /// Validated, but the engine refused it immediately. The session state has
     /// already absorbed the failure.
     Failed { request_id: u64, message: String },
+    /// An invoked registry command the shell carries out itself. The session
+    /// found it available; nothing reached the engine.
+    Perform {},
+    /// The answer to a `history` command.
+    History { result: HistoryActionResult },
+    /// Carried out by the session itself (a playlist edit, or an open whose
+    /// folders are being read); nothing reached the engine yet. Events report
+    /// the effect.
+    Applied {},
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,6 +222,10 @@ pub enum RejectReason {
     UnsupportedSchemaVersion,
     /// The C caller passed a null pointer or text that is not UTF-8.
     InvalidArgument,
+    /// `invoke_command` named an id that is not in the registry.
+    UnknownCommand,
+    /// `invoke_command` named a command this shell cannot run.
+    Unavailable,
 }
 
 /// `{"schema_version":1,"query":{...}}`
@@ -201,6 +241,20 @@ pub struct QueryEnvelope {
 pub enum Query {
     /// The full session state, as the event stream has reported it so far.
     Snapshot {},
+    /// Every registry command, resolved against the current state. The shell
+    /// passes the window state only it knows.
+    CommandRegistry {
+        #[serde(default)]
+        fullscreen: bool,
+        #[serde(default)]
+        mini_player: bool,
+    },
+    /// Every bindable action with its chords on this platform.
+    ShortcutTable {},
+    /// A watch-history query; see [`HistoryQuery`].
+    History { query: HistoryQuery },
+    /// The playlist as it is now.
+    Playlist {},
 }
 
 /// `{"schema_version":1,"result":{...}}`, the answer to a query.
@@ -216,6 +270,19 @@ pub struct QueryReply {
 pub enum QueryResult {
     Snapshot {
         snapshot: SessionSnapshot,
+    },
+    CommandRegistry {
+        commands: Vec<RegistryCommand>,
+    },
+    ShortcutTable {
+        shortcuts: Vec<ShortcutRow>,
+    },
+    /// The answer to a `history` query.
+    History {
+        result: HistoryQueryResult,
+    },
+    Playlist {
+        playlist: PlaylistState,
     },
     Rejected {
         reason: RejectReason,
@@ -233,13 +300,18 @@ pub struct EventBatch {
 
 /// One entry of a drained batch. A batch holds at most one `snapshot_changed`,
 /// first, carrying the latest value of every field that changed since the
-/// previous batch; `error` events follow in the order they happened; `shutdown`
-/// comes last.
+/// previous batch; then at most one `playlist_changed` with the latest
+/// playlist; `error` events follow in the order they happened; `shutdown` comes
+/// last.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Event {
     SnapshotChanged {
         changes: Vec<SnapshotChange>,
+    },
+    /// The playlist changed: its items, current item, play modes or scanning.
+    PlaylistChanged {
+        playlist: PlaylistState,
     },
     Error {
         kind: ErrorKind,
@@ -249,6 +321,10 @@ pub enum Event {
     },
     /// The engine has quit; the session accepts no further playback.
     Shutdown {},
+    /// A watch-history event; see [`HistoryEvent`].
+    History {
+        event: HistoryEvent,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -425,10 +501,25 @@ impl MediaSource {
     }
 }
 
+/// Where the session sends a command.
+pub(crate) enum Route<'a> {
+    /// The core command `PlayerMachine` validates before the engine sees it.
+    Player(core::PlayerCommand),
+    /// A history action, which the session carries out itself.
+    History(&'a HistoryAction),
+    /// `invoke_command`, which names a registry command instead of carrying
+    /// one; the session resolves it before routing.
+    Registry,
+    /// A playlist command: the session's playlist decides it and plays an item
+    /// with an `open`, so the command itself is never forwarded.
+    Playlist(&'a PlaylistAction),
+}
+
 impl Command {
-    /// The core command `PlayerMachine` validates for this intent.
-    pub(crate) fn to_core(&self) -> core::PlayerCommand {
-        match self {
+    /// Where this command goes: a player command becomes the core command the
+    /// state machine validates.
+    pub(crate) fn route(&self) -> Route<'_> {
+        Route::Player(match self {
             Self::Open {
                 source,
                 resume_from,
@@ -461,7 +552,10 @@ impl Command {
                 id: *id,
             },
             Self::SetSubtitleDelay { seconds } => core::PlayerCommand::SetSubtitleDelay(*seconds),
-        }
+            Self::History { action } => return Route::History(action),
+            Self::InvokeCommand { .. } => return Route::Registry,
+            Self::Playlist { action } => return Route::Playlist(action),
+        })
     }
 }
 
@@ -564,6 +658,8 @@ impl RejectReason {
             Self::Malformed => "the document is not a known command or query",
             Self::UnsupportedSchemaVersion => "unsupported schema_version",
             Self::InvalidArgument => "a null pointer or non-UTF-8 text was passed",
+            Self::UnknownCommand => "not a registry command",
+            Self::Unavailable => "the command is not available in this shell",
         }
     }
 }

@@ -508,6 +508,11 @@ pub struct Preferences {
     pub audio_delay: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<f64>,
+    /// Per-file output volume in percent, boost above 100 included (PRD §12.2).
+    /// Written by the macOS session; the GTK shell keeps volume global for now and
+    /// leaves a recorded value untouched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f64>,
     /// Per-file aspect, zoom/pan, rotation, fill, and deinterlace choices.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video_geometry: Option<VideoGeometry>,
@@ -526,6 +531,7 @@ impl Preferences {
             && self.subtitle_scale.is_none()
             && self.audio_delay.is_none()
             && self.speed.is_none()
+            && self.volume.is_none()
             && self.video_geometry.is_none()
     }
 
@@ -556,6 +562,9 @@ impl Preferences {
         }
         if updated.speed.is_some() {
             self.speed = updated.speed;
+        }
+        if updated.volume.is_some() {
+            self.volume = updated.volume;
         }
         if updated.video_geometry.is_some() {
             self.video_geometry = updated.video_geometry.map(VideoGeometry::normalized);
@@ -1077,6 +1086,67 @@ mod tests {
         assert_eq!(base.subtitle_enabled, Some(false));
         assert_eq!(base.subtitle_scale, Some(1.2));
         assert_eq!(base.speed, Some(0.75));
+    }
+
+    #[test]
+    fn a_per_file_volume_round_trips_and_survives_merges_that_do_not_set_it() {
+        let raw = r#"{
+            "version": 2,
+            "files": {
+                "/media/movie.mkv": {
+                    "position": 120.0,
+                    "duration": 600.0,
+                    "finished": false,
+                    "updated_at_unix": 1700000000,
+                    "preferences": { "volume": 135.0, "speed": 1.25 }
+                }
+            }
+        }"#;
+        let mut history = History::load(raw).expect("a document with a volume loads");
+        let key = "/media/movie.mkv";
+        assert_eq!(history.files[key].preferences.volume, Some(135.0));
+
+        // A new volume replaces the recorded one.
+        history.record_preferences(
+            key,
+            Preferences {
+                volume: Some(80.0),
+                ..Preferences::default()
+            },
+            1_700_000_050,
+            HistoryWriteMode::Record,
+        );
+        assert_eq!(history.files[key].preferences.volume, Some(80.0));
+        assert_eq!(history.files[key].preferences.speed, Some(1.25));
+
+        // A shell that does not remember volume merges without it.
+        history.record_preferences(
+            key,
+            Preferences {
+                speed: Some(1.5),
+                ..Preferences::default()
+            },
+            1_700_000_100,
+            HistoryWriteMode::Record,
+        );
+        let saved = serde_json::to_string(&history).expect("history serialises");
+        let reloaded = History::load(&saved).expect("the saved document loads");
+        assert_eq!(reloaded.files[key].preferences.volume, Some(80.0));
+        assert_eq!(reloaded.files[key].preferences.speed, Some(1.5));
+
+        // Only a volume is still a recorded preference, and none is omitted.
+        assert!(
+            !Preferences {
+                volume: Some(40.0),
+                ..Preferences::default()
+            }
+            .is_empty()
+        );
+        assert!(
+            !serde_json::to_string(&Preferences::default())
+                .expect("preferences serialise")
+                .contains("volume")
+        );
     }
 
     #[test]

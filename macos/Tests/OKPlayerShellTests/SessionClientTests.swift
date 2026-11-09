@@ -17,7 +17,8 @@ final class SessionClientTests: XCTestCase {
             configDir: root.appendingPathComponent("config").path,
             cacheDir: root.appendingPathComponent("cache").path,
             hwdec: "no",
-            mpvOptions: [MpvOption(name: "ao", value: "null"), MpvOption(name: "vo", value: "null")])
+            mpvOptions: [MpvOption(name: "ao", value: "null"), MpvOption(name: "vo", value: "null")],
+            shellCommands: ["open-file"])
         client = try SessionClient(config: config)
     }
 
@@ -51,11 +52,16 @@ final class SessionClientTests: XCTestCase {
 
     func testTheSessionReadsEverySwiftEncodedCommand() {
         let missing = root.appendingPathComponent("missing.mkv").path
+        // The fixture opens name media that is not there, and a URL libmpv would
+        // fetch; open a missing local file instead.
         var commands = SessionProtocolTests.commands.values.filter {
-            if case .open = $0 { return false }
-            return true
+            switch $0 {
+            case .open, .playlist(.open): return false
+            default: return true
+            }
         }
         commands.append(.open(source: MediaSource(kind: .local, location: missing), resumeFrom: 3, audioTrack: 1, subtitleTrack: nil))
+        commands.append(.playlist(action: .open(sources: [MediaSource(kind: .local, location: missing)])))
         for command in commands {
             switch client.dispatch(command) {
             case .rejected(let reason, let message) where reason == .malformed || reason == .unsupportedSchemaVersion:
@@ -64,6 +70,80 @@ final class SessionClientTests: XCTestCase {
                 break
             }
         }
+    }
+
+    func testTheSessionAnswersTheRegistryQueriesAndInvokesItsCommands() throws {
+        guard case .commandRegistry(let commands)? = client.query(.commandRegistry(fullscreen: true, miniPlayer: false)) else {
+            return XCTFail("the registry query was not answered with the registry")
+        }
+        let fullscreen = try XCTUnwrap(commands.first { $0.id == "fullscreen" })
+        XCTAssertEqual(fullscreen.label, "Exit fullscreen", "the window state passed in the query is honoured")
+        XCTAssertTrue(fullscreen.checked)
+        XCTAssertFalse(fullscreen.available, "a shell command this shell did not list is unavailable")
+        let openFile = try XCTUnwrap(commands.first { $0.id == "open-file" })
+        XCTAssertTrue(openFile.available, "the config's shell_commands reached the session")
+        XCTAssertEqual(openFile.shortcut?.label, "Cmd+O")
+
+        guard case .shortcutTable(let shortcuts)? = client.query(.shortcutTable) else {
+            return XCTFail("the shortcut table query was not answered with the table")
+        }
+        XCTAssertEqual(shortcuts.first { $0.action == "save-screenshot" }?.command, "save-frame")
+
+        guard case .accepted = client.dispatch(.invokeCommand(id: "volume-up")) else {
+            return XCTFail("a command the session runs must be dispatched")
+        }
+        guard case .perform = client.dispatch(.invokeCommand(id: "open-file")) else {
+            return XCTFail("a command this shell carries out must come back as perform")
+        }
+        guard case .rejected(.unavailable, _) = client.dispatch(.invokeCommand(id: "open-url")) else {
+            return XCTFail("a command nobody carries out must be refused as unavailable")
+        }
+        guard case .rejected(.unknownCommand, _) = client.dispatch(.invokeCommand(id: "no-such-command")) else {
+            return XCTFail("an id outside the registry must be refused as unknown")
+        }
+    }
+
+    func testTheSessionKeepsTheHistoryAndReportsThePrivateSession() throws {
+        guard case .history(.welcomeShelf(false, let entries))? =
+            client.query(.history(query: .welcomeShelf(limit: 8, utcOffsetSeconds: 0))) else {
+            return XCTFail("the shelf query was not answered with a public shelf")
+        }
+        XCTAssertEqual(entries, [], "a new data directory has no history")
+
+        let reported = expectation(description: "a drained batch reports the private session")
+        reported.assertForOverFulfill = false
+        client.onBatch = { batch in
+            if batch.events.contains(.history(event: .privateSession(enabled: true))) { reported.fulfill() }
+        }
+        XCTAssertEqual(client.dispatch(.history(action: .setPrivate(enabled: true))), .history(result: .done))
+        XCTAssertEqual(client.dispatch(.history(action: .setPrivate(enabled: true))), .history(result: .unchanged))
+        wait(for: [reported], timeout: 5)
+        guard case .history(.page(true, _, _, _, _, _))? =
+            client.query(.history(query: .page(utcOffsetSeconds: 0))) else {
+            return XCTFail("the page does not report the private session")
+        }
+    }
+
+    func testTheSessionAnswersThePlaylistQueryAndReportsItsChanges() {
+        guard case .playlist(let empty)? = client.query(.playlist) else {
+            return XCTFail("the playlist query was not answered with the playlist")
+        }
+        XCTAssertEqual(empty, PlaylistState(), "a new session has an empty playlist")
+
+        let reported = expectation(description: "a drained batch carries the new repeat mode")
+        reported.assertForOverFulfill = false
+        client.onBatch = { batch in
+            for case .playlistChanged(let playlist) in batch.events where playlist.repeat == .all {
+                reported.fulfill()
+            }
+        }
+        XCTAssertEqual(client.dispatch(.playlist(action: .setRepeat(mode: .all))), .applied)
+        XCTAssertEqual(client.dispatch(.playlist(action: .setRepeat(mode: .all))), .noOp)
+        wait(for: [reported], timeout: 5)
+        guard case .playlist(let playlist)? = client.query(.playlist) else {
+            return XCTFail("the playlist query was not answered with the playlist")
+        }
+        XCTAssertEqual(playlist.repeat, .all)
     }
 
     func testAClosedClientRefusesCommandsWithoutTouchingTheSession() {

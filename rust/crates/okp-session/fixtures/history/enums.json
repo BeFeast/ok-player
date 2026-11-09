@@ -1,0 +1,4 @@
+{
+  "history_state": ["finished", "progress", "barely"],
+  "history_bucket": ["today", "yesterday", "earlier_this_week", "earlier"]
+}
