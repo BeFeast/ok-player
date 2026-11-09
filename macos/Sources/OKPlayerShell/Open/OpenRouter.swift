@@ -37,11 +37,13 @@ enum OpenOutcome: Equatable {
 final class OpenRouter {
     private(set) weak var session: OpenSession?
     /// Loads one subtitle file onto the media that plays. `nil` while the session
-    /// has no command for it; a subtitle-only plan is then unsupported, and a
-    /// drop of subtitles is refused.
+    /// has no command for it (#910); a subtitle-only plan is then unsupported, and
+    /// a drop of subtitles is refused.
     var addSubtitle: ((String) -> DispatchResult)?
     /// Open events held until the session exists, oldest first.
     private(set) var held: [URL] = []
+    /// What the latest `open(_:)` came to.
+    private(set) var lastOutcome: OpenOutcome?
 
     /// The local file paths among `urls`, in order. Web URLs are not opened from
     /// here yet.
@@ -49,10 +51,29 @@ final class OpenRouter {
         urls.filter(\.isFileURL).map { $0.standardizedFileURL.path }
     }
 
+    /// The paths among `paths(urls)` that are folders, which the session opens
+    /// whatever their names; a path it can tell nothing else about opens nothing.
+    static func folders(_ urls: [URL]) -> [String] {
+        urls.filter { $0.isFileURL && isFolder($0) }.map { $0.standardizedFileURL.path }
+    }
+
+    /// Whether a file URL names a folder. The file system says so when it can (a
+    /// symbolic link counts as what it points to); a package such as an app bundle
+    /// is a file to the user, not a folder. Without an answer from it, the URL's own
+    /// form decides: open panels, Finder drags and Launch Services hand folders over
+    /// as URLs ending in a slash.
+    static func isFolder(_ url: URL) -> Bool {
+        let target = url.resolvingSymlinksInPath()
+        guard let values = try? target.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey]),
+              let directory = values.isDirectory else { return url.hasDirectoryPath }
+        return directory && values.isPackage != true
+    }
+
     /// The session's plan for `urls`; `.nothing` without a session or local files.
     func plan(for urls: [URL]) -> OpenPlan {
         let paths = OpenRouter.paths(urls)
-        guard !paths.isEmpty, case .openPaths(let plan)? = session?.query(.openPaths(paths: paths)) else {
+        let query = Query.openPaths(paths: paths, folders: OpenRouter.folders(urls))
+        guard !paths.isEmpty, case .openPaths(let plan)? = session?.query(query) else {
             return .nothing
         }
         return plan
@@ -71,6 +92,12 @@ final class OpenRouter {
     /// Open `urls`, or hold them until the session exists.
     @discardableResult
     func open(_ urls: [URL]) -> OpenOutcome {
+        let outcome = route(urls)
+        lastOutcome = outcome
+        return outcome
+    }
+
+    private func route(_ urls: [URL]) -> OpenOutcome {
         guard session != nil else {
             let files = urls.filter(\.isFileURL)
             if files.isEmpty { return .nothing }

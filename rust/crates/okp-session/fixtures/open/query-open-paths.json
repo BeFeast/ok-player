@@ -6,7 +6,11 @@
         "/Users/example/Movies/Show",
         "/Users/example/Movies/film.mkv",
         "/Users/example/Movies/film.en.srt",
-        "/Users/example/Music/queue.m3u8"
+        "/Users/example/Music/queue.m3u8",
+        "/Users/example/Documents/notes.pdf"
+      ],
+      "folders": [
+        "/Users/example/Movies/Show"
       ]
     }
   }

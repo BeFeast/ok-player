@@ -698,10 +698,14 @@ fn every_enum_value_matches_the_enums_fixture() {
         ErrorKind::LoadFailed,
         ErrorKind::CommandFailed,
         ErrorKind::Engine,
+        ErrorKind::NothingPlayable,
     ];
     for value in &error_kind {
         match value {
-            ErrorKind::LoadFailed | ErrorKind::CommandFailed | ErrorKind::Engine => {}
+            ErrorKind::LoadFailed
+            | ErrorKind::CommandFailed
+            | ErrorKind::Engine
+            | ErrorKind::NothingPlayable => {}
         }
     }
     let video_click_intent = vec![

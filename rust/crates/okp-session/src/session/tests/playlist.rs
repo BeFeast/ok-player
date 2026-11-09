@@ -582,7 +582,7 @@ fn opening_a_folder_plays_its_media_and_an_empty_one_reports_an_error() {
     assert_eq!(
         errors,
         [(
-            ErrorKind::LoadFailed,
+            ErrorKind::NothingPlayable,
             "nothing playable was found".to_owned()
         )]
     );

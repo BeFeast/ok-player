@@ -263,7 +263,9 @@ several times between drains appears once. Applying the changes in order to the
 snapshot from a query gives the session's state as of the drain.
 
 `error` events (`kind`, `message`, `request_id` when the error answers a
-command) follow in the order they happened, and `shutdown` comes last.
+command) follow in the order they happened, and `shutdown` comes last. The
+kinds are `load_failed`, `command_failed`, `engine`, and `nothing_playable`
+(see Playlist).
 
 `time_pos` and `cache_ahead` change on every frame. On their own they are
 published at most about ten times a second; whenever another field changes they
@@ -302,7 +304,9 @@ Opening:
   relative entries resolved against the playlist file's folder.
 - Folders and playlist files are read on a scan thread too. The reply is
   `applied`; the first item opens when the read finishes, and an `error` event
-  (`load_failed`, no `request_id`) reports a read that found nothing playable.
+  (`nothing_playable`, no `request_id`) reports a read that found nothing
+  playable. Whatever was loaded before goes on playing, so a shell reports it
+  without treating the current media as failed.
 - While an open's folders and playlist files are read, the playlist it
   replaces stays. `jump`, `next` and `previous` play from it and drop the
   read. Sources queued meanwhile show in it at once and follow the opened
@@ -337,15 +341,21 @@ reads the filesystem.
 - `open_formats {}` answers `result.open_formats.formats`: `video`, `audio`,
   `subtitle` and `playlist` (`m3u`, `m3u8`), each a list of lowercase
   extensions without the dot, for an open panel's filter.
-- `open_paths {paths}` answers `result.open_paths.plan` for local paths from an
-  open panel, a drop onto the window or the system's open events:
-  - `open {sources}`: every path that is not a subtitle file, as local
-    sources in the given order and each once. The shell sends them as a
-    playlist `open` (see Playlist), which plays media files, lists folders and
-    reads M3U files on its scan thread. Subtitle files among them are left out.
-  - `add_subtitles {paths}`: only subtitle files were given and media is
-    `playing` or `paused`: they belong to that media.
-  - `nothing {}`: no paths, or only subtitle files with nothing loaded.
+- `open_paths {paths, folders}` answers `result.open_paths.plan` for local
+  paths from an open panel, a drop onto the window or the system's open
+  events. `folders` (optional, empty when left out) lists those of `paths` the
+  shell knows are folders, from their file URLs; the session cannot tell
+  without reading the filesystem.
+  - `open {sources}`: the media files (by okp-core's rules), M3U files and
+    folders among the paths, as local sources in the given order and each once.
+    The shell sends them as a playlist `open` (see Playlist), which plays media
+    files, lists folders and reads M3U files on its scan thread. Subtitle files
+    and files of any other kind among them are left out.
+  - `add_subtitles {paths}`: no media file, M3U file or folder was given, but
+    subtitle files were, and media is `playing` or `paused`: they belong to that
+    media.
+  - `nothing {}`: nothing of the above. A document, an archive or a path not
+    known as a folder opens nothing, so it never replaces what plays.
 
 The documents are pinned by `rust/crates/okp-session/fixtures/open/`.
 

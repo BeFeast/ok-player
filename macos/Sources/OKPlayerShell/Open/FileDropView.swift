@@ -7,13 +7,15 @@ import AppKit
 ///
 /// While a drag the router accepts is over the window, a highlight frames the
 /// content. What a drop does is the router's: `accepts` and `perform` are its
-/// `accepts(_:)` and the app's open.
+/// `accepts(_:)` and the app's open. Over the content it also holds the notice an
+/// open that played nothing shows (`OpenNotice`).
 final class FileDropView: NSView {
     /// Whether dropping these files would do anything.
     var accepts: ([URL]) -> Bool = { _ in false }
     /// Opens dropped files; returns whether anything was opened.
     var perform: ([URL]) -> Bool = { _ in false }
     let highlight = DropHighlightView()
+    let notice = OpenNoticeView()
 
     init(content: NSView) {
         super.init(frame: .zero)
@@ -25,6 +27,14 @@ final class FileDropView: NSView {
                 view.leadingAnchor.constraint(equalTo: leadingAnchor), view.trailingAnchor.constraint(equalTo: trailingAnchor),
             ])
         }
+        // Below the title bar, under the highlight.
+        notice.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(notice, positioned: .below, relativeTo: highlight)
+        NSLayoutConstraint.activate([
+            notice.centerXAnchor.constraint(equalTo: centerXAnchor),
+            notice.topAnchor.constraint(equalTo: topAnchor, constant: 48),
+            notice.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 20),
+        ])
         highlight.isHidden = true
         registerForDraggedTypes([.fileURL])
     }

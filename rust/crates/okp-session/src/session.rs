@@ -302,8 +302,8 @@ impl Session {
             Query::OpenFormats {} => QueryResult::OpenFormats {
                 formats: OpenFormats::current(),
             },
-            Query::OpenPaths { paths } => QueryResult::OpenPaths {
-                plan: open_paths::plan(paths, self.snapshot().status),
+            Query::OpenPaths { paths, folders } => QueryResult::OpenPaths {
+                plan: open_paths::plan(paths, folders, self.snapshot().status),
             },
         }
     }
@@ -624,7 +624,7 @@ impl State {
                     let _ = self.open_planned(engine, open);
                 }
                 Background::NothingPlayable => self.queue.push(Event::Error {
-                    kind: ErrorKind::LoadFailed,
+                    kind: ErrorKind::NothingPlayable,
                     message: "nothing playable was found".to_owned(),
                     request_id: None,
                 }),

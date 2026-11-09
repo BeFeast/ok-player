@@ -245,7 +245,9 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         playlist.state = client.store.playlist
         system.privateSession = client.store.privateSession
         system.update(client.store.snapshot)
-        for case .error(_, let message, _) in batch.events {
+        for case .error(let kind, let message, _) in batch.events {
+            // An open that found nothing leaves what plays alone (Open/PlayerOpen.swift).
+            if kind == .nothingPlayable { nothingPlayableFound(); continue }
             fail(message); return
         }
         if batch.events.contains(.shutdown) { fail("The playback engine stopped"); return }

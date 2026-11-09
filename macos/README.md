@@ -130,14 +130,17 @@ The Swift package (`Package.swift`, no Xcode project) has three targets:
   after the icon source changes.
 - `NSLocalNetworkUsageDescription` explains the local network prompt.
 - **Document types.** `CFBundleDocumentTypes` (a Video and an Audio viewer at rank
-  Default) and `UTImportedTypeDeclarations` (mkv, webm and the other extensions macOS
-  declares no type for) come from okp-core's `media_formats` at build time and replace
-  both keys; the `Info.plist` template carries neither. After the build, the GitHub
-  workflow registers the app with Launch Services and runs `ok-player
-  --check-document-types`: every video and audio extension must have a type macOS
-  declares that the Video or Audio document type claims, by identifier or by
-  conformance. Conformance to `public.movie` alone is not enough as a rule: macOS
-  declares `.asf` as audiovisual content, which the Video document type claims by name.
+  Default, then a Folder viewer for `public.folder` and a Playlist viewer for
+  `public.m3u-playlist` at rank Alternate, so Finder offers the app for folders and
+  M3U files without making it their default) and `UTImportedTypeDeclarations` (mkv,
+  webm and the other extensions macOS declares no type for) come from okp-core at build
+  time and replace both keys; the `Info.plist` template carries neither. After the
+  build, the GitHub workflow registers the app with Launch Services and runs `ok-player
+  --check-document-types`: every video, audio and playlist extension of the session's
+  `open_formats` must have a type macOS declares that the Video, Audio or Playlist
+  document type claims, by identifier or by conformance, and the Folder type must claim
+  folders. Conformance to `public.movie` alone is not enough as a rule: macOS declares
+  `.asf` as audiovisual content, which the Video document type claims by name.
 
 ## Signing
 
@@ -375,7 +378,11 @@ playlists is okp-core's rule; the shell has no extension list.
   playlist types of the session's `open_formats`. **File → Open Folder** takes one
   or more folders.
 - **Drop** files, folders or an `.m3u`/`.m3u8` anywhere on the window. While the drag
-  is over the window an accent frame shows, only if the drop would open something.
+  is over the window an accent frame shows, only if the drop would open something:
+  a document, an archive or anything else that is neither media, a playlist file nor
+  a folder is refused, and dropped beside media it is left out. The router tells the
+  session which paths are folders (from the file system, or from a URL that ends in
+  a slash); the session decides the rest.
 - **Open events**: `application(_:open:)` takes Finder's Open With, a double click
   on a file OK Player is the default app for, a drop on the Dock icon and files the
   app is launched with. Events that arrive while the app launches are held and opened
@@ -384,8 +391,15 @@ playlists is okp-core's rule; the shell has no extension list.
 Several files, folders or a playlist file become one session playlist (`playlist`
 `open`); one file plays with its folder as the playlist. A subtitle file dropped or
 opened on its own while media plays is planned onto that media (`add_subtitles`), but
-the session has no command to load it yet, so the drop is refused until #882 adds
-one. Subtitle files dropped together with media are left out.
+the session has no command to load it yet (#882), so the drop is refused and File >
+Open or Finder shows a notice; subtitle files opened together with media are left
+out. #910 loads both.
+
+An open that plays nothing says why: a notice over the video for three seconds while
+media is loaded, else the Open prompt's status line. That covers a selection the
+session plans nothing for and a folder or playlist file whose read finds nothing
+playable (the session's `nothing_playable` error). Neither is a failure: what plays
+goes on, the window keeps its title and the controls keep following the session.
 
 ## System integration
 
@@ -424,9 +438,10 @@ The optional bounded smoke mode opens the deterministic local fixture in a nativ
 window and checks, from the session's events and the video layer's counters:
 
 - no render calls while idle, before the file is open;
-- the fixture, opened through `application(_:open:)` as Finder opens a file, was
-  planned by the session as a playlist open and is the playlist's current item; a
-  subtitle beside it is planned onto it while it plays; the window takes file drops;
+- the fixture, opened through `application(_:open:)` as Finder opens a file, reached
+  the session through the open router as the playlist open of the fixture, which the
+  session took, and is the playlist's current item; a subtitle beside it is planned
+  onto it while it plays; the window takes file drops;
 - the position and the render calls advance while playing;
 - while playing, the system's Now Playing reports the fixture as playing video,
   IOKit lists the display-sleep assertion, and `MPRemoteCommandCenter` has play,

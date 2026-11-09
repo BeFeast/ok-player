@@ -7,14 +7,17 @@ import XCTest
 final class FakeOpenSession: OpenSession {
     var plan: OpenPlan
     var reply = DispatchResult.accepted(requestId: 1)
+    /// The paths of each `open_paths` query, and the folders among them.
     private(set) var asked: [[String]] = []
+    private(set) var folders: [[String]] = []
     private(set) var dispatched: [Command] = []
 
     init(plan: OpenPlan) { self.plan = plan }
 
     func query(_ query: Query) -> QueryResult? {
-        guard case .openPaths(let paths) = query else { return nil }
+        guard case .openPaths(let paths, let folders) = query else { return nil }
         asked.append(paths)
+        self.folders.append(folders)
         return .openPaths(plan: plan)
     }
 
@@ -25,6 +28,8 @@ final class FakeOpenSession: OpenSession {
 }
 
 private func file(_ path: String) -> URL { URL(fileURLWithPath: path) }
+/// A folder URL as open panels, Finder and Launch Services hand it over: ending in a slash.
+private func folder(_ path: String) -> URL { URL(fileURLWithPath: path, isDirectory: true) }
 private func local(_ path: String) -> MediaSource { MediaSource(kind: .local, location: path) }
 
 /// Open events, open panels and drops through the router, against a scripted session.
@@ -43,6 +48,7 @@ final class OpenRouterTests: XCTestCase {
         let command = Command.playlist(action: .open(sources: [local("/m/a.mkv"), local("/m/b.mp3")]))
         XCTAssertEqual(session.dispatched, [command], "one playlist open")
         XCTAssertEqual(outcome, .opened(command: command, result: .accepted(requestId: 1), title: "a.mkv"))
+        XCTAssertEqual(router.lastOutcome, outcome, "the router remembers what the open came to")
         XCTAssertTrue(router.held.isEmpty)
         XCTAssertNil(router.connect(session), "nothing is opened twice")
         XCTAssertEqual(session.dispatched.count, 1)
@@ -53,9 +59,10 @@ final class OpenRouterTests: XCTestCase {
         let session = FakeOpenSession(plan: .open(sources: [local("/m/Show")]))
         XCTAssertNil(router.connect(session), "nothing was held")
 
-        let outcome = router.open([file("/m/Show")])
+        let outcome = router.open([folder("/m/Show")])
 
         XCTAssertEqual(session.asked, [["/m/Show"]])
+        XCTAssertEqual(session.folders, [["/m/Show"]], "the session is told it is a folder")
         let command = Command.playlist(action: .open(sources: [local("/m/Show")]))
         XCTAssertEqual(session.dispatched, [command])
         XCTAssertEqual(outcome, .opened(command: command, result: .accepted(requestId: 1), title: "Show"))
@@ -111,6 +118,33 @@ final class OpenRouterTests: XCTestCase {
         XCTAssertTrue(session.dispatched.isEmpty)
     }
 
+    func testFoldersAreToldApartByTheFileSystemOrTheURLForm() throws {
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("okp-folders-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let files = FileManager.default
+        let show = scratch.appendingPathComponent("Show")
+        let bundle = scratch.appendingPathComponent("Tool.app")
+        let link = scratch.appendingPathComponent("Linked Show")
+        let film = scratch.appendingPathComponent("film.mkv")
+        try files.createDirectory(at: show, withIntermediateDirectories: true)
+        try files.createDirectory(at: bundle, withIntermediateDirectories: true)
+        try files.createSymbolicLink(at: link, withDestinationURL: show)
+        try Data().write(to: film)
+
+        // On disk the file system decides, whatever the URL looks like.
+        XCTAssertTrue(OpenRouter.isFolder(URL(fileURLWithPath: show.path, isDirectory: false)))
+        XCTAssertTrue(OpenRouter.isFolder(URL(fileURLWithPath: link.path, isDirectory: false)), "a link to a folder")
+        XCTAssertFalse(OpenRouter.isFolder(URL(fileURLWithPath: bundle.path, isDirectory: true)),
+                       "an app bundle is a file to the user")
+        XCTAssertFalse(OpenRouter.isFolder(URL(fileURLWithPath: film.path, isDirectory: false)))
+        // Not on disk, the URL's form decides.
+        XCTAssertTrue(OpenRouter.isFolder(folder("/okp-missing/Show")))
+        XCTAssertFalse(OpenRouter.isFolder(file("/okp-missing/doc.pdf")))
+
+        let urls = [URL(fileURLWithPath: show.path, isDirectory: false), file(film.path), folder("/okp-missing/Show")]
+        XCTAssertEqual(OpenRouter.folders(urls), [show.standardizedFileURL.path, "/okp-missing/Show"])
+    }
+
     func testOnlyLocalFilesAreAskedAbout() {
         let router = OpenRouter()
         let session = FakeOpenSession(plan: .open(sources: [local("/m/a.mkv")]))
@@ -152,10 +186,20 @@ final class OpenSessionRoutingTests: XCTestCase {
     }
 
     func testFilesAFolderAndAnM3uBecomeOnePlaylistOpen() {
-        let payload = [file("/m/Show"), file("/m/b.mkv"), file("/m/a.MP3"), file("/m/queue.m3u8")]
+        let payload = [folder("/m/Show"), file("/m/b.mkv"), file("/m/a.MP3"), file("/m/queue.m3u8"),
+                       file("/m/notes.pdf")]
         XCTAssertEqual(router.plan(for: payload), .open(sources: [
             local("/m/Show"), local("/m/b.mkv"), local("/m/a.MP3"), local("/m/queue.m3u8"),
-        ]))
+        ]), "the document is left out")
+    }
+
+    func testADocumentOrAnythingNotKnownAsAFolderIsRefused() {
+        for payload in [[file("/m/report.pdf")], [file("/m/report.pdf"), file("/m/Show")]] {
+            XCTAssertEqual(router.plan(for: payload), .nothing, "\(payload)")
+            XCTAssertFalse(router.accepts(payload), "no drop highlight for \(payload)")
+            XCTAssertEqual(router.open(payload), .nothing)
+        }
+        XCTAssertTrue(router.accepts([folder("/m/Show")]))
     }
 
     func testASubtitleBesideMediaIsLeftOutAndASubtitleAloneNeedsPlayingMedia() {
@@ -194,10 +238,15 @@ final class DropPayloadTests: XCTestCase {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("okp-drop-\(UUID().uuidString)"))
         defer { pasteboard.releaseGlobally() }
         pasteboard.clearContents()
-        let files = [file("/m/b.mkv"), URL(fileURLWithPath: "/m/Show", isDirectory: true), file("/m/queue.m3u")]
+        let files = [file("/m/b.mkv"), folder("/m/Show"), file("/m/queue.m3u")]
         let web = URL(string: "https://example.com/a.mp4")!
         XCTAssertTrue(pasteboard.writeObjects((files + [web]).map { $0 as NSURL }))
-        XCTAssertEqual(DropPayload.urls(from: pasteboard).map(\.path), files.map(\.path))
+        let dropped = DropPayload.urls(from: pasteboard)
+        XCTAssertEqual(dropped.map(\.path), files.map(\.path))
+        // A folder keeps its trailing slash through the pasteboard, so it is still known
+        // as a folder where the file system cannot tell.
+        XCTAssertEqual(dropped.map(\.hasDirectoryPath), [false, true, false])
+        XCTAssertEqual(OpenRouter.folders(dropped), ["/m/Show"])
     }
 }
 
@@ -237,5 +286,18 @@ final class FileDropViewTests: XCTestCase {
         XCTAssertEqual(view.highlight.frame, view.bounds)
         XCTAssertNil(view.highlight.hitTest(NSPoint(x: 10, y: 10)))
         XCTAssertTrue(view.subviews.last === view.highlight, "the highlight lies over the content")
+        XCTAssertTrue(view.notice.isHidden)
+        XCTAssertNil(view.notice.hitTest(NSPoint(x: 10, y: 10)))
+    }
+
+    func testANoticeShowsItsTextAndHidesItself() {
+        let notice = FileDropView(content: NSView()).notice
+        notice.duration = 0.05
+        notice.show("First")
+        notice.show("Nothing playable was found")
+        XCTAssertFalse(notice.isHidden)
+        XCTAssertEqual(notice.label.stringValue, "Nothing playable was found")
+        let hidden = expectation(for: NSPredicate { _, _ in notice.isHidden }, evaluatedWith: nil)
+        wait(for: [hidden], timeout: 5)
     }
 }

@@ -20,9 +20,10 @@ final class OpenProtocolTests: XCTestCase {
 
     func testTheOpenQueriesRoundTrip() throws {
         let dropped = ["/Users/example/Movies/Show", "/Users/example/Movies/film.mkv",
-                       "/Users/example/Movies/film.en.srt", "/Users/example/Music/queue.m3u8"]
-        for (name, query) in [("query-open-formats.json", Query.openFormats),
-                              ("query-open-paths.json", Query.openPaths(paths: dropped))] {
+                       "/Users/example/Movies/film.en.srt", "/Users/example/Music/queue.m3u8",
+                       "/Users/example/Documents/notes.pdf"]
+        let opened = Query.openPaths(paths: dropped, folders: ["/Users/example/Movies/Show"])
+        for (name, query) in [("query-open-formats.json", Query.openFormats), ("query-open-paths.json", opened)] {
             let path = "open/\(name)"
             let envelope = QueryEnvelope(query: query)
             XCTAssertEqual(try GoldenFixtures.decode(QueryEnvelope.self, path), envelope, name)

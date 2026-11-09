@@ -311,7 +311,12 @@ pub enum Query {
     /// What opening these local paths does: an open panel's selection, a drop
     /// onto the window or the system's open events ([`crate::open_paths::plan`]).
     /// Reads the session status, never the filesystem.
-    OpenPaths { paths: Vec<String> },
+    OpenPaths {
+        paths: Vec<String>,
+        /// Those of `paths` the shell knows are folders (from their file URLs).
+        #[serde(default)]
+        folders: Vec<String>,
+    },
 }
 
 /// `{"schema_version":1,"result":{...}}`, the answer to a query.
@@ -407,6 +412,9 @@ pub enum ErrorKind {
     LoadFailed,
     CommandFailed,
     Engine,
+    /// The folders and playlist files of a playlist `open` held nothing
+    /// playable. Whatever was loaded before goes on playing.
+    NothingPlayable,
 }
 
 /// The full state a shell renders from.

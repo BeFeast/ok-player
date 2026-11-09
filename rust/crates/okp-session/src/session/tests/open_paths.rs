@@ -1,15 +1,15 @@
 use super::*;
 use crate::open_paths::OpenPlan;
 
-fn open_paths(session: &Session, paths: &[&str]) -> OpenPlan {
-    let paths = paths
-        .iter()
-        .map(|path| format!("\"{path}\""))
-        .collect::<Vec<_>>();
-    let reply = session.query_json(&format!(
-        r#"{{"schema_version":1,"query":{{"open_paths":{{"paths":[{}]}}}}}}"#,
-        paths.join(",")
-    ));
+/// The plan for `paths`, of which `folders` are folders.
+fn open_paths(session: &Session, paths: &[&str], folders: &[&str]) -> OpenPlan {
+    let reply = session.query_json(
+        &serde_json::json!({
+            "schema_version": 1,
+            "query": {"open_paths": {"paths": paths, "folders": folders}}
+        })
+        .to_string(),
+    );
     match serde_json::from_str::<QueryReply>(&reply).map(|reply| reply.result) {
         Ok(QueryResult::OpenPaths { plan }) => plan,
         other => panic!("open_paths answered {other:?}"),
@@ -20,21 +20,21 @@ fn open_paths(session: &Session, paths: &[&str]) -> OpenPlan {
 fn a_dropped_subtitle_is_planned_onto_media_only_once_it_has_loaded() {
     let (session, engine) = fake_session();
     assert_eq!(
-        open_paths(&session, &["/media/a.en.srt"]),
+        open_paths(&session, &["/media/a.en.srt"], &[]),
         OpenPlan::Nothing {},
         "no media to load it onto"
     );
 
     let _ = session.dispatch(&open("/media/a.mkv"));
     assert_eq!(
-        open_paths(&session, &["/media/a.en.srt"]),
+        open_paths(&session, &["/media/a.en.srt"], &[]),
         OpenPlan::Nothing {},
         "the media is still opening"
     );
     loaded(&engine, 10.0);
     assert!(wait_for(|| session.snapshot().status == Status::Playing));
     assert_eq!(
-        open_paths(&session, &["/media/a.en.srt"]),
+        open_paths(&session, &["/media/a.en.srt"], &[]),
         OpenPlan::AddSubtitles {
             paths: vec!["/media/a.en.srt".to_owned()]
         }
@@ -43,7 +43,7 @@ fn a_dropped_subtitle_is_planned_onto_media_only_once_it_has_loaded() {
     // Media and folders open whatever plays, and the query forwards nothing.
     let forwarded = engine.forwarded().len();
     assert_eq!(
-        open_paths(&session, &["/media/Show", "/media/b.mkv"]),
+        open_paths(&session, &["/media/Show", "/media/b.mkv"], &["/media/Show"]),
         OpenPlan::Open {
             sources: vec![
                 MediaSource {
@@ -58,6 +58,32 @@ fn a_dropped_subtitle_is_planned_onto_media_only_once_it_has_loaded() {
         }
     );
     assert_eq!(engine.forwarded().len(), forwarded);
+    // A document dropped onto the playing media is no open at all.
+    assert_eq!(
+        open_paths(&session, &["/media/report.pdf"], &[]),
+        OpenPlan::Nothing {}
+    );
+}
+
+#[test]
+fn a_query_without_folders_takes_none_for_folders() {
+    let (session, _engine) = fake_session();
+    let reply = session.query_json(
+        r#"{"schema_version":1,"query":{"open_paths":{"paths":["/media/Show","/media/a.mkv"]}}}"#,
+    );
+    assert_eq!(
+        serde_json::from_str::<QueryReply>(&reply)
+            .map(|reply| reply.result)
+            .ok(),
+        Some(QueryResult::OpenPaths {
+            plan: OpenPlan::Open {
+                sources: vec![MediaSource {
+                    kind: SourceKind::Local,
+                    location: "/media/a.mkv".to_owned()
+                }]
+            }
+        })
+    );
 }
 
 #[test]

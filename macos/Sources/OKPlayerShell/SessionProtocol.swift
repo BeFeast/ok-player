@@ -159,8 +159,9 @@ enum Query: Codable, Equatable {
     case transport(at: Double? = nil)
     /// The file types the Open panel offers (Open/OpenProtocol.swift).
     case openFormats
-    /// What opening these local paths does (Open/OpenRouter.swift).
-    case openPaths(paths: [String])
+    /// What opening these local paths does, `folders` being those known to be
+    /// folders (Open/OpenRouter.swift).
+    case openPaths(paths: [String], folders: [String])
 }
 
 struct QueryEnvelope: Codable, Equatable {
@@ -256,6 +257,9 @@ enum ErrorKind: String, Codable, CaseIterable {
     case loadFailed = "load_failed"
     case commandFailed = "command_failed"
     case engine
+    /// A playlist open's folders and playlist files held nothing playable; what
+    /// was loaded goes on (Open/PlayerOpen.swift).
+    case nothingPlayable = "nothing_playable"
 }
 
 struct Track: Codable, Equatable {

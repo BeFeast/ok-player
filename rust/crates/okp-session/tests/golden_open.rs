@@ -27,14 +27,18 @@ const CHECKED: &[&str] = &[
     "query-reply-open-paths-nothing.json",
 ];
 
-/// The paths of `query-open-paths.json`: a folder, a film, its subtitle and an
-/// M3U file.
+/// The paths of `query-open-paths.json`: a folder, a film, its subtitle, an M3U
+/// file and a document.
 const DROPPED: &[&str] = &[
     "/Users/example/Movies/Show",
     "/Users/example/Movies/film.mkv",
     "/Users/example/Movies/film.en.srt",
     "/Users/example/Music/queue.m3u8",
+    "/Users/example/Documents/notes.pdf",
 ];
+
+/// Those of [`DROPPED`] the shell knows are folders.
+const FOLDERS: &[&str] = &["/Users/example/Movies/Show"];
 
 const SUBTITLE: &str = "/Users/example/Movies/film.en.srt";
 
@@ -92,17 +96,19 @@ fn the_open_paths_query_matches_its_fixture() {
         "query-open-paths.json",
         query(Query::OpenPaths {
             paths: strings(DROPPED),
+            folders: strings(FOLDERS),
         }),
     );
 }
 
 #[test]
 fn the_plan_replies_are_what_the_core_rules_answer() {
-    // Media, a folder and an M3U file open; the subtitle beside them is left out.
+    // Media, a folder and an M3U file open; the subtitle and the document beside
+    // them are left out.
     golden(
         "query-reply-open-paths-open.json",
         reply(QueryResult::OpenPaths {
-            plan: open_paths::plan(&strings(DROPPED), Status::Playing),
+            plan: open_paths::plan(&strings(DROPPED), &strings(FOLDERS), Status::Playing),
         }),
     );
     // A subtitle alone loads onto the media that plays.
@@ -110,18 +116,18 @@ fn the_plan_replies_are_what_the_core_rules_answer() {
     golden(
         "query-reply-open-paths-add-subtitles.json",
         reply(QueryResult::OpenPaths {
-            plan: open_paths::plan(&subtitle, Status::Playing),
+            plan: open_paths::plan(&subtitle, &[], Status::Playing),
         }),
     );
     // Without media it does nothing.
     golden(
         "query-reply-open-paths-nothing.json",
         reply(QueryResult::OpenPaths {
-            plan: open_paths::plan(&subtitle, Status::Idle),
+            plan: open_paths::plan(&subtitle, &[], Status::Idle),
         }),
     );
     assert_eq!(
-        open_paths::plan(&subtitle, Status::Idle),
+        open_paths::plan(&subtitle, &[], Status::Idle),
         OpenPlan::Nothing {}
     );
 }

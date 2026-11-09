@@ -37,18 +37,41 @@ extension PlayerApp {
         return drop
     }
 
+    /// The window's drop target, which holds the open notice.
+    var dropTarget: FileDropView? { window?.contentView as? FileDropView }
+
     /// Give the router the session and open what arrived while the app launched;
     /// returns whether anything was.
     @discardableResult
-    func connectOpenRouter(_ client: SessionClient) -> Bool {
-        // TODO(#882): once the session has its `add_subtitle {path}` command, load
-        // subtitles dropped on playing media with it through openRouter.addSubtitle.
-        guard let outcome = openRouter.connect(client) else { return false }
+    func connectOpenRouter(_ session: OpenSession) -> Bool {
+        // TODO(#910): once the session has its `add_subtitle {path}` command (#882),
+        // load subtitles dropped on playing media with it through openRouter.addSubtitle.
+        guard let outcome = openRouter.connect(session) else { return false }
         return showOpenOutcome(outcome)
+    }
+
+    /// The session's read of an open's folders or playlist files found nothing to
+    /// play (its `nothing_playable` error). That open never replaced what was
+    /// loaded, which goes on: the window takes back its title and says so, and the
+    /// session's state keeps reaching the window and the controls.
+    func nothingPlayableFound() {
+        window.title = OpenNotice.windowTitle(loaded: client?.store.snapshot.source)
+        showNotice(.nothingPlayable)
+    }
+
+    /// Say why an open played nothing: over the video while media is loaded, else in
+    /// the Open prompt's status line.
+    func showNotice(_ notice: OpenNotice) {
+        if client?.store.snapshot.source != nil {
+            dropTarget?.notice.show(notice.text)
+        } else {
+            showStatus(notice.text, .textMuted)
+        }
     }
 
     @discardableResult
     private func showOpenOutcome(_ outcome: OpenOutcome) -> Bool {
+        if let notice = OpenNotice(outcome) { showNotice(notice) }
         switch outcome {
         case .opened(_, let result, let title):
             errorShown = false
