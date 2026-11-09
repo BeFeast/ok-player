@@ -136,6 +136,21 @@ fn subtitle_files_named_after_the_media_load_with_it_and_an_added_one_is_selecte
         wait_for(|| tracks(&session).subtitles[0].selected),
         "subtitles Off is not selected after turning them off"
     );
+    // Selecting a file that sub-auto already loaded reuses that track.
+    accepted(session.dispatch(&Command::AddSubtitle {
+        path: root.path().join("movie.srt").to_string_lossy().into_owned(),
+    }));
+    assert!(
+        wait_for(|| {
+            subtitle_count(&session) == 3
+                && tracks(&session)
+                    .subtitles
+                    .iter()
+                    .any(|row| row.selected && row.id.is_some_and(|id| stem_ids.contains(&id)))
+        }),
+        "an existing same-stem subtitle was duplicated instead of selected: {:?}",
+        session.snapshot().tracks
+    );
     let errors: Vec<_> = session
         .drain_events()
         .into_iter()

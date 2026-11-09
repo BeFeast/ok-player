@@ -205,10 +205,11 @@ impl Engine for MpvEngine {
                 TrackKind::Subtitle => engine.select_subtitle(*id),
             },
             Command::SetSubtitleDelay { seconds } => engine.set_subtitle_delay(*seconds),
-            // `select` makes the added file the subtitle track; a file libmpv
-            // cannot read is reported with the command's reply.
+            // `cached` selects an existing same-path external track instead of
+            // duplicating an auto-loaded subtitle. New files are loaded and
+            // selected; an unreadable file fails through the command's reply.
             Command::AddSubtitle { path } => {
-                engine.command_async_with_userdata(&["sub-add", path, "select"], request_id)
+                engine.command_async_with_userdata(&["sub-add", path, "cached"], request_id)
             }
             Command::SetSubtitleScale { scale } => engine.set_subtitle_scale(*scale),
             // The session resolves a size nudge into a `set_subtitle_scale` first.

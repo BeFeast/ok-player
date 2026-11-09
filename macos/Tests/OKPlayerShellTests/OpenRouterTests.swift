@@ -224,10 +224,10 @@ final class OpenSessionRoutingTests: XCTestCase {
     }
 
     /// A PCM WAV keeps the real engine loaded without an external encoder.
-    private func mediaAndSubtitle() throws -> (URL, URL) {
+    private func mediaAndSubtitle(sameStem: Bool = false) throws -> (URL, URL) {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let media = root.appendingPathComponent("tone.wav")
-        let subtitle = root.appendingPathComponent("manual.srt")
+        let subtitle = root.appendingPathComponent(sameStem ? "tone.srt" : "manual.srt")
         var wav = Data()
         func word(_ value: UInt32, bytes: Int) {
             for offset in 0..<bytes { wav.append(UInt8((value >> (offset * 8)) & 255)) }
@@ -286,6 +286,17 @@ final class OpenSessionRoutingTests: XCTestCase {
         }
         XCTAssertEqual(client.store.snapshot.source, local(media.path))
         XCTAssertEqual(client.store.snapshot.status, .paused)
+    }
+
+    func testAMixedSameStemSelectionSelectsTheAutoLoadedSubtitleWithoutDuplicatingIt() throws {
+        let (media, subtitle) = try mediaAndSubtitle(sameStem: true)
+        _ = router.open([media, subtitle])
+        // Progress comes from the engine, after it has handled the queued sub-add;
+        // the first loaded snapshot alone could show only the auto-loaded track.
+        awaitSnapshot("same-stem media progresses after subtitle attachment") { ($0.timePos ?? 0) > 0.25 }
+        let external = client.store.snapshot.tracks.filter { $0.kind == .subtitle && $0.external }
+        XCTAssertEqual(external.count, 1, "sub-add reuses an existing external subtitle")
+        XCTAssertTrue(external.first?.selected == true)
     }
 
     func testTheSessionListsTheCoreFormats() throws {
