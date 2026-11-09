@@ -88,15 +88,16 @@ final class AccentButton: NSButton {
 
 extension SessionConfig {
     /// The app's own session: per-user directories named after the bundle id, as
-    /// the core's `AppIdentity::macos` does, and the session's engine defaults.
-    static func forApp() -> SessionConfig {
+    /// the core's `AppIdentity::macos` does, the session's engine defaults, and the
+    /// registry commands the shell carries out (`PlayerCommands.shellCommands`).
+    static func forApp(shellCommands: [String] = []) -> SessionConfig {
         let files = FileManager.default
         let bundleID = "uk.oklabs.ok-player"
         let support = files.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(bundleID)
         let caches = files.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(bundleID)
         return SessionConfig(app: AppIdentity(name: "OK Player", platform: .macos),
                              dataDir: support.path, configDir: support.path, cacheDir: caches.path,
-                             shellCommands: TrackControls.shellCommands)
+                             shellCommands: shellCommands)
     }
 }
 
@@ -128,6 +129,9 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     lazy var playlist: SessionPlaylist = SessionPlaylist { [weak self] command in
         self?.client?.dispatch(command) ?? .rejected(reason: .noActiveMedia, message: "No playback session")
     }
+    /// The registry commands of the menu bar and the window keys (Menu/).
+    let commands = PlayerCommands()
+    var menuBar: MenuBar?
     /// Key presses the window received; each one counts as activity for the transport controls.
     private(set) var keyPresses = 0
     var shuttingDown = false
@@ -135,16 +139,11 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var errorShown = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let menu = NSMenu()
-        let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Quit OK Player", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        let appItem = NSMenuItem(); appItem.submenu = appMenu; menu.addItem(appItem)
-        let fileMenu = NSMenu(title: "File")
-        let openItem = fileMenu.addItem(withTitle: "Open…", action: #selector(openFile), keyEquivalent: "o")
-        openItem.target = self
-        fileMenu.addItem(system.makeOpenRecentItem())
-        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: ""); fileItem.submenu = fileMenu
-        menu.addItem(fileItem); NSApp.mainMenu = menu
+        // One player window: no window tabs, so no tab items in View and Window.
+        NSWindow.allowsAutomaticWindowTabbing = false
+        let menuBar = MenuBar(commands: commands, openRecent: system.makeOpenRecentItem())
+        self.menuBar = menuBar
+        menuBar.install()
         let behaviour = PlayerWindowController(contentRect: NSRect(x: 0, y: 0, width: 960, height: 580))
         windowBehaviour = behaviour; window = behaviour.window
         window.title = "OK Player"; window.delegate = self; window.isReleasedWhenClosed = false
@@ -183,9 +182,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         behaviour.window.onKeyDown = { [weak self] in self?.keyPressed() }
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         guard let video else { fail("No OpenGL pixel format is available for video"); return }
+        registerPlayerCommands()
         let client: SessionClient
         do {
-            client = try SessionClient(config: .forApp())
+            client = try SessionClient(config: .forApp(shellCommands: commands.shellCommands))
         } catch {
             fail("\(error)"); return
         }
@@ -210,14 +210,12 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         tracks.holdControls = { [weak self] hold in
             if hold { self?.osc.autoHide.pin() } else { self?.osc.autoHide.unpin() }
         }
-        if case .shortcutTable(let table)? = client.query(.shortcutTable) { tracks.setShortcuts(table) }
-        behaviour.window.onOtherKey = { [weak self] event in self?.tracks.handleKey(event) ?? false }
         osc.onPrevious = { [weak self] in _ = self?.playlist.step(.previous) }
         osc.onNext = { [weak self] in _ = self?.playlist.step(.next) }
-        video.onTogglePause = { [weak self] in self?.togglePause() }
         osc.focusReturn = video
         video.videoLayer.onError = { [weak self] message in self?.fail(message) }
         if let handle = client.handle { video.videoLayer.attach(session: handle) }
+        connectPlayerCommands(client)
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
         let path = pendingPath ?? args.first
         if smoke {
@@ -261,6 +259,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// The session reported a batch; the store already holds the new state.
     func sessionChanged(_ batch: EventBatch) {
         guard !shuttingDown, let client else { return }
+        commands.invalidate()
         playlist.state = client.store.playlist
         system.privateSession = client.store.privateSession
         system.update(client.store.snapshot)
@@ -353,8 +352,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 /// 1. idle: no render calls before a file is open;
 /// 2. playing: the position and the render calls advance; Now Playing shows the file
 ///    as playing video, the display-sleep assertion is held and the system offers the
-///    remote commands; the pause is sent through the handler the system holds for its
-///    pause command;
+///    remote commands; the menu bar has its nine menus, Play/Pause from the registry
+///    validates enabled and a held Space's auto-repeat toggles nothing, on the
+///    focused scrubber and on the video; the pause is sent through the handler the
+///    system holds for its pause command;
 /// 3. paused: the position holds and the render calls stay flat for two seconds; Now
 ///    Playing shows the pause and the assertion is released; the resume is sent
 ///    through the handler for the system's play command;
@@ -371,9 +372,11 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 ///    back to the video as they hide, come back on activity with the session's
 ///    time readout, and are in the snapshots;
 /// 9. fullscreen: F and Escape, pressed on the video view, enter and leave
-///    native fullscreen, and each reaches the controls as activity;
-/// 10. tracks: `]` steps the subtitle size with the session's readout on screen, and
-///    an added subtitle file becomes the selected external track (checked at the end);
+///    native fullscreen through the shortcut table's registry commands, and each
+///    reaches the controls as activity;
+/// 10. tracks: `]` steps the subtitle size through the shortcut table with the
+///    session's readout on screen, and an added subtitle file becomes the selected
+///    external track (checked at the end);
 /// 11. closed while playing: teardown runs in order, the system offers no remote
 ///    command any more, and the app exits.
 ///
@@ -422,6 +425,7 @@ final class SmokeRun {
         switch phase {
         case .playing where snapshot.status == .playing && position > 0.7 && renders > 10:
             if let failure = app?.windowBehaviour?.smokeFitFailure(video: snapshot.video) { fail(failure); return }
+            if let failure = app?.smokeMenuFailure() { fail(failure); return }
             phase = .pausing
             playingRenders = renders
             // Now Playing and the display-sleep assertion, then pause as a media key would.
@@ -489,7 +493,7 @@ final class SmokeRun {
         phase = .hiding
         // Playing without pointer activity: the controls hide once the idle timeout
         // has passed. The scrubber holds keyboard focus first, as after a click;
-        // hidden, it has to give it back to the video, which handles Space.
+        // hidden, it has to give it back to the video.
         app.osc.noteActivity()
         guard app.window.makeFirstResponder(app.osc.scrubber) else {
             fail("The scrubber did not take keyboard focus during playback"); return
@@ -536,13 +540,18 @@ final class SmokeRun {
         }
         phase = .fullscreen
         let pressesBefore = app.keyPresses
+        let performedBefore = app.commands.performedCounts
         behaviour.smokeFullscreenRoundTrip(timeout: 8) { [weak self] failure in
             guard let self, let app = self.app, let client = app.client, let layer = app.video?.videoLayer,
                   !self.cancelled else { return }
             if let failure { self.fail(failure); return }
             if let problem = app.tracks.smokeFinish() { self.fail(problem); return }
-            // F and Escape went through the window, which reports each key press to
-            // the transport controls as activity.
+            // F and Escape ran the registry's fullscreen commands through the
+            // shortcut table, and the window reported each key press to the
+            // transport controls as activity.
+            if let failure = app.commands.smokeFullscreenKeysFailure(since: performedBefore) {
+                self.fail(failure); return
+            }
             let presses = app.keyPresses - pressesBefore
             guard presses >= 2 else {
                 self.fail("\(presses) of the F and Escape presses reached the transport controls"); return

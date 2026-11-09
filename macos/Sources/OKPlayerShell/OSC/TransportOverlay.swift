@@ -11,7 +11,7 @@ import AppKit
 /// (`dispatch`); nothing here changes playback state itself. The controls hide
 /// with the cursor after the session's idle timeout while media plays (`AutoHide`).
 /// The scrubber gives keyboard focus back to `focusReturn` whenever it may no
-/// longer hold it, so Space keeps toggling pause.
+/// longer hold it.
 final class TransportOverlay: NSView {
     /// Sends a command to the session.
     var dispatch: ((Command) -> Void)?
@@ -27,7 +27,7 @@ final class TransportOverlay: NSView {
     /// Called whenever the controls show or hide.
     var onRevealChange: ((Bool) -> Void)?
     /// Where keyboard focus goes when the scrubber may no longer hold it (the
-    /// controls hid, or the media cannot be sought): the video, which handles Space.
+    /// controls hid, or the media cannot be sought): the video.
     weak var focusReturn: NSView?
 
     let autoHide: AutoHide
@@ -133,8 +133,8 @@ final class TransportOverlay: NSView {
         if !next.focusable || !scrubber.isEnabled { returnFocus() }
     }
 
-    /// Hidden or disabled, the scrubber lets go of keyboard focus: Space then
-    /// reaches the video, and Left/Right no longer seek through hidden controls.
+    /// Hidden or disabled, the scrubber lets go of keyboard focus, which goes
+    /// back to the video.
     private func returnFocus() {
         guard let window, window.firstResponder === scrubber else { return }
         _ = window.makeFirstResponder(focusReturn)
@@ -328,10 +328,6 @@ final class TransportOverlay: NSView {
         previousButton.isEnabled = false
         nextButton.isEnabled = false
         scrubber.onScrub = { [weak self] phase, fraction in self?.scrubbed(phase, fraction) }
-        scrubber.onStep = { [weak self] seconds in
-            self?.dispatch?(.seek(seconds: seconds, mode: .relative, precision: .keyframe))
-        }
-        scrubber.onTogglePause = { [weak self] in self?.togglePause() }
         volumeSlider.onFraction = { [weak self] fraction in self?.volumeDragged(to: fraction) }
 
         let leading = NSStackView(views: [previousButton, playButton, nextButton, elapsedLabel, trailingLabel])

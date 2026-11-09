@@ -891,3 +891,41 @@ fn what_is_queued_while_an_open_is_read_follows_the_opened_items() {
     assert_eq!(list.current_index, Some(0));
     assert_eq!(opened(&engine), ["/a/1.mkv", "/slow/x.mkv"]);
 }
+
+#[test]
+fn the_registry_steps_through_the_playlist_once_it_has_two_items() {
+    fn steps(session: &Session) -> (bool, bool) {
+        let QueryResult::CommandRegistry { commands } = session.query(&Query::CommandRegistry {
+            fullscreen: false,
+            mini_player: false,
+        }) else {
+            panic!("the registry query answers with the registry");
+        };
+        let enabled = |id: &str| {
+            commands
+                .iter()
+                .find(|command| command.id == id)
+                .is_some_and(|command| command.enabled)
+        };
+        (enabled("previous-item"), enabled("next-item"))
+    }
+
+    let (session, engine, _folders) = session_with(FakeFolders::default());
+    let _ = act(
+        &session,
+        PlaylistAction::Open {
+            sources: vec![source("/media/a.mkv")],
+        },
+    );
+    playing(&session, &engine);
+    assert_eq!(steps(&session), (false, false), "one item");
+
+    let _ = act(
+        &session,
+        PlaylistAction::Open {
+            sources: vec![source("/media/a.mkv"), source("/media/b.mkv")],
+        },
+    );
+    playing(&session, &engine);
+    assert_eq!(steps(&session), (true, true), "two items");
+}

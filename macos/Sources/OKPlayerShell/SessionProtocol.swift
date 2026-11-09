@@ -157,6 +157,8 @@ enum Query: Codable, Equatable {
     case commandRegistry(fullscreen: Bool = false, miniPlayer: Bool = false)
     /// Every bindable action with its chords on the config's platform.
     case shortcutTable
+    /// The actions whose key repeats while held; every other one runs once per press.
+    case repeatingShortcuts
     /// A watch-history query, answered with `QueryResult.history`.
     case history(query: HistoryQuery)
     /// The playlist as it is now.
@@ -178,6 +180,8 @@ enum QueryResult: Codable, Equatable {
     case videoClick(intent: VideoClickIntent)
     case commandRegistry(commands: [RegistryCommand])
     case shortcutTable(shortcuts: [ShortcutRow])
+    /// Shortcut action ids (`ShortcutRow.action`).
+    case repeatingShortcuts(actions: [String])
     case history(result: HistoryQueryResult)
     case playlist(playlist: PlaylistState)
     case transport(transport: TransportView)

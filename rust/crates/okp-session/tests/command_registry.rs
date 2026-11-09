@@ -154,14 +154,34 @@ fn a_macos_shell_reads_the_registry_and_runs_commands_through_the_session() {
     assert!(shell.command("open-file").available);
     assert_eq!(shell.invoke("open-file"), DispatchResult::Perform {});
 
-    // Mute works without media and shows checked.
+    // Mute works without media: it takes the level to 0, which shows checked
+    // once libmpv reports it, and the next one brings the level back.
     assert!(!shell.command("mute").checked);
+    assert!(
+        wait_for(|| shell.snapshot().volume.is_some()),
+        "libmpv never reported the volume"
+    );
+    let level = shell.snapshot().volume.expect("libmpv reported the volume");
     assert!(matches!(
         shell.invoke("mute"),
         DispatchResult::Accepted { .. }
     ));
-    assert!(shell.command("mute").checked);
-    assert!(shell.snapshot().mute);
+    assert!(
+        wait_for(|| shell.command("mute").checked),
+        "mute did not show checked: {:?}",
+        shell.snapshot().volume
+    );
+    assert_eq!(shell.snapshot().volume, Some(0.0));
+    assert!(matches!(
+        shell.invoke("mute"),
+        DispatchResult::Accepted { .. }
+    ));
+    assert!(
+        wait_for(|| shell.snapshot().volume == Some(level)),
+        "mute did not bring {level} back: {:?}",
+        shell.snapshot().volume
+    );
+    assert!(!shell.command("mute").checked);
 
     // Nothing to pause or close yet.
     assert!(!shell.command("play-pause").enabled);

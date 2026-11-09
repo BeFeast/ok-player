@@ -3,10 +3,12 @@ import XCTest
 @testable import OKPlayerShell
 
 /// The track surfaces over real AppKit objects in a window that is never shown,
-/// with the session stood in by closures: what a key press, a menu item and the
-/// session's answers make them send and show.
+/// with the session stood in by closures and the keys and menu bar going through
+/// `PlayerCommands`, wired as the app wires them: what a key press, a menu item
+/// and the session's answers make them send and show.
 final class TrackControlsTests: XCTestCase {
     private var controls: TrackControls!
+    private var commands: PlayerCommands!
     private var dispatched: [Command] = []
     private var answer: DispatchResult = .accepted(requestId: 1)
     private var view: TracksView!
@@ -15,57 +17,73 @@ final class TrackControlsTests: XCTestCase {
         try super.setUpWithError()
         _ = NSApplication.shared
         view = try TrackProtocolTests.fixtureView()
-        let reply = try GoldenFixtures.decode(QueryReply.self, "query-reply-shortcut-table.json")
-        guard case .shortcutTable(let table) = reply.result else { return XCTFail("not a shortcut table") }
         controls = TrackControls()
-        controls.setShortcuts(table)
         dispatched = []
         answer = .accepted(requestId: 1)
-        controls.dispatch = { [unowned self] command in
-            self.dispatched.append(command)
-            return self.answer
-        }
+        controls.dispatch = { [unowned self] command in self.session(command) }
         controls.query = { [unowned self] in self.view }
+        commands = PlayerCommands()
+        controls.register(with: commands)
+        // The fixture registry is resolved for a shell without the file panel.
+        let rows = MenuFixtures.changing(try MenuFixtures.registry(), [TrackMenus.addSubtitle]) { $0.available = true }
+        commands.connect(session: { [unowned self] command in self.session(command) }, registry: { _ in rows },
+                         keys: try MenuFixtures.keys())
+        commands.onRun = { [unowned self] invocation in self.controls.commandRan(invocation) }
     }
 
-    private func key(_ characters: String, _ modifiers: NSEvent.ModifierFlags = [], repeating: Bool = false) -> NSEvent {
+    /// The session: it hands the shell's `add-subtitle` back and answers the rest with `answer`.
+    private func session(_ command: Command) -> DispatchResult {
+        dispatched.append(command)
+        if command == .invokeCommand(id: TrackMenus.addSubtitle) { return .perform }
+        return answer
+    }
+
+    private var invoked: [String] {
+        dispatched.compactMap { command -> String? in
+            if case .invokeCommand(let id) = command { return id }
+            return nil
+        }
+    }
+
+    private func key(_ characters: String, keyCode: UInt16, _ modifiers: NSEvent.ModifierFlags = [],
+                     repeating: Bool = false) -> NSEvent {
         NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: 0,
                          context: nil, characters: characters, charactersIgnoringModifiers: characters,
-                         isARepeat: repeating, keyCode: 0)!
+                         isARepeat: repeating, keyCode: keyCode)!
     }
 
     func testTheSizeKeyRunsTheRegistryCommandAndShowsTheSessionsReadout() {
-        XCTAssertTrue(controls.handleKey(key("]")))
+        XCTAssertTrue(commands.handle(key("]", keyCode: 30)))
         XCTAssertEqual(dispatched, [.invokeCommand(id: "subtitle-size-up")])
         XCTAssertEqual(controls.readout.text, "Subtitle size 110%")
     }
 
     func testShiftZStepsTheDelayBackAndReadsTheDelay() {
-        XCTAssertTrue(controls.handleKey(key("Z", .shift)))
+        XCTAssertTrue(commands.handle(key("Z", keyCode: 6, .shift)))
         XCTAssertEqual(dispatched, [.invokeCommand(id: "subtitle-delay-back")])
         XCTAssertEqual(controls.readout.text, "Subtitle delay +250 ms")
     }
 
-    func testOtherKeysAreLeftToTheWindow() {
-        XCTAssertFalse(controls.handleKey(key("x")))
-        XCTAssertFalse(controls.handleKey(key("z", .command)))
-        XCTAssertTrue(dispatched.isEmpty)
+    func testAnotherCommandIsNotATrackRequest() {
+        answer = .accepted(requestId: 5)
+        XCTAssertTrue(commands.handle(key("x", keyCode: 7)), "X closes the media")
+        XCTAssertEqual(invoked, ["close-media"])
         XCTAssertEqual(controls.readout.text, "")
+        XCTAssertFalse(controls.claimError(requestId: 5), "its error stays the app's")
     }
 
     func testARefusedStepShowsNoReadout() {
         answer = .rejected(reason: .noActiveMedia, message: "the command needs loaded media")
-        XCTAssertTrue(controls.handleKey(key("[")), "the key is still the size key")
+        XCTAssertTrue(commands.handle(key("[", keyCode: 33)), "the key is still the size key")
         XCTAssertEqual(dispatched, [.invokeCommand(id: "subtitle-size-down")])
         XCTAssertEqual(controls.readout.text, "", "nothing changed, so nothing is announced")
     }
 
     func testAHeldSAsksForTheFilePanelOnceAndTheSessionDecidesWhetherItOpens() {
-        answer = .perform
-        XCTAssertTrue(controls.handleKey(key("s")))
-        XCTAssertTrue(controls.handleKey(key("s", repeating: true)), "a repeat is swallowed")
+        XCTAssertTrue(commands.handle(key("s", keyCode: 1)))
+        XCTAssertTrue(commands.handle(key("s", keyCode: 1, repeating: true)), "a repeat is swallowed")
         XCTAssertEqual(dispatched, [.invokeCommand(id: "add-subtitle")])
-        XCTAssertTrue(controls.carryOut("add-subtitle"), "the shell carries out the file panel")
+        XCTAssertEqual(commands.performedCounts, ["add-subtitle": 1], "the shell carries out the file panel")
         XCTAssertFalse(controls.carryOut("open-file"), "not a track surface's command")
     }
 
@@ -74,22 +92,49 @@ final class TrackControlsTests: XCTestCase {
         XCTAssertEqual(dispatched, [.addSubtitle(path: "/Users/example/Movies/film.en.srt")])
     }
 
-    func testTheMenuBarSubmenuListsTheTracksAndSwitchesThem() {
-        let menu = NSMenu()
-        controls.populate(menu, kind: .subtitle)
-        XCTAssertEqual(menu.items.map(\.title), ["Off", "English SDH · PGS · Image · Default", "en · SRT · EXT", "",
-                                                 "Add Subtitle File…"])
-        XCTAssertEqual(menu.items.map(\.state), [.off, .off, .on, .off, .off])
-        XCTAssertTrue(menu.items[3].isSeparatorItem)
-        menu.performActionForItem(at: 0)
-        menu.performActionForItem(at: 1)
+    func testTheMenuBarHostsTheTrackSubmenusAndTheySwitchTracks() throws {
+        XCTAssertEqual(commands.submenuCommands, ["audio-track", "subtitles"])
+        XCTAssertTrue(commands.shellCommands.contains("add-subtitle"))
+        let bar = MenuBar(commands: commands, openRecent: nil)
+        bar.rebuild()
+        let subtitles = try submenu(of: .subtitles, in: bar)
+        XCTAssertEqual(subtitles.items.map(\.title), ["Off", "English SDH · PGS · Image · Default", "en · SRT · EXT", "",
+                                                      "Add Subtitle File…"])
+        XCTAssertEqual(subtitles.items.map(\.state), [.off, .off, .on, .off, .off])
+        XCTAssertTrue(subtitles.items[3].isSeparatorItem)
+        subtitles.performActionForItem(at: 0)
+        subtitles.performActionForItem(at: 1)
         XCTAssertEqual(dispatched, [.selectTrack(kind: .subtitle, id: nil), .selectTrack(kind: .subtitle, id: 1)])
+        XCTAssertTrue(bar.menus[.subtitles]?.items.contains(where: { $0.playerCommandID == "add-subtitle" }) ?? false,
+                      "S has its registry item in the Subtitles menu")
 
-        let audio = NSMenu()
-        controls.populate(audio, kind: .audio)
+        let audio = try submenu(of: .audio, in: bar)
         XCTAssertEqual(audio.items.map(\.title), ["English · 5.1 · EAC3", "Director's Commentary · ENG · 2.0 · AC3"])
         audio.performActionForItem(at: 1)
         XCTAssertEqual(dispatched.last, .selectTrack(kind: .audio, id: 2))
+
+        view.adjustable = false
+        bar.menuNeedsUpdate(subtitles)
+        XCTAssertFalse(subtitles.items.filter { !$0.isSeparatorItem }.contains(where: \.isEnabled),
+                       "nothing to choose without loaded media")
+    }
+
+    func testAMenuItemsStepShowsItsReadout() throws {
+        let bar = MenuBar(commands: commands, openRecent: nil)
+        bar.rebuild()
+        let menu = try XCTUnwrap(bar.menus[.subtitles])
+        let index = try XCTUnwrap(menu.items.firstIndex { $0.playerCommandID == "subtitle-size-up" })
+        commands.perform(menu.items[index])
+        XCTAssertEqual(invoked, ["subtitle-size-up"])
+        XCTAssertEqual(controls.readout.text, "Subtitle size 110%")
+    }
+
+    /// The submenu a provider fills in `menu`, filled as when it opens.
+    private func submenu(of menu: MenuBarMenu, in bar: MenuBar) throws -> NSMenu {
+        let item = try XCTUnwrap(bar.menus[menu]?.items.first { $0.submenu != nil }, "\(menu) has no track submenu")
+        let submenu = try XCTUnwrap(item.submenu)
+        bar.menuNeedsUpdate(submenu)
+        return submenu
     }
 
     func testTheButtonsWorkOnlyWhileMediaIsLoaded() {
@@ -110,18 +155,22 @@ final class TrackControlsTests: XCTestCase {
         XCTAssertNil(controls.readout.hitTest(NSPoint(x: 1, y: 1)), "the readout takes no clicks")
     }
 
-    func testThePlayerWindowOffersTheKeysItsOwnCommandsDoNotTake() {
+    func testThePlayerWindowRunsEachTrackKeyOnceThroughTheShortcutTable() {
         let window = PlayerWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100),
                                   styleMask: PlayerWindow.style, backing: .buffered, defer: true)
         window.isReleasedWhenClosed = false
-        var commands: [WindowCommand] = []
-        var offered: [String] = []
-        window.onCommand = { command in commands.append(command); return true }
-        window.onOtherKey = { event in offered.append(event.charactersIgnoringModifiers ?? ""); return true }
-        window.keyDown(with: key("f"))
-        window.keyDown(with: key("z"))
-        XCTAssertEqual(commands, [.toggleFullscreen])
-        XCTAssertEqual(offered, ["z"], "F is the window's; Z goes on to the track keys")
+        var windowCommands: [WindowCommand] = []
+        window.onCommand = { command in windowCommands.append(command); return true }
+        window.shortcutKeys = { [unowned self] event in self.commands.handle(event) }
+        window.keyDown(with: key("s", keyCode: 1))
+        window.keyDown(with: key("z", keyCode: 6))
+        window.keyDown(with: key("Z", keyCode: 6, .shift))
+        window.keyDown(with: key("[", keyCode: 33))
+        window.keyDown(with: key("]", keyCode: 30))
+        window.keyDown(with: key("я", keyCode: 6))
+        XCTAssertEqual(invoked, ["add-subtitle", "subtitle-delay-forward", "subtitle-delay-back", "subtitle-size-down",
+                                 "subtitle-size-up", "subtitle-delay-forward"], "each key ran its command once")
+        XCTAssertEqual(windowCommands, [], "and none went on to the window's own keys")
         window.close()
     }
 
@@ -141,6 +190,11 @@ final class TrackControlsTests: XCTestCase {
         controls.choose(.select(kind: .audio, id: 3))
         XCTAssertTrue(controls.claimError(requestId: 9), "the session reports a failed choice as an error event too")
         XCTAssertEqual(controls.readout.text, TrackControls.changeFailed)
+
+        answer = .accepted(requestId: 11)
+        XCTAssertTrue(commands.handle(key("]", keyCode: 30)))
+        XCTAssertTrue(controls.claimError(requestId: 11), "a step from the shortcut table is a track request")
+        XCTAssertEqual(controls.readout.text, TrackControls.changeFailed)
     }
 
     func testSOpensTheFilePanelOnlyWhileMediaIsLoaded() {
@@ -150,12 +204,11 @@ final class TrackControlsTests: XCTestCase {
         controls.window = window
         controls.presentFilePanel = { _, _ in panels += 1 }
         // The session answers `perform` for the shell's command whatever plays.
-        answer = .perform
         view.adjustable = false
-        XCTAssertTrue(controls.handleKey(key("s")))
+        XCTAssertTrue(commands.handle(key("s", keyCode: 1)))
         XCTAssertEqual(panels, 0, "nothing plays to add a file to")
         view.adjustable = true
-        XCTAssertTrue(controls.handleKey(key("s")))
+        XCTAssertTrue(commands.handle(key("s", keyCode: 1)))
         XCTAssertEqual(panels, 1)
     }
 
@@ -165,8 +218,7 @@ final class TrackControlsTests: XCTestCase {
         var chosen: ((URL) -> Void)?
         controls.window = window
         controls.presentFilePanel = { _, done in chosen = done }
-        answer = .perform
-        XCTAssertTrue(controls.handleKey(key("s")))
+        XCTAssertTrue(commands.handle(key("s", keyCode: 1)))
         // Playback ended while the panel was open.
         answer = .rejected(reason: .noActiveMedia, message: "the command needs loaded media")
         chosen?(URL(fileURLWithPath: "/Users/example/Movies/film.en.srt"))
@@ -200,7 +252,7 @@ final class TrackControlsTests: XCTestCase {
     }
 
     func testAfterAPopoverClosesSpacePausesInsteadOfClickingTheTrackButton() throws {
-        let rig = try PlayerRig(controls: controls)
+        let rig = try PlayerRig(controls: controls, commands: commands)
         defer { rig.close() }
         XCTAssertTrue(controls.audioButton.refusesFirstResponder && controls.subtitleButton.refusesFirstResponder,
                       "a click on a track button leaves keyboard focus where it was")
@@ -208,19 +260,20 @@ final class TrackControlsTests: XCTestCase {
         _ = rig.window.makeFirstResponder(controls.subtitleButton)
         controls.popoverDidClose(Notification(name: NSPopover.didCloseNotification))
         rig.window.sendEvent(try rig.key(" ", keyCode: 49))
-        XCTAssertEqual(rig.pauses, 1)
+        XCTAssertEqual(invoked, ["play-pause"])
     }
 
     func testKeysPressedInThePopoverGoToThePlayerWindow() throws {
-        let rig = try PlayerRig(controls: controls)
+        let rig = try PlayerRig(controls: controls, commands: commands)
         defer { rig.close() }
         let content = controls.popoverContent.view
         XCTAssertTrue(content.acceptsFirstResponder, "the popover's content holds keyboard focus, not its Off button")
         content.keyDown(with: try rig.key(" ", keyCode: 49))
-        XCTAssertEqual(rig.pauses, 1, "Space pauses as it does on the video")
-        XCTAssertTrue(dispatched.isEmpty, "and turns no subtitle off")
+        XCTAssertEqual(dispatched, [.invokeCommand(id: "play-pause")],
+                       "Space pauses as it does on the video, and turns no subtitle off")
         content.keyDown(with: try rig.key("]", keyCode: 30))
-        XCTAssertEqual(dispatched, [.invokeCommand(id: "subtitle-size-up")], "] steps the size the popover shows")
+        XCTAssertEqual(dispatched.last, .invokeCommand(id: "subtitle-size-up"), "] steps the size the popover shows")
+        XCTAssertEqual(controls.readout.text, "Subtitle size 110%")
         XCTAssertFalse(controls.popoverKey(try rig.key("\u{1b}", keyCode: WindowKeys.escapeKeyCode)),
                        "Escape is left to the popover, which closes")
     }
@@ -241,15 +294,15 @@ final class TrackControlsTests: XCTestCase {
     }
 }
 
-/// A real player window with a video view holding keyboard focus and the track
-/// buttons in the transport controls, wired as the app wires them.
+/// A real player window with a video view holding keyboard focus, the track
+/// buttons in the transport controls and the keys going through `commands`'s
+/// shortcut table, wired as the app wires them.
 private final class PlayerRig {
     let window: PlayerWindow
     let video: VideoView
     let osc = TransportOverlay(hideTimer: ManualHideTimer())
-    private(set) var pauses = 0
 
-    init(controls: TrackControls) throws {
+    init(controls: TrackControls, commands: PlayerCommands) throws {
         _ = NSApplication.shared
         window = PlayerWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 580), styleMask: PlayerWindow.style,
                               backing: .buffered, defer: false)
@@ -262,8 +315,7 @@ private final class PlayerRig {
         osc.focusReturn = video
         controls.install(in: osc, over: root)
         controls.window = window
-        video.onTogglePause = { [unowned self] in self.pauses += 1 }
-        window.onOtherKey = { [weak controls] event in controls?.handleKey(event) ?? false }
+        window.shortcutKeys = { [weak commands] event in commands?.handle(event) ?? false }
         XCTAssertTrue(window.makeFirstResponder(video))
     }
 

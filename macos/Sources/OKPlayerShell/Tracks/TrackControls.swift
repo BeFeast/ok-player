@@ -2,8 +2,10 @@ import AppKit
 import UniformTypeIdentifiers
 
 /// The audio and subtitle surfaces (#882): two OSC buttons with popovers, the
-/// subtitle file panel, the delay and size keys with an on-screen readout, and the
-/// Audio and Subtitles submenus for the menu bar (`populate(_:kind:)`).
+/// subtitle file panel, the on-screen readout of the delay and size steps, and the
+/// menu bar's Audio and Subtitles submenus (`register(with:)`). The keys (S, Z,
+/// Shift+Z, [ and ]) are the shortcut table's, run by `PlayerCommands` like every
+/// other key; `commandRan(_:)` shows their readout.
 ///
 /// What the surfaces list and send comes from `TrackMenus`, over the session's
 /// `tracks` view; selecting, adding and stepping are session commands. Nothing here
@@ -38,7 +40,6 @@ final class TrackControls: NSObject, NSPopoverDelegate {
     /// The popover's content.
     let popoverContent = TrackPopoverController()
 
-    private var keys = TrackKeys(table: [])
     private let popover = NSPopover()
     private var popoverKind: TrackKind?
     /// The transport controls the buttons sit in; their `focusReturn` is where
@@ -89,9 +90,6 @@ final class TrackControls: NSObject, NSPopoverDelegate {
         ])
     }
 
-    /// The session's shortcut table, for the keys handled here.
-    func setShortcuts(_ table: [ShortcutRow]) { keys = TrackKeys(table: table) }
-
     /// The session reported a batch.
     func sessionChanged(_ snapshot: SessionSnapshot) {
         let loaded = snapshot.status == .playing || snapshot.status == .paused
@@ -101,22 +99,26 @@ final class TrackControls: NSObject, NSPopoverDelegate {
 
     // MARK: Commands
 
-    /// A key the window's own commands did not take. True when it was one of
-    /// these surfaces' keys.
-    func handleKey(_ event: NSEvent) -> Bool {
-        guard let command = keys.command(characters: event.charactersIgnoringModifiers, keyCode: event.keyCode,
-                                         modifiers: event.modifierFlags.intersection(.deviceIndependentFlagsMask))
-        else { return false }
-        // A held S would open the file panel again and again; held steps repeat.
-        if !(event.isARepeat && command == TrackMenus.addSubtitle) { run(command) }
-        return true
+    /// The menu bar's Audio and Subtitles submenus, the file panel as the shell's
+    /// `add-subtitle` command: register them with `commands` before the session
+    /// starts, so the session config lists them as this shell's commands.
+    func register(with commands: PlayerCommands) {
+        commands.register(TrackMenus.addSubtitle) { [weak self] in _ = self?.carryOut(TrackMenus.addSubtitle) }
+        commands.register(TrackSubmenu(controls: self, kind: .audio))
+        commands.register(TrackSubmenu(controls: self, kind: .subtitle))
     }
 
-    /// Invoke the registry command `id`: the session runs the delay and size steps,
-    /// and answers `perform` for the file panel.
+    /// A key or a menu item ran a registry command (`PlayerCommands.onRun`): a
+    /// delay or size step shows its readout, and an error against it its failure.
+    func commandRan(_ invocation: PlayerCommands.Invocation) {
+        if case .ran(let result) = invocation.outcome { invoked(invocation.id, result) }
+    }
+
+    /// Invoke the registry command `id` from the popover: the session runs the
+    /// delay and size steps, and answers `perform` for the file panel.
     @discardableResult
     func run(_ id: String) -> DispatchResult? {
-        guard let result = send(.invokeCommand(id: id), failure: Self.changeFailed) else { return nil }
+        guard let result = dispatch?(.invokeCommand(id: id)) else { return nil }
         if case .perform = result { _ = carryOut(id) }
         invoked(id, result)
         return result
@@ -130,8 +132,13 @@ final class TrackControls: NSObject, NSPopoverDelegate {
         return true
     }
 
-    /// The registry command `id` was invoked with `result`: show its readout.
+    /// The registry command `id` was invoked with `result`. For a delay or size
+    /// step, an error the session reports against the request reads as a failed
+    /// change, and an accepted one shows its readout. Any other command is not
+    /// these surfaces'.
     func invoked(_ id: String, _ result: DispatchResult) {
+        guard TrackMenus.steps.contains(id) else { return }
+        remember(result, failure: Self.changeFailed)
         guard case .accepted = result, let view = query?(), let text = TrackMenus.readout(after: id, in: view) else {
             return
         }
@@ -171,6 +178,12 @@ final class TrackControls: NSObject, NSPopoverDelegate {
     @discardableResult
     private func send(_ command: Command, failure: String) -> DispatchResult? {
         guard let result = dispatch?(command) else { return nil }
+        remember(result, failure: failure)
+        return result
+    }
+
+    /// Remember the request `result` answers, so an error against it reads `failure`.
+    private func remember(_ result: DispatchResult, failure: String) {
         switch result {
         case .accepted(let id), .failed(let id, _):
             requests.append((id, failure))
@@ -179,7 +192,6 @@ final class TrackControls: NSObject, NSPopoverDelegate {
         default:
             break
         }
-        return result
     }
 
     private func showFailure(_ text: String) {
@@ -256,27 +268,45 @@ final class TrackControls: NSObject, NSPopoverDelegate {
         _ = window.makeFirstResponder(video)
     }
 
-    /// Fill `menu` with the Audio or Subtitles items for the menu bar; call it from
-    /// the menu's `menuNeedsUpdate(_:)`.
-    func populate(_ menu: NSMenu, kind: TrackKind) {
-        menu.removeAllItems()
-        // The items' own enabled state, not whether the target answers the action.
-        menu.autoenablesItems = false
-        for item in TrackMenus.items(kind, query?()) {
-            guard item.kind != .separator else { menu.addItem(.separator()); continue }
+    /// The Audio or Subtitles items for the menu bar, for the session's state now.
+    /// They carry their own enabled state: the menu bar's provider submenus do not
+    /// auto-enable their items.
+    func menuItems(_ kind: TrackKind) -> [NSMenuItem] {
+        TrackMenus.items(kind, query?()).map { (item: TrackMenuItem) -> NSMenuItem in
+            guard item.kind != .separator else { return NSMenuItem.separator() }
             let entry = NSMenuItem(title: item.title, action: item.action == nil ? nil : #selector(chooseMenuItem(_:)),
                                    keyEquivalent: "")
             entry.target = self
             entry.state = item.checked ? .on : .off
             entry.isEnabled = item.enabled
             entry.representedObject = item.action.map { TrackActionBox($0) }
-            menu.addItem(entry)
+            return entry
         }
     }
 
     @objc private func chooseMenuItem(_ item: NSMenuItem) {
         guard let box = item.representedObject as? TrackActionBox else { return }
         choose(box.action)
+    }
+}
+
+/// The menu bar's Audio or Subtitles submenu: the registry's `audio-track` or
+/// `subtitles` row, filled with the track items each time it opens.
+final class TrackSubmenu: DynamicSubmenuProvider {
+    let kind: TrackKind
+    private weak var controls: TrackControls?
+
+    init(controls: TrackControls, kind: TrackKind) {
+        self.controls = controls
+        self.kind = kind
+    }
+
+    var commandID: String { kind == .audio ? TrackMenus.audioCommand : TrackMenus.subtitlesCommand }
+
+    /// The items enable themselves from the `tracks` view: nothing can be chosen
+    /// while no media is loaded.
+    func submenuItems(for command: RegistryCommand) -> [NSMenuItem] {
+        controls?.menuItems(kind) ?? []
     }
 }
 

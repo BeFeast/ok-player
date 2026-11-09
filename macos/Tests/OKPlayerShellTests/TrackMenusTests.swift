@@ -69,32 +69,36 @@ final class TrackMenusTests: XCTestCase {
         XCTAssertNil(TrackMenus.readout(after: "volume-up", in: view))
     }
 
-    func testTheTrackKeysAreTheShortcutTablesChords() throws {
-        let reply = try GoldenFixtures.decode(QueryReply.self, "query-reply-shortcut-table.json")
-        guard case .shortcutTable(let table) = reply.result else { return XCTFail("not a shortcut table") }
-        let keys = TrackKeys(table: table)
-        XCTAssertEqual(keys.command(characters: "z", keyCode: 6, modifiers: []), "subtitle-delay-forward")
-        XCTAssertEqual(keys.command(characters: "Z", keyCode: 6, modifiers: .shift), "subtitle-delay-back",
-                       "Shift keeps the capital in charactersIgnoringModifiers")
-        XCTAssertEqual(keys.command(characters: "[", keyCode: 33, modifiers: []), "subtitle-size-down")
-        XCTAssertEqual(keys.command(characters: "]", keyCode: 30, modifiers: []), "subtitle-size-up")
-        XCTAssertEqual(keys.command(characters: "s", keyCode: 1, modifiers: []), "add-subtitle")
-        XCTAssertNil(keys.command(characters: "z", keyCode: 6, modifiers: .command), "Cmd+Z is not a subtitle key")
-        XCTAssertNil(keys.command(characters: "{", keyCode: 33, modifiers: .shift), "Shift+[ is not [")
-        XCTAssertNil(keys.command(characters: "x", keyCode: 7, modifiers: []), "close-media is not handled here")
-        XCTAssertNil(TrackKeys(table: []).command(characters: "z", keyCode: 6, modifiers: []), "no table, no keys")
+    /// The command the shortcut table runs for a key event with these characters.
+    private func command(_ characters: String, keyCode: UInt16, _ modifiers: NSEvent.ModifierFlags = []) throws
+        -> String? {
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                                                   timestamp: 0, windowNumber: 0, context: nil,
+                                                   characters: characters, charactersIgnoringModifiers: characters,
+                                                   isARepeat: false, keyCode: keyCode))
+        guard let press = KeyPress(event: event), case .run(let id)? = try MenuFixtures.keys().match(press) else {
+            return nil
+        }
+        return id
     }
 
-    func testARussianOrHebrewLayoutReachesTheKeyInTheSamePlace() throws {
-        let reply = try GoldenFixtures.decode(QueryReply.self, "query-reply-shortcut-table.json")
-        guard case .shortcutTable(let table) = reply.result else { return XCTFail("not a shortcut table") }
-        let keys = TrackKeys(table: table)
-        XCTAssertEqual(keys.command(characters: "ы", keyCode: 1, modifiers: []), "add-subtitle")
-        XCTAssertEqual(keys.command(characters: "ד", keyCode: 1, modifiers: []), "add-subtitle")
-        XCTAssertEqual(keys.command(characters: "я", keyCode: 6, modifiers: []), "subtitle-delay-forward")
-        XCTAssertEqual(keys.command(characters: "Я", keyCode: 6, modifiers: .shift), "subtitle-delay-back")
-        XCTAssertEqual(keys.command(characters: "х", keyCode: 33, modifiers: []), "subtitle-size-down")
-        XCTAssertEqual(keys.command(characters: "ъ", keyCode: 30, modifiers: []), "subtitle-size-up")
-        XCTAssertNil(keys.command(characters: "ч", keyCode: 7, modifiers: []), "X is not a track key")
+    func testTheTrackKeysRunThroughTheShortcutTable() throws {
+        XCTAssertEqual(try command("z", keyCode: 6), "subtitle-delay-forward")
+        XCTAssertEqual(try command("Z", keyCode: 6, .shift), "subtitle-delay-back",
+                       "Shift keeps the capital in charactersIgnoringModifiers")
+        XCTAssertEqual(try command("[", keyCode: 33), "subtitle-size-down")
+        XCTAssertEqual(try command("]", keyCode: 30), "subtitle-size-up")
+        XCTAssertEqual(try command("s", keyCode: 1), "add-subtitle")
+        XCTAssertNil(try command("z", keyCode: 6, .command), "Cmd+Z is the menu's Undo, not a subtitle key")
+        XCTAssertNil(try command("{", keyCode: 33, .shift), "Shift+[ is not [")
+    }
+
+    func testARussianOrHebrewLayoutReachesTheTrackKeyInTheSamePlace() throws {
+        XCTAssertEqual(try command("ы", keyCode: 1), "add-subtitle")
+        XCTAssertEqual(try command("ד", keyCode: 1), "add-subtitle")
+        XCTAssertEqual(try command("я", keyCode: 6), "subtitle-delay-forward")
+        XCTAssertEqual(try command("Я", keyCode: 6, .shift), "subtitle-delay-back")
+        XCTAssertEqual(try command("х", keyCode: 33), "subtitle-size-down")
+        XCTAssertEqual(try command("ъ", keyCode: 30), "subtitle-size-up")
     }
 }

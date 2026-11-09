@@ -81,7 +81,7 @@ written as `null` and may be left out on input.
 | Config (`okp_session_new`) | `schema_version`, `app` (`name`, `platform`), absolute `data_dir`, `config_dir`, `cache_dir`, optional `hwdec`, ordered `mpv_options` (`name`, `value`) applied after the session defaults, optional `shell_commands` (see Command registry) |
 | Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay`, `invoke_command {id}`, `playlist` (see Playlist), `nudge_volume` and `toggle_mute` (see Transport controls), `add_subtitle`, `set_subtitle_scale` and `nudge_subtitle_scale` (see Tracks and subtitles) |
 | Reply | `{"schema_version":1,"result":{...}}`: `accepted {request_id}`, `no_op {}`, `rejected {reason, message}`, `failed {request_id, message}` when the engine refused an accepted command at once, `perform {}` (`invoke_command` only), or `applied {}` when the session carried the command out itself and nothing reached libmpv yet |
-| Query (`okp_session_query`) | `{"schema_version":1,"query":{...}}`: `snapshot {}`, answered with `result.snapshot.snapshot` (the full state); `command_registry {fullscreen, mini_player}` (both optional), answered with `result.command_registry.commands`; `shortcut_table {}`, answered with `result.shortcut_table.shortcuts`; `playlist {}`, answered with `result.playlist.playlist`; `transport {at}` (`at` optional), answered with `result.transport.transport` (see Transport controls); `tracks {}`, answered with `result.tracks.tracks` (see Tracks and subtitles); `window_fit`, `initial_window_fit` and `video_click` (see Window queries); or `result.rejected`; `history` queries are below |
+| Query (`okp_session_query`) | `{"schema_version":1,"query":{...}}`: `snapshot {}`, answered with `result.snapshot.snapshot` (the full state); `command_registry {fullscreen, mini_player}` (both optional), answered with `result.command_registry.commands`; `shortcut_table {}`, answered with `result.shortcut_table.shortcuts`; `repeating_shortcuts {}`, answered with `result.repeating_shortcuts.actions`; `playlist {}`, answered with `result.playlist.playlist`; `transport {at}` (`at` optional), answered with `result.transport.transport` (see Transport controls); `tracks {}`, answered with `result.tracks.tracks` (see Tracks and subtitles); `window_fit`, `initial_window_fit` and `video_click` (see Window queries); or `result.rejected`; `history` queries are below |
 | Event batch (`okp_session_drain_events`) | `{"schema_version":1,"events":[...]}` |
 
 An open source is `{"kind":"local"|"url","location":"..."}`. A URL is handed
@@ -177,17 +177,23 @@ under their shortcut action ids. Each `command_registry` row carries `id`,
 keyboard-only command), `label`, `available`, `enabled`, `checked` and
 `shortcut`, the primary chord bound to it on the config's platform.
 `enabled`, `checked` and the state-dependent labels ("Mute" checked while
-muted, "Exit fullscreen") are resolved against the session state at the time
-of the query. The window state is the shell's, so it passes `fullscreen` and
+muted, that is while libmpv's mute flag is on or the level is 0, as the
+transport view's `muted`; "Exit fullscreen") are resolved against the session state at the time
+of the query, the session playlist included: `next-item` and `previous-item`
+are enabled while it holds two items or more. The window state is the shell's, so it passes `fullscreen` and
 `mini_player` in the query. Query when a menu opens; no event announces a
 change.
 
 The session runs some commands itself: `play-pause`, `close-media`,
-`seek-back`/`seek-forward` (5 s), `volume-down`/`volume-up` (5 points, within
-0-130), `mute`, `subtitle-delay-back`/`subtitle-delay-forward` (0.05 s, from
-the delay asked for last), `subtitle-size-down`/`subtitle-size-up` (0.1, as
-`nudge_subtitle_scale`). For these, `enabled` is exactly when the session
-accepts the command:
+`seek-back`/`seek-forward` (5 s), `volume-down`/`volume-up` (a
+`nudge_volume` of 5 points), `mute` (a `toggle_mute`),
+`subtitle-delay-back`/`subtitle-delay-forward` (0.05 s, from the delay asked
+for last), `subtitle-size-down`/`subtitle-size-up` (0.1, as
+`nudge_subtitle_scale`). The volume steps and mute go through the same volume
+model as the transport controls (see Transport controls): a step builds on the
+level asked for last, and `mute` unmutes a mute made from the controls and the
+other way round. For these, `enabled` is exactly when the session accepts the
+command:
 `play-pause`, the seeks and the subtitle nudges while the status is `playing`
 or `paused` (not while a file opens, after it ends or after a load error,
 although the source stays set), `close-media` while the status is not `idle`,
@@ -211,6 +217,12 @@ the platform defaults and `secondary` is `null`. A chord is
 the canonical key name (`space`, `comma`, `Left`, `o`) and `label` the display
 text (`Shift+Cmd+O`). On macOS menu commands use Cmd chords and in-window keys
 stay single keys.
+
+`repeating_shortcuts` lists the actions whose key repeats while held (the
+seek, frame, volume and subtitle delay, size and cue steps): each auto-repeat
+runs the action again. Every other action runs once per physical press (core
+`key_press`), so a held Space, M or F toggles once. The list is pinned by
+`query-reply-repeating-shortcuts.json`.
 
 ## Transport controls
 

@@ -55,6 +55,11 @@ enum TrackMenus {
     static let delayBack = "subtitle-delay-back"
     static let sizeUp = "subtitle-size-up"
     static let sizeDown = "subtitle-size-down"
+    /// The delay and size steps, which show a readout.
+    static let steps: Set<String> = [delayForward, delayBack, sizeUp, sizeDown]
+    /// The registry rows the menu bar shows as the Audio and Subtitles submenus.
+    static let audioCommand = "audio-track"
+    static let subtitlesCommand = "subtitles"
 
     /// The Audio menu: one item per audio track, the playing one checked.
     static func audioItems(_ view: TracksView?) -> [TrackMenuItem] {
