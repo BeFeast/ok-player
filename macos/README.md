@@ -443,9 +443,9 @@ from the session's command registry and shortcut table (`docs/session-abi.md`,
 - **Commands this shell carries out:** Open file, Open folder, Fullscreen and Escape
   fullscreen, Next and Previous item (the session playlist), the Playback speed submenu,
   Add Subtitle and the Audio track and Subtitles submenus (see Tracks and subtitles).
-  They are registered with `PlayerCommands` before the session starts and passed in the config's
-  `shell_commands`. A `DynamicSubmenuProvider` fills a registry command's submenu each
-  time it opens; the audio and subtitle track menus plug in there.
+  They are registered with `PlayerCommands` before the session starts and passed in
+  the config's `shell_commands`. A `DynamicSubmenuProvider` fills a registry command's
+  submenu each time it opens; the audio and subtitle track menus plug in there.
 
 ## Tracks and subtitles
 
