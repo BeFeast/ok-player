@@ -264,7 +264,9 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         playlist.state = client.store.playlist
         system.privateSession = client.store.privateSession
         system.update(client.store.snapshot)
-        for case .error(_, let message, _) in batch.events {
+        // An error against a track surface's own request (a subtitle file libmpv
+        // cannot read) shows in its readout; playback goes on.
+        for case .error(_, let message, let requestId) in batch.events where !tracks.claimError(requestId: requestId) {
             fail(message); return
         }
         if batch.events.contains(.shutdown) { fail("The playback engine stopped"); return }

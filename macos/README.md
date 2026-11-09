@@ -362,14 +362,22 @@ subtitle popover starts with Off and ends with **Add Subtitle File…** and the
 delay and size rows, each with the session's readout and a step down and up.
 
 - **Add Subtitle File…** and **S** open a file panel limited to subtitle files
-  (`.srt`, `.ass`, `.ssa`, `.sub`, `.vtt`, `.idx`, `.sup`); the file goes to the
-  session as `add_subtitle` and becomes the subtitle track.
+  (`.srt`, `.ass`, `.ssa`, `.sub`, `.vtt`, `.idx`, `.sup`) while media is loaded;
+  the file goes to the session as `add_subtitle` and becomes the subtitle track.
+  A file the session refuses, or one libmpv cannot read (an `error` event with the
+  request's id), shows "Could not load the subtitle file" in the readout and
+  playback goes on; only errors of no track request reach the app's error alert.
 - Subtitle files named after the media (`movie.srt`, `movie.en.srt`) load with it;
   libmpv finds them (`sub-auto=exact`).
 - **Z** / **Shift+Z** move subtitles 50 ms later / earlier and **]** / **[** make them
   10 % larger / smaller (0.25-4). The keys come from the session's shortcut table,
   the session runs them, and the new value shows for a moment over the top of the
-  video.
+  video. With a Cyrillic or Hebrew layout active, the key in the same place works.
+- The track buttons and the popover's controls never take keyboard focus. While a
+  popover is the key window, its content view hands every key but Escape to the
+  player window, so Space pauses and Z or ] step the values it shows; when it
+  closes, focus goes back to the video. The popover is rebuilt only when the
+  session's `tracks` view changed, not on every playback batch.
 - `TrackControls.populate(_:kind:)` fills an Audio or Subtitles menu with the same
   items, for the menu bar (#880) to host.
 
@@ -436,8 +444,9 @@ window and checks, from the session's events and the video layer's counters:
 - F and Escape, sent as key events to the video view, enter native fullscreen and
   leave it again, and each press reaches the transport controls as activity;
 - `]` sent to the window steps the subtitle size and shows the session's `110%`
-  readout, and a generated SRT file added during playback is the selected external
-  subtitle track a few seconds later;
+  readout, which libmpv reports a few seconds later; a subtitle file that does not
+  exist is added and its error shows in the readout while playback goes on; and a
+  generated SRT file added during playback is the selected external subtitle track;
 - closing the window during playback tears down in order (close, destroy the
   render context, free the session), after which the center has none of those
   commands enabled and no handler of the app's.

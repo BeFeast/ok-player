@@ -11,6 +11,12 @@ import UniformTypeIdentifiers
 final class TrackControls: NSObject, NSPopoverDelegate {
     /// The registry commands this shell carries out for the track surfaces.
     static let shellCommands = [TrackMenus.addSubtitle]
+    /// The readout when an added subtitle file was refused or libmpv could not load it.
+    static let addFailed = "Could not load the subtitle file"
+    /// The readout when the session reports an error for a track choice or step.
+    static let changeFailed = "Could not change the subtitles or audio"
+    /// How long a failure stays on screen.
+    static let failureSeconds: TimeInterval = 3
 
     /// Sends a command to the session.
     var dispatch: ((Command) -> DispatchResult)?
@@ -19,40 +25,60 @@ final class TrackControls: NSObject, NSPopoverDelegate {
     /// Holds the transport controls up (true) or lets them hide again (false)
     /// while a popover is open.
     var holdControls: ((Bool) -> Void)?
-    /// The window the file panel is a sheet of.
+    /// The window the file panel is a sheet of, and the player window that the
+    /// popover hands key presses on to.
     weak var window: NSWindow?
+    /// Shows the file panel as a sheet of the window and hands over the chosen file.
+    var presentFilePanel: (NSWindow, @escaping (URL) -> Void) -> Void = TrackControls.openSubtitlePanel
 
     let audioButton = TransportOverlay.iconButton("waveform", "Audio")
     let subtitleButton = TransportOverlay.iconButton("captions.bubble", "Subtitles")
     let readout = TrackReadoutView()
 
+    /// The popover's content.
+    let popoverContent = TrackPopoverController()
+
     private var keys = TrackKeys(table: [])
     private let popover = NSPopover()
-    private let content = TrackPopoverController()
     private var popoverKind: TrackKind?
+    /// The transport controls the buttons sit in; their `focusReturn` is where
+    /// keyboard focus goes when a popover closes.
+    private weak var osc: TransportOverlay?
     /// The registry command whose readout is showing.
     private var readoutCommand: String?
+    /// The latest requests these surfaces sent, with the readout for an error the
+    /// session reports against one of them.
+    private var requests: [(id: UInt64, failure: String)] = []
+    /// Errors the readout showed instead of the app (smoke evidence).
+    private(set) var failuresShown = 0
     private var smokeSubtitle: URL?
 
     override init() {
         super.init()
         popover.behavior = .transient
-        popover.contentViewController = content
+        popover.contentViewController = popoverContent
         popover.delegate = self
-        content.onAction = { [weak self] action, closes in
+        popoverContent.onAction = { [weak self] action, closes in
             self?.choose(action)
             if closes { self?.popover.performClose(nil) } else { self?.refresh() }
         }
+        popoverContent.onKey = { [weak self] event in self?.popoverKey(event) ?? false }
         audioButton.target = self
         audioButton.action = #selector(showAudio)
         subtitleButton.target = self
         subtitleButton.action = #selector(showSubtitles)
-        for button in [audioButton, subtitleButton] { button.isEnabled = false }
+        for button in [audioButton, subtitleButton] {
+            button.isEnabled = false
+            // With Keyboard navigation on, a clicked button would keep keyboard
+            // focus, and Space would click it again instead of pausing.
+            button.refusesFirstResponder = true
+        }
     }
 
     /// Put the two buttons at the front of the transport controls' trailing group,
     /// and the readout over the top of `root`.
     func install(in osc: TransportOverlay, over root: NSView) {
+        self.osc = osc
         osc.trailingControls.insertArrangedSubview(subtitleButton, at: 0)
         osc.trailingControls.insertArrangedSubview(audioButton, at: 0)
         readout.translatesAutoresizingMaskIntoConstraints = false
@@ -78,7 +104,7 @@ final class TrackControls: NSObject, NSPopoverDelegate {
     /// A key the window's own commands did not take. True when it was one of
     /// these surfaces' keys.
     func handleKey(_ event: NSEvent) -> Bool {
-        guard let command = keys.command(characters: event.charactersIgnoringModifiers,
+        guard let command = keys.command(characters: event.charactersIgnoringModifiers, keyCode: event.keyCode,
                                          modifiers: event.modifierFlags.intersection(.deviceIndependentFlagsMask))
         else { return false }
         // A held S would open the file panel again and again; held steps repeat.
@@ -90,7 +116,7 @@ final class TrackControls: NSObject, NSPopoverDelegate {
     /// and answers `perform` for the file panel.
     @discardableResult
     func run(_ id: String) -> DispatchResult? {
-        guard let result = dispatch?(.invokeCommand(id: id)) else { return nil }
+        guard let result = send(.invokeCommand(id: id), failure: Self.changeFailed) else { return nil }
         if case .perform = result { _ = carryOut(id) }
         invoked(id, result)
         return result
@@ -111,7 +137,7 @@ final class TrackControls: NSObject, NSPopoverDelegate {
         }
         readoutCommand = id
         readout.show(text) { [weak self] in self?.readoutCommand = nil }
-        if popover.isShown { content.update(kind: popoverKind ?? .subtitle, view: view) }
+        if popover.isShown { popoverContent.update(kind: popoverKind ?? .subtitle, view: view) }
     }
 
     /// Do what a menu or popover item stands for.
@@ -119,26 +145,67 @@ final class TrackControls: NSObject, NSPopoverDelegate {
         switch action {
         case .addSubtitle: chooseSubtitleFile()
         case .invoke(let id): run(id)
-        case .select: if let command = TrackMenus.command(for: action) { _ = dispatch?(command) }
+        case .select: if let command = TrackMenus.command(for: action) { send(command, failure: Self.changeFailed) }
         }
     }
 
-    /// Load `url` as a subtitle for the playing media.
+    /// Load `url` as a subtitle for the playing media. A refusal shows in the
+    /// readout; so does libmpv failing to read the file later (`claimError`).
     @discardableResult
     func addSubtitle(_ url: URL) -> DispatchResult? {
-        dispatch?(.addSubtitle(path: url.path))
+        let result = send(.addSubtitle(path: url.path), failure: Self.addFailed)
+        if case .rejected? = result { showFailure(Self.addFailed) }
+        return result
+    }
+
+    /// The session reported an error for request `requestId`. True when it
+    /// answers one of these surfaces' requests: the readout says what failed and
+    /// playback goes on, so the error is not the app's to show.
+    func claimError(requestId: UInt64?) -> Bool {
+        guard let requestId, let index = requests.firstIndex(where: { $0.id == requestId }) else { return false }
+        showFailure(requests.remove(at: index).failure)
+        return true
+    }
+
+    /// Send `command`, remembering the request so an error against it reads `failure`.
+    @discardableResult
+    private func send(_ command: Command, failure: String) -> DispatchResult? {
+        guard let result = dispatch?(command) else { return nil }
+        switch result {
+        case .accepted(let id), .failed(let id, _):
+            requests.append((id, failure))
+            // A request that succeeded is never answered again; keep the latest few.
+            if requests.count > 32 { requests.removeFirst(requests.count - 32) }
+        default:
+            break
+        }
+        return result
+    }
+
+    private func showFailure(_ text: String) {
+        failuresShown += 1
+        readoutCommand = nil
+        readout.show(text, for: Self.failureSeconds)
     }
 
     private func chooseSubtitleFile() {
-        guard let window else { return }
+        // As the menu item and the popover row, which are disabled then: no media
+        // to add the file to.
+        guard query?()?.adjustable == true, let window else { return }
+        if popover.isShown { popover.performClose(nil) }
+        presentFilePanel(window) { [weak self] url in self?.addSubtitle(url) }
+    }
+
+    /// The file panel, limited to subtitle files.
+    static func openSubtitlePanel(on window: NSWindow, chosen: @escaping (URL) -> Void) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = SubtitleFiles.extensions.compactMap { UTType(filenameExtension: $0) }
         panel.message = "Add a subtitle file to the playing media"
         panel.prompt = "Add"
-        panel.beginSheetModal(for: window) { [weak self] response in
-            if response == .OK, let url = panel.url { self?.addSubtitle(url) }
+        panel.beginSheetModal(for: window) { response in
+            if response == .OK, let url = panel.url { chosen(url) }
         }
     }
 
@@ -151,20 +218,42 @@ final class TrackControls: NSObject, NSPopoverDelegate {
         // A button closes whichever popover is open; the next click opens its own.
         guard !popover.isShown else { popover.performClose(nil); return }
         popoverKind = kind
-        content.update(kind: kind, view: query?())
+        popoverContent.update(kind: kind, view: query?())
         holdControls?(true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY)
     }
 
     private func refresh() {
         guard let view = query?() else { return }
-        if popover.isShown, let kind = popoverKind { content.update(kind: kind, view: view) }
+        if popover.isShown, let kind = popoverKind { popoverContent.update(kind: kind, view: view) }
         if let id = readoutCommand, let text = TrackMenus.readout(after: id, in: view) { readout.update(text) }
     }
 
     func popoverDidClose(_ notification: Notification) {
         popoverKind = nil
+        // A clicked radio button turns itself on whether or not the session takes
+        // the choice: the next opening shows the session's state again.
+        popoverContent.invalidate()
         holdControls?(false)
+        returnFocus()
+    }
+
+    /// A key pressed while the popover is the key window. Escape closes the
+    /// popover as usual; any other key goes to the player window, as if the
+    /// popover were not there: Space pauses, Z and ] step the values it shows.
+    func popoverKey(_ event: NSEvent) -> Bool {
+        guard event.keyCode != WindowKeys.escapeKeyCode, let window else { return false }
+        (window.firstResponder ?? window).keyDown(with: event)
+        return true
+    }
+
+    /// Keyboard focus goes back to the video when a popover closes, unless
+    /// another control of the window holds it (the scrubber after a click).
+    private func returnFocus() {
+        guard let window, let video = osc?.focusReturn else { return }
+        let holder = window.firstResponder
+        guard holder == nil || holder === window || holder === audioButton || holder === subtitleButton else { return }
+        _ = window.makeFirstResponder(video)
     }
 
     /// Fill `menu` with the Audio or Subtitles items for the menu bar; call it from
@@ -201,22 +290,45 @@ final class TrackActionBox: NSObject {
 
 /// The popover content: the track choices, and for subtitles Add Subtitle File…
 /// and the delay and size rows. Choosing a track closes the popover; the steps
-/// keep it open.
+/// keep it open. Its controls never take keyboard focus: the content view holds
+/// it and hands key presses to `onKey`.
 final class TrackPopoverController: NSViewController {
     /// An action was chosen; `closes` when the popover should close after it.
     var onAction: ((TrackMenuAction, _ closes: Bool) -> Void)?
-    private let stack = NSStackView()
+    /// A key pressed while the popover is the key window; true when it was used.
+    var onKey: ((NSEvent) -> Bool)?
+    private let stack = TrackPopoverView()
+    /// What the controls show now.
+    private var shown: (kind: TrackKind, view: TracksView?)?
 
     override func loadView() {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 4
         stack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
+        stack.onKey = { [weak self] event in self?.onKey?(event) ?? false }
         view = stack
     }
 
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        _ = view.window?.makeFirstResponder(view)
+    }
+
+    /// The rows of the popover, top to bottom.
+    var controls: [NSView] {
+        loadViewIfNeeded()
+        return stack.arrangedSubviews
+    }
+
+    /// Show `tracks` for `kind`. Batches arrive about ten times a second during
+    /// playback; the controls are rebuilt only when what they show changed, so a
+    /// button is never pulled away under a click and keyboard and VoiceOver focus
+    /// stay where they are.
     func update(kind: TrackKind, view tracks: TracksView?) {
         loadViewIfNeeded()
+        if let shown, shown.kind == kind, shown.view == tracks { return }
+        shown = (kind, tracks)
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         boxes = [:]
         let title = NSTextField(labelWithString: kind == .audio ? "Audio" : "Subtitles")
@@ -284,7 +396,11 @@ final class TrackPopoverController: NSViewController {
         return line
     }
 
+    /// The next `update` rebuilds the controls even if nothing changed.
+    func invalidate() { shown = nil }
+
     private func attach(_ action: TrackMenuAction?, to button: NSButton) {
+        button.refusesFirstResponder = true
         guard let action else { return }
         button.identifier = NSUserInterfaceItemIdentifier(UUID().uuidString)
         boxes[button.identifier!] = TrackActionBox(action)
@@ -301,6 +417,19 @@ final class TrackPopoverController: NSViewController {
     @objc private func adjust(_ sender: NSButton) {
         guard let id = sender.identifier, let box = boxes[id] else { return }
         onAction?(box.action, false)
+    }
+}
+
+/// The popover's content view. It holds keyboard focus while the popover is the
+/// key window, so the player's keys keep working there.
+final class TrackPopoverView: NSStackView {
+    /// A key press; true when it was used.
+    var onKey: ((NSEvent) -> Bool)?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func keyDown(with event: NSEvent) {
+        if onKey?(event) != true { super.keyDown(with: event) }
     }
 }
 
@@ -361,8 +490,9 @@ final class TrackReadoutView: NSVisualEffectView {
 
 extension TrackControls {
     /// Smoke, while media plays: `]` pressed on `window` steps the subtitle size and
-    /// shows the session's readout, and a generated SRT file is added. The message
-    /// says what failed.
+    /// shows the session's readout. A subtitle file that does not exist is added,
+    /// which libmpv reports as an error against that request, and then a generated
+    /// SRT file. The message says what failed.
     func smokeStart(window: NSWindow) -> String? {
         guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
                                            timestamp: ProcessInfo.processInfo.systemUptime,
@@ -373,35 +503,45 @@ extension TrackControls {
         guard readout.text == "Subtitle size 110%" else {
             return "] did not show the subtitle size readout (\(readout.text.isEmpty ? "nothing" : readout.text))"
         }
-        let file = FileManager.default.temporaryDirectory
-            .appendingPathComponent("okp-smoke-\(ProcessInfo.processInfo.processIdentifier).srt")
+        let directory = FileManager.default.temporaryDirectory
+        let stem = "okp-smoke-\(ProcessInfo.processInfo.processIdentifier)"
+        let missing = directory.appendingPathComponent("\(stem)-missing.srt")
+        let file = directory.appendingPathComponent("\(stem).srt")
         do {
             try "1\n00:00:00,000 --> 00:01:00,000\nOK Player smoke\n\n".write(to: file, atomically: true, encoding: .utf8)
         } catch {
             return "Could not write a subtitle file: \(error)"
         }
         smokeSubtitle = file
+        guard case .accepted? = addSubtitle(missing) else { return "The session refused the missing subtitle file" }
         guard case .accepted? = addSubtitle(file) else { return "The session refused the subtitle file" }
         return nil
     }
 
-    /// Smoke, seconds later: the added file is the selected subtitle with the
-    /// session's external-file label, the audio track is listed, and the size holds.
+    /// Smoke, seconds later: the missing file's error showed in the readout and
+    /// playback went on; the added file is the selected subtitle with the session's
+    /// external-file label; the audio track is listed; and libmpv reports the size.
     func smokeFinish() -> String? {
         defer { if let smokeSubtitle { try? FileManager.default.removeItem(at: smokeSubtitle) } }
+        guard failuresShown >= 1 else { return "The missing subtitle file's error did not reach the readout" }
         guard let view = query?() else { return "The session answered no tracks view" }
         guard !view.audio.isEmpty else { return "No audio track is listed" }
         guard let added = view.subtitles.first(where: { $0.selected && $0.id != nil }), added.label.hasSuffix("EXT") else {
             return "The added subtitle is not the selected external track: \(view.subtitles.map(\.label))"
         }
-        guard view.subtitleScale.label == "110%" else { return "The subtitle size is \(view.subtitleScale.label)" }
+        guard view.subtitleScale.label == "110%", let reported = view.subtitleScale.reported, abs(reported - 1.1) < 0.001
+        else {
+            return "libmpv reports the subtitle size as \(view.subtitleScale.reported.map { "\($0)" } ?? "nothing") "
+                + "(\(view.subtitleScale.label) asked)"
+        }
         return nil
     }
 
     /// The smoke line's part for these surfaces.
     var smokeSummary: String {
         let view = query?()
+        let reported = view?.subtitleScale.reported.map { "\(Int(($0 * 100).rounded()))%" } ?? "?"
         return "tracks_audio=\(view?.audio.count ?? 0) subtitles_listed=\((view?.subtitles.count ?? 1) - 1) "
-            + "subtitle_added=external subtitle_size=\(view?.subtitleScale.label ?? "?")"
+            + "subtitle_added=external subtitle_add_error=readout subtitle_size_reported=\(reported)"
     }
 }

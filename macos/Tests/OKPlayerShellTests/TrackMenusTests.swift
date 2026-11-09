@@ -73,15 +73,28 @@ final class TrackMenusTests: XCTestCase {
         let reply = try GoldenFixtures.decode(QueryReply.self, "query-reply-shortcut-table.json")
         guard case .shortcutTable(let table) = reply.result else { return XCTFail("not a shortcut table") }
         let keys = TrackKeys(table: table)
-        XCTAssertEqual(keys.command(characters: "z", modifiers: []), "subtitle-delay-forward")
-        XCTAssertEqual(keys.command(characters: "Z", modifiers: .shift), "subtitle-delay-back",
+        XCTAssertEqual(keys.command(characters: "z", keyCode: 6, modifiers: []), "subtitle-delay-forward")
+        XCTAssertEqual(keys.command(characters: "Z", keyCode: 6, modifiers: .shift), "subtitle-delay-back",
                        "Shift keeps the capital in charactersIgnoringModifiers")
-        XCTAssertEqual(keys.command(characters: "[", modifiers: []), "subtitle-size-down")
-        XCTAssertEqual(keys.command(characters: "]", modifiers: []), "subtitle-size-up")
-        XCTAssertEqual(keys.command(characters: "s", modifiers: []), "add-subtitle")
-        XCTAssertNil(keys.command(characters: "z", modifiers: .command), "Cmd+Z is not a subtitle key")
-        XCTAssertNil(keys.command(characters: "{", modifiers: .shift), "Shift+[ is not [")
-        XCTAssertNil(keys.command(characters: "x", modifiers: []), "close-media is not handled here")
-        XCTAssertNil(TrackKeys(table: []).command(characters: "z", modifiers: []), "no table, no keys")
+        XCTAssertEqual(keys.command(characters: "[", keyCode: 33, modifiers: []), "subtitle-size-down")
+        XCTAssertEqual(keys.command(characters: "]", keyCode: 30, modifiers: []), "subtitle-size-up")
+        XCTAssertEqual(keys.command(characters: "s", keyCode: 1, modifiers: []), "add-subtitle")
+        XCTAssertNil(keys.command(characters: "z", keyCode: 6, modifiers: .command), "Cmd+Z is not a subtitle key")
+        XCTAssertNil(keys.command(characters: "{", keyCode: 33, modifiers: .shift), "Shift+[ is not [")
+        XCTAssertNil(keys.command(characters: "x", keyCode: 7, modifiers: []), "close-media is not handled here")
+        XCTAssertNil(TrackKeys(table: []).command(characters: "z", keyCode: 6, modifiers: []), "no table, no keys")
+    }
+
+    func testARussianOrHebrewLayoutReachesTheKeyInTheSamePlace() throws {
+        let reply = try GoldenFixtures.decode(QueryReply.self, "query-reply-shortcut-table.json")
+        guard case .shortcutTable(let table) = reply.result else { return XCTFail("not a shortcut table") }
+        let keys = TrackKeys(table: table)
+        XCTAssertEqual(keys.command(characters: "ы", keyCode: 1, modifiers: []), "add-subtitle")
+        XCTAssertEqual(keys.command(characters: "ד", keyCode: 1, modifiers: []), "add-subtitle")
+        XCTAssertEqual(keys.command(characters: "я", keyCode: 6, modifiers: []), "subtitle-delay-forward")
+        XCTAssertEqual(keys.command(characters: "Я", keyCode: 6, modifiers: .shift), "subtitle-delay-back")
+        XCTAssertEqual(keys.command(characters: "х", keyCode: 33, modifiers: []), "subtitle-size-down")
+        XCTAssertEqual(keys.command(characters: "ъ", keyCode: 30, modifiers: []), "subtitle-size-up")
+        XCTAssertNil(keys.command(characters: "ч", keyCode: 7, modifiers: []), "X is not a track key")
     }
 }

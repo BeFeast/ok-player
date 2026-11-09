@@ -19,23 +19,31 @@ struct TrackKeys {
 
     /// The registry command for a key press, or `nil`. `characters` is the event's
     /// `charactersIgnoringModifiers`, which keeps Shift (Shift+Z gives `Z`).
-    func command(characters: String?, modifiers: NSEvent.ModifierFlags) -> String? {
-        guard let characters, let key = Self.keyName(characters) else { return nil }
+    func command(characters: String?, keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> String? {
+        guard let key = Self.keyName(characters, keyCode: keyCode) else { return nil }
         let pressed = ShortcutModifiers(ctrl: modifiers.contains(.control), alt: modifiers.contains(.option),
                                         shift: modifiers.contains(.shift), cmd: modifiers.contains(.command))
         return bindings.first { $0.chord.key.lowercased() == key && $0.chord.modifiers == pressed }?.command
     }
 
-    /// The shortcut table's key name for the characters a key gave: a letter or
-    /// digit in lower case, the brackets by name.
-    static func keyName(_ characters: String) -> String? {
-        switch characters {
-        case "[", "{": return "bracketleft"
-        case "]", "}": return "bracketright"
-        default:
-            guard characters.count == 1, let character = characters.first,
-                  character.isLetter || character.isNumber else { return nil }
-            return characters.lowercased()
+    /// The shortcut table's key name for a key press: an ASCII letter or digit in
+    /// lower case, the brackets by name. A layout whose characters are not ASCII
+    /// (Cyrillic, Hebrew) gives the US key in the same place.
+    static func keyName(_ characters: String?, keyCode: UInt16) -> String? {
+        if let characters, characters.count == 1, let character = characters.first, character.isASCII {
+            switch character {
+            case "[", "{": return "bracketleft"
+            case "]", "}": return "bracketright"
+            default: return character.isLetter || character.isNumber ? characters.lowercased() : nil
+            }
         }
+        return usLayout[keyCode]
     }
+
+    /// The US layout's letter and bracket keys by virtual key code.
+    static let usLayout: [UInt16: String] = [
+        0: "a", 11: "b", 8: "c", 2: "d", 14: "e", 3: "f", 5: "g", 4: "h", 34: "i", 38: "j", 40: "k", 37: "l",
+        46: "m", 45: "n", 31: "o", 35: "p", 12: "q", 15: "r", 1: "s", 17: "t", 32: "u", 9: "v", 13: "w", 7: "x",
+        16: "y", 6: "z", 33: "bracketleft", 30: "bracketright",
+    ]
 }
