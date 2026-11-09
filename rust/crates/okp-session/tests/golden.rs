@@ -12,7 +12,8 @@ use okp_session::protocol::{
     Chapter, Command, CommandEnvelope, CommandGroup, CommandMenu, DispatchReply, DispatchResult,
     EndReason, ErrorKind, Event, EventBatch, MediaSource, MpvOption, Query, QueryEnvelope,
     QueryReply, QueryResult, RejectReason, SeekMode, SeekPrecision, SessionConfig, SessionSnapshot,
-    SnapshotChange, SourceKind, Status, Track, TrackKind, VideoGeometry,
+    SnapshotChange, SourceKind, Status, Track, TrackKind, VideoClickIntent, VideoGeometry,
+    WindowRect, WindowSize,
 };
 use okp_session::{CommandRegistry, SCHEMA_VERSION, WindowState};
 use serde::Serialize;
@@ -54,6 +55,11 @@ const CHECKED: &[&str] = &[
     "query-snapshot.json",
     "query-reply-snapshot.json",
     "query-reply-rejected.json",
+    "query-window-fit.json",
+    "query-initial-window-fit.json",
+    "query-reply-window-fit.json",
+    "query-video-click.json",
+    "query-reply-video-click.json",
     "query-command-registry.json",
     "query-reply-command-registry.json",
     "query-shortcut-table.json",
@@ -313,6 +319,90 @@ fn the_snapshot_query_and_its_replies_match_their_fixtures() {
     );
 }
 
+#[test]
+fn the_window_queries_and_their_replies_match_their_fixtures() {
+    golden(
+        "query-window-fit.json",
+        QueryEnvelope {
+            schema_version: SCHEMA_VERSION,
+            query: Query::WindowFit {
+                video: WindowSize {
+                    width: 3840,
+                    height: 2160,
+                },
+                backing_scale: 2.0,
+                visible_frame: WindowRect {
+                    x: 0,
+                    y: 0,
+                    width: 1512,
+                    height: 945,
+                },
+                min_size: Some(WindowSize {
+                    width: 420,
+                    height: 280,
+                }),
+                chrome: Some(WindowSize {
+                    width: 0,
+                    height: 48,
+                }),
+            },
+        },
+    );
+    golden(
+        "query-initial-window-fit.json",
+        QueryEnvelope {
+            schema_version: SCHEMA_VERSION,
+            query: Query::InitialWindowFit {
+                backing_scale: 2.0,
+                visible_frame: WindowRect {
+                    x: 0,
+                    y: 0,
+                    width: 1512,
+                    height: 945,
+                },
+                min_size: Some(WindowSize {
+                    width: 420,
+                    height: 280,
+                }),
+                chrome: Some(WindowSize {
+                    width: 0,
+                    height: 48,
+                }),
+            },
+        },
+    );
+    golden(
+        "query-reply-window-fit.json",
+        QueryReply {
+            schema_version: SCHEMA_VERSION,
+            result: QueryResult::WindowFit {
+                frame: Some(WindowRect {
+                    x: 45,
+                    y: 49,
+                    width: 1421,
+                    height: 847,
+                }),
+            },
+        },
+    );
+    golden(
+        "query-video-click.json",
+        QueryEnvelope {
+            schema_version: SCHEMA_VERSION,
+            query: Query::VideoClick { press_count: 2 },
+        },
+    );
+    golden(
+        "query-reply-video-click.json",
+        QueryReply {
+            schema_version: SCHEMA_VERSION,
+            result: QueryResult::VideoClick {
+                intent: VideoClickIntent::CancelPlayPauseAndToggleFullscreen,
+            },
+        },
+    );
+}
+
 /// The macOS shell of the registry fixtures: it opens files and folders and owns
 /// the window and the track and speed menus.
 fn macos_registry() -> CommandRegistry {
@@ -513,6 +603,7 @@ struct Enums {
     source_kind: Vec<SourceKind>,
     seek_mode: Vec<SeekMode>,
     seek_precision: Vec<SeekPrecision>,
+    video_click_intent: Vec<VideoClickIntent>,
     command_group: Vec<CommandGroup>,
     command_menu: Vec<CommandMenu>,
 }
@@ -613,6 +704,18 @@ fn every_enum_value_matches_the_enums_fixture() {
             ErrorKind::LoadFailed | ErrorKind::CommandFailed | ErrorKind::Engine => {}
         }
     }
+    let video_click_intent = vec![
+        VideoClickIntent::Ignore,
+        VideoClickIntent::SchedulePlayPause,
+        VideoClickIntent::CancelPlayPauseAndToggleFullscreen,
+    ];
+    for value in &video_click_intent {
+        match value {
+            VideoClickIntent::Ignore
+            | VideoClickIntent::SchedulePlayPause
+            | VideoClickIntent::CancelPlayPauseAndToggleFullscreen => {}
+        }
+    }
     golden(
         "enums.json",
         Enums {
@@ -624,6 +727,7 @@ fn every_enum_value_matches_the_enums_fixture() {
             source_kind: vec![SourceKind::Local, SourceKind::Url],
             seek_mode: vec![SeekMode::Absolute, SeekMode::Relative],
             seek_precision: vec![SeekPrecision::Exact, SeekPrecision::Keyframe],
+            video_click_intent,
             command_group,
             command_menu,
         },

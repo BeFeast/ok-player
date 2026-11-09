@@ -21,6 +21,7 @@ pub mod protocol;
 pub mod reconcile;
 mod session;
 mod transport;
+pub mod window;
 
 pub use coalesce::TIMELINE_INTERVAL;
 pub use commands::{CommandRegistry, WindowState};

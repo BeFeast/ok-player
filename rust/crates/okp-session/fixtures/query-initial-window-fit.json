@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "query": {
+    "initial_window_fit": {
+      "backing_scale": 2.0,
+      "visible_frame": { "x": 0, "y": 0, "width": 1512, "height": 945 },
+      "min_size": { "width": 420, "height": 280 },
+      "chrome": { "width": 0, "height": 48 }
+    }
+  }
+}

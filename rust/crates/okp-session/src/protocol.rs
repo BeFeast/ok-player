@@ -23,6 +23,7 @@ pub use crate::history::{
 };
 pub use crate::playlist::{PlaylistAction, PlaylistEntry, PlaylistState, QueueMode, RepeatMode};
 pub use crate::transport::{OscSurface, OscView, SpeedChoice, TransportView, VolumeView};
+pub use crate::window::{VideoClickIntent, WindowRect, WindowSize};
 
 /// Version of every envelope below. Bump on any change a shell built against
 /// the previous version could not decode or would misread. A new command,
@@ -251,6 +252,38 @@ pub struct QueryEnvelope {
 pub enum Query {
     /// The full session state, as the event stream has reported it so far.
     Snapshot {},
+    /// The frame of a window fitted to a video on one screen
+    /// ([`crate::window::fit_window`]). Reads no session state.
+    WindowFit {
+        /// Display size of the video in pixels, as the snapshot's `video`.
+        video: WindowSize,
+        /// Device pixels per logical unit on that screen.
+        backing_scale: f64,
+        /// The part of the screen windows may use, in logical units.
+        visible_frame: WindowRect,
+        /// The window's minimum size, if it has one.
+        #[serde(default)]
+        min_size: Option<WindowSize>,
+        /// The room the window's own controls take outside the video area, if
+        /// any: the frame grows by it so the video area keeps the video's aspect.
+        #[serde(default)]
+        chrome: Option<WindowSize>,
+    },
+    /// The fit the current source is owed: once per opened source, the frame of
+    /// a window fitted to the first video size reported while it is loaded (as
+    /// `window_fit` with that size); `null` before that size is known, after the
+    /// fit was taken, and for a source without video. Answering takes the fit.
+    InitialWindowFit {
+        backing_scale: f64,
+        visible_frame: WindowRect,
+        #[serde(default)]
+        min_size: Option<WindowSize>,
+        #[serde(default)]
+        chrome: Option<WindowSize>,
+    },
+    /// What a primary-button release with `press_count` clicks on the video
+    /// means ([`crate::window::video_click_intent`]). Reads no session state.
+    VideoClick { press_count: i32 },
     /// Every registry command, resolved against the current state. The shell
     /// passes the window state only it knows.
     CommandRegistry {
@@ -286,6 +319,14 @@ pub struct QueryReply {
 pub enum QueryResult {
     Snapshot {
         snapshot: SessionSnapshot,
+    },
+    /// The answer to `window_fit` and `initial_window_fit`; `null` when there
+    /// is nothing to fit.
+    WindowFit {
+        frame: Option<WindowRect>,
+    },
+    VideoClick {
+        intent: VideoClickIntent,
     },
     CommandRegistry {
         commands: Vec<RegistryCommand>,

@@ -101,6 +101,7 @@ extension SessionConfig {
 
 final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var window: NSWindow!
+    var windowBehaviour: PlayerWindowController?
     var video: VideoView?
     let status = NSTextField(labelWithString: "Open a video to begin")
     /// The Open button and the status line, centred over the video while nothing plays.
@@ -124,6 +125,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     lazy var playlist: SessionPlaylist = SessionPlaylist { [weak self] command in
         self?.client?.dispatch(command) ?? .rejected(reason: .noActiveMedia, message: "No playback session")
     }
+    /// Key presses the window received; each one counts as activity for the transport controls.
+    private(set) var keyPresses = 0
     var shuttingDown = false
     var closing = false
     var errorShown = false
@@ -139,8 +142,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         fileMenu.addItem(system.makeOpenRecentItem())
         let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: ""); fileItem.submenu = fileMenu
         menu.addItem(fileItem); NSApp.mainMenu = menu
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 580),
-                          styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        let behaviour = PlayerWindowController(contentRect: NSRect(x: 0, y: 0, width: 960, height: 580))
+        windowBehaviour = behaviour; window = behaviour.window
         window.title = "OK Player"; window.delegate = self; window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 420, height: 280)
         window.backgroundColor = PaletteRole.canvas.color
@@ -166,6 +169,13 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             prompt.centerXAnchor.constraint(equalTo: root.centerXAnchor), prompt.centerYAnchor.constraint(equalTo: root.centerYAnchor),
             prompt.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 12)
         ])
+        behaviour.install(in: root, videoArea: videoArea)
+        // The title bar's traffic lights and title strip show and hide with the
+        // transport controls, and a key press brings the controls back like a
+        // pointer movement.
+        osc.onRevealChange = { [weak self] revealed in self?.oscRevealChanged(revealed) }
+        behaviour.oscVisibilityChanged(osc.isRevealed, animated: false)
+        behaviour.window.onKeyDown = { [weak self] in self?.keyPressed() }
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         guard let video else { fail("No OpenGL pixel format is available for video"); return }
         let client: SessionClient
@@ -175,6 +185,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             fail("\(error)"); return
         }
         self.client = client
+        behaviour.connect(client) { [weak self] in self?.togglePause() }
         client.onBatch = { [weak self] batch in self?.sessionChanged(batch) }
         playlist.state = client.store.playlist
         system.playlist = playlist
@@ -221,6 +232,15 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         prompt.isHidden = false
     }
     @objc func togglePause() { client?.dispatch(.togglePause) }
+    /// The transport controls showed or hid.
+    func oscRevealChanged(_ revealed: Bool) {
+        windowBehaviour?.oscVisibilityChanged(revealed, animated: true)
+        smokeRun?.oscRevealChanged(revealed)
+    }
+    func keyPressed() {
+        keyPresses += 1
+        osc.noteActivity()
+    }
     /// The session reported a batch; the store already holds the new state.
     func sessionChanged(_ batch: EventBatch) {
         guard !shuttingDown, let client else { return }
@@ -233,6 +253,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if batch.events.contains(.shutdown) { fail("The playback engine stopped"); return }
         guard !errorShown else { return }
         let snapshot = client.store.snapshot
+        windowBehaviour?.sessionChanged(snapshot)
         video?.hasVideo = snapshot.video != nil
         osc.sessionChanged(snapshot)
         osc.playlistSteps = (previous: playlist.canStep(.previous), next: playlist.canStep(.next))
@@ -287,6 +308,9 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         client = nil
     }
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        windowBehaviour?.windowWillResize(to: frameSize) ?? frameSize
+    }
     func windowWillClose(_ notification: Notification) {
         // Terminating closes the window again; the first close does the work.
         guard !closing else { return }
@@ -319,17 +343,22 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 ///    context and has drawn into no context but the layer's own;
 /// 6. presented: every frame drawn reported a swap that reached libmpv (the swap
 ///    count the session returns equals the frames drawn);
-/// 7. transport controls: they stay up through the paused seconds, hide after the
-///    session's idle timeout once playback resumes without activity, hand the
-///    scrubber's keyboard focus back to the video as they hide, come back on
-///    activity with the session's time readout, and are in the snapshots;
-/// 8. closed while playing: teardown runs in order, the system offers no remote
+/// 7. fitted: once playing, the window has the size the fit gave it, the video
+///    view has the video's aspect, and a resize keeps it (checked with step 2);
+/// 8. transport controls: they stay up through the paused seconds, hide after the
+///    session's idle timeout once playback resumes without activity, take the
+///    title bar's traffic lights with them, hand the scrubber's keyboard focus
+///    back to the video as they hide, come back on activity with the session's
+///    time readout, and are in the snapshots;
+/// 9. fullscreen: F and Escape, pressed on the video view, enter and leave
+///    native fullscreen, and each reaches the controls as activity;
+/// 10. closed while playing: teardown runs in order, the system offers no remote
 ///    command any more, and the app exits.
 ///
 /// The timed steps use one-shot timers; the session state itself arrives through
 /// wakeup-driven drains, never through polling.
 final class SmokeRun {
-    enum Phase { case idle, playing, pausing, holding, resuming, resizing, hiding, finished }
+    enum Phase { case idle, playing, pausing, holding, resuming, resizing, hiding, titlebar, fullscreen, finished }
 
     private weak var app: PlayerApp?
     private let path: String?
@@ -354,7 +383,7 @@ final class SmokeRun {
 
     func start() {
         guard let path else { fail("Smoke needs a media file argument"); return }
-        after(25) { [self] in
+        after(30) { [self] in
             if phase != .finished { fail("Smoke timed out in phase \(phase) after \(renders) render calls") }
         }
         // Idle: the render context exists, nothing is loaded, nothing may be drawn.
@@ -370,6 +399,7 @@ final class SmokeRun {
         let position = snapshot.timePos ?? 0
         switch phase {
         case .playing where snapshot.status == .playing && position > 0.7 && renders > 10:
+            if let failure = app?.windowBehaviour?.smokeFitFailure(video: snapshot.video) { fail(failure); return }
             phase = .pausing
             playingRenders = renders
             // Now Playing and the display-sleep assertion, then pause as a media key would.
@@ -442,21 +472,34 @@ final class SmokeRun {
             fail("The scrubber did not take keyboard focus during playback"); return
         }
         let hideAfter = app.osc.transport?.osc.hideAfter ?? 2.5
-        app.osc.onRevealChange = { [weak self] revealed in
-            if !revealed { self?.controlsHid() }
-        }
         after(hideAfter + 1.5) { [self] in
             if phase == .hiding { fail("The transport controls did not hide during playback") }
         }
     }
 
-    private func controlsHid() {
-        guard phase == .hiding, let app, let client = app.client, let layer = app.video?.videoLayer, !cancelled else { return }
-        app.osc.onRevealChange = nil
+    /// The app forwards every show and hide of the transport controls.
+    func oscRevealChanged(_ revealed: Bool) {
+        guard !revealed, phase == .hiding, !cancelled, let app else { return }
+        phase = .titlebar
         guard app.window.firstResponder === app.video else {
             fail("The hidden scrubber kept keyboard focus"); return
         }
+        // The title bar's traffic lights fade out with the controls and are hidden
+        // once the fade has finished.
+        after(0.6) { [self] in controlsHid() }
+    }
+
+    private func controlsHid() {
+        guard phase == .titlebar, let app, let behaviour = app.windowBehaviour, !cancelled else { return }
+        let lights = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
+            .compactMap { app.window.standardWindowButton($0) }
+        guard !lights.isEmpty, lights.allSatisfy(\.isHidden) else {
+            fail("The traffic lights did not hide with the transport controls"); return
+        }
         app.osc.noteActivity()
+        guard lights.allSatisfy({ !$0.isHidden }) else {
+            fail("The traffic lights did not come back with the transport controls"); return
+        }
         let elapsed = app.osc.elapsedLabel.stringValue, trailing = app.osc.trailingLabel.stringValue
         guard app.osc.isRevealed, !app.osc.panel.isHidden, elapsed.contains(":"), elapsed != "00:00" else {
             fail("The transport controls did not come back with the time (\(elapsed))"); return
@@ -468,21 +511,35 @@ final class SmokeRun {
         guard steps == (items >= 2), app.osc.previousButton.isEnabled == steps else {
             fail("Previous/next are \(steps ? "enabled" : "disabled") with \(items) playlist items"); return
         }
-        phase = .finished
-        let counts = layer.counts, use = layer.surface.contextUse
-        let snapshot = client.store.snapshot
-        let pixelFormat = layer.surface.floatColor ? "float16" : "rgba8"
-        print("OKP_SMOKE loaded=true progressed=true pause=true resume=true idle_render_calls=0 paused_render_calls=0 "
-              + "render_calls=\(counts.renders) swaps=\(counts.swaps) before_pause=\(playingRenders) "
-              + "before_resize=\(resizeRenders) ca_contexts_held=\(use.held) ca_context_copies=\(use.copies) "
-              + "draw_contexts=\(use.drawnInto.count) pixel_format=\(pixelFormat) "
-              + "volume=\(Int(snapshot.volume ?? -1)) tracks=\(snapshot.tracks.count) "
-              + "osc_paused_shown=true osc_auto_hidden=true osc_focus_returned=true osc_elapsed=\(elapsed) osc_trailing=\(trailing) "
-              + "playlist_items=\(items) osc_steps=\(steps ? "enabled" : "disabled")")
-        if let directory = app.snapshotDirectory { app.captureAppearances(to: directory) }
-        // Closing the window during playback runs the real teardown path; the app
-        // reports it once teardown has returned.
-        app.window.close()
+        phase = .fullscreen
+        let pressesBefore = app.keyPresses
+        behaviour.smokeFullscreenRoundTrip(timeout: 8) { [weak self] failure in
+            guard let self, let app = self.app, let client = app.client, let layer = app.video?.videoLayer,
+                  !self.cancelled else { return }
+            if let failure { self.fail(failure); return }
+            // F and Escape went through the window, which reports each key press to
+            // the transport controls as activity.
+            let presses = app.keyPresses - pressesBefore
+            guard presses >= 2 else {
+                self.fail("\(presses) of the F and Escape presses reached the transport controls"); return
+            }
+            self.phase = .finished
+            let counts = layer.counts, use = layer.surface.contextUse
+            let snapshot = client.store.snapshot
+            let pixelFormat = layer.surface.floatColor ? "float16" : "rgba8"
+            print("OKP_SMOKE loaded=true progressed=true pause=true resume=true idle_render_calls=0 paused_render_calls=0 "
+                  + "render_calls=\(counts.renders) swaps=\(counts.swaps) before_pause=\(self.playingRenders) "
+                  + "before_resize=\(self.resizeRenders) ca_contexts_held=\(use.held) ca_context_copies=\(use.copies) "
+                  + "draw_contexts=\(use.drawnInto.count) pixel_format=\(pixelFormat) "
+                  + "volume=\(Int(snapshot.volume ?? -1)) tracks=\(snapshot.tracks.count) \(behaviour.smokeFitSummary) "
+                  + "fullscreen=entered_and_left osc_paused_shown=true osc_auto_hidden=true osc_focus_returned=true "
+                  + "osc_titlebar_faded=true osc_key_activity=\(presses) osc_elapsed=\(elapsed) osc_trailing=\(trailing) "
+                  + "playlist_items=\(items) osc_steps=\(steps ? "enabled" : "disabled")")
+            if let directory = app.snapshotDirectory { app.captureAppearances(to: directory) }
+            // Closing the window during playback runs the real teardown path; the app
+            // reports it once teardown has returned.
+            app.window.close()
+        }
     }
 
     private func fail(_ message: String) {

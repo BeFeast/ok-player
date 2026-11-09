@@ -10,6 +10,20 @@ pause. Closing the window stops playback,
 destroys the render context and then frees the session. Errors stay visible until
 another explicit open attempt.
 
+The window runs its content under a transparent title bar, with the media title in
+the strip along the top. Opening a file fits the window to the video on the screen
+it is on: at most one video pixel per device pixel, centered, never below the
+window's minimum size, with room for the control bar under the video so the video
+view itself has the video's size. The session keeps the one fit each opened source
+is owed and answers the `initial_window_fit` query with okp-core's frame, whichever
+way the file was opened. While video shows, a resize keeps the video view at the
+video's aspect (`windowWillResize(_:to:)`; AppKit's `contentAspectRatio` would lock
+the whole content, bar included). **F**, **Control-Command-F** and a double click on
+the video toggle native fullscreen; **Esc** leaves it. A single click on the video
+toggles pause once the double-click interval has passed, so a double click never
+pauses first. The traffic lights and the title strip hide and show with the
+transport controls (`WindowChromeVisibility`); hidden ones take no clicks.
+
 This preview is for local testing. It does not yet contain the Linux shell's URL
 resolver, History, saving/cache UI, subtitle controls or update service. Its chrome
 uses the shared BeFeast palette in light and dark, following the system appearance;
@@ -331,7 +345,8 @@ Swift side only turns input into commands and keeps the hide timer.
 - **Previous/next item:** send the session playlist's `previous` and `next`
   (`SessionPlaylist`), enabled while the playlist has two items or more.
 - **Auto-hide:** while media plays, the controls and the cursor hide after the
-  session's idle timeout (2.5 s) without pointer movement. Paused or loading media
+  session's idle timeout (2.5 s) without pointer movement or a key press. The title
+  bar's traffic lights and title strip fade with them (`oscVisibilityChanged`). Paused or loading media
   keeps them up, and the pointer over them, an open menu or a scrubber drag holds
   them. Hidden controls take no clicks, and clicks outside the bar always reach the
   video.
@@ -388,17 +403,24 @@ window and checks, from the session's events and the video layer's counters:
   has drawn into no context but the layer's own;
 - every frame drawn reported a swap that reached libmpv: the count
   `okp_session_render_report_swap` returns equals the frames drawn;
+- once playing, the window has the frame the fit gave it, the video view has the
+  video's aspect after the fit and after a resize through the window's resize rule,
+  and the title strip has room under the title bar;
 - the transport controls stay up through the paused seconds, hide after the idle
-  timeout once playback resumes without pointer activity, hand the scrubber's
-  keyboard focus back to the video as they hide, and come back on activity with
-  the session's time readout, so both window snapshots show them;
+  timeout once playback resumes without pointer activity, take the title bar's
+  traffic lights with them, hand the scrubber's keyboard focus back to the video
+  as they hide, and come back on activity with the session's time readout, so
+  both window snapshots show them;
+- F and Escape, sent as key events to the video view, enter native fullscreen and
+  leave it again, and each press reaches the transport controls as activity;
 - closing the window during playback tears down in order (close, destroy the
   render context, free the session), after which the center has none of those
   commands enabled and no handler of the app's.
 
 Its `OKP_SMOKE` line also reports those counts, the pixel format, the
-volume and track count from the session snapshot, and the time readout the
-controls showed. The complete app is copied
+volume and track count from the session snapshot, the time readout the controls
+showed, and the fitted size, the video view's size after the fit and after the
+resize, the aspect and the title strip height. The complete app is copied
 to a new directory and launched with `DYLD_LIBRARY_PATH` unset. A separate 40-second
 process deadline prevents a blocked render callback from keeping the job alive.
 

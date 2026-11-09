@@ -141,6 +141,11 @@ struct DispatchReply: Codable, Equatable {
 
 enum Query: Codable, Equatable {
     case snapshot
+    /// See `SessionClient.windowFit` and `SessionClient.initialWindowFit`.
+    case windowFit(video: WindowSize, backingScale: Double, visibleFrame: WindowRect, minSize: WindowSize?,
+                   chrome: WindowSize?)
+    case initialWindowFit(backingScale: Double, visibleFrame: WindowRect, minSize: WindowSize?, chrome: WindowSize?)
+    case videoClick(pressCount: Int32)
     /// Every registry command, resolved against the session state and the window
     /// state only the shell knows. Query it when a menu opens.
     case commandRegistry(fullscreen: Bool = false, miniPlayer: Bool = false)
@@ -161,6 +166,8 @@ struct QueryEnvelope: Codable, Equatable {
 
 enum QueryResult: Codable, Equatable {
     case snapshot(snapshot: SessionSnapshot)
+    case windowFit(frame: WindowRect?)
+    case videoClick(intent: VideoClickIntent)
     case commandRegistry(commands: [RegistryCommand])
     case shortcutTable(shortcuts: [ShortcutRow])
     case history(result: HistoryQueryResult)

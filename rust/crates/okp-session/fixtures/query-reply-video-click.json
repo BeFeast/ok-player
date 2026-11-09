@@ -1,0 +1,4 @@
+{
+  "schema_version": 1,
+  "result": { "video_click": { "intent": "cancel_play_pause_and_toggle_fullscreen" } }
+}
