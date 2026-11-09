@@ -246,6 +246,10 @@ follows the system light/dark switch while it is open:
 | Scrubber track, buffered range, progress and knob | `borderSubtle`, `border`, `accent` |
 | Volume track, level up to 100 %, boost above it, 100 % mark | `borderSubtle`, `accent`, `warning`, `text` |
 | Volume level while muted | `textMuted` |
+| Up Next panel and its border | `surface`, `borderSubtle` |
+| Up Next title, item titles; item numbers, heading, NOW PLAYING | `text`; `textMuted` |
+| Now Playing card and the current item's row | `selected` |
+| Play mark of the current item; Up Next button while the panel is open | `accent` |
 
 The video surface gets no tint. A malformed palette or a role missing from one
 appearance fails the build. `scripts/tests/macos-palette.Tests.py` checks that the
@@ -351,6 +355,31 @@ Swift side only turns input into commands and keeps the hide timer.
   them. Hidden controls take no clicks, and clicks outside the bar always reach the
   video.
 
+## Up Next
+
+The Up Next panel (`Sources/OKPlayerShell/UpNext/`) lists the session playlist
+(`SessionStore.playlist`, from `playlist_changed`) on the right of the video, between
+the title bar and the transport controls. A pinned Now Playing card names the current
+item (libmpv's media title, else the item's label); under it every item is listed in
+playlist order with its number, the current one marked with a play mark on the
+selected fill.
+
+- **Show and hide:** the list button on the transport controls and **View → Up Next**
+  run the registry command `chapters-up-next`, which this shell lists in its
+  `shell_commands`. The panel opens when the registry enables the command (media is
+  open) and the session answers `perform`; the menu item is checked while it is open.
+  Both, and the panel's close button, close it at any time.
+- **Play an item:** a double click or Return on a row sends the playlist `jump`.
+  The current item is not restarted.
+- **Remove an item:** Delete, Forward Delete or **Remove from Up Next** in the row's
+  context menu sends the playlist `remove`. The current item is never removed.
+- **Keys:** while the list has keyboard focus, the arrow, Home, End and page keys move
+  its selection and every other key goes to the video, so Space and F keep working.
+  Hiding the panel gives focus back to the video. A scroll over the panel scrolls the
+  list instead of changing the volume.
+
+Drag to reorder, Add to queue, Play next and saving the playlist come later.
+
 ## System integration
 
 `System/SystemIntegration.swift` connects the player to macOS. It is handed the
@@ -384,15 +413,18 @@ session snapshot after every drained batch and keeps no playback state of its ow
 
 ## Verification boundary
 
-The optional bounded smoke mode opens the deterministic local fixture in a native
-window and checks, from the session's events and the video layer's counters:
+The optional bounded smoke mode copies the deterministic local fixture twice into a
+new folder, opens the first copy in a native window (the session lists the folder as a
+two-item playlist) and checks, from the session's events and the video layer's
+counters:
 
 - no render calls while idle, before the file is open;
 - the position and the render calls advance while playing;
 - while playing, the system's Now Playing reports the fixture as playing video,
   IOKit lists the display-sleep assertion, and `MPRemoteCommandCenter` has play,
   pause, play/pause, stop, both skips (10 s), change position and change rate enabled
-  (with the offered rates) and next and previous off; the pause is sent by running
+  (with the offered rates) and next and previous on, since the fixture plays from a
+  folder that holds two copies of it; the pause is sent by running
   the handler registered with the center's pause command;
 - while paused, the position holds and the render calls stay flat for two seconds,
   Now Playing reports the pause at rate 0 and the assertion is gone; the resume is sent
@@ -413,6 +445,8 @@ window and checks, from the session's events and the video layer's counters:
   both window snapshots show them;
 - F and Escape, sent as key events to the video view, enter native fullscreen and
   leave it again, and each press reaches the transport controls as activity;
+- the Up Next command opens the panel, which lists both copies of the fixture under
+  the Now Playing card with the first one current, so both window snapshots show it;
 - closing the window during playback tears down in order (close, destroy the
   render context, free the session), after which the center has none of those
   commands enabled and no handler of the app's.

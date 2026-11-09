@@ -57,6 +57,8 @@ final class TransportOverlay: NSView {
     private var panelArea: NSTrackingArea?
     private var scrollMonitor: Any?
     private var windowObservers: [NSObjectProtocol] = []
+    /// Speed, mute, volume and fullscreen, at the right of the bar.
+    private let trailingControls = NSStackView()
 
     init(hideTimer: HideTimer = MainQueueHideTimer()) {
         autoHide = AutoHide(timer: hideTimer)
@@ -195,12 +197,27 @@ final class TransportOverlay: NSView {
     /// A scroll over the video changes the volume. True when it was used.
     private func scrolled(_ event: NSEvent) -> Bool {
         guard event.window === window, surface?.visible == true else { return false }
-        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return false }
+        guard takesScroll(at: event.locationInWindow) else { return false }
         autoHide.activity()
         if let command = VolumeScrollAccumulator.command(steps: scrollSteps.steps(for: ScrollInput(event: event))) {
             dispatch?(command)
         }
         return true
+    }
+
+    /// Whether a scroll at `point` (window coordinates) changes the volume: over the
+    /// video or these controls, but not over a view laid over them, such as the Up
+    /// Next panel, which scrolls its own list.
+    func takesScroll(at point: NSPoint) -> Bool {
+        guard bounds.contains(convert(point, from: nil)) else { return false }
+        guard let root = window?.contentView else { return true }
+        guard let hit = root.hitTest(root.superview?.convert(point, from: nil) ?? point) else { return true }
+        return hit === focusReturn || hit.isDescendant(of: self)
+    }
+
+    /// Add a control to the bar's trailing group, before the fullscreen button.
+    func addTrailingControl(_ control: NSView) {
+        trailingControls.insertArrangedSubview(control, at: Swift.max(0, trailingControls.arrangedSubviews.count - 1))
     }
 
     // MARK: Controls
@@ -335,7 +352,9 @@ final class TransportOverlay: NSView {
         let leading = NSStackView(views: [previousButton, playButton, nextButton, elapsedLabel, trailingLabel])
         leading.spacing = 6
         leading.setCustomSpacing(12, after: nextButton)
-        let trailingControls = NSStackView(views: [speedLabel, muteButton, volumeSlider, fullscreenButton])
+        for control in [speedLabel, muteButton, volumeSlider, fullscreenButton] as [NSView] {
+            trailingControls.addArrangedSubview(control)
+        }
         trailingControls.spacing = 6
         for stack in [leading, trailingControls] {
             stack.orientation = .horizontal
@@ -374,7 +393,8 @@ final class TransportOverlay: NSView {
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .medium))
     }
 
-    private static func iconButton(_ name: String, _ label: String) -> NSButton {
+    /// A borderless 26-point button showing the SF Symbol `name` in the text colour.
+    static func iconButton(_ name: String, _ label: String) -> NSButton {
         let button = NSButton(title: "", target: nil, action: nil)
         button.isBordered = false
         button.imagePosition = .imageOnly

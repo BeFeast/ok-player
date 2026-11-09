@@ -95,7 +95,8 @@ extension SessionConfig {
         let support = files.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(bundleID)
         let caches = files.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(bundleID)
         return SessionConfig(app: AppIdentity(name: "OK Player", platform: .macos),
-                             dataDir: support.path, configDir: support.path, cacheDir: caches.path)
+                             dataDir: support.path, configDir: support.path, cacheDir: caches.path,
+                             shellCommands: [UpNextController.commandID])
     }
 }
 
@@ -108,6 +109,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let prompt = NSStackView()
     /// The floating transport controls over the video.
     let osc = TransportOverlay()
+    /// The Up Next side panel, its button on the controls and its View menu item.
+    let upNext = UpNextController()
     var statusRole = PaletteRole.textMuted
     var client: SessionClient?
     var pendingPath: String?
@@ -141,7 +144,11 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         openItem.target = self
         fileMenu.addItem(system.makeOpenRecentItem())
         let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: ""); fileItem.submenu = fileMenu
-        menu.addItem(fileItem); NSApp.mainMenu = menu
+        menu.addItem(fileItem)
+        let viewMenu = NSMenu(title: "View")
+        viewMenu.addItem(upNext.makeMenuItem())
+        let viewItem = NSMenuItem(title: "View", action: nil, keyEquivalent: ""); viewItem.submenu = viewMenu
+        menu.addItem(viewItem); NSApp.mainMenu = menu
         let behaviour = PlayerWindowController(contentRect: NSRect(x: 0, y: 0, width: 960, height: 580))
         windowBehaviour = behaviour; window = behaviour.window
         window.title = "OK Player"; window.delegate = self; window.isReleasedWhenClosed = false
@@ -170,6 +177,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             prompt.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 12)
         ])
         behaviour.install(in: root, videoArea: videoArea)
+        osc.addTrailingControl(upNext.button)
+        upNext.install(in: root, above: osc.panel)
         // The title bar's traffic lights and title strip show and hide with the
         // transport controls, and a key press brings the controls back like a
         // pointer movement.
@@ -199,6 +208,12 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         osc.onNext = { [weak self] in _ = self?.playlist.step(.next) }
         video.onTogglePause = { [weak self] in self?.togglePause() }
         osc.focusReturn = video
+        upNext.dispatch = { [weak client] command in
+            client?.dispatch(command) ?? .rejected(reason: .noActiveMedia, message: "No playback session")
+        }
+        upNext.query = { [weak client] query in client?.query(query) }
+        upNext.isFullscreen = { [weak behaviour] in behaviour?.window.isInFullscreen ?? false }
+        upNext.panel.focusReturn = video
         video.videoLayer.onError = { [weak self] message in self?.fail(message) }
         if let handle = client.handle { video.videoLayer.attach(session: handle) }
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
@@ -257,6 +272,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         video?.hasVideo = snapshot.video != nil
         osc.sessionChanged(snapshot)
         osc.playlistSteps = (previous: playlist.canStep(.previous), next: playlist.canStep(.next))
+        upNext.sessionChanged(playlist: client.store.playlist, snapshot: snapshot)
         prompt.isHidden = snapshot.source != nil && snapshot.status != .opening
         smokeRun?.sessionChanged(snapshot)
     }
@@ -352,7 +368,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 ///    time readout, and are in the snapshots;
 /// 9. fullscreen: F and Escape, pressed on the video view, enter and leave
 ///    native fullscreen, and each reaches the controls as activity;
-/// 10. closed while playing: teardown runs in order, the system offers no remote
+/// 10. Up Next: the fixture plays from a folder holding two copies of it, and the
+///    Up Next command opens the panel with both under the Now Playing card, the
+///    first marked current, before the snapshots;
+/// 11. closed while playing: teardown runs in order, the system offers no remote
 ///    command any more, and the app exits.
 ///
 /// The timed steps use one-shot timers; the session state itself arrives through
@@ -368,6 +387,8 @@ final class SmokeRun {
     private var playingRenders = 0
     private var pausedRenders = 0
     private var resizeRenders = 0
+    /// The folder with the two copies of the fixture the smoke plays.
+    private var folder: URL?
 
     init(app: PlayerApp, path: String?) {
         self.app = app
@@ -379,10 +400,22 @@ final class SmokeRun {
     /// Every step passed.
     var finished: Bool { phase == .finished }
 
-    func cancel() { cancelled = true }
+    func cancel() {
+        cancelled = true
+        if let folder { try? FileManager.default.removeItem(at: folder) }
+        folder = nil
+    }
 
     func start() {
-        guard let path else { fail("Smoke needs a media file argument"); return }
+        guard let fixture = path else { fail("Smoke needs a media file argument"); return }
+        // Two copies of the fixture in a folder of their own: the session lists the
+        // folder as a two-item playlist for Up Next.
+        let first: String
+        do {
+            first = try makeTwoItemFolder(from: fixture)
+        } catch {
+            fail("Could not copy the fixture into a folder of two: \(error)"); return
+        }
         after(30) { [self] in
             if phase != .finished { fail("Smoke timed out in phase \(phase) after \(renders) render calls") }
         }
@@ -390,7 +423,7 @@ final class SmokeRun {
         after(0.6) { [self] in
             guard renders == 0 else { fail("\(renders) render calls while idle"); return }
             phase = .playing
-            app?.play(path)
+            app?.play(first)
         }
     }
 
@@ -436,6 +469,19 @@ final class SmokeRun {
         }
         phase = .resuming
         if let problem = app.system.smokeCheckPausedThenResume() { fail(problem) }
+    }
+
+    /// Copy `fixture` twice into a new temporary folder; returns the first copy.
+    private func makeTwoItemFolder(from fixture: String) throws -> String {
+        let files = FileManager.default
+        let source = URL(fileURLWithPath: fixture)
+        let folder = files.temporaryDirectory.appendingPathComponent("okp-smoke-\(UUID().uuidString)")
+        try files.createDirectory(at: folder, withIntermediateDirectories: true)
+        self.folder = folder
+        let stem = source.deletingPathExtension().lastPathComponent, ext = source.pathExtension
+        let copies = (1...2).map { folder.appendingPathComponent("\(stem) \($0)").appendingPathExtension(ext) }
+        for copy in copies { try files.copyItem(at: source, to: copy) }
+        return copies[0].path
     }
 
     private func resize() {
@@ -523,6 +569,10 @@ final class SmokeRun {
             guard presses >= 2 else {
                 self.fail("\(presses) of the F and Escape presses reached the transport controls"); return
             }
+            // Up Next, opened as its menu item opens it, lists the folder's two copies.
+            if let failure = app.upNext.smokeShowFailure(playlist: app.playlist.state) {
+                self.fail(failure); return
+            }
             self.phase = .finished
             let counts = layer.counts, use = layer.surface.contextUse
             let snapshot = client.store.snapshot
@@ -534,7 +584,7 @@ final class SmokeRun {
                   + "volume=\(Int(snapshot.volume ?? -1)) tracks=\(snapshot.tracks.count) \(behaviour.smokeFitSummary) "
                   + "fullscreen=entered_and_left osc_paused_shown=true osc_auto_hidden=true osc_focus_returned=true "
                   + "osc_titlebar_faded=true osc_key_activity=\(presses) osc_elapsed=\(elapsed) osc_trailing=\(trailing) "
-                  + "playlist_items=\(items) osc_steps=\(steps ? "enabled" : "disabled")")
+                  + "playlist_items=\(items) osc_steps=\(steps ? "enabled" : "disabled") \(app.upNext.smokeSummary)")
             if let directory = app.snapshotDirectory { app.captureAppearances(to: directory) }
             // Closing the window during playback runs the real teardown path; the app
             // reports it once teardown has returned.
