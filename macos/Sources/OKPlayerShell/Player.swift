@@ -108,7 +108,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let prompt = NSStackView()
     /// The floating transport controls over the video.
     let osc = TransportOverlay()
-    var statusRole = PaletteRole.textMuted
+    /// Loading, buffering and failure states over the video, and the toast.
+    let statusLayer = StatusLayer()
     var client: SessionClient?
     var pendingPath: String?
     let smoke = CommandLine.arguments.contains("--smoke-test")
@@ -129,7 +130,6 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private(set) var keyPresses = 0
     var shuttingDown = false
     var closing = false
-    var errorShown = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let menu = NSMenu()
@@ -161,7 +161,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             ])
         }
         let open = AccentButton(label: "Open…", target: self, action: #selector(openFile))
-        status.textColor = statusRole.color
+        status.textColor = PaletteRole.textMuted.color
         prompt.addArrangedSubview(open); prompt.addArrangedSubview(status)
         prompt.orientation = .vertical; prompt.alignment = .centerX; prompt.spacing = 10
         prompt.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(prompt)
@@ -170,6 +170,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             prompt.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 12)
         ])
         behaviour.install(in: root, videoArea: videoArea)
+        statusLayer.install(in: root, above: videoArea)
+        statusLayer.onRetry = { [weak self] source in self?.open(source) }
+        statusLayer.onOpenAnother = { [weak self] in self?.openFile() }
+        statusLayer.onToast = { [weak self] text in self?.smokeRun?.toastShown(text) }
         // The title bar's traffic lights and title strip show and hide with the
         // transport controls, and a key press brings the controls back like a
         // pointer movement.
@@ -190,6 +194,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         playlist.state = client.store.playlist
         system.playlist = playlist
         system.start()
+        statusLayer.query = { [weak client] in
+            guard case .statusSurface(let surface)? = client?.query(.statusSurface) else { return nil }
+            return surface
+        }
         osc.dispatch = { [weak client] command in _ = client?.dispatch(command) }
         osc.query = { [weak client] at in
             guard case .transport(let view)? = client?.query(.transport(at: at)) else { return nil }
@@ -221,15 +229,16 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
     func play(_ path: String) {
+        open(MediaSource(kind: .local, location: path))
+    }
+    /// Open `source`; the status layer shows it loading, or the session's failure card.
+    func open(_ source: MediaSource) {
         guard let client else { return }
-        errorShown = false
-        switch client.dispatch(.open(source: MediaSource(kind: .local, location: path))) {
-        case .accepted, .noOp, .perform, .history, .applied: break
-        case .rejected(_, let message), .failed(_, let message): fail(message); return
-        }
-        window.title = "\((path as NSString).lastPathComponent) — OK Player"
-        showStatus("Opening…", .textMuted)
-        prompt.isHidden = false
+        let result = client.dispatch(.open(source: source))
+        if case .rejected(_, let message) = result { statusLayer.show(toast: message) }
+        window.title = "\((source.location as NSString).lastPathComponent) — OK Player"
+        statusLayer.refresh()
+        prompt.isHidden = true
     }
     @objc func togglePause() { client?.dispatch(.togglePause) }
     /// The transport controls showed or hid.
@@ -247,37 +256,30 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         playlist.state = client.store.playlist
         system.privateSession = client.store.privateSession
         system.update(client.store.snapshot)
-        for case .error(_, let message, _) in batch.events {
-            fail(message); return
-        }
+        smokeRun?.batchArrived(batch)
         if batch.events.contains(.shutdown) { fail("The playback engine stopped"); return }
-        guard !errorShown else { return }
+        statusLayer.sessionChanged(batch)
         let snapshot = client.store.snapshot
         windowBehaviour?.sessionChanged(snapshot)
         video?.hasVideo = snapshot.video != nil
         osc.sessionChanged(snapshot)
         osc.playlistSteps = (previous: playlist.canStep(.previous), next: playlist.canStep(.next))
-        prompt.isHidden = snapshot.source != nil && snapshot.status != .opening
+        prompt.isHidden = snapshot.source != nil || !statusLayer.display.isClear
         smokeRun?.sessionChanged(snapshot)
     }
+    /// The shell itself cannot play: no renderer, no session, the engine quit, or a
+    /// failed smoke step. The status layer shows it as a card without actions.
     func fail(_ message: String) {
-        guard !shuttingDown, !errorShown else { return }
-        errorShown = true
-        showStatus(message, .danger)
-        prompt.isHidden = false
+        guard !shuttingDown, statusLayer.shellFailure == nil else { return }
+        statusLayer.showShellFailure(message)
+        prompt.isHidden = true
         fputs("OK Player: \(message)\n", stderr)
         if smoke { shutdown(); exit(1) }
-        let alert = NSAlert(); alert.messageText = "Could not play video"; alert.informativeText = message
-        alert.beginSheetModal(for: window)
-    }
-    func showStatus(_ text: String, _ role: PaletteRole) {
-        status.stringValue = text
-        if role != statusRole { statusRole = role; status.textColor = role.color }
     }
     /// Smoke evidence: renders the window content in the light and the dark appearance
     /// to PNG files. Only this window's appearance is overridden, never the system's.
     /// The OpenGL video layer is not part of an AppKit cache, so it stays empty.
-    func captureAppearances(to directory: String) {
+    func captureAppearances(to directory: String, prefix: String = "window") {
         guard let view = window.contentView else { return }
         for (name, appearanceName) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
             guard let appearance = NSAppearance(named: appearanceName) else { continue }
@@ -285,7 +287,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             view.layoutSubtreeIfNeeded()
             guard let image = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
             appearance.performAsCurrentDrawingAppearance { view.cacheDisplay(in: view.bounds, to: image) }
-            let file = URL(fileURLWithPath: directory).appendingPathComponent("window-\(name).png")
+            let file = URL(fileURLWithPath: directory).appendingPathComponent("\(prefix)-\(name).png")
             do {
                 guard let png = image.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
                 try png.write(to: file)
@@ -331,6 +333,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 /// against what the session reported and what the video layer counted:
 ///
 /// 1. idle: no render calls before a file is open;
+/// 1a. failed: opening a missing file shows the session's failure card with Retry
+///    and Open another, and no alert; Retry opens the file again, which fails
+///    again; opening the fixture then shows the loading indicator with its name,
+///    and playing media shows no status state;
 /// 2. playing: the position and the render calls advance; Now Playing shows the file
 ///    as playing video, the display-sleep assertion is held and the system offers the
 ///    remote commands; the pause is sent through the handler the system holds for its
@@ -352,13 +358,18 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 ///    time readout, and are in the snapshots;
 /// 9. fullscreen: F and Escape, pressed on the video view, enter and leave
 ///    native fullscreen, and each reaches the controls as activity;
-/// 10. closed while playing: teardown runs in order, the system offers no remote
+/// 10. toast: a volume nudge shows the session's notice as a toast in the top half
+///    of the window, clear of captions, and the snapshots show it;
+/// 11. closed while playing: teardown runs in order, the system offers no remote
 ///    command any more, and the app exits.
 ///
 /// The timed steps use one-shot timers; the session state itself arrives through
 /// wakeup-driven drains, never through polling.
 final class SmokeRun {
-    enum Phase { case idle, playing, pausing, holding, resuming, resizing, hiding, titlebar, fullscreen, finished }
+    enum Phase {
+        case idle, failing, retrying, playing, pausing, holding, resuming, resizing, hiding, titlebar, fullscreen,
+             toasting, finished
+    }
 
     private weak var app: PlayerApp?
     private let path: String?
@@ -368,6 +379,10 @@ final class SmokeRun {
     private var playingRenders = 0
     private var pausedRenders = 0
     private var resizeRenders = 0
+    /// `load_failed` errors while the missing file was opened and retried.
+    private var loadFailures = 0
+    /// The summary of the status steps for the `OKP_SMOKE` line.
+    private var statusSummary = ""
 
     init(app: PlayerApp, path: String?) {
         self.app = app
@@ -382,23 +397,100 @@ final class SmokeRun {
     func cancel() { cancelled = true }
 
     func start() {
-        guard let path else { fail("Smoke needs a media file argument"); return }
+        guard path != nil else { fail("Smoke needs a media file argument"); return }
         after(30) { [self] in
             if phase != .finished { fail("Smoke timed out in phase \(phase) after \(renders) render calls") }
         }
         // Idle: the render context exists, nothing is loaded, nothing may be drawn.
         after(0.6) { [self] in
             guard renders == 0 else { fail("\(renders) render calls while idle"); return }
-            phase = .playing
-            app?.play(path)
+            // A file in a folder that does not exist, so no folder listing follows.
+            phase = .failing
+            app?.play(NSTemporaryDirectory() + "okp-smoke-missing-\(getpid())/missing.mp4")
         }
+    }
+
+    /// The app hands over every drained batch. Errors other than the missing
+    /// file's load failures fail the smoke.
+    func batchArrived(_ batch: EventBatch) {
+        guard !cancelled else { return }
+        for case .error(let kind, let message, _) in batch.events {
+            if kind == .loadFailed && (phase == .failing || phase == .retrying) {
+                loadFailures += 1
+            } else {
+                fail("The session reported an error while \(phase): \(message)")
+            }
+        }
+    }
+
+    /// The failure card is up for the missing file, with its actions and no alert.
+    private func failureCardProblem() -> String? {
+        guard let app else { return "No app" }
+        guard case .failure(let card) = app.statusLayer.display else {
+            return "No failure card for the missing file (\(app.statusLayer.display))"
+        }
+        let overlay = app.statusLayer.overlay
+        guard !overlay.cardPanel.isHidden, overlay.titleLabel.stringValue == card.title, !card.title.isEmpty else {
+            return "The failure card is not shown"
+        }
+        guard overlay.button(for: .retry) != nil, overlay.button(for: .openAnother) != nil else {
+            return "The failure card has no Retry or Open another"
+        }
+        guard app.window.attachedSheet == nil else { return "An alert sheet showed with the failure card" }
+        guard app.prompt.isHidden else { return "The Open prompt showed over the failure card" }
+        return nil
+    }
+
+    /// Retry reopened the missing file and it failed again: open the fixture, which
+    /// shows the loading indicator with its name.
+    private func playFixture() {
+        guard let app, let path else { return }
+        if let directory = app.snapshotDirectory { app.captureAppearances(to: directory, prefix: "status") }
+        phase = .playing
+        app.play(path)
+        let name = (path as NSString).lastPathComponent
+        guard case .progress(let line) = app.statusLayer.display, line.contains(name),
+              !app.statusLayer.overlay.progressPanel.isHidden else {
+            fail("No loading indicator naming \(name) (\(app.statusLayer.display))"); return
+        }
+        statusSummary = "status_card=shown_and_retried load_failures=\(loadFailures) loading=shown"
+    }
+
+    /// The status layer showed a toast.
+    func toastShown(_ text: String) {
+        guard phase == .toasting, let app, !cancelled else { return }
+        let toast = app.statusLayer.toastView
+        guard text.hasPrefix("Volume"), !toast.isHidden, toast.label.stringValue == text else {
+            fail("The volume nudge toasted \"\(text)\""); return
+        }
+        // Captions sit at the bottom of the video; the toast stays in the top half.
+        guard let root = app.window.contentView,
+              toast.convert(toast.bounds, to: root).minY > root.bounds.midY else {
+            fail("The toast is not in the top half of the window"); return
+        }
+        phase = .finished
+        print("OKP_SMOKE \(statusSummary) toast=\(text.replacingOccurrences(of: " ", with: "_"))")
+        if let directory = app.snapshotDirectory { app.captureAppearances(to: directory) }
+        // Closing the window during playback runs the real teardown path; the app
+        // reports it once teardown has returned.
+        app.window.close()
     }
 
     func sessionChanged(_ snapshot: SessionSnapshot) {
         guard !cancelled else { return }
         let position = snapshot.timePos ?? 0
         switch phase {
+        case .failing where loadFailures >= 1:
+            if let problem = failureCardProblem() { fail(problem); return }
+            phase = .retrying
+            app?.statusLayer.overlay.button(for: .retry)?.performClick(nil)
+        case .retrying where loadFailures >= 2:
+            if let problem = failureCardProblem() { fail(problem); return }
+            playFixture()
         case .playing where snapshot.status == .playing && position > 0.7 && renders > 10:
+            if let display = app?.statusLayer.display, !display.isClear {
+                fail("The status layer shows \(display) during playback"); return
+            }
             if let failure = app?.windowBehaviour?.smokeFitFailure(video: snapshot.video) { fail(failure); return }
             phase = .pausing
             playingRenders = renders
@@ -523,7 +615,6 @@ final class SmokeRun {
             guard presses >= 2 else {
                 self.fail("\(presses) of the F and Escape presses reached the transport controls"); return
             }
-            self.phase = .finished
             let counts = layer.counts, use = layer.surface.contextUse
             let snapshot = client.store.snapshot
             let pixelFormat = layer.surface.floatColor ? "float16" : "rgba8"
@@ -535,10 +626,12 @@ final class SmokeRun {
                   + "fullscreen=entered_and_left osc_paused_shown=true osc_auto_hidden=true osc_focus_returned=true "
                   + "osc_titlebar_faded=true osc_key_activity=\(presses) osc_elapsed=\(elapsed) osc_trailing=\(trailing) "
                   + "playlist_items=\(items) osc_steps=\(steps ? "enabled" : "disabled")")
-            if let directory = app.snapshotDirectory { app.captureAppearances(to: directory) }
-            // Closing the window during playback runs the real teardown path; the app
-            // reports it once teardown has returned.
-            app.window.close()
+            // One toast before the snapshots: the session confirms a volume nudge.
+            self.phase = .toasting
+            _ = client.dispatch(.nudgeVolume(delta: -5))
+            self.after(3) { [self] in
+                if phase == .toasting { fail("The volume nudge showed no toast") }
+            }
         }
     }
 

@@ -210,7 +210,7 @@ fn current_speed(speed: Option<f64>) -> f64 {
 }
 
 /// `1.25×`, as the Linux speed control shows it.
-fn format_speed(speed: f64) -> String {
+pub(crate) fn format_speed(speed: f64) -> String {
     format!("{:.2}×", speed.clamp(0.25, 4.0))
 }
 

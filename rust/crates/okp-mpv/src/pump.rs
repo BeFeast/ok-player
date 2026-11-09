@@ -56,6 +56,8 @@ const OBSERVED_PROPERTIES: &[(&str, libc::c_int)] = &[
     // decoder by the hardware-decoding guard.
     ("core-idle", ffi::MPV_FORMAT_NONE),
     ("paused-for-cache", ffi::MPV_FORMAT_NONE),
+    // How far the cache has refilled towards resuming, for a buffering readout.
+    ("cache-buffering-state", ffi::MPV_FORMAT_NONE),
     // Subtitle state surfaced in the subtitle popover / saved preferences.
     ("sub-delay", ffi::MPV_FORMAT_NONE),
     ("sub-scale", ffi::MPV_FORMAT_NONE),

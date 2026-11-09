@@ -81,7 +81,7 @@ written as `null` and may be left out on input.
 | Config (`okp_session_new`) | `schema_version`, `app` (`name`, `platform`), absolute `data_dir`, `config_dir`, `cache_dir`, optional `hwdec`, ordered `mpv_options` (`name`, `value`) applied after the session defaults, optional `shell_commands` (see Command registry) |
 | Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay`, `invoke_command {id}`, `playlist` (see Playlist), `nudge_volume` and `toggle_mute` (see Transport controls) |
 | Reply | `{"schema_version":1,"result":{...}}`: `accepted {request_id}`, `no_op {}`, `rejected {reason, message}`, `failed {request_id, message}` when the engine refused an accepted command at once, `perform {}` (`invoke_command` only), or `applied {}` when the session carried the command out itself and nothing reached libmpv yet |
-| Query (`okp_session_query`) | `{"schema_version":1,"query":{...}}`: `snapshot {}`, answered with `result.snapshot.snapshot` (the full state); `command_registry {fullscreen, mini_player}` (both optional), answered with `result.command_registry.commands`; `shortcut_table {}`, answered with `result.shortcut_table.shortcuts`; `playlist {}`, answered with `result.playlist.playlist`; `transport {at}` (`at` optional), answered with `result.transport.transport` (see Transport controls); `window_fit`, `initial_window_fit` and `video_click` (see Window queries); or `result.rejected`; `history` queries are below |
+| Query (`okp_session_query`) | `{"schema_version":1,"query":{...}}`: `snapshot {}`, answered with `result.snapshot.snapshot` (the full state); `command_registry {fullscreen, mini_player}` (both optional), answered with `result.command_registry.commands`; `shortcut_table {}`, answered with `result.shortcut_table.shortcuts`; `playlist {}`, answered with `result.playlist.playlist`; `transport {at}` (`at` optional), answered with `result.transport.transport` (see Transport controls); `status_surface {}`, answered with `result.status_surface.surface` (see Status surface and notices); `window_fit`, `initial_window_fit` and `video_click` (see Window queries); or `result.rejected`; `history` queries are below |
 | Event batch (`okp_session_drain_events`) | `{"schema_version":1,"events":[...]}` |
 
 An open source is `{"kind":"local"|"url","location":"..."}`. A URL is handed
@@ -263,11 +263,59 @@ several times between drains appears once. Applying the changes in order to the
 snapshot from a query gives the session's state as of the drain.
 
 `error` events (`kind`, `message`, `request_id` when the error answers a
-command) follow in the order they happened, and `shutdown` comes last.
+command), `history` events and `notice` events (see Status surface and
+notices) follow in the order they happened, and `shutdown` comes last.
 
 `time_pos` and `cache_ahead` change on every frame. On their own they are
 published at most about ten times a second; whenever another field changes they
 are published with it at once.
+
+## Status surface and notices
+
+The `status_surface` query answers what covers the video now, so every shell
+shows the same loading, buffering and failure states. A shell asks for it
+after each drained batch, and after it dispatches an `open`.
+`result.status_surface.surface` is one of:
+
+| Surface | When |
+|---|---|
+| `failed {card}` | the current source did not play: the open was refused, or its load ended with an engine error or a decoder failure; it stays until the next accepted `open` or `close` |
+| `loading {label}` | a source is opening (`Opening film.mkv`: the file name, or the URL) |
+| `buffering {percent, label}` | loaded media waits for libmpv's cache (the snapshot's `buffering`); `percent` is libmpv's `cache-buffering-state` (0-100) or `null`, and `label` reads `Buffering 45%` or `Buffering…` |
+| `clear {}` | none of these |
+
+They are checked in this order. The `card` is the core's classification of
+the failure (`playback_failure::diagnose_mpv_failure` and `diagnose_mpv_eof`,
+or `PlaybackFailureDiagnostic::application` for an open the engine refused):
+`kind` (`missing_codec`, `renderer`, `application`), `title`, `message`,
+`detail` (the copyable `network_media::failure_detail`: source and short
+reason, never the engine log), `source` (what Retry opens again, with a plain
+`open`) and `actions`, the buttons left to right as `{action, label}`:
+`retry` "Retry", `open_another` "Open another", `copy_details` "Copy details".
+
+A `notice {text}` event is a one-line message for a toast. The session queues
+one when the engine accepts:
+
+| Command | Notice |
+|---|---|
+| `set_volume`, `nudge_volume`, `toggle_mute`, `set_mute` | `Volume 85%` (the volume readout), or `Muted` at 0 % or under libmpv's mute flag |
+| `set_speed` | `Speed 1.25×` |
+| `set_subtitle_delay` | `Subtitle delay: +250 ms` (`subtitle_delay::format_label`) |
+| `select_track` | `Audio: <name>`, `Subtitles: <name>` (`track_label::primary_track_name`), `Audio off`, `Subtitles off` |
+| `seek` with `relative` mode | where it lands (`seek_readout::format_readout`: `01:40`) |
+
+It also queues `Resumed at 12:34` with the history's `resumed` event, `Added to
+Up Next` for a playlist `queue` in `append` mode that was `applied`, `Plays
+next` for an applied `queue` in `play_next` mode or `play_next`, and `Nothing
+playable was found` with the `load_failed` error of an open whose folders and
+playlist files held nothing to play. Remembered per-file settings that an open
+restores are not announced.
+
+Every `load_failed` error is shown by one of these: the `failed` card for the
+current source, or that notice. A shell can leave `load_failed` errors out of
+its own messages and show the other kinds.
+
+The documents are pinned by `rust/crates/okp-session/fixtures/status/`.
 
 ## Playlist
 

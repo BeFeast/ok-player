@@ -345,6 +345,26 @@ fn a_resumed_open_announces_where_it_started_once_loaded() {
     );
 }
 
+#[test]
+fn a_resumed_open_is_announced_to_the_toast_with_the_clock_time() {
+    let root = unique_temp_dir("okp-session-history-resumed-notice");
+    seed(root.path(), &[("/media/film.mkv", 754.5, 3600.0)]);
+    let harness = Harness::new(root.path());
+
+    harness.open("/media/film.mkv");
+    harness.load(3600.0, vec![]);
+    let notices: Vec<String> = harness
+        .session
+        .drain_events()
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::Notice { text } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notices, vec!["Resumed at 12:34".to_owned()]);
+}
+
 /// Play `key` to 120 s of 600 s with nothing saved yet.
 fn playing(root: &Path, key: &str) -> Harness {
     let harness = Harness::new(root);

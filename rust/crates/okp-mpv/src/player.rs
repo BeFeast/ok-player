@@ -224,6 +224,9 @@ pub struct PlaybackDiagnostics {
     /// mpv's `paused-for-cache`: playback is held while the demuxer cache
     /// refills. Distinct from the user-facing `pause` property.
     pub paused_for_cache: bool,
+    /// mpv's `cache-buffering-state`: how far, in percent (0-100), the cache
+    /// has refilled towards resuming playback; `None` without a cache.
+    pub cache_buffering_state: Option<i64>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -499,6 +502,7 @@ impl RawReader {
             vo_drops: self.get_i64("frame-drop-count")?.unwrap_or(0).max(0),
             core_idle: self.get_flag("core-idle")?.unwrap_or(false),
             paused_for_cache: self.get_flag("paused-for-cache")?.unwrap_or(false),
+            cache_buffering_state: self.get_i64("cache-buffering-state")?,
         })
     }
 

@@ -37,6 +37,9 @@ final class SessionStore {
             case .history:
                 // A shell showing the history queries it again.
                 break
+            case .notice:
+                // Shown by the status layer; nothing to keep.
+                break
             case .error(_, let message, _):
                 lastError = message
             case .shutdown:

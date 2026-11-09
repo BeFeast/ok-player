@@ -20,6 +20,7 @@ mod playlist;
 pub mod protocol;
 pub mod reconcile;
 mod session;
+pub mod status;
 mod transport;
 pub mod window;
 

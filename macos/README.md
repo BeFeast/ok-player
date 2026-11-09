@@ -7,8 +7,10 @@ and the same libmpv engine as the Linux player. It opens local videos through
 The video fills the window and the transport controls float over it (see
 [Transport controls](#transport-controls)); **Space** and their play button toggle
 pause. Closing the window stops playback,
-destroys the render context and then frees the session. Errors stay visible until
-another explicit open attempt.
+destroys the render context and then frees the session. A source that does not play
+leaves a failure card over the video with Retry, Open another and Copy details, and
+short notices such as the volume show as a toast (see
+[Status and toasts](#status-and-toasts)).
 
 The window runs its content under a transparent title bar, with the media title in
 the strip along the top. Opening a file fits the window to the video on the screen
@@ -240,7 +242,10 @@ follows the system light/dark switch while it is open:
 | Window background | `canvas` |
 | Open button | `accent` fill, `onAccent` label |
 | Keyboard focus ring on the Open button and the scrubber | `focus` |
-| Status text: hint, error | `textMuted`, `danger` |
+| Status text (the hint under the Open button) | `textMuted` |
+| Loading and buffering line, toast, failure card title | `text` |
+| Failure card message, icon | `textMuted`, `danger` |
+| Failure card Retry button | `accent` fill, `onAccent` label |
 | Transport icons, elapsed time, speed, chapter ticks | `text` |
 | Trailing time label | `textMuted` |
 | Scrubber track, buffered range, progress and knob | `borderSubtle`, `border`, `accent` |
@@ -351,6 +356,32 @@ Swift side only turns input into commands and keeps the hide timer.
   them. Hidden controls take no clicks, and clicks outside the bar always reach the
   video.
 
+## Status and toasts
+
+`Sources/OKPlayerShell/Status/` draws the states over the video and the toast. After
+every drained batch, and right after it opens a source, `StatusLayer` asks the
+session's `status_surface` query (`docs/session-abi.md`, "Status surface and
+notices") what covers the video, and shows it:
+
+- **Loading:** a spinner with `Opening <file name>` while a source opens.
+- **Buffering:** a spinner with `Buffering 45%` while libmpv waits for its cache
+  (the snapshot's `buffering`, with libmpv's `cache-buffering-state`).
+- **Failure card:** the core's classification of a failed load (missing codec,
+  renderer, anything else), with its title and message and the buttons Retry, Open
+  another and Copy details. Retry opens the card's source again, Open another shows
+  the open panel and Copy details puts the core's short detail (source and reason)
+  on the pasteboard. The card stays until the next open or close. It replaces the
+  alert sheet the preview showed; a failure of the shell itself (no renderer, no
+  session, the engine quit) shows the same card without buttons.
+
+Only the card takes clicks: a click or double click anywhere else still reaches the
+video. The toast is one line on a rounded pill near the top of the window, under the
+title bar and clear of captions; it stays 1.7 seconds and a newer one replaces it. It
+shows the session's `notice` events (volume, speed, subtitle delay, track changes,
+relative seeks, "Resumed at", "Added to Up Next", "Plays next") and the message of
+any error other than a load failure. Any part of the shell shows one with
+`StatusLayer.show(toast:)`.
+
 ## System integration
 
 `System/SystemIntegration.swift` connects the player to macOS. It is handed the
@@ -413,6 +444,12 @@ window and checks, from the session's events and the video layer's counters:
   both window snapshots show them;
 - F and Escape, sent as key events to the video view, enter native fullscreen and
   leave it again, and each press reaches the transport controls as activity;
+- before the fixture plays, opening a missing file shows the session's failure card
+  with Retry and Open another and no alert sheet; Retry opens the file again and the
+  card returns with the second load failure; the fixture then shows the loading
+  indicator with its file name, and nothing covers the video while it plays;
+- a volume nudge before the snapshots shows the session's notice as a toast in the
+  top half of the window;
 - closing the window during playback tears down in order (close, destroy the
   render context, free the session), after which the center has none of those
   commands enabled and no handler of the app's.
@@ -420,7 +457,9 @@ window and checks, from the session's events and the video layer's counters:
 Its `OKP_SMOKE` line also reports those counts, the pixel format, the
 volume and track count from the session snapshot, the time readout the controls
 showed, and the fitted size, the video view's size after the fit and after the
-resize, the aspect and the title strip height. The complete app is copied
+resize, the aspect and the title strip height; a second `OKP_SMOKE` line reports the
+status steps and the toast's text. The failure card is captured as
+`snapshots/status-light.png` and `status-dark.png`. The complete app is copied
 to a new directory and launched with `DYLD_LIBRARY_PATH` unset. A separate 40-second
 process deadline prevents a blocked render callback from keeping the job alive.
 

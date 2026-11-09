@@ -157,6 +157,8 @@ enum Query: Codable, Equatable {
     case playlist
     /// What the transport controls show; with `at`, the readout at that position.
     case transport(at: Double? = nil)
+    /// What covers the video (Status/StatusProtocol.swift).
+    case statusSurface
 }
 
 struct QueryEnvelope: Codable, Equatable {
@@ -173,6 +175,7 @@ enum QueryResult: Codable, Equatable {
     case history(result: HistoryQueryResult)
     case playlist(playlist: PlaylistState)
     case transport(transport: TransportView)
+    case statusSurface(surface: StatusSurface)
     case rejected(reason: RejectReason, message: String)
 }
 
@@ -335,7 +338,8 @@ enum SnapshotChange: Codable, Equatable {
 }
 
 /// One entry of a drained batch: at most one `snapshotChanged`, first; then at
-/// most one `playlistChanged`; errors in the order they happened; `shutdown` last.
+/// most one `playlistChanged`; errors, history events and notices in the order
+/// they happened; `shutdown` last.
 enum Event: Codable, Equatable {
     case snapshotChanged(changes: [SnapshotChange])
     /// The playlist changed: its items, current item, play modes or scanning.
@@ -343,6 +347,8 @@ enum Event: Codable, Equatable {
     case error(kind: ErrorKind, message: String, requestId: UInt64?)
     case shutdown
     case history(event: HistoryEvent)
+    /// A one-line message for the toast (Status/StatusRules.swift).
+    case notice(text: String)
 }
 
 extension Event {

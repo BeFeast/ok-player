@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "events": [
+    { "notice": { "text": "Volume 72%" } },
+    { "notice": { "text": "Resumed at 12:34" } }
+  ]
+}

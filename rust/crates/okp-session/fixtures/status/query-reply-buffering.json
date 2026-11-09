@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "result": {
+    "status_surface": { "surface": { "buffering": { "percent": 45, "label": "Buffering 45%" } } }
+  }
+}

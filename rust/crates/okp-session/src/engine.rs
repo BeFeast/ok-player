@@ -22,6 +22,9 @@ pub(crate) struct Observation {
     pub(crate) playback: PlaybackState,
     pub(crate) subtitle_delay: f64,
     pub(crate) buffering: bool,
+    /// How far the cache has refilled towards resuming, in percent, when the
+    /// engine reports it.
+    pub(crate) buffering_percent: Option<i64>,
     pub(crate) tracks: Vec<Track>,
     pub(crate) chapters: Vec<Chapter>,
     pub(crate) title: Option<String>,
@@ -226,10 +229,12 @@ impl Engine for MpvEngine {
 
     fn observe(&self) -> Observation {
         let engine = &self.mpv;
+        let diagnostics = engine.observed_playback_diagnostics();
         Observation {
             playback: engine.observed_playback_state(),
             subtitle_delay: engine.observed_subtitle_delay(),
-            buffering: engine.observed_playback_diagnostics().paused_for_cache,
+            buffering: diagnostics.paused_for_cache,
+            buffering_percent: diagnostics.cache_buffering_state,
             tracks: engine.observed_tracks(),
             chapters: engine.observed_chapters(),
             title: engine.observed_media_info().map(|info| info.title),

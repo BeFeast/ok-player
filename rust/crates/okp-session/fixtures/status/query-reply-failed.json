@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "result": {
+    "status_surface": {
+      "surface": {
+        "failed": {
+          "card": {
+            "kind": "application",
+            "title": "Playback failed",
+            "message": "OK Player could not open this source. You can retry or choose another.",
+            "detail": "OK Player could not open the media.\nPath: /Users/example/Movies/film.mkv\nReason: libmpv error -13",
+            "source": { "kind": "local", "location": "/Users/example/Movies/film.mkv" },
+            "actions": [
+              { "action": "retry", "label": "Retry" },
+              { "action": "open_another", "label": "Open another" },
+              { "action": "copy_details", "label": "Copy details" }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

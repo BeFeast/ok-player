@@ -353,6 +353,9 @@ impl SessionHistory {
                 queue.push(Event::History {
                     event: HistoryEvent::Resumed { position },
                 });
+                queue.push(Event::Notice {
+                    text: crate::status::resumed_notice(position),
+                });
             }
             current.title = title.map(str::to_owned);
             if matches!(current.source, PlaylistItem::Url(_)) {

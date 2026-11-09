@@ -33,7 +33,10 @@ impl Store {
                     }
                 }
                 Event::History { event } => self.history.push(event),
-                Event::Error { .. } | Event::Shutdown {} | Event::PlaylistChanged { .. } => {}
+                Event::Error { .. }
+                | Event::Shutdown {}
+                | Event::PlaylistChanged { .. }
+                | Event::Notice { .. } => {}
             }
         }
     }

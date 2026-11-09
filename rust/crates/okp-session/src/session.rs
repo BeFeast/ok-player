@@ -27,6 +27,7 @@ use crate::protocol::{
     parse_envelope, to_json,
 };
 use crate::reconcile::{core_end_reason, endfile_error, event_matches_source};
+use crate::status::{self, StatusState};
 use crate::transport::{TransportView, VolumeTarget};
 use crate::window;
 
@@ -84,6 +85,8 @@ struct State {
     history: SessionHistory,
     /// The volume asked for and not yet reported, which volume nudges build on.
     volume: VolumeTarget,
+    /// The current source's failure and the engine's buffering progress.
+    status: StatusState,
 }
 
 /// Wakes the event thread: set by the engine listener, by commands and by
@@ -175,6 +178,7 @@ impl Session {
                 end_failed: false,
                 history,
                 volume: VolumeTarget::default(),
+                status: StatusState::default(),
             }),
             signal,
             wakeup: Mutex::new(None),
@@ -247,6 +251,12 @@ impl Session {
             Query::Transport { at } => QueryResult::Transport {
                 transport: TransportView::project(&self.snapshot(), *at),
             },
+            Query::StatusSurface {} => {
+                let snapshot = self.snapshot();
+                QueryResult::StatusSurface {
+                    surface: lock(&self.shared.state).status.surface(&snapshot),
+                }
+            }
             Query::Playlist {} => QueryResult::Playlist {
                 playlist: lock(&self.shared.state).playlist.state(),
             },
@@ -470,6 +480,7 @@ impl State {
             loaded |= self.reconcile_event(event, &observation);
         }
         self.reconcile_observation(&observation);
+        self.status.observe(observation.buffering_percent);
         // Remembered per-file choices go first, so the open's own tracks win.
         self.history.refresh(
             Report {
@@ -557,14 +568,28 @@ impl State {
             && matches!(*command, Command::Open { .. } | Command::Close {})
         {
             // Whatever the engine makes of it, the previous source is gone, and
-            // with it any fit still owed to it.
+            // with it any fit still owed to it and any failure it showed.
             self.fit.begin_source();
+            self.status.begin_source();
         }
         match (outcome, engine_result) {
             (CommandOutcome::Accepted { request_id }, Ok(())) => {
+                if let Some(text) =
+                    status::command_notice(&command, self.machine.machine().snapshot())
+                {
+                    self.queue.push(Event::Notice { text });
+                }
                 DispatchResult::Accepted { request_id }
             }
             (CommandOutcome::Accepted { request_id }, Err(message)) => {
+                if let PlayerCommand::Open(request) = &core {
+                    self.status.failed(
+                        &request.source,
+                        &okp_core::playback_failure::PlaybackFailureDiagnostic::application(
+                            message.clone(),
+                        ),
+                    );
+                }
                 self.queue.push(Event::Error {
                     kind: if matches!(core, PlayerCommand::Open(_)) {
                         ErrorKind::LoadFailed
@@ -590,10 +615,14 @@ impl State {
         action: &PlaylistAction,
     ) -> DispatchResult {
         let current = self.machine.machine().snapshot().source.clone();
-        match self.playlist.dispatch(action, current.as_ref()) {
+        let result = match self.playlist.dispatch(action, current.as_ref()) {
             Step::Reply(result) => result,
             Step::Open(open) => self.open_planned(engine, open),
+        };
+        if let Some(text) = status::playlist_notice(action, &result) {
+            self.queue.push(Event::Notice { text });
         }
+        result
     }
 
     /// Open an item the playlist chose, as an `open` command would.
@@ -616,11 +645,16 @@ impl State {
                     // An engine refusal is already queued as an error event.
                     let _ = self.open_planned(engine, open);
                 }
-                Background::NothingPlayable => self.queue.push(Event::Error {
-                    kind: ErrorKind::LoadFailed,
-                    message: "nothing playable was found".to_owned(),
-                    request_id: None,
-                }),
+                Background::NothingPlayable => {
+                    self.queue.push(Event::Error {
+                        kind: ErrorKind::LoadFailed,
+                        message: "nothing playable was found".to_owned(),
+                        request_id: None,
+                    });
+                    self.queue.push(Event::Notice {
+                        text: status::NOTHING_PLAYABLE.to_owned(),
+                    });
+                }
             }
         }
         if let Some(playlist) = self.playlist.take_changed() {
@@ -730,6 +764,15 @@ impl State {
                     self.playlist.end_of_file();
                 }
                 if let Some(message) = error {
+                    if let Some(source) = self.machine.machine().snapshot().source.clone() {
+                        let diagnostic = status::diagnose_end(reason, &diagnostic_messages)
+                            .unwrap_or_else(|| {
+                                okp_core::playback_failure::PlaybackFailureDiagnostic::application(
+                                    message.clone(),
+                                )
+                            });
+                        self.status.failed(&source, &diagnostic);
+                    }
                     self.machine.apply_event(PlayerEvent::Error(PlayerError {
                         kind: PlayerErrorKind::LoadFailed,
                         message: message.clone(),
@@ -911,7 +954,7 @@ fn core_track(track: &okp_mpv::Track) -> TrackInfo {
 }
 
 /// A title for media the engine has not named yet: the file name, or the URL.
-fn source_title(source: &PlaylistItem) -> String {
+pub(crate) fn source_title(source: &PlaylistItem) -> String {
     match source {
         PlaylistItem::Local(path) => path
             .file_name()
@@ -2042,4 +2085,6 @@ mod tests {
 
     /// The playlist through the session: folder scans, auto-advance, commands.
     mod playlist;
+    /// The status surface and notices through the session.
+    mod status;
 }

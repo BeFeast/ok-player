@@ -1,0 +1,4 @@
+{
+  "failure_kind": ["missing_codec", "renderer", "application"],
+  "failure_action": ["retry", "open_another", "copy_details"]
+}

@@ -22,6 +22,9 @@ pub use crate::history::{
     HistoryQueryResult, HistorySection, HistoryState,
 };
 pub use crate::playlist::{PlaylistAction, PlaylistEntry, PlaylistState, QueueMode, RepeatMode};
+pub use crate::status::{
+    FailureAction, FailureActionView, FailureCard, FailureKind, StatusSurface,
+};
 pub use crate::transport::{OscSurface, OscView, SpeedChoice, TransportView, VolumeView};
 pub use crate::window::{VideoClickIntent, WindowRect, WindowSize};
 
@@ -304,6 +307,9 @@ pub enum Query {
         #[serde(default)]
         at: Option<f64>,
     },
+    /// What covers the video: a loading or buffering indicator, a failure
+    /// card, or nothing ([`StatusSurface`]).
+    StatusSurface {},
 }
 
 /// `{"schema_version":1,"result":{...}}`, the answer to a query.
@@ -344,6 +350,9 @@ pub enum QueryResult {
     Transport {
         transport: TransportView,
     },
+    StatusSurface {
+        surface: StatusSurface,
+    },
     Rejected {
         reason: RejectReason,
         message: String,
@@ -361,8 +370,8 @@ pub struct EventBatch {
 /// One entry of a drained batch. A batch holds at most one `snapshot_changed`,
 /// first, carrying the latest value of every field that changed since the
 /// previous batch; then at most one `playlist_changed` with the latest
-/// playlist; `error` events follow in the order they happened; `shutdown` comes
-/// last.
+/// playlist; `error`, `history` and `notice` events follow in the order they
+/// happened; `shutdown` comes last.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Event {
@@ -384,6 +393,11 @@ pub enum Event {
     /// A watch-history event; see [`HistoryEvent`].
     History {
         event: HistoryEvent,
+    },
+    /// A one-line notice for the shell's toast: what a command changed, a
+    /// resume, an Up Next edit ([`crate::status`]).
+    Notice {
+        text: String,
     },
 }
 
