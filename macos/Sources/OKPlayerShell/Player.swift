@@ -262,6 +262,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         playlist.state = client.store.playlist
         system.privateSession = client.store.privateSession
         system.update(client.store.snapshot)
+        // Up Next only renders the store, and its rows send playlist commands by
+        // index into the session's playlist, so it follows every batch, also while
+        // an error is shown: a jump from it does not go through play().
+        upNext.sessionChanged(playlist: client.store.playlist, snapshot: client.store.snapshot)
         for case .error(_, let message, _) in batch.events {
             fail(message); return
         }
@@ -272,7 +276,6 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         video?.hasVideo = snapshot.video != nil
         osc.sessionChanged(snapshot)
         osc.playlistSteps = (previous: playlist.canStep(.previous), next: playlist.canStep(.next))
-        upNext.sessionChanged(playlist: client.store.playlist, snapshot: snapshot)
         prompt.isHidden = snapshot.source != nil && snapshot.status != .opening
         smokeRun?.sessionChanged(snapshot)
     }

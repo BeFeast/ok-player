@@ -226,19 +226,25 @@ final class UpNextControllerTests: XCTestCase {
     }
 }
 
+/// The app's own session config over the real okp_session_* ABI, with its files
+/// under `root` and no audio or video output.
+private func appSessionConfig(root: URL) -> SessionConfig {
+    var config = SessionConfig.forApp()
+    config.dataDir = root.appendingPathComponent("data").path
+    config.configDir = root.appendingPathComponent("config").path
+    config.cacheDir = root.appendingPathComponent("cache").path
+    config.hwdec = "no"
+    config.mpvOptions = [MpvOption(name: "ao", value: "null"), MpvOption(name: "vo", value: "null")]
+    return config
+}
+
 /// The app's own session config over the real okp_session_* ABI: the Up Next
 /// command is the shell's to carry out.
 final class UpNextSessionTests: XCTestCase {
     func testTheAppsSessionLeavesTheUpNextCommandToTheShell() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("okp-up-next-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        var config = SessionConfig.forApp()
-        config.dataDir = root.appendingPathComponent("data").path
-        config.configDir = root.appendingPathComponent("config").path
-        config.cacheDir = root.appendingPathComponent("cache").path
-        config.hwdec = "no"
-        config.mpvOptions = [MpvOption(name: "ao", value: "null"), MpvOption(name: "vo", value: "null")]
-        let client = try SessionClient(config: config)
+        let client = try SessionClient(config: appSessionConfig(root: root))
         defer { client.close() }
 
         guard case .commandRegistry(let commands)? = client.query(.commandRegistry(fullscreen: false, miniPlayer: false)) else {
@@ -253,5 +259,47 @@ final class UpNextSessionTests: XCTestCase {
         controller.dispatch = { client.dispatch($0) }
         controller.query = { client.query($0) }
         XCTAssertFalse(controller.show(), "the panel waits for media")
+    }
+}
+
+/// The app hands every drained batch to the panel, also while an error it reported
+/// is shown: the rows send playlist commands by index into the session's playlist,
+/// and a jump from the panel never goes through File > Open, which clears the error.
+final class UpNextAppTests: XCTestCase {
+    func testThePanelFollowsThePlaylistAfterTheSessionReportedAnError() throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("okp-up-next-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let client = try SessionClient(config: appSessionConfig(root: root))
+        defer { client.close() }
+        let app = PlayerApp()
+        app.system = SystemIntegration(session: { _ in .applied }, open: { _ in },
+                                       nowPlayingCenter: RecordingNowPlayingCenter(),
+                                       remoteSource: FakeRemoteCommandSource(), power: FakePowerAssertions(),
+                                       recentList: FakeRecentDocumentList(), artwork: nil, clock: { 0 })
+        app.client = client
+        func deliver(_ events: [Event]) {
+            let batch = EventBatch(schemaVersion: SessionJSON.schemaVersion, events: events)
+            client.store.apply(batch)
+            app.sessionChanged(batch)
+        }
+        let rows = { app.upNext.panel.list.rows.map(\.title) }
+
+        deliver([.playlistChanged(playlist: upNextPlaylist(["a.mkv", "b.mkv", "c.mkv", "d.mkv"], current: 1))])
+        XCTAssertEqual(rows(), ["a.mkv", "b.mkv", "c.mkv", "d.mkv"])
+
+        // a.mkv, played from the panel, does not open: the session moved to it and
+        // reported the error, and the app put up its alert (not run here).
+        app.errorShown = true
+        deliver([.playlistChanged(playlist: upNextPlaylist(["a.mkv", "b.mkv", "c.mkv", "d.mkv"], current: 0)),
+                 .error(kind: .loadFailed, message: "a.mkv: unrecognized file format", requestId: nil)])
+        XCTAssertEqual(app.upNext.panel.list.rows.firstIndex(where: \.isCurrent), 0, "the batch with the error")
+
+        // The alert is dismissed and the panel removes b.mkv.
+        deliver([.playlistChanged(playlist: upNextPlaylist(["a.mkv", "c.mkv", "d.mkv"], current: 0))])
+        XCTAssertEqual(rows(), ["a.mkv", "c.mkv", "d.mkv"], "a batch after the error")
+        XCTAssertEqual(app.upNext.panel.tableView.numberOfRows, 3)
+        XCTAssertEqual(app.upNext.panel.list.activation(ofRow: 1), .playlist(action: .jump(index: 1)),
+                       "row 2 on screen is c.mkv, the session's item 1")
     }
 }
