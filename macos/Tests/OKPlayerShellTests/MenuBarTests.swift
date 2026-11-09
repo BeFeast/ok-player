@@ -129,7 +129,8 @@ final class MenuBarTests: XCTestCase {
         XCTAssertEqual(entries(models, .subtitles), [
             command("subtitles", "Subtitles", submenu: true), .separator,
             command("subtitle-delay-forward", "Subtitle Delay Forward"),
-            command("subtitle-delay-back", "Subtitle Delay Back"),
+            command("subtitle-delay-back", "Subtitle Delay Back"), .separator,
+            command("subtitle-size-up", "Subtitle Size Up"), command("subtitle-size-down", "Subtitle Size Down"),
         ])
         XCTAssertEqual(entries(models, .window), [
             .standard(.minimize), .standard(.zoom), .separator,
