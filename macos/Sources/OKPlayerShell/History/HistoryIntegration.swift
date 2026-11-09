@@ -141,9 +141,11 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
     // MARK: Smoke
 
     /// Smoke, while idle: the Welcome view shows the seeded Continue watching shelf
-    /// (`SmokeHistory`), its baseline snapshots are written, and the fixture is
-    /// opened by activating its card as a click does. Returns what failed.
-    func smokeOpenFromWelcome(fixture: String, snapshotDirectory: String?) -> String? {
+    /// (`SmokeHistory`) with the fixture's card first, and its baseline snapshots are
+    /// written. The smoke then opens the fixture through the open router (Open/), so
+    /// the card itself is not activated here; `HistoryModelTests` covers a card's
+    /// open. Returns what failed.
+    func smokeWelcomeFailure(fixture: String, snapshotDirectory: String?) -> String? {
         guard showsWelcome, !welcomeView.isHidden else { return "The Welcome view is not shown while nothing plays" }
         let entries = welcome.entries
         guard entries.count == SmokeHistory.seededCount, let card = entries.first,
@@ -152,9 +154,8 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
                 + (welcome.problem.map { " (\($0))" } ?? "")
         }
         if let snapshotDirectory { smokeCaptureWelcome(to: snapshotDirectory) }
-        print("OKP_SMOKE welcome=shown continue_watching=\(entries.count) first_card=\(card.state.rawValue) opened_from=card")
+        print("OKP_SMOKE welcome=shown continue_watching=\(entries.count) first_card=\(card.state.rawValue)")
         fflush(stdout)
-        welcome.resume(card)
         return nil
     }
 
@@ -225,9 +226,10 @@ enum SmokeHistory {
     /// The directory `config(fixture:)` made, removed by `cleanUp()`.
     private static var directory: URL?
 
-    /// The app's session config with the history in a seeded temporary directory.
-    static func config(fixture: String?) throws -> SessionConfig {
-        var config = SessionConfig.forApp()
+    /// The app's session config, with `shellCommands`, and the history in a seeded
+    /// temporary directory.
+    static func config(fixture: String?, shellCommands: [String] = []) throws -> SessionConfig {
+        var config = SessionConfig.forApp(shellCommands: shellCommands)
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("okp-smoke-history-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

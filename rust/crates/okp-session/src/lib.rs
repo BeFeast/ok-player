@@ -16,10 +16,12 @@ pub mod commands;
 mod engine;
 pub mod history;
 pub mod machine;
+pub mod open_paths;
 mod playlist;
 pub mod protocol;
 pub mod reconcile;
 mod session;
+mod tracks;
 mod transport;
 pub mod window;
 
@@ -29,3 +31,4 @@ pub use machine::SessionMachine;
 pub use playlist::FOLDER_SCAN_LIMIT;
 pub use protocol::SCHEMA_VERSION;
 pub use session::{RenderUpdate, Session, Wakeup};
+pub use tracks::SUBTITLE_SCALE_STEP;

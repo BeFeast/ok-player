@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "result": {
+    "tracks": {
+      "tracks": {
+        "audio": [
+          { "id": 1, "label": "English · 5.1 · EAC3", "selected": true },
+          { "id": 2, "label": "Director's Commentary · ENG · 2.0 · AC3", "selected": false }
+        ],
+        "subtitles": [
+          { "id": null, "label": "Off", "selected": false },
+          { "id": 1, "label": "English SDH · PGS · Image · Default", "selected": false },
+          { "id": 2, "label": "en · SRT · EXT", "selected": true }
+        ],
+        "subtitle_delay": { "value": 0.25, "label": "+250 ms", "reported": 0.25 },
+        "subtitle_scale": { "value": 1.1, "label": "110%", "reported": 1.0 },
+        "adjustable": true
+      }
+    }
+  }
+}

@@ -10,7 +10,7 @@
     "unknown_command",
     "unavailable"
   ],
-  "error_kind": ["load_failed", "command_failed", "engine"],
+  "error_kind": ["load_failed", "command_failed", "engine", "nothing_playable"],
   "track_kind": ["audio", "subtitle"],
   "source_kind": ["local", "url"],
   "seek_mode": ["absolute", "relative"],

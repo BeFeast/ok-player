@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "result": {
+    "open_formats": {
+      "formats": {
+        "video": [
+          "mkv",
+          "mp4",
+          "m4v",
+          "avi",
+          "mov",
+          "webm",
+          "m2ts",
+          "ts",
+          "wmv",
+          "flv",
+          "mpg",
+          "mpeg",
+          "3gp",
+          "3g2",
+          "ogv",
+          "vob",
+          "divx",
+          "f4v",
+          "mts",
+          "m2t",
+          "asf",
+          "rm",
+          "rmvb",
+          "mxf"
+        ],
+        "audio": [
+          "mp3",
+          "flac",
+          "m4a",
+          "m4b",
+          "opus",
+          "wav",
+          "ogg",
+          "oga",
+          "mka",
+          "aac",
+          "wv",
+          "ape",
+          "wma",
+          "aiff",
+          "aif",
+          "dsf",
+          "dff",
+          "tak",
+          "tta",
+          "mpc",
+          "ac3",
+          "dts",
+          "caf",
+          "spx",
+          "amr"
+        ],
+        "subtitle": [
+          "srt",
+          "ass",
+          "ssa",
+          "sub",
+          "vtt",
+          "idx",
+          "sup"
+        ],
+        "playlist": [
+          "m3u",
+          "m3u8"
+        ]
+      }
+    }
+  }
+}

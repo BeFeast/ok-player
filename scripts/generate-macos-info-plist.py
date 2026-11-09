@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Stamp the macOS app's Info.plist with a version derived from git.
+"""Stamp the macOS app's Info.plist with a version derived from git and its document types.
 
-Usage: generate-macos-info-plist.py TEMPLATE OUTPUT --repo DIR [--build-number N]
+Usage: generate-macos-info-plist.py TEMPLATE OUTPUT --repo DIR --document-types PLIST [--build-number N]
 
 CFBundleShortVersionString is MAJOR.MINOR.PATCH of the nearest `v<semver>` tag.
 macOS reads three integers there, so a prerelease suffix is dropped: a build on the
@@ -17,6 +17,11 @@ commit), so a copy on disk names the commit it was built from.
 
 A shallow clone has neither the tags nor the true commit count. It is refused rather
 than stamped with a wrong version.
+
+CFBundleDocumentTypes and UTImportedTypeDeclarations come from the property list that
+okp-core's `okp-macos-document-types` generator writes from `media_formats`. They
+replace whatever the template holds under those keys (a PlistBuddy merge would keep the
+old arrays next to the new ones); the template itself carries neither.
 """
 import argparse
 import plistlib
@@ -27,10 +32,33 @@ import sys
 TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$")
 DESCRIBE = re.compile(r"^(?P<tag>.+)-(?P<distance>\d+)-g(?P<commit>[0-9a-f]+)$")
 BUILD_NUMBER = re.compile(r"^\d+$")
+DOCUMENT_TYPE_KEYS = ("CFBundleDocumentTypes", "UTImportedTypeDeclarations")
 
 
 class VersionError(Exception):
     pass
+
+
+class DocumentTypesError(Exception):
+    pass
+
+
+def document_types(path):
+    """Return the two document-type keys of the generated property list at PATH."""
+    try:
+        with open(path, "rb") as handle:
+            fragment = plistlib.load(handle)
+    except (OSError, plistlib.InvalidFileException) as error:
+        raise DocumentTypesError(f"cannot read the document types {path}: {error}") from None
+    if not isinstance(fragment, dict):
+        raise DocumentTypesError(f"{path} is not a dictionary")
+    unexpected = sorted(set(fragment) - set(DOCUMENT_TYPE_KEYS))
+    if unexpected:
+        raise DocumentTypesError(f"{path} carries keys other than the document types: {', '.join(unexpected)}")
+    for key in DOCUMENT_TYPE_KEYS:
+        if not isinstance(fragment.get(key), list) or not fragment[key]:
+            raise DocumentTypesError(f"{path} has no {key}")
+    return {key: fragment[key] for key in DOCUMENT_TYPE_KEYS}
 
 
 def git(repo, *args):
@@ -67,16 +95,21 @@ def main(argv):
     parser.add_argument("template")
     parser.add_argument("output")
     parser.add_argument("--repo", required=True, help="git work tree the app is built from")
+    parser.add_argument("--document-types", required=True,
+                        help="property list written by okp-core's okp-macos-document-types")
     parser.add_argument("--build-number", default="0", help="CI run number; 0 for a local build")
     args = parser.parse_args(argv[1:])
     try:
         with open(args.template, "rb") as handle:
             info = plistlib.load(handle)
         version = bundle_version(args.repo, args.build_number)
-    except (OSError, plistlib.InvalidFileException, VersionError) as error:
+        types = document_types(args.document_types)
+    except (OSError, plistlib.InvalidFileException, VersionError, DocumentTypesError) as error:
         print(f"generate-macos-info-plist: {error}", file=sys.stderr)
         return 1
     info.update(version)
+    # Replace, never merge: the generated arrays are the whole of both keys.
+    info.update(types)
     with open(args.output, "wb") as handle:
         plistlib.dump(info, handle, fmt=plistlib.FMT_XML)
     print(" ".join(f"{key}={value}" for key, value in version.items()))

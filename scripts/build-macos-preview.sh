@@ -28,6 +28,12 @@ export SDKROOT
 DYLD_LIBRARY_PATH="$OKP_MPV_PREFIX/lib" cargo test --manifest-path "$root/rust/Cargo.toml" --locked --lib -p okp-ffi --features live-mpv --target aarch64-apple-darwin 2>&1 | tee "$output/tests.log"
 # The session's own tests drive the pinned libmpv through the session and its C ABI.
 DYLD_LIBRARY_PATH="$OKP_MPV_PREFIX/lib" cargo test --manifest-path "$root/rust/Cargo.toml" --locked -p okp-session --target aarch64-apple-darwin 2>&1 | tee -a "$output/tests.log"
+# The core's macOS-only tests (Platform::current) and the document-type generator's.
+cargo test --manifest-path "$root/rust/Cargo.toml" --locked --lib -p okp-core --target aarch64-apple-darwin 2>&1 | tee -a "$output/tests.log"
+# CFBundleDocumentTypes and UTImportedTypeDeclarations, generated from okp-core's
+# media_formats; the Info.plist stamp below replaces both keys with them.
+cargo run --manifest-path "$root/rust/Cargo.toml" --locked -p okp-core --bin okp-macos-document-types \
+  --target aarch64-apple-darwin -- "$work/document-types.plist"
 cargo build --manifest-path "$root/rust/Cargo.toml" --locked --release -p okp-ffi --features live-mpv --target aarch64-apple-darwin 2>&1 | tee "$output/build.log"
 cp "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/libokp_ffi.dylib" "$frameworks/"
 cp "$OKP_MPV_PREFIX"/lib/*.dylib "$frameworks/"
@@ -70,7 +76,9 @@ relocate "$app/Contents/MacOS/ok-player"
 cp "$frameworks/"*.dylib "$app/Contents/Frameworks/"
 
 python3 "$root/scripts/generate-macos-info-plist.py" "$package/Info.plist" "$app/Contents/Info.plist" \
-  --repo "$root" --build-number "${OKP_MACOS_BUILD_NUMBER:-0}" | tee "$output/version.txt"
+  --repo "$root" --build-number "${OKP_MACOS_BUILD_NUMBER:-0}" \
+  --document-types "$work/document-types.plist" | tee "$output/version.txt"
+plutil -lint "$app/Contents/Info.plist" | tee -a "$output/tests.log"
 cp "$package/Resources/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
 cp "$root/LICENSE" "$app/Contents/Resources/"
 cp "$package/README.md" "$app/Contents/Resources/README.md"

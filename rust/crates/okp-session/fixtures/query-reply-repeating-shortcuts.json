@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "result": {
+    "repeating_shortcuts": {
+      "actions": [
+        "seek-back",
+        "seek-forward",
+        "frame-forward",
+        "frame-back",
+        "volume-down",
+        "volume-up",
+        "subtitle-delay-forward",
+        "subtitle-delay-back",
+        "subtitle-size-down",
+        "subtitle-size-up",
+        "subtitle-previous-cue",
+        "subtitle-next-cue"
+      ]
+    }
+  }
+}

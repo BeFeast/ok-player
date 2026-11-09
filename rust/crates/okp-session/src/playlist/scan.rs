@@ -102,12 +102,17 @@ pub(crate) fn folder_playlist(file: &Path, siblings: Vec<PathBuf>) -> Vec<Playli
     items
 }
 
+/// The extensions of the playlist files an open reads, without the dot.
+pub(crate) const PLAYLIST_EXTENSIONS: [&str; 2] = ["m3u", "m3u8"];
+
 /// Whether `path` names an M3U playlist by its extension.
 pub(crate) fn is_playlist_file(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
-            extension.eq_ignore_ascii_case("m3u") || extension.eq_ignore_ascii_case("m3u8")
+            PLAYLIST_EXTENSIONS
+                .iter()
+                .any(|known| extension.eq_ignore_ascii_case(known))
         })
 }
 
