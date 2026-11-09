@@ -124,6 +124,16 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let snapshotDirectory = CommandLine.arguments.first { $0.hasPrefix("--snapshot-dir=") }
         .map { String($0.dropFirst("--snapshot-dir=".count)) }
     var smokeRun: SmokeRun?
+    /// Now Playing, remote commands, display sleep, recent documents, Dock menu.
+    lazy var system: SystemIntegration = SystemIntegration(
+        session: { [weak self] command in
+            self?.client?.dispatch(command) ?? .rejected(reason: .noActiveMedia, message: "No playback session")
+        },
+        open: { [weak self] path in self?.play(path) })
+    /// Next and previous item for the remote commands and the Dock menu.
+    lazy var playlist: SessionPlaylist = SessionPlaylist { [weak self] command in
+        self?.client?.dispatch(command) ?? .rejected(reason: .noActiveMedia, message: "No playback session")
+    }
     var shuttingDown = false
     var closing = false
     var errorShown = false
@@ -136,6 +146,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let fileMenu = NSMenu(title: "File")
         let openItem = fileMenu.addItem(withTitle: "Open…", action: #selector(openFile), keyEquivalent: "o")
         openItem.target = self
+        fileMenu.addItem(system.makeOpenRecentItem())
         let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: ""); fileItem.submenu = fileMenu
         menu.addItem(fileItem); NSApp.mainMenu = menu
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 580),
@@ -175,6 +186,9 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         self.client = client
         client.onBatch = { [weak self] batch in self?.sessionChanged(batch) }
+        playlist.state = client.store.playlist
+        system.playlist = playlist
+        system.start()
         video.onTogglePause = { [weak self] in self?.togglePause() }
         video.videoLayer.onError = { [weak self] message in self?.fail(message) }
         if let handle = client.handle { video.videoLayer.attach(session: handle) }
@@ -212,6 +226,9 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// The session reported a batch; the store already holds the new state.
     func sessionChanged(_ batch: EventBatch) {
         guard !shuttingDown, let client else { return }
+        playlist.state = client.store.playlist
+        system.privateSession = client.store.privateSession
+        system.update(client.store.snapshot)
         for case .error(_, let message, _) in batch.events {
             fail(message); return
         }
@@ -267,6 +284,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func shutdown() {
         guard !shuttingDown else { return }; shuttingDown = true
         smokeRun?.cancel()
+        system.shutdown()
         if let client {
             client.dispatch(.close)
             video?.shutdown()
@@ -279,25 +297,35 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard !closing else { return }
         closing = true
         shutdown()
-        if smokeRun?.finished == true { print("OKP_SMOKE teardown=clean"); fflush(stdout) }
+        if smokeRun?.finished == true {
+            if let problem = system.smokeCheckWithdrawn() { fputs("OK Player: \(problem)\n", stderr); exit(1) }
+            print("OKP_SMOKE teardown=clean"); fflush(stdout)
+        }
         NSApp.terminate(nil)
     }
     func applicationWillTerminate(_ notification: Notification) { shutdown() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? { system.makeDockMenu() }
 }
 
 /// The bounded smoke the macOS workflows run (`--smoke-test`). Each step is checked
 /// against what the session reported and what the video layer counted:
 ///
 /// 1. idle: no render calls before a file is open;
-/// 2. playing: the position and the render calls advance;
-/// 3. paused: the position holds and the render calls stay flat for two seconds;
+/// 2. playing: the position and the render calls advance; Now Playing shows the file
+///    as playing video, the display-sleep assertion is held and the system offers the
+///    remote commands; the pause is sent through the handler the system holds for its
+///    pause command;
+/// 3. paused: the position holds and the render calls stay flat for two seconds; Now
+///    Playing shows the pause and the assertion is released; the resume is sent
+///    through the handler for the system's play command;
 /// 4. resumed: both advance again;
 /// 5. resized: after repeated window resizes Core Animation holds exactly one GL
 ///    context and has drawn into no context but the layer's own;
 /// 6. presented: every frame drawn reported a swap that reached libmpv (the swap
 ///    count the session returns equals the frames drawn);
-/// 7. closed while playing: teardown runs in order and the app exits.
+/// 7. closed while playing: teardown runs in order, the system offers no remote
+///    command any more, and the app exits.
 ///
 /// The timed steps use one-shot timers; the session state itself arrives through
 /// wakeup-driven drains, never through polling.
@@ -345,7 +373,8 @@ final class SmokeRun {
         case .playing where snapshot.status == .playing && position > 0.7 && renders > 10:
             phase = .pausing
             playingRenders = renders
-            app?.client?.dispatch(.setPaused(paused: true))
+            // Now Playing and the display-sleep assertion, then pause as a media key would.
+            if let problem = app?.system.smokeCheckPlayingThenPause() { fail(problem) }
         case .pausing where snapshot.status == .paused:
             phase = .holding
             // Let the pause settle, then measure two seconds of it.
@@ -372,7 +401,7 @@ final class SmokeRun {
             fail("\(renders - pausedRenders) render calls in two paused seconds"); return
         }
         phase = .resuming
-        client.dispatch(.setPaused(paused: false))
+        if let problem = app.system.smokeCheckPausedThenResume() { fail(problem) }
     }
 
     private func resize() {
