@@ -139,6 +139,33 @@ final class TransportOverlayTests: XCTestCase {
         XCTAssertEqual(asked, [nil])
     }
 
+    func testPreviousAndNextFollowThePlaylistAndRunTheirActions() {
+        var steps: [String] = []
+        overlay.sessionChanged(snapshot(.playing, duration: 600))
+        XCTAssertFalse(overlay.previousButton.isEnabled, "no action, no playlist")
+        XCTAssertFalse(overlay.nextButton.isEnabled)
+        overlay.onPrevious = { steps.append("previous") }
+        overlay.onNext = { steps.append("next") }
+        XCTAssertFalse(overlay.previousButton.isEnabled, "a lone item has nothing to step to")
+        XCTAssertFalse(overlay.nextButton.isEnabled)
+
+        overlay.playlistSteps = (previous: true, next: true)
+        XCTAssertTrue(overlay.previousButton.isEnabled)
+        XCTAssertTrue(overlay.nextButton.isEnabled)
+        overlay.nextButton.performClick(nil)
+        overlay.previousButton.performClick(nil)
+        XCTAssertEqual(steps, ["next", "previous"])
+        XCTAssertTrue(dispatched.isEmpty, "stepping is the playlist's, not a playback command")
+
+        overlay.playlistSteps = (previous: false, next: false)
+        XCTAssertFalse(overlay.previousButton.isEnabled)
+        XCTAssertFalse(overlay.nextButton.isEnabled)
+        overlay.playlistSteps = (previous: true, next: true)
+        overlay.onNext = nil
+        XCTAssertTrue(overlay.previousButton.isEnabled)
+        XCTAssertFalse(overlay.nextButton.isEnabled, "no action, no button")
+    }
+
     func testTheMuteButtonAsksTheSessionToToggleMute() {
         overlay.sessionChanged(snapshot(.playing, duration: 4000))
         overlay.muteButton.performClick(nil)

@@ -17,9 +17,13 @@ final class TransportOverlay: NSView {
     var dispatch: ((Command) -> Void)?
     /// The session's transport view, at a drag position when one is given.
     var query: ((Double?) -> TransportView?)?
-    /// Previous and next item. The buttons stay disabled while these are nil.
-    var onPrevious: (() -> Void)? { didSet { previousButton.isEnabled = onPrevious != nil } }
-    var onNext: (() -> Void)? { didSet { nextButton.isEnabled = onNext != nil } }
+    /// Previous and next item. A button is enabled while its action is set and the
+    /// playlist has an item to step to (`playlistSteps`).
+    var onPrevious: (() -> Void)? { didSet { updateStepButtons() } }
+    var onNext: (() -> Void)? { didSet { updateStepButtons() } }
+    /// Whether the session playlist can step back and forward. The session wraps
+    /// at both ends, so both are true exactly when it holds two items or more.
+    var playlistSteps = (previous: false, next: false) { didSet { updateStepButtons() } }
     /// Called whenever the controls show or hide.
     var onRevealChange: ((Bool) -> Void)?
     /// Where keyboard focus goes when the scrubber may no longer hold it (the
@@ -204,6 +208,11 @@ final class TransportOverlay: NSView {
     @objc private func togglePause() { dispatch?(.togglePause) }
     @objc private func previousItem() { onPrevious?() }
     @objc private func nextItem() { onNext?() }
+
+    private func updateStepButtons() {
+        previousButton.isEnabled = onPrevious != nil && playlistSteps.previous
+        nextButton.isEnabled = onNext != nil && playlistSteps.next
+    }
     @objc private func toggleMute() { dispatch?(.toggleMute) }
     @objc private func toggleFullscreen() { window?.toggleFullScreen(nil) }
 
