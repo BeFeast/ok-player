@@ -44,6 +44,8 @@ final class TransportOverlay: NSView {
     let muteButton = TransportOverlay.iconButton("speaker.wave.2.fill", "Mute")
     let volumeSlider = VolumeSliderView()
     let fullscreenButton = TransportOverlay.iconButton("arrow.up.left.and.arrow.down.right", "Enter Full Screen")
+    /// The controls right of the time readout; other surfaces put their buttons here (Tracks/).
+    let trailingControls = NSStackView()
 
     /// The last transport view the session gave.
     private(set) var transport: TransportView?
@@ -335,7 +337,7 @@ final class TransportOverlay: NSView {
         let leading = NSStackView(views: [previousButton, playButton, nextButton, elapsedLabel, trailingLabel])
         leading.spacing = 6
         leading.setCustomSpacing(12, after: nextButton)
-        let trailingControls = NSStackView(views: [speedLabel, muteButton, volumeSlider, fullscreenButton])
+        for control in [speedLabel, muteButton, volumeSlider, fullscreenButton] { trailingControls.addArrangedSubview(control) }
         trailingControls.spacing = 6
         for stack in [leading, trailingControls] {
             stack.orientation = .horizontal
@@ -374,7 +376,7 @@ final class TransportOverlay: NSView {
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .medium))
     }
 
-    private static func iconButton(_ name: String, _ label: String) -> NSButton {
+    static func iconButton(_ name: String, _ label: String) -> NSButton {
         let button = NSButton(title: "", target: nil, action: nil)
         button.isBordered = false
         button.imagePosition = .imageOnly

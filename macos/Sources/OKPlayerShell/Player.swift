@@ -95,7 +95,8 @@ extension SessionConfig {
         let support = files.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(bundleID)
         let caches = files.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(bundleID)
         return SessionConfig(app: AppIdentity(name: "OK Player", platform: .macos),
-                             dataDir: support.path, configDir: support.path, cacheDir: caches.path)
+                             dataDir: support.path, configDir: support.path, cacheDir: caches.path,
+                             shellCommands: TrackControls.shellCommands)
     }
 }
 
@@ -108,6 +109,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let prompt = NSStackView()
     /// The floating transport controls over the video.
     let osc = TransportOverlay()
+    /// Audio and subtitle popovers, the subtitle file panel, the delay and size keys.
+    let tracks = TrackControls()
     var statusRole = PaletteRole.textMuted
     var client: SessionClient?
     var pendingPath: String?
@@ -170,6 +173,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             prompt.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 12)
         ])
         behaviour.install(in: root, videoArea: videoArea)
+        tracks.install(in: osc, over: root)
+        tracks.window = window
         // The title bar's traffic lights and title strip show and hide with the
         // transport controls, and a key press brings the controls back like a
         // pointer movement.
@@ -195,6 +200,18 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard case .transport(let view)? = client?.query(.transport(at: at)) else { return nil }
             return view
         }
+        tracks.dispatch = { [weak client] command in
+            client?.dispatch(command) ?? .rejected(reason: .noActiveMedia, message: "No playback session")
+        }
+        tracks.query = { [weak client] in
+            guard case .tracks(let view)? = client?.query(.tracks) else { return nil }
+            return view
+        }
+        tracks.holdControls = { [weak self] hold in
+            if hold { self?.osc.autoHide.pin() } else { self?.osc.autoHide.unpin() }
+        }
+        if case .shortcutTable(let table)? = client.query(.shortcutTable) { tracks.setShortcuts(table) }
+        behaviour.window.onOtherKey = { [weak self] event in self?.tracks.handleKey(event) ?? false }
         osc.onPrevious = { [weak self] in _ = self?.playlist.step(.previous) }
         osc.onNext = { [weak self] in _ = self?.playlist.step(.next) }
         video.onTogglePause = { [weak self] in self?.togglePause() }
@@ -256,6 +273,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         windowBehaviour?.sessionChanged(snapshot)
         video?.hasVideo = snapshot.video != nil
         osc.sessionChanged(snapshot)
+        tracks.sessionChanged(snapshot)
         osc.playlistSteps = (previous: playlist.canStep(.previous), next: playlist.canStep(.next))
         prompt.isHidden = snapshot.source != nil && snapshot.status != .opening
         smokeRun?.sessionChanged(snapshot)
@@ -352,7 +370,9 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 ///    time readout, and are in the snapshots;
 /// 9. fullscreen: F and Escape, pressed on the video view, enter and leave
 ///    native fullscreen, and each reaches the controls as activity;
-/// 10. closed while playing: teardown runs in order, the system offers no remote
+/// 10. tracks: `]` steps the subtitle size with the session's readout on screen, and
+///    an added subtitle file becomes the selected external track (checked at the end);
+/// 11. closed while playing: teardown runs in order, the system offers no remote
 ///    command any more, and the app exits.
 ///
 /// The timed steps use one-shot timers; the session state itself arrives through
@@ -463,6 +483,7 @@ final class SmokeRun {
         guard counts.swaps == counts.renders else {
             fail("\(counts.swaps) swaps reached libmpv for \(counts.renders) frames drawn"); return
         }
+        if let problem = app.tracks.smokeStart(window: app.window) { fail(problem); return }
         phase = .hiding
         // Playing without pointer activity: the controls hide once the idle timeout
         // has passed. The scrubber holds keyboard focus first, as after a click;
@@ -517,6 +538,7 @@ final class SmokeRun {
             guard let self, let app = self.app, let client = app.client, let layer = app.video?.videoLayer,
                   !self.cancelled else { return }
             if let failure { self.fail(failure); return }
+            if let problem = app.tracks.smokeFinish() { self.fail(problem); return }
             // F and Escape went through the window, which reports each key press to
             // the transport controls as activity.
             let presses = app.keyPresses - pressesBefore
@@ -534,7 +556,7 @@ final class SmokeRun {
                   + "volume=\(Int(snapshot.volume ?? -1)) tracks=\(snapshot.tracks.count) \(behaviour.smokeFitSummary) "
                   + "fullscreen=entered_and_left osc_paused_shown=true osc_auto_hidden=true osc_focus_returned=true "
                   + "osc_titlebar_faded=true osc_key_activity=\(presses) osc_elapsed=\(elapsed) osc_trailing=\(trailing) "
-                  + "playlist_items=\(items) osc_steps=\(steps ? "enabled" : "disabled")")
+                  + "playlist_items=\(items) osc_steps=\(steps ? "enabled" : "disabled") \(app.tracks.smokeSummary)")
             if let directory = app.snapshotDirectory { app.captureAppearances(to: directory) }
             // Closing the window during playback runs the real teardown path; the app
             // reports it once teardown has returned.

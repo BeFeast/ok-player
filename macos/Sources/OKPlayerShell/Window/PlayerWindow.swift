@@ -13,6 +13,10 @@ class PlayerWindow: NSWindow {
     /// the transport controls count it as activity.
     var onKeyDown: (() -> Void)?
 
+    /// Offered every key press no view and none of the window's own keys took;
+    /// returns whether it was used.
+    var onOtherKey: ((NSEvent) -> Bool)?
+
     /// The window is in native fullscreen. (Tests stand in a flagged window.)
     var isInFullscreen: Bool { styleMask.contains(.fullScreen) }
 
@@ -28,6 +32,7 @@ class PlayerWindow: NSWindow {
            onCommand?(command) == true {
             return
         }
+        if onOtherKey?(event) == true { return }
         super.keyDown(with: event)
     }
 

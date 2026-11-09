@@ -219,12 +219,14 @@ fn a_macos_shell_reads_the_registry_and_runs_commands_through_the_session() {
 }
 
 /// Registry rows that need playing or paused media, and the ones that do not.
-const NEED_ACTIVE_MEDIA: [&str; 5] = [
+const NEED_ACTIVE_MEDIA: [&str; 7] = [
     "play-pause",
     "seek-back",
     "seek-forward",
     "subtitle-delay-forward",
     "subtitle-delay-back",
+    "subtitle-size-down",
+    "subtitle-size-up",
 ];
 const WORK_AFTER_THE_END: [&str; 4] = ["close-media", "volume-down", "volume-up", "mute"];
 

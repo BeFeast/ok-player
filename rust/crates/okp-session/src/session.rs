@@ -27,6 +27,7 @@ use crate::protocol::{
     parse_envelope, to_json,
 };
 use crate::reconcile::{core_end_reason, endfile_error, event_matches_source};
+use crate::tracks::{self, TrackState};
 use crate::transport::{TransportView, VolumeTarget};
 use crate::window;
 
@@ -84,6 +85,8 @@ struct State {
     history: SessionHistory,
     /// The volume asked for and not yet reported, which volume nudges build on.
     volume: VolumeTarget,
+    /// The track details the menus' labels need, and the subtitle size.
+    tracks: TrackState,
 }
 
 /// Wakes the event thread: set by the engine listener, by commands and by
@@ -175,6 +178,7 @@ impl Session {
                 end_failed: false,
                 history,
                 volume: VolumeTarget::default(),
+                tracks: TrackState::default(),
             }),
             signal,
             wakeup: Mutex::new(None),
@@ -247,6 +251,12 @@ impl Session {
             Query::Transport { at } => QueryResult::Transport {
                 transport: TransportView::project(&self.snapshot(), *at),
             },
+            Query::Tracks {} => {
+                let snapshot = self.snapshot();
+                QueryResult::Tracks {
+                    tracks: lock(&self.shared.state).tracks.view(&snapshot),
+                }
+            }
             Query::Playlist {} => QueryResult::Playlist {
                 playlist: lock(&self.shared.state).playlist.state(),
             },
@@ -305,7 +315,13 @@ impl Session {
     /// tell the shell to carry it out. An unknown or unavailable command is
     /// refused.
     fn invoke_command(&self, id: &str) -> DispatchResult {
-        match self.commands.invocation(id, &self.snapshot()) {
+        let mut snapshot = self.snapshot();
+        // The delay keys build on the delay asked for last, which libmpv may
+        // not have reported yet.
+        snapshot.subtitle_delay = lock(&self.shared.state)
+            .tracks
+            .delay(snapshot.subtitle_delay);
+        match self.commands.invocation(id, &snapshot) {
             Invocation::Run(command) => self.dispatch(&command),
             Invocation::Perform => DispatchResult::Perform {},
             Invocation::Refuse(reason, message) => DispatchResult::Rejected { reason, message },
@@ -534,6 +550,14 @@ impl State {
             (core.volume, core.mute)
         };
         let resolved = self.volume.resolve(command, observed_volume, muted);
+        // And a subtitle size nudge becomes the size it stands for.
+        let resolved = self.tracks.resolve(&resolved).into_owned();
+        if let Some(message) = tracks::invalid_argument(&resolved) {
+            return DispatchResult::Rejected {
+                reason: RejectReason::InvalidArgument,
+                message,
+            };
+        }
         let command = self.prepare(&resolved);
         let Route::Player(core) = command.route() else {
             // Playlist, history and registry commands never reach here.
@@ -547,6 +571,9 @@ impl State {
         });
         if engine_result.is_ok() {
             self.track_load(&command, outcome, load);
+            if matches!(outcome, CommandOutcome::Accepted { .. }) {
+                self.tracks.forwarded(&command);
+            }
         } else if matches!(*command, Command::SetVolume { .. }) {
             self.volume.forget();
         }
@@ -801,6 +828,8 @@ impl State {
     }
 
     fn reconcile_observation(&mut self, observation: &Observation) {
+        self.tracks
+            .observe(observation, is_loaded(self.machine.machine().status()));
         let playback = observation.playback;
         self.volume.observe(playback.volume);
         // Volume and speed are engine-global and hold without media.
@@ -2042,4 +2071,5 @@ mod tests {
 
     /// The playlist through the session: folder scans, auto-advance, commands.
     mod playlist;
+    mod tracks;
 }

@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use crate::protocol::{
     Command, RejectReason, SeekMode, SeekPrecision, SessionSnapshot, SourceKind, Status,
 };
+use crate::tracks::SUBTITLE_SCALE_STEP;
 
 /// Seconds the seek keys jump, as in the GTK shell.
 const SEEK_STEP_SECONDS: f64 = 5.0;
@@ -160,6 +161,8 @@ pub(crate) const SESSION_COMMANDS: &[&str] = &[
     "mute",
     "subtitle-delay-forward",
     "subtitle-delay-back",
+    "subtitle-size-down",
+    "subtitle-size-up",
 ];
 
 /// What `invoke_command` does with an id.
@@ -314,6 +317,13 @@ fn session_command(id: &str, snapshot: &SessionSnapshot) -> Option<Command> {
         },
         "subtitle-delay-forward" => subtitle_delay(SUBTITLE_DELAY_STEP_SECONDS),
         "subtitle-delay-back" => subtitle_delay(-SUBTITLE_DELAY_STEP_SECONDS),
+        // From the size the session asked for last, which the snapshot does not carry.
+        "subtitle-size-down" => Command::NudgeSubtitleScale {
+            delta: -SUBTITLE_SCALE_STEP,
+        },
+        "subtitle-size-up" => Command::NudgeSubtitleScale {
+            delta: SUBTITLE_SCALE_STEP,
+        },
         _ => return None,
     })
 }
@@ -330,7 +340,9 @@ fn session_command_enabled(id: &str, status: Status) -> Option<bool> {
         | "seek-back"
         | "seek-forward"
         | "subtitle-delay-forward"
-        | "subtitle-delay-back" => active,
+        | "subtitle-delay-back"
+        | "subtitle-size-down"
+        | "subtitle-size-up" => active,
         "close-media" => status != Status::Idle,
         // Volume and mute are engine-global and apply without media.
         "volume-down" | "volume-up" | "mute" => true,
@@ -728,6 +740,8 @@ mod tests {
                 "mute",
                 "subtitle-delay-forward",
                 "subtitle-delay-back",
+                "subtitle-size-down",
+                "subtitle-size-up",
             ]
         );
 
@@ -782,6 +796,14 @@ mod tests {
         assert_eq!(
             registry.invocation("subtitle-delay-back", &snapshot),
             Invocation::Run(Command::SetSubtitleDelay { seconds: 0.2 })
+        );
+        assert_eq!(
+            registry.invocation("subtitle-size-up", &snapshot),
+            Invocation::Run(Command::NudgeSubtitleScale { delta: 0.1 })
+        );
+        assert_eq!(
+            registry.invocation("subtitle-size-down", &snapshot),
+            Invocation::Run(Command::NudgeSubtitleScale { delta: -0.1 })
         );
         snapshot.mute = true;
         assert_eq!(

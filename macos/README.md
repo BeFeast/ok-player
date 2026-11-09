@@ -25,7 +25,7 @@ pauses first. The traffic lights and the title strip hide and show with the
 transport controls (`WindowChromeVisibility`); hidden ones take no clicks.
 
 This preview is for local testing. It does not yet contain the Linux shell's URL
-resolver, History, saving/cache UI, subtitle controls or update service. Its chrome
+resolver, History, saving/cache UI, subtitle styling or update service. Its chrome
 uses the shared BeFeast palette in light and dark, following the system appearance;
 the full macOS UI redesign is still ahead. The app needs macOS 14 or later on Apple
 Silicon. It is signed with a stable self-signed identity when one is configured (see
@@ -351,6 +351,28 @@ Swift side only turns input into commands and keeps the hide timer.
   them. Hidden controls take no clicks, and clicks outside the bar always reach the
   video.
 
+## Tracks and subtitles
+
+`Sources/OKPlayerShell/Tracks/` adds two buttons at the front of the transport
+controls' trailing group, Audio and Subtitles. Each opens a popover listing the
+tracks with the labels the session's `tracks` query gives them (core
+`track_label`: name, language, channels, codec, `EXT` for a file loaded beside the
+media) and checks the one that plays; choosing one sends `select_track`. The
+subtitle popover starts with Off and ends with **Add Subtitle File…** and the
+delay and size rows, each with the session's readout and a step down and up.
+
+- **Add Subtitle File…** and **S** open a file panel limited to subtitle files
+  (`.srt`, `.ass`, `.ssa`, `.sub`, `.vtt`, `.idx`, `.sup`); the file goes to the
+  session as `add_subtitle` and becomes the subtitle track.
+- Subtitle files named after the media (`movie.srt`, `movie.en.srt`) load with it;
+  libmpv finds them (`sub-auto=exact`).
+- **Z** / **Shift+Z** move subtitles 50 ms later / earlier and **]** / **[** make them
+  10 % larger / smaller (0.25-4). The keys come from the session's shortcut table,
+  the session runs them, and the new value shows for a moment over the top of the
+  video.
+- `TrackControls.populate(_:kind:)` fills an Audio or Subtitles menu with the same
+  items, for the menu bar (#880) to host.
+
 ## System integration
 
 `System/SystemIntegration.swift` connects the player to macOS. It is handed the
@@ -413,6 +435,9 @@ window and checks, from the session's events and the video layer's counters:
   both window snapshots show them;
 - F and Escape, sent as key events to the video view, enter native fullscreen and
   leave it again, and each press reaches the transport controls as activity;
+- `]` sent to the window steps the subtitle size and shows the session's `110%`
+  readout, and a generated SRT file added during playback is the selected external
+  subtitle track a few seconds later;
 - closing the window during playback tears down in order (close, destroy the
   render context, free the session), after which the center has none of those
   commands enabled and no handler of the app's.
