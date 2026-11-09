@@ -12,8 +12,8 @@
           { "id": 1, "label": "English SDH · PGS · Image · Default", "selected": false },
           { "id": 2, "label": "en · SRT · EXT", "selected": true }
         ],
-        "subtitle_delay": { "value": 0.25, "label": "+250 ms" },
-        "subtitle_scale": { "value": 1.1, "label": "110%" },
+        "subtitle_delay": { "value": 0.25, "label": "+250 ms", "reported": 0.25 },
+        "subtitle_scale": { "value": 1.1, "label": "110%", "reported": 1.0 },
         "adjustable": true
       }
     }

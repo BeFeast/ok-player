@@ -147,10 +147,13 @@ fn the_reply_fixture_carries_the_core_labels() {
         subtitle_delay: SubtitleValue {
             value: 0.25,
             label: subtitle_delay::format_label(0.25),
+            reported: Some(0.25),
         },
         subtitle_scale: SubtitleValue {
             value: 1.1,
             label: "110%".to_owned(),
+            // The size asked for is on its way: libmpv still reports 100 %.
+            reported: Some(1.0),
         },
         adjustable: true,
     };

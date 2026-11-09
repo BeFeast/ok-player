@@ -28,8 +28,12 @@ struct TrackChoice: Codable, Equatable {
 
 /// A subtitle adjustment and its readout.
 struct SubtitleValue: Codable, Equatable {
-    /// Seconds for the delay, a factor (1 = 100 %) for the size.
+    /// Seconds for the delay, a factor (1 = 100 %) for the size: the value asked
+    /// for last until libmpv reports it, then libmpv's.
     var value: Double
     /// `+250 ms`; `110%`.
     var label: String
+    /// libmpv's last report of the value; `nil` before its first. It differs from
+    /// `value` while a change is on its way to libmpv.
+    var reported: Double?
 }

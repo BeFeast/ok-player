@@ -60,8 +60,8 @@ final class TrackProtocolTests: XCTestCase {
                 TrackChoice(id: 1, label: "English SDH · PGS · Image · Default", selected: false),
                 TrackChoice(id: 2, label: "en · SRT · EXT", selected: true),
             ],
-            subtitleDelay: SubtitleValue(value: 0.25, label: "+250 ms"),
-            subtitleScale: SubtitleValue(value: 1.1, label: "110%"),
+            subtitleDelay: SubtitleValue(value: 0.25, label: "+250 ms", reported: 0.25),
+            subtitleScale: SubtitleValue(value: 1.1, label: "110%", reported: 1.0),
             adjustable: true)
         XCTAssertEqual(reply.result, .tracks(tracks: expected))
         // Written back, it is the fixture; Off's `null` id is left out, which Rust reads the same way.

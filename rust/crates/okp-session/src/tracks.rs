@@ -8,9 +8,11 @@
 //!
 //! libmpv reports the delay and the size asynchronously, so the values asked
 //! for lead until it reports them: keys pressed faster than its reports all
-//! count, and a `tracks` query right after a change reads the new value. The
-//! subtitle size (`sub-scale`) is engine-global like the volume and holds across
-//! files; it is not part of the snapshot, so a shell reads it from `tracks`.
+//! count, and a `tracks` query right after a change reads the new value. Each
+//! value also carries libmpv's own last report (`reported`), which is where a
+//! change shows that it arrived. The subtitle size (`sub-scale`) is
+//! engine-global like the volume and holds across files; it is not part of the
+//! snapshot, so a shell reads it from `tracks`.
 
 use std::borrow::Cow;
 
@@ -60,10 +62,14 @@ pub struct TrackChoice {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubtitleValue {
-    /// Seconds for the delay, a factor (1 = 100 %) for the size.
+    /// Seconds for the delay, a factor (1 = 100 %) for the size: the value
+    /// asked for last until libmpv reports it, then libmpv's.
     pub value: f64,
     /// `+250 ms`, `0 ms`; `110%`.
     pub label: String,
+    /// libmpv's last report of the value; `None` before its first. It differs
+    /// from `value` while a change is on its way to libmpv.
+    pub reported: Option<f64>,
 }
 
 /// The track details labels need and the snapshot leaves out, and the
@@ -186,10 +192,12 @@ impl TrackState {
             subtitle_delay: SubtitleValue {
                 value: delay,
                 label: subtitle_delay::format_label(delay),
+                reported: Some(snapshot.subtitle_delay),
             },
             subtitle_scale: SubtitleValue {
                 value: scale,
                 label: scale_label(scale),
+                reported: self.observed_scale,
             },
             adjustable: matches!(snapshot.status, Status::Playing | Status::Paused),
         }
@@ -412,10 +420,12 @@ mod tests {
             view.subtitle_delay,
             SubtitleValue {
                 value: -0.125,
-                label: "-125 ms".to_owned()
+                label: "-125 ms".to_owned(),
+                reported: Some(-0.125),
             }
         );
         assert_eq!(view.subtitle_scale.label, "110%");
+        assert_eq!(view.subtitle_scale.reported, Some(1.1));
         assert!(view.adjustable);
         snapshot.status = Status::Ended;
         assert!(!state.view(&snapshot).adjustable);
@@ -436,13 +446,20 @@ mod tests {
         let second = state.resolve(&up).into_owned();
         assert_eq!(second, Command::SetSubtitleScale { scale: 1.2 });
         state.forwarded(&second);
+        let pending = state.view(&playing(Vec::new())).subtitle_scale;
+        assert_eq!(pending.label, "120%");
         assert_eq!(
-            state.view(&playing(Vec::new())).subtitle_scale.label,
-            "120%"
+            pending.reported,
+            Some(1.0),
+            "libmpv's own value stays apart from the size asked for"
         );
         // Once reported, the engine's value is the one nudges build on.
         state.observe(&observed(Vec::new(), 1.2), true);
         assert_eq!(state.scale(), 1.2);
+        assert_eq!(
+            state.view(&playing(Vec::new())).subtitle_scale.reported,
+            Some(1.2)
+        );
     }
 
     #[test]

@@ -266,8 +266,8 @@ and after it changed the delay or the size.
 | `audio` | the audio tracks in libmpv's order, each `{id, label, selected}`; empty without loaded media |
 | `subtitles` | `Off` (`id: null`, selected while no subtitle track is) first, then the subtitle tracks the same way |
 | `label` | the one-line descriptor: name (title, else language, else `Track N`), language, channels and codec for audio; format, `Image`, `Native style` and `EXT` or `Default` for subtitles (`track_label`) |
-| `subtitle_delay` | `{value, label}`: seconds and `+250 ms` / `0 ms` (`subtitle_delay::format_label`) |
-| `subtitle_scale` | `{value, label}`: the size factor and `110%` |
+| `subtitle_delay` | `{value, label, reported}`: seconds and `+250 ms` / `0 ms` (`subtitle_delay::format_label`) |
+| `subtitle_scale` | `{value, label, reported}`: the size factor and `110%` |
 | `adjustable` | media is `playing` or `paused`, so a file can be added and the delay and size changed |
 
 A row's `id` goes to `select_track` with the menu's kind; `null` turns subtitles
@@ -292,7 +292,9 @@ off.
 
 libmpv reports the delay and the size asynchronously. Until it does, the
 values asked for lead: delay and size keys pressed faster than its reports all
-count, and `tracks` reads the new value at once. The snapshot's
+count, and `tracks` reads the new value at once in `value` and `label`.
+`reported` is libmpv's own last report (`null` before its first), so a shell or
+a test can tell when a change has reached libmpv. The snapshot's
 `subtitle_delay` follows when libmpv reports it.
 
 The documents are pinned by `rust/crates/okp-session/fixtures/tracks/`.

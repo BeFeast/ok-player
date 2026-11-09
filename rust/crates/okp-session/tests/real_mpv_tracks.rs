@@ -155,21 +155,42 @@ fn the_delay_and_size_keys_reach_libmpv_and_the_readouts_follow() {
     let session = Session::new(&headless_config(root.path())).expect("libmpv starts");
     open(&session, &media);
     let invoke = |id: &str| session.dispatch(&Command::InvokeCommand { id: id.to_owned() });
+    // What libmpv itself reports, not the value the session asked for: the
+    // readouts lead with that one until the report arrives.
+    let reported_delay =
+        |seconds: f64| wait_for(|| (session.snapshot().subtitle_delay - seconds).abs() < 0.000_5);
+    let reported_scale = |scale: f64| {
+        wait_for(|| {
+            tracks(&session)
+                .subtitle_scale
+                .reported
+                .is_some_and(|reported| (reported - scale).abs() < 0.000_5)
+        })
+    };
 
     accepted(invoke("subtitle-delay-forward"));
+    assert_eq!(tracks(&session).subtitle_delay.label, "+50 ms");
     assert!(
-        wait_for(|| tracks(&session).subtitle_delay.label == "+50 ms"),
-        "libmpv never reported the delay: {:?}",
-        tracks(&session).subtitle_delay
+        reported_delay(0.05),
+        "libmpv never reported the delay: {}",
+        session.snapshot().subtitle_delay
     );
     accepted(invoke("subtitle-delay-back"));
     accepted(invoke("subtitle-delay-back"));
-    assert!(wait_for(
-        || tracks(&session).subtitle_delay.label == "-50 ms"
-    ));
+    assert_eq!(tracks(&session).subtitle_delay.label, "-50 ms");
+    assert!(
+        reported_delay(-0.05),
+        "libmpv never reported the delay: {}",
+        session.snapshot().subtitle_delay
+    );
 
     accepted(invoke("subtitle-size-up"));
     assert_eq!(tracks(&session).subtitle_scale.label, "110%");
+    assert!(
+        reported_scale(1.1),
+        "libmpv never reported the size: {:?}",
+        tracks(&session).subtitle_scale
+    );
     for _ in 0..40 {
         accepted(invoke("subtitle-size-up"));
     }
@@ -178,9 +199,25 @@ fn the_delay_and_size_keys_reach_libmpv_and_the_readouts_follow() {
         "400%",
         "the size stops at the core's maximum"
     );
+    assert!(
+        reported_scale(4.0),
+        "libmpv never reported the maximum size: {:?}",
+        tracks(&session).subtitle_scale
+    );
     accepted(session.dispatch(&Command::SetSubtitleScale { scale: 1.0 }));
     accepted(invoke("subtitle-size-down"));
     assert_eq!(tracks(&session).subtitle_scale.label, "90%");
+    assert!(
+        reported_scale(0.9),
+        "libmpv never reported the smaller size: {:?}",
+        tracks(&session).subtitle_scale
+    );
+    let shown = tracks(&session).subtitle_scale;
+    assert_eq!(
+        (shown.label.as_str(), shown.reported),
+        ("90%", Some(shown.value)),
+        "once reported, libmpv's value is the one shown"
+    );
 
     let errors: Vec<_> = session
         .drain_events()
