@@ -629,8 +629,9 @@ final class SmokeRun {
             // One toast before the snapshots: the session confirms a volume nudge.
             self.phase = .toasting
             _ = client.dispatch(.nudgeVolume(delta: -5))
-            self.after(3) { [self] in
-                if phase == .toasting { fail("The volume nudge showed no toast") }
+            self.after(3) { [weak self] in
+                guard let self, self.phase == .toasting else { return }
+                self.fail("The volume nudge showed no toast")
             }
         }
     }
