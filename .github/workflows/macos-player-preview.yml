@@ -222,9 +222,10 @@ jobs:
           exit "$status"
 
       # The bundled Info.plist gets its document types from okp-core's media_formats.
-      # Once Launch Services knows the build, every video and audio extension there has
-      # to resolve to a declared type conforming to public.movie or public.audio; a
-      # system identifier macOS does not declare fails here, where Linux cannot see it.
+      # Once Launch Services knows the build, every video and audio extension there needs
+      # a type macOS declares that the Video or Audio document type claims (by identifier
+      # or by conformance); a system identifier macOS does not declare fails here, where
+      # Linux cannot see it.
       - name: Check the document types macOS resolves
         shell: bash
         run: |

@@ -134,8 +134,10 @@ The Swift package (`Package.swift`, no Xcode project) has three targets:
   declares no type for) come from okp-core's `media_formats` at build time and replace
   both keys; the `Info.plist` template carries neither. After the build, the GitHub
   workflow registers the app with Launch Services and runs `ok-player
-  --check-document-types`: every video and audio extension must resolve to a declared
-  type conforming to `public.movie` or `public.audio`.
+  --check-document-types`: every video and audio extension must have a type macOS
+  declares that the Video or Audio document type claims, by identifier or by
+  conformance. Conformance to `public.movie` alone is not enough as a rule: macOS
+  declares `.asf` as audiovisual content, which the Video document type claims by name.
 
 ## Signing
 
