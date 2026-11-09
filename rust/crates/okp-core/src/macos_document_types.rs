@@ -22,6 +22,12 @@
 //! The video document type also claims `public.movie`, and the audio type `public.audio`, so a
 //! file whose extension the system or another app declares under a different identifier is
 //! still offered through type conformance. Both are viewer roles at rank `Default`.
+//!
+//! Two more viewer types, at rank `Alternate`, let Finder hand over what the player opens as a
+//! playlist without making OK Player the default app for it: `Folder` claims `public.folder`
+//! (a folder plays its media) and `Playlist` the type macOS declares for M3U and M3U8 files.
+//! Without them a folder or an `.m3u8` dropped on the Dock icon is refused and Open With does
+//! not list the app.
 
 use std::fmt::Write as _;
 
@@ -123,6 +129,13 @@ const SHARED_IMPORTS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// The document types beyond the media kinds: name and claimed content types. Both are viewer
+/// roles at rank `Alternate`, after the video and audio types.
+pub const ALTERNATE_DOCUMENT_TYPES: &[(&str, &[&str])] = &[
+    ("Folder", &["public.folder"]),
+    ("Playlist", &["public.m3u-playlist"]),
+];
+
 /// Every audio and video extension in [`crate::media_formats`], video first, each with its
 /// content type.
 pub fn extension_types() -> Vec<ExtensionType> {
@@ -166,7 +179,8 @@ fn extension_type(kind: MediaKind, extension: &'static str) -> ExtensionType {
 }
 
 /// A standalone XML property list with `CFBundleDocumentTypes` (one video and one audio viewer
-/// type at rank `Default`) and `UTImportedTypeDeclarations` for every imported type.
+/// type at rank `Default`, then [`ALTERNATE_DOCUMENT_TYPES`] at rank `Alternate`) and
+/// `UTImportedTypeDeclarations` for every imported type.
 pub fn info_plist_fragment() -> String {
     let types = extension_types();
     let mut plist = String::from(
@@ -184,12 +198,19 @@ pub fn info_plist_fragment() -> String {
                 content_types.push(entry.identifier.clone());
             }
         }
-        plist.push_str("\t\t<dict>\n");
-        push_string(&mut plist, 3, "CFBundleTypeName", kind.document_type_name());
-        push_string(&mut plist, 3, "CFBundleTypeRole", "Viewer");
-        push_string(&mut plist, 3, "LSHandlerRank", "Default");
-        push_string_array(&mut plist, 3, "LSItemContentTypes", &content_types);
-        plist.push_str("\t\t</dict>\n");
+        push_document_type(
+            &mut plist,
+            kind.document_type_name(),
+            "Default",
+            &content_types,
+        );
+    }
+    for (name, content_types) in ALTERNATE_DOCUMENT_TYPES {
+        let content_types = content_types
+            .iter()
+            .map(|identifier| (*identifier).to_owned())
+            .collect::<Vec<_>>();
+        push_document_type(&mut plist, name, "Alternate", &content_types);
     }
     plist.push_str("\t</array>\n");
 
@@ -218,6 +239,16 @@ pub fn info_plist_fragment() -> String {
     }
     plist.push_str("\t</array>\n</dict>\n</plist>\n");
     plist
+}
+
+/// One viewer entry of `CFBundleDocumentTypes`.
+fn push_document_type(plist: &mut String, name: &str, rank: &str, content_types: &[String]) {
+    plist.push_str("\t\t<dict>\n");
+    push_string(plist, 3, "CFBundleTypeName", name);
+    push_string(plist, 3, "CFBundleTypeRole", "Viewer");
+    push_string(plist, 3, "LSHandlerRank", rank);
+    push_string_array(plist, 3, "LSItemContentTypes", content_types);
+    plist.push_str("\t\t</dict>\n");
 }
 
 fn push_string(plist: &mut String, depth: usize, key: &str, value: &str) {
@@ -414,7 +445,7 @@ mod tests {
 
         assert_eq!(
             types.keys().cloned().collect::<Vec<_>>(),
-            ["Audio", "Video"]
+            ["Audio", "Folder", "Playlist", "Video"]
         );
         for (name, umbrella) in [("Video", "public.movie"), ("Audio", "public.audio")] {
             let entry = types[name];
@@ -429,6 +460,26 @@ mod tests {
             let unique = claimed.iter().collect::<BTreeSet<_>>();
             assert_eq!(unique.len(), claimed.len(), "{name} lists a type twice");
         }
+    }
+
+    #[test]
+    fn folders_and_m3u_playlists_are_alternate_rank_viewers() {
+        let plist = read_plist(&info_plist_fragment());
+        let types = document_types(&plist);
+        for (name, claimed) in [
+            ("Folder", ["public.folder"]),
+            ("Playlist", ["public.m3u-playlist"]),
+        ] {
+            let entry = types[name];
+            assert_eq!(entry["CFBundleTypeRole"], "Viewer", "{name}");
+            // Offered in Open With and on the Dock icon, never made the default app.
+            assert_eq!(entry["LSHandlerRank"], "Alternate", "{name}");
+            assert_eq!(strings(&entry["LSItemContentTypes"]), claimed, "{name}");
+        }
+        // Both are system types: nothing is imported for them.
+        let imports = imports(&plist);
+        assert!(!imports.contains_key("public.folder"));
+        assert!(!imports.contains_key("public.m3u-playlist"));
     }
 
     #[test]

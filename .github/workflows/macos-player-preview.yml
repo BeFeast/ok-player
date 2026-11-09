@@ -221,6 +221,21 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app"
           exit "$status"
 
+      # The bundled Info.plist gets its document types from okp-core. Once Launch Services
+      # knows the build, every video, audio and playlist extension the session opens needs
+      # a type macOS declares that the Video, Audio or Playlist document type claims (by
+      # identifier or by conformance), and the Folder type must claim folders; a system
+      # identifier macOS does not declare fails here, where Linux cannot see it.
+      - name: Check the document types macOS resolves
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          app="$OKP_MACOS_OUTPUT/OK Player.app"
+          plutil -lint "$app/Contents/Info.plist"
+          lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+          "$lsregister" -f "$app"
+          env -u DYLD_LIBRARY_PATH "$app/Contents/MacOS/ok-player" --check-document-types | tee "$OKP_MACOS_OUTPUT/document-types.txt"
+
       - name: Generate the H.264/AAC smoke fixture with a pinned ffmpeg
         if: env.RUN_SMOKE == 'true'
         shell: bash

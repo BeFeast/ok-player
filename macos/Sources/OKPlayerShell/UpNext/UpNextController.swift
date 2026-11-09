@@ -1,14 +1,15 @@
 import AppKit
 
 /// The Up Next panel in the player window (#884), with the transport controls'
-/// Up Next button and the View menu's Up Next item that show and hide it.
+/// Up Next button and the menu bar's registry item that show and hide it.
 ///
 /// Both run the registry command `chapters-up-next`, which this shell carries out
-/// (`SessionConfig.shellCommands`): the panel opens when the registry enables the
-/// command (media is open) and the session answers `perform`. It closes from either
-/// of them or its own close button at any time. Each drained batch hands it the
-/// session's playlist (`SessionStore.playlist`).
-final class UpNextController: NSObject, NSMenuItemValidation {
+/// (registered with `PlayerCommands`, so the session config lists it): the panel
+/// opens when the registry enables the command (media is open) and the session
+/// answers `perform`. It closes from the button, the menu item while it is enabled,
+/// or its own close button. Each drained batch hands it the session's playlist
+/// (`SessionStore.playlist`).
+final class UpNextController: NSObject {
     /// The registry command that shows and hides the panel.
     static let commandID = "chapters-up-next"
 
@@ -52,11 +53,16 @@ final class UpNextController: NSObject, NSMenuItemValidation {
         ])
     }
 
-    /// View > Up Next.
-    func makeMenuItem() -> NSMenuItem {
-        let item = NSMenuItem(title: "Up Next", action: #selector(toggleUpNext(_:)), keyEquivalent: "")
-        item.target = self
-        return item
+    /// Carry out the registry command when the menu bar or a key runs it: register
+    /// it with `commands` before the session starts.
+    func register(with commands: PlayerCommands) {
+        commands.register(Self.commandID) { [weak self] in self?.registryCommandRan() }
+    }
+
+    /// `PlayerCommands` ran the command and the session handed it to this shell:
+    /// show a hidden panel, hide a shown one. The registry already enabled it.
+    func registryCommandRan() {
+        setShown(!isShown)
     }
 
     /// The session reported a batch; `playlist` and `snapshot` are the store's state
@@ -105,12 +111,6 @@ final class UpNextController: NSObject, NSMenuItemValidation {
         toggle()
     }
 
-    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        guard menuItem.action == #selector(toggleUpNext(_:)) else { return true }
-        menuItem.state = isShown ? .on : .off
-        return isShown || isOffered
-    }
-
     private func setShown(_ shown: Bool) {
         isShown = shown
         if !shown { panel.returnFocus() }
@@ -124,7 +124,7 @@ final class UpNextController: NSObject, NSMenuItemValidation {
 
 // The smoke's check (`--smoke-test`, run by the macOS workflows).
 extension UpNextController {
-    /// Open the panel the way its menu item does and check that it lists `playlist`
+    /// Open the panel if the menu bar has not, and check that it lists `playlist`
     /// (at least two items) under its Now Playing card, with the current item marked.
     /// Returns what failed.
     func smokeShowFailure(playlist: PlaylistState) -> String? {

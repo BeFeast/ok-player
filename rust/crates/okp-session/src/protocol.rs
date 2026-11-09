@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use okp_core::app::AppIdentity;
 use okp_core::player as core;
 use okp_core::playlist::PlaylistItem;
+use okp_core::shortcuts::ShortcutAction;
 use serde::{Deserialize, Serialize};
 
 pub use crate::commands::{CommandGroup, CommandMenu, RegistryCommand, ShortcutRow};
@@ -21,7 +22,9 @@ pub use crate::history::{
     HistoryAction, HistoryActionResult, HistoryBucket, HistoryEntry, HistoryEvent, HistoryQuery,
     HistoryQueryResult, HistorySection, HistoryState,
 };
+pub use crate::open_paths::{OpenFormats, OpenPlan};
 pub use crate::playlist::{PlaylistAction, PlaylistEntry, PlaylistState, QueueMode, RepeatMode};
+pub use crate::tracks::{SubtitleValue, TrackChoice, TracksView};
 pub use crate::transport::{OscSurface, OscView, SpeedChoice, TransportView, VolumeView};
 pub use crate::window::{VideoClickIntent, WindowRect, WindowSize};
 
@@ -160,6 +163,19 @@ pub enum Command {
     /// it, which the next toggle restores. Forwarded as a `set_volume`, or as
     /// `set_mute(false)` while libmpv's own mute flag is on.
     ToggleMute {},
+    /// Load a subtitle file for the current media and select it.
+    AddSubtitle {
+        path: String,
+    },
+    /// Subtitle size as a factor (1 = 100 %), kept within 0.25-4.
+    SetSubtitleScale {
+        scale: f64,
+    },
+    /// Change the subtitle size by `delta` from the size asked for last, or the
+    /// reported one. Forwarded as a `set_subtitle_scale`.
+    NudgeSubtitleScale {
+        delta: f64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -231,7 +247,8 @@ pub enum RejectReason {
     Malformed,
     /// The envelope carries a `schema_version` this session does not speak.
     UnsupportedSchemaVersion,
-    /// The C caller passed a null pointer or text that is not UTF-8.
+    /// The C caller passed a null pointer or text that is not UTF-8, or
+    /// `add_subtitle` named a file that is not a subtitle.
     InvalidArgument,
     /// `invoke_command` named an id that is not in the registry.
     UnknownCommand,
@@ -294,6 +311,9 @@ pub enum Query {
     },
     /// Every bindable action with its chords on this platform.
     ShortcutTable {},
+    /// The actions whose key repeats while held; every other action runs once
+    /// per physical press.
+    RepeatingShortcuts {},
     /// A watch-history query; see [`HistoryQuery`].
     History { query: HistoryQuery },
     /// The playlist as it is now.
@@ -304,6 +324,21 @@ pub enum Query {
         #[serde(default)]
         at: Option<f64>,
     },
+    /// The file types an open panel offers ([`OpenFormats`]). Reads no
+    /// session state.
+    OpenFormats {},
+    /// What opening these local paths does: an open panel's selection, a drop
+    /// onto the window or the system's open events ([`crate::open_paths::plan`]).
+    /// Reads the session status, never the filesystem.
+    OpenPaths {
+        paths: Vec<String>,
+        /// Those of `paths` the shell knows are folders (from their file URLs).
+        #[serde(default)]
+        folders: Vec<String>,
+    },
+    /// What the audio and subtitle menus show: the tracks with their labels,
+    /// and the subtitle delay and size.
+    Tracks {},
 }
 
 /// `{"schema_version":1,"result":{...}}`, the answer to a query.
@@ -334,6 +369,9 @@ pub enum QueryResult {
     ShortcutTable {
         shortcuts: Vec<ShortcutRow>,
     },
+    RepeatingShortcuts {
+        actions: Vec<ShortcutAction>,
+    },
     /// The answer to a `history` query.
     History {
         result: HistoryQueryResult,
@@ -343,6 +381,15 @@ pub enum QueryResult {
     },
     Transport {
         transport: TransportView,
+    },
+    OpenFormats {
+        formats: OpenFormats,
+    },
+    OpenPaths {
+        plan: OpenPlan,
+    },
+    Tracks {
+        tracks: TracksView,
     },
     Rejected {
         reason: RejectReason,
@@ -393,6 +440,9 @@ pub enum ErrorKind {
     LoadFailed,
     CommandFailed,
     Engine,
+    /// The folders and playlist files of a playlist `open` held nothing
+    /// playable. Whatever was loaded before goes on playing.
+    NothingPlayable,
 }
 
 /// The full state a shell renders from.
@@ -617,6 +667,17 @@ impl Command {
                 id: *id,
             },
             Self::SetSubtitleDelay { seconds } => core::PlayerCommand::SetSubtitleDelay(*seconds),
+            // `sub-add … select` selects the track it adds, so the core validates
+            // an added subtitle file as a subtitle selection: it needs loaded media.
+            Self::AddSubtitle { .. } => core::PlayerCommand::SelectTrack {
+                kind: core::TrackKind::Subtitle,
+                id: None,
+            },
+            // The size is subtitle presentation like the delay, and the core gates
+            // it the same way: loaded media and a finite value. A nudge is turned
+            // into a size by the session first (`tracks::TrackState`).
+            Self::SetSubtitleScale { scale } => core::PlayerCommand::SetSubtitleDelay(*scale),
+            Self::NudgeSubtitleScale { delta } => core::PlayerCommand::SetSubtitleDelay(*delta),
             Self::History { action } => return Route::History(action),
             Self::InvokeCommand { .. } => return Route::Registry,
             Self::Playlist { action } => return Route::Playlist(action),

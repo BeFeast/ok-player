@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "result": {
+    "open_paths": {
+      "plan": {
+        "open": {
+          "sources": [
+            {
+              "kind": "local",
+              "location": "/Users/example/Movies/Show"
+            },
+            {
+              "kind": "local",
+              "location": "/Users/example/Movies/film.mkv"
+            },
+            {
+              "kind": "local",
+              "location": "/Users/example/Music/queue.m3u8"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

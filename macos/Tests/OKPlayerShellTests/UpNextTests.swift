@@ -105,8 +105,8 @@ final class UpNextFocusTarget: NSView {
     override func keyDown(with event: NSEvent) { keys.append(event.keyCode) }
 }
 
-/// The panel's place in the window: the transport controls' button and the View
-/// menu item open it through the registry command, and it shows the playlist the
+/// The panel's place in the window: the transport controls' button and the menu
+/// bar's registry item open it through the registry command, and it shows the playlist the
 /// session drained. Real AppKit views in a window that is never shown.
 final class UpNextControllerTests: XCTestCase {
     private var session: FakeUpNextSession!
@@ -184,19 +184,27 @@ final class UpNextControllerTests: XCTestCase {
         XCTAssertFalse(controller.isShown, "the panel's own close button")
     }
 
-    func testTheMenuItemIsCheckedWhileShownAndEnabledWhenItCanOpenOrClose() {
-        let item = controller.makeMenuItem()
+    func testTheMenuBarsRegistryItemOpensAndClosesThePanel() {
+        let commands = PlayerCommands()
+        controller.register(with: commands)
+        XCTAssertEqual(commands.shellCommands, [UpNextController.commandID])
+        commands.connect(session: { [unowned self] command in self.session.dispatch(command) },
+                         registry: { [unowned self] _ in
+                             guard case .commandRegistry(let rows)? = self.session.query(.commandRegistry()) else {
+                                 return []
+                             }
+                             return rows
+                         },
+                         keys: ShortcutKeyMap())
+        XCTAssertEqual(commands.run(UpNextController.commandID), .performed)
+        XCTAssertTrue(controller.isShown)
+        XCTAssertFalse(controller.panel.isHidden)
+        XCTAssertEqual(session.dispatched, [.invokeCommand(id: "chapters-up-next")], "invoked once, by the menu bar")
+        XCTAssertEqual(commands.run(UpNextController.commandID), .performed)
+        XCTAssertFalse(controller.isShown, "the same item closes it")
         session.enabled = false
-        XCTAssertFalse(controller.validateMenuItem(item), "nothing to show without media")
-        XCTAssertEqual(item.state, .off)
-
-        session.enabled = true
-        XCTAssertTrue(controller.validateMenuItem(item))
-        _ = NSApp.sendAction(item.action!, to: item.target, from: item)
-        XCTAssertTrue(controller.isShown, "the item runs the command")
-        session.enabled = false
-        XCTAssertTrue(controller.validateMenuItem(item), "a shown panel can always be closed")
-        XCTAssertEqual(item.state, .on)
+        XCTAssertEqual(commands.run(UpNextController.commandID), .disabled, "nothing to show without media")
+        XCTAssertFalse(controller.isShown)
     }
 
     func testThePanelShowsTheDrainedPlaylistUnderNowPlaying() {
@@ -228,8 +236,11 @@ final class UpNextControllerTests: XCTestCase {
 
 /// The app's own session config over the real okp_session_* ABI, with its files
 /// under `root` and no audio or video output.
+/// The app's session config, with the shell commands the app registers.
 private func appSessionConfig(root: URL) -> SessionConfig {
-    var config = SessionConfig.forApp()
+    let app = PlayerApp()
+    app.registerPlayerCommands()
+    var config = SessionConfig.forApp(shellCommands: app.commands.shellCommands)
     config.dataDir = root.appendingPathComponent("data").path
     config.configDir = root.appendingPathComponent("config").path
     config.cacheDir = root.appendingPathComponent("cache").path
