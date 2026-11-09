@@ -8,8 +8,9 @@ private final class FocusTarget: NSView {
 }
 
 /// The overlay over real AppKit views, in a window that is never shown: where
-/// keyboard focus goes, what Space does on the scrubber, how a press ends when the
-/// file ends under it, and what the mute button asks the session for.
+/// keyboard focus goes, how a press ends when the file ends under it, and what
+/// the mute button asks the session for. Keys on the focused scrubber are the
+/// player window's (`ShortcutWindowTests`).
 final class TransportOverlayTests: XCTestCase {
     private var timer: ManualHideTimer!
     private var overlay: TransportOverlay!
@@ -97,15 +98,6 @@ final class TransportOverlayTests: XCTestCase {
         overlay.sessionChanged(snapshot(.ended, duration: nil))
         XCTAssertFalse(overlay.scrubber.isEnabled)
         XCTAssertTrue(window.firstResponder === video)
-    }
-
-    func testSpaceOnTheFocusedScrubberTogglesPause() throws {
-        focusScrubber()
-        let space = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
-                                                   windowNumber: window.windowNumber, context: nil, characters: " ",
-                                                   charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49))
-        overlay.scrubber.keyDown(with: space)
-        XCTAssertEqual(dispatched, [.togglePause])
     }
 
     func testTheFileEndingUnderAPressEndsTheDragAndReleasesItsHold() throws {

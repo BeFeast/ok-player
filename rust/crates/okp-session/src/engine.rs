@@ -21,6 +21,8 @@ pub(crate) type ChangeListener = Arc<dyn Fn() + Send + Sync>;
 pub(crate) struct Observation {
     pub(crate) playback: PlaybackState,
     pub(crate) subtitle_delay: f64,
+    /// `sub-scale`, which holds across files; `None` before the engine reports it.
+    pub(crate) subtitle_scale: Option<f64>,
     pub(crate) buffering: bool,
     /// How far the cache has refilled towards resuming, in percent, when the
     /// engine reports it.
@@ -203,6 +205,16 @@ impl Engine for MpvEngine {
                 TrackKind::Subtitle => engine.select_subtitle(*id),
             },
             Command::SetSubtitleDelay { seconds } => engine.set_subtitle_delay(*seconds),
+            // `select` makes the added file the subtitle track; a file libmpv
+            // cannot read is reported with the command's reply.
+            Command::AddSubtitle { path } => {
+                engine.command_async_with_userdata(&["sub-add", path, "select"], request_id)
+            }
+            Command::SetSubtitleScale { scale } => engine.set_subtitle_scale(*scale),
+            // The session resolves a size nudge into a `set_subtitle_scale` first.
+            Command::NudgeSubtitleScale { .. } => {
+                return Err("a subtitle size nudge must be resolved by the session".to_owned());
+            }
             Command::Playlist { .. } => {
                 return Err("playlist commands are carried out by the session".to_owned());
             }
@@ -233,6 +245,7 @@ impl Engine for MpvEngine {
         Observation {
             playback: engine.observed_playback_state(),
             subtitle_delay: engine.observed_subtitle_delay(),
+            subtitle_scale: Some(engine.observed_subtitle_scale()),
             buffering: diagnostics.paused_for_cache,
             buffering_percent: diagnostics.cache_buffering_state,
             tracks: engine.observed_tracks(),

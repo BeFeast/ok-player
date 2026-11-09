@@ -118,7 +118,10 @@ final class SessionProtocolTests: XCTestCase {
             "playlist-enums.json", "playlist-events.json", "playlist-query-reply.json", "playlist-query-reply-empty.json",
         ]).union(TransportProtocolTests.covered.map { "transport/\($0)" })
             .union(StatusProtocolTests.covered.map { "status/\($0)" })
+            .union(TrackProtocolTests.covered.map { "tracks/\($0)" })
             .union(WindowSessionQueryTests.fixtures)
+            .union(OpenProtocolTests.covered.map { "open/\($0)" })
+            .union(ShortcutKeyTests.fixtures)
         XCTAssertFalse(names.isEmpty, "no fixtures found in \(GoldenFixtures.directory.path)")
         XCTAssertEqual(Set(names), covered, "a fixture was added or removed without a Swift test")
     }

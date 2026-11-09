@@ -257,7 +257,12 @@ impl SessionHistory {
             | Command::InvokeCommand { .. }
             | Command::Playlist { .. }
             | Command::NudgeVolume { .. }
-            | Command::ToggleMute {} => return,
+            | Command::ToggleMute {}
+            // The subtitle size holds across files and an added file is not
+            // remembered for the media yet.
+            | Command::AddSubtitle { .. }
+            | Command::SetSubtitleScale { .. }
+            | Command::NudgeSubtitleScale { .. } => return,
         };
         // The value the shell just set, not the engine's next report of it,
         // which may still hold the previous value. It is written with the next

@@ -278,7 +278,6 @@ private func videoLayerUpdate(_ ctx: UnsafeMutableRawPointer?) {
 /// link that paces its drawing.
 final class VideoView: NSView {
     let videoLayer: VideoLayer
-    var onTogglePause: (() -> Void)?
     /// A primary-button release on the video, with AppKit's click count.
     var onClick: ((Int) -> Void)?
     /// The current media has video. Only then does a resize redraw the frame.
@@ -298,6 +297,8 @@ final class VideoView: NSView {
 
     required init?(coder: NSCoder) { fatalError("Use init(surface:)") }
 
+    // Key presses go on to the window, whose shortcut table handles Space and the
+    // other single keys.
     override var acceptsFirstResponder: Bool { true }
 
     // Taking the press keeps the release coming back to this view.
@@ -305,14 +306,6 @@ final class VideoView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         onClick?(event.clickCount)
-    }
-
-    override func keyDown(with event: NSEvent) {
-        if event.charactersIgnoringModifiers == " " {
-            onTogglePause?()
-        } else {
-            super.keyDown(with: event)
-        }
     }
 
     override func viewDidMoveToWindow() {

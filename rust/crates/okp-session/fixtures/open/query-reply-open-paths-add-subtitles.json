@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "result": {
+    "open_paths": {
+      "plan": {
+        "add_subtitles": {
+          "paths": [
+            "/Users/example/Movies/film.en.srt"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -278,6 +278,11 @@ impl SessionPlaylist {
         }
     }
 
+    /// How many items the playlist holds.
+    pub(crate) fn len(&self) -> usize {
+        self.list.items().len()
+    }
+
     /// The state, if it changed since the last call.
     pub(crate) fn take_changed(&mut self) -> Option<PlaylistState> {
         (self.revision != self.published).then(|| {

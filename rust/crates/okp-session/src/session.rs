@@ -19,6 +19,7 @@ use crate::commands::{CommandRegistry, Invocation, WindowState};
 use crate::engine::{Engine, MpvEngine, Observation};
 use crate::history::{HistoryAction, HistoryActionResult, Report, SessionHistory};
 use crate::machine::SessionMachine;
+use crate::open_paths::{self, OpenFormats};
 use crate::playlist::{Background, PlannedOpen, SessionPlaylist, Step};
 use crate::protocol::{
     Command, CommandEnvelope, DispatchReply, DispatchResult, ErrorKind, Event, EventBatch,
@@ -28,6 +29,7 @@ use crate::protocol::{
 };
 use crate::reconcile::{core_end_reason, endfile_error, event_matches_source};
 use crate::status::{self, StatusState};
+use crate::tracks::{self, TrackState};
 use crate::transport::{TransportView, VolumeTarget};
 use crate::window;
 
@@ -87,6 +89,9 @@ struct State {
     volume: VolumeTarget,
     /// The current source's failure and the engine's buffering progress.
     status: StatusState,
+    /// The track details the menus' labels need, and the subtitle delay and
+    /// size asked for.
+    tracks: TrackState,
 }
 
 /// Wakes the event thread: set by the engine listener, by commands and by
@@ -179,6 +184,7 @@ impl Session {
                 history,
                 volume: VolumeTarget::default(),
                 status: StatusState::default(),
+                tracks: TrackState::default(),
             }),
             signal,
             wakeup: Mutex::new(None),
@@ -257,6 +263,12 @@ impl Session {
                     surface: lock(&self.shared.state).status.surface(&snapshot),
                 }
             }
+            Query::Tracks {} => {
+                let snapshot = self.snapshot();
+                QueryResult::Tracks {
+                    tracks: lock(&self.shared.state).tracks.view(&snapshot),
+                }
+            }
             Query::Playlist {} => QueryResult::Playlist {
                 playlist: lock(&self.shared.state).playlist.state(),
             },
@@ -296,17 +308,31 @@ impl Session {
             Query::CommandRegistry {
                 fullscreen,
                 mini_player,
-            } => QueryResult::CommandRegistry {
-                commands: self.commands.resolve(
-                    &self.snapshot(),
-                    WindowState {
-                        fullscreen: *fullscreen,
-                        mini_player: *mini_player,
-                    },
-                ),
-            },
+            } => {
+                let snapshot = self.snapshot();
+                let playlist_items = lock(&self.shared.state).playlist.len();
+                QueryResult::CommandRegistry {
+                    commands: self.commands.resolve(
+                        &snapshot,
+                        WindowState {
+                            fullscreen: *fullscreen,
+                            mini_player: *mini_player,
+                        },
+                        playlist_items,
+                    ),
+                }
+            }
             Query::ShortcutTable {} => QueryResult::ShortcutTable {
                 shortcuts: self.commands.shortcut_table(),
+            },
+            Query::OpenFormats {} => QueryResult::OpenFormats {
+                formats: OpenFormats::current(),
+            },
+            Query::OpenPaths { paths, folders } => QueryResult::OpenPaths {
+                plan: open_paths::plan(paths, folders, self.snapshot().status),
+            },
+            Query::RepeatingShortcuts {} => QueryResult::RepeatingShortcuts {
+                actions: self.commands.repeating_shortcuts(),
             },
         }
     }
@@ -315,7 +341,13 @@ impl Session {
     /// tell the shell to carry it out. An unknown or unavailable command is
     /// refused.
     fn invoke_command(&self, id: &str) -> DispatchResult {
-        match self.commands.invocation(id, &self.snapshot()) {
+        let mut snapshot = self.snapshot();
+        // The delay keys build on the delay asked for last, which libmpv may
+        // not have reported yet.
+        snapshot.subtitle_delay = lock(&self.shared.state)
+            .tracks
+            .delay(snapshot.subtitle_delay);
+        match self.commands.invocation(id, &snapshot) {
             Invocation::Run(command) => self.dispatch(&command),
             Invocation::Perform => DispatchResult::Perform {},
             Invocation::Refuse(reason, message) => DispatchResult::Rejected { reason, message },
@@ -545,6 +577,14 @@ impl State {
             (core.volume, core.mute)
         };
         let resolved = self.volume.resolve(command, observed_volume, muted);
+        // And a subtitle size nudge becomes the size it stands for.
+        let resolved = self.tracks.resolve(&resolved).into_owned();
+        if let Some(message) = tracks::invalid_argument(&resolved) {
+            return DispatchResult::Rejected {
+                reason: RejectReason::InvalidArgument,
+                message,
+            };
+        }
         let command = self.prepare(&resolved);
         let Route::Player(core) = command.route() else {
             // Playlist, history and registry commands never reach here.
@@ -558,6 +598,9 @@ impl State {
         });
         if engine_result.is_ok() {
             self.track_load(&command, outcome, load);
+            if matches!(outcome, CommandOutcome::Accepted { .. }) {
+                self.tracks.forwarded(&command);
+            }
         } else if matches!(*command, Command::SetVolume { .. }) {
             self.volume.forget();
         }
@@ -647,7 +690,7 @@ impl State {
                 }
                 Background::NothingPlayable => {
                     self.queue.push(Event::Error {
-                        kind: ErrorKind::LoadFailed,
+                        kind: ErrorKind::NothingPlayable,
                         message: "nothing playable was found".to_owned(),
                         request_id: None,
                     });
@@ -844,6 +887,8 @@ impl State {
     }
 
     fn reconcile_observation(&mut self, observation: &Observation) {
+        self.tracks
+            .observe(observation, is_loaded(self.machine.machine().status()));
         let playback = observation.playback;
         self.volume.observe(playback.volume);
         // Volume and speed are engine-global and hold without media.
@@ -1998,15 +2043,23 @@ mod tests {
         );
         assert!(engine.forwarded().is_empty(), "{:?}", engine.forwarded());
 
+        // Mute works without media: the level goes to 0, which shows checked once
+        // libmpv reports it, and the next one brings the level back.
         assert!(!registry_row(&session, "mute").checked);
         assert!(matches!(
             session.dispatch(&invoke("mute")),
             DispatchResult::Accepted { .. }
         ));
+        publish_and_settle(&engine, |observation| {
+            observation.playback.volume = Some(0.0);
+        });
         assert!(registry_row(&session, "mute").checked);
         let reply = session
             .dispatch_json(r#"{"schema_version":1,"command":{"invoke_command":{"id":"mute"}}}"#);
         assert!(reply.contains(r#""accepted""#), "{reply}");
+        publish_and_settle(&engine, |observation| {
+            observation.playback.volume = Some(100.0);
+        });
         assert!(!registry_row(&session, "mute").checked);
         assert!(matches!(
             session.dispatch(&invoke("volume-up")),
@@ -2014,11 +2067,7 @@ mod tests {
         ));
         assert_eq!(
             engine.forwarded(),
-            vec![
-                Command::SetMute { muted: true },
-                Command::SetMute { muted: false },
-                Command::SetVolume { volume: 105.0 },
-            ]
+            [0.0, 100.0, 105.0].map(|volume| Command::SetVolume { volume })
         );
 
         // Once media plays, play-pause is enabled and pauses it.
@@ -2033,6 +2082,78 @@ mod tests {
         ));
         assert_eq!(session.snapshot().status, Status::Paused);
         assert_eq!(engine.forwarded().last(), Some(&Command::TogglePause {}));
+    }
+
+    #[test]
+    fn the_mute_command_and_the_transport_mute_button_share_one_mute() {
+        let (session, engine) = fake_session();
+        assert!(wait_for(|| session.snapshot().volume == Some(100.0)));
+        let accepted = |command: Command| {
+            let reply = session.dispatch(&command);
+            assert!(
+                matches!(reply, DispatchResult::Accepted { .. }),
+                "{command:?}: {reply:?}"
+            );
+        };
+        let report = |level| {
+            publish_and_settle(&engine, |observation| {
+                observation.playback.volume = Some(level);
+            });
+        };
+        let checked = || registry_row(&session, "mute").checked;
+
+        accepted(Command::SetVolume { volume: 70.0 });
+        report(70.0);
+        // The button mutes: the menu shows it, and M brings the level back.
+        accepted(Command::ToggleMute {});
+        report(0.0);
+        assert!(checked(), "the button's mute is checked in the menu");
+        accepted(invoke("mute"));
+        report(70.0);
+        assert!(!checked());
+        // M mutes, and the button brings the level back.
+        accepted(invoke("mute"));
+        report(0.0);
+        assert!(checked());
+        accepted(Command::ToggleMute {});
+        assert_eq!(
+            engine.forwarded(),
+            [70.0, 0.0, 70.0, 0.0, 70.0].map(|volume| Command::SetVolume { volume })
+        );
+
+        // libmpv's own mute flag is checked too, and M clears it first.
+        report(70.0);
+        accepted(Command::SetMute { muted: true });
+        assert!(checked());
+        accepted(invoke("mute"));
+        assert_eq!(
+            engine.forwarded()[5..],
+            [
+                Command::SetMute { muted: true },
+                Command::SetMute { muted: false }
+            ]
+        );
+        assert!(!checked());
+    }
+
+    #[test]
+    fn volume_keys_pressed_faster_than_the_engine_reports_all_count() {
+        let (session, engine) = fake_session();
+        assert!(wait_for(|| session.snapshot().volume == Some(100.0)));
+        // A held Up: libmpv has reported none of the steps yet.
+        for id in ["volume-up", "volume-up", "volume-down", "volume-up"] {
+            assert!(
+                matches!(
+                    session.dispatch(&invoke(id)),
+                    DispatchResult::Accepted { .. }
+                ),
+                "{id}"
+            );
+        }
+        assert_eq!(
+            engine.forwarded(),
+            [105.0, 110.0, 105.0, 110.0].map(|volume| Command::SetVolume { volume })
+        );
     }
 
     #[test]
@@ -2083,8 +2204,12 @@ mod tests {
         }
     }
 
+    /// The open panel's types and the plan for opened paths, through the session.
+    mod open_paths;
     /// The playlist through the session: folder scans, auto-advance, commands.
     mod playlist;
     /// The status surface and notices through the session.
     mod status;
+    /// The track menus, the subtitle delay and size through the session.
+    mod tracks;
 }

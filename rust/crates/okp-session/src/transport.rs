@@ -186,15 +186,26 @@ impl TransportView {
     }
 }
 
+/// Whether audio is muted: libmpv's mute flag is on, or the level is the core's
+/// mute level of 0 (`toggle_mute`). The transport view's `muted` and the
+/// registry's Mute check mark both read it.
+pub(crate) fn audio_muted(level: Option<f64>, mute: bool) -> bool {
+    mute || volume_state(level).is_muted()
+}
+
+fn volume_state(level: Option<f64>) -> VolumeState {
+    VolumeState::new(level.unwrap_or(volume::DEFAULT_RESTORE_VOLUME))
+}
+
 impl VolumeView {
     fn project(level: Option<f64>, mute: bool) -> Self {
-        let state = VolumeState::new(level.unwrap_or(volume::DEFAULT_RESTORE_VOLUME));
+        let state = volume_state(level);
         Self {
             level: state.level(),
             max: volume::MAX_VOLUME,
             fraction: state.level_fraction(),
             unity_fraction: VolumeState::unity_fraction(),
-            muted: mute || state.is_muted(),
+            muted: audio_muted(level, mute),
             boosted: state.is_boosted(),
             readout: if mute {
                 "Muted".to_owned()

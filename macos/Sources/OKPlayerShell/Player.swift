@@ -88,14 +88,16 @@ final class AccentButton: NSButton {
 
 extension SessionConfig {
     /// The app's own session: per-user directories named after the bundle id, as
-    /// the core's `AppIdentity::macos` does, and the session's engine defaults.
-    static func forApp() -> SessionConfig {
+    /// the core's `AppIdentity::macos` does, the session's engine defaults, and the
+    /// registry commands the shell carries out (`PlayerCommands.shellCommands`).
+    static func forApp(shellCommands: [String] = []) -> SessionConfig {
         let files = FileManager.default
         let bundleID = "uk.oklabs.ok-player"
         let support = files.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(bundleID)
         let caches = files.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(bundleID)
         return SessionConfig(app: AppIdentity(name: "OK Player", platform: .macos),
-                             dataDir: support.path, configDir: support.path, cacheDir: caches.path)
+                             dataDir: support.path, configDir: support.path, cacheDir: caches.path,
+                             shellCommands: shellCommands)
     }
 }
 
@@ -110,8 +112,13 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let osc = TransportOverlay()
     /// Loading, buffering and failure states over the video, and the toast.
     let statusLayer = StatusLayer()
+    /// The Up Next side panel and its button on the controls.
+    let upNext = UpNextController()
+    /// Audio and subtitle popovers, the subtitle file panel, the delay and size keys.
+    let tracks = TrackControls()
     var client: SessionClient?
-    var pendingPath: String?
+    /// Where opened, dropped and Finder-opened files go (Open/).
+    let openRouter = OpenRouter()
     let smoke = CommandLine.arguments.contains("--smoke-test")
     let snapshotDirectory = CommandLine.arguments.first { $0.hasPrefix("--snapshot-dir=") }
         .map { String($0.dropFirst("--snapshot-dir=".count)) }
@@ -126,28 +133,29 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     lazy var playlist: SessionPlaylist = SessionPlaylist { [weak self] command in
         self?.client?.dispatch(command) ?? .rejected(reason: .noActiveMedia, message: "No playback session")
     }
+    /// The idle Welcome view (Continue watching) and the History window.
+    lazy var history: HistoryIntegration = HistoryIntegration(app: self)
+    /// The registry commands of the menu bar and the window keys (Menu/).
+    let commands = PlayerCommands()
+    var menuBar: MenuBar?
     /// Key presses the window received; each one counts as activity for the transport controls.
     private(set) var keyPresses = 0
     var shuttingDown = false
     var closing = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let menu = NSMenu()
-        let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Quit OK Player", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        let appItem = NSMenuItem(); appItem.submenu = appMenu; menu.addItem(appItem)
-        let fileMenu = NSMenu(title: "File")
-        let openItem = fileMenu.addItem(withTitle: "Open…", action: #selector(openFile), keyEquivalent: "o")
-        openItem.target = self
-        fileMenu.addItem(system.makeOpenRecentItem())
-        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: ""); fileItem.submenu = fileMenu
-        menu.addItem(fileItem); NSApp.mainMenu = menu
+        // One player window: no window tabs, so no tab items in View and Window.
+        NSWindow.allowsAutomaticWindowTabbing = false
+        let menuBar = MenuBar(commands: commands, openRecent: system.makeOpenRecentItem(),
+                              history: history.makeMenuItem())
+        self.menuBar = menuBar
+        menuBar.install()
         let behaviour = PlayerWindowController(contentRect: NSRect(x: 0, y: 0, width: 960, height: 580))
         windowBehaviour = behaviour; window = behaviour.window
         window.title = "OK Player"; window.delegate = self; window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 420, height: 280)
         window.backgroundColor = PaletteRole.canvas.color
-        let root = PaletteSurface(fill: .canvas); window.contentView = root
+        let root = PaletteSurface(fill: .canvas); window.contentView = makeDropTarget(content: root)
         // The video area keeps its place in the layout even when no renderer exists.
         let surface = GLSurface.make()
         let videoArea: NSView = surface.map { VideoView(surface: $0) as NSView } ?? NSView()
@@ -169,11 +177,19 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             prompt.centerXAnchor.constraint(equalTo: root.centerXAnchor), prompt.centerYAnchor.constraint(equalTo: root.centerYAnchor),
             prompt.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 12)
         ])
+        history.install(in: root, above: osc.panel)
         behaviour.install(in: root, videoArea: videoArea)
+        osc.addTrailingControl(upNext.button)
+        upNext.install(in: root, above: osc.panel)
+        tracks.install(in: osc, over: root)
+        tracks.window = window
+        // The status layer's toast goes on top of everything installed so far.
         statusLayer.install(in: root, above: videoArea)
-        statusLayer.onRetry = { [weak self] source in self?.open(source) }
+        statusLayer.onRetry = { [weak self] source in self?.play(source) }
         statusLayer.onOpenAnother = { [weak self] in self?.openFile() }
         statusLayer.onToast = { [weak self] text in self?.smokeRun?.toastShown(text) }
+        // The track readouts (delay, size, a subtitle file that did not load) are toasts.
+        tracks.toast = { [weak self] text in self?.statusLayer.show(toast: text) }
         // The title bar's traffic lights and title strip show and hide with the
         // transport controls, and a key press brings the controls back like a
         // pointer movement.
@@ -182,9 +198,16 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         behaviour.window.onKeyDown = { [weak self] in self?.keyPressed() }
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         guard let video else { fail("No OpenGL pixel format is available for video"); return }
+        let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
+        // The smoke opens its fixture itself, once it has checked the idle state.
+        let smokePath = smoke ? openRouter.takeHeld().first?.path ?? args.first : nil
+        registerPlayerCommands()
         let client: SessionClient
         do {
-            client = try SessionClient(config: .forApp())
+            // The smoke runs on a seeded history of its own (`SmokeHistory`).
+            client = try SessionClient(config: smoke
+                ? SmokeHistory.config(fixture: smokePath, shellCommands: commands.shellCommands)
+                : .forApp(shellCommands: commands.shellCommands))
         } catch {
             fail("\(error)"); return
         }
@@ -203,41 +226,54 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard case .transport(let view)? = client?.query(.transport(at: at)) else { return nil }
             return view
         }
+        tracks.dispatch = { [weak client] command in
+            client?.dispatch(command) ?? .rejected(reason: .noActiveMedia, message: "No playback session")
+        }
+        tracks.query = { [weak client] in
+            guard case .tracks(let view)? = client?.query(.tracks) else { return nil }
+            return view
+        }
+        tracks.holdControls = { [weak self] hold in
+            if hold { self?.osc.autoHide.pin() } else { self?.osc.autoHide.unpin() }
+        }
         osc.onPrevious = { [weak self] in _ = self?.playlist.step(.previous) }
         osc.onNext = { [weak self] in _ = self?.playlist.step(.next) }
-        video.onTogglePause = { [weak self] in self?.togglePause() }
         osc.focusReturn = video
+        upNext.dispatch = { [weak client] command in
+            client?.dispatch(command) ?? .rejected(reason: .noActiveMedia, message: "No playback session")
+        }
+        upNext.query = { [weak client] query in client?.query(query) }
+        upNext.isFullscreen = { [weak behaviour] in behaviour?.window.isInFullscreen ?? false }
+        upNext.panel.focusReturn = video
         statusLayer.overlay.focusReturn = video
         video.videoLayer.onError = { [weak self] message, transient in self?.fail(message, clearsOnOpen: transient) }
         if let handle = client.handle { video.videoLayer.attach(session: handle) }
-        let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
-        let path = pendingPath ?? args.first
+        connectPlayerCommands(client)
+        updateWelcome(client.store.snapshot)
         if smoke {
-            smokeRun = SmokeRun(app: self, path: path)
+            connectOpenRouter(client)
+            smokeRun = SmokeRun(app: self, path: smokePath)
             smokeRun?.start()
-        } else if let path {
-            play(path)
-        }
-    }
-    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
-        if client != nil { play(filename) } else { pendingPath = filename }
-        return true
-    }
-    @objc func openFile() {
-        let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
-        panel.beginSheetModal(for: window) { [weak self] response in
-            if response == .OK, let path = panel.url?.path { self?.play(path) }
+        } else if !connectOpenRouter(client), let path = args.first {
+            self.open([URL(fileURLWithPath: path)])
         }
     }
     func play(_ path: String) {
-        open(MediaSource(kind: .local, location: path))
+        play(MediaSource(kind: .local, location: path))
     }
-    /// Open `source`; the status layer shows it loading, or the session's failure card.
-    func open(_ source: MediaSource) {
+    /// Open `source`; `resumeFrom` `nil` leaves the start position to the session's
+    /// resume rule. The status layer shows it loading, or the session's failure card.
+    func play(_ source: MediaSource, resumeFrom: Double? = nil) {
         guard let client else { return }
-        let result = client.dispatch(.open(source: source))
-        window.title = "\((source.location as NSString).lastPathComponent) — OK Player"
+        let result = client.dispatch(.open(source: source, resumeFrom: resumeFrom))
         statusLayer.opened(result)
+        showOpening((source.location as NSString).lastPathComponent)
+    }
+    /// A file or folder named `name` is opening: the status layer shows it loading,
+    /// in the Welcome view's and the Open prompt's place.
+    func showOpening(_ name: String) {
+        window.title = "\(name) — OK Player"
+        history.setWelcomeShown(false)
         prompt.isHidden = true
     }
     @objc func togglePause() { client?.dispatch(.togglePause) }
@@ -253,25 +289,52 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// The session reported a batch; the store already holds the new state.
     func sessionChanged(_ batch: EventBatch) {
         guard !shuttingDown, let client else { return }
+        history.sessionChanged(batch)
+        commands.invalidate()
         playlist.state = client.store.playlist
         system.privateSession = client.store.privateSession
         system.update(client.store.snapshot)
-        smokeRun?.batchArrived(batch)
+        // Up Next only renders the store, and its rows send playlist commands by
+        // index into the session's playlist, so it follows every batch, also while
+        // a failure card is up: a jump from it does not go through play().
+        upNext.sessionChanged(playlist: client.store.playlist, snapshot: client.store.snapshot)
+        // An error against a track surface's own request (a subtitle file libmpv
+        // cannot read) shows in the track readout, and an open that found nothing
+        // leaves what plays alone and comes with the session's notice
+        // (Open/PlayerOpen.swift): neither is toasted as the raw error.
+        var shown = batch
+        shown.events = batch.events.filter { event in
+            guard case .error(let kind, _, let requestId) = event else { return true }
+            if kind == .nothingPlayable { nothingPlayableFound(); return false }
+            return !tracks.claimError(requestId: requestId)
+        }
+        smokeRun?.batchArrived(shown)
         if batch.events.contains(.shutdown) { fail("The playback engine stopped"); return }
-        statusLayer.sessionChanged(batch)
+        statusLayer.sessionChanged(shown)
         let snapshot = client.store.snapshot
         windowBehaviour?.sessionChanged(snapshot)
         video?.hasVideo = snapshot.video != nil
         osc.sessionChanged(snapshot)
+        tracks.sessionChanged(snapshot)
         osc.playlistSteps = (previous: playlist.canStep(.previous), next: playlist.canStep(.next))
         prompt.isHidden = snapshot.source != nil || !statusLayer.display.isClear
+        updateWelcome(snapshot)
         smokeRun?.sessionChanged(snapshot)
+    }
+    /// A failure card covers the video: the session's for the current source, or
+    /// the shell's own. The Welcome view stays away while one is up.
+    var errorShown: Bool {
+        switch statusLayer.display {
+        case .failure, .shellFailure: return true
+        case .clear, .progress: return false
+        }
     }
     /// The shell itself cannot play: no renderer, no session, the engine quit, or a
     /// failed smoke step. The status layer shows it as a card without actions; one
     /// that `clearsOnOpen` (a frame did not render) goes with the next open.
     func fail(_ message: String, clearsOnOpen: Bool = false) {
         guard !shuttingDown, statusLayer.showShellFailure(message, clearsOnOpen: clearsOnOpen) else { return }
+        history.setWelcomeShown(false)
         prompt.isHidden = true
         fputs("OK Player: \(message)\n", stderr)
         if smoke { shutdown(); exit(1) }
@@ -309,6 +372,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             client.close()
         }
         client = nil
+        SmokeHistory.cleanUp()
     }
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         windowBehaviour?.windowWillResize(to: frameSize) ?? frameSize
@@ -332,15 +396,20 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 /// The bounded smoke the macOS workflows run (`--smoke-test`). Each step is checked
 /// against what the session reported and what the video layer counted:
 ///
-/// 1. idle: no render calls before a file is open;
+/// 1. idle: no render calls before a file is open; the Welcome view shows the seeded
+///    Continue watching shelf (`SmokeHistory`);
 /// 1a. failed: opening a missing file shows the session's failure card with Retry
 ///    and Open another, and no alert; Retry opens the file again, which fails
-///    again; opening the fixture then shows the loading indicator with its name,
+///    again; the fixture is then opened as Finder opens a file
+///    (`application(_:open:)`), which shows the loading indicator with its name,
 ///    and playing media shows no status state;
-/// 2. playing: the position and the render calls advance; Now Playing shows the file
+/// 2. playing: the position and the render calls advance; the open went through the
+///    open router (`smokeOpenFailure`) and the Welcome view is gone; Now Playing shows the file
 ///    as playing video, the display-sleep assertion is held and the system offers the
-///    remote commands; the pause is sent through the handler the system holds for its
-///    pause command;
+///    remote commands; the menu bar has its nine menus, Play/Pause from the registry
+///    validates enabled and a held Space's auto-repeat toggles nothing, on the
+///    focused scrubber and on the video; the pause is sent through the handler the
+///    system holds for its pause command;
 /// 3. paused: the position holds and the render calls stay flat for two seconds; Now
 ///    Playing shows the pause and the assertion is released; the resume is sent
 ///    through the handler for the system's play command;
@@ -357,10 +426,17 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 ///    back to the video as they hide, come back on activity with the session's
 ///    time readout, and are in the snapshots;
 /// 9. fullscreen: F and Escape, pressed on the video view, enter and leave
-///    native fullscreen, and each reaches the controls as activity;
-/// 10. toast: a volume nudge shows the session's notice as a toast in the top half
+///    native fullscreen through the shortcut table's registry commands, and each
+///    reaches the controls as activity;
+/// 10. tracks: `]` steps the subtitle size through the shortcut table with the
+///    session's readout as a toast, and an added subtitle file becomes the selected
+///    external track (checked at the end);
+/// 11. Up Next: the fixture plays from a folder holding two copies of it, and the
+///    menu bar's Up Next command opens the panel with both under the Now Playing
+///    card, the first marked current, before the snapshots;
+/// 12. toast: a volume nudge shows the session's notice as a toast in the top half
 ///    of the window, clear of captions, and the snapshots show it;
-/// 11. closed while playing: teardown runs in order, the system offers no remote
+/// 13. closed while playing: teardown runs in order, the system offers no remote
 ///    command any more, and the app exits.
 ///
 /// The timed steps use one-shot timers; the session state itself arrives through
@@ -383,6 +459,10 @@ final class SmokeRun {
     private var loadFailures = 0
     /// The summary of the status steps for the `OKP_SMOKE` line.
     private var statusSummary = ""
+    /// The folder with the two copies of the fixture the smoke plays.
+    private var folder: URL?
+    /// The copy of the fixture the smoke opens.
+    private var opened: String?
 
     init(app: PlayerApp, path: String?) {
         self.app = app
@@ -394,16 +474,33 @@ final class SmokeRun {
     /// Every step passed.
     var finished: Bool { phase == .finished }
 
-    func cancel() { cancelled = true }
+    func cancel() {
+        cancelled = true
+        if let folder { try? FileManager.default.removeItem(at: folder) }
+        folder = nil
+    }
 
     func start() {
-        guard path != nil else { fail("Smoke needs a media file argument"); return }
+        guard let fixture = path else { fail("Smoke needs a media file argument"); return }
+        // Two copies of the fixture in a folder of their own: the session lists the
+        // folder as a two-item playlist for Up Next.
+        let first: String
+        do {
+            first = try makeTwoItemFolder(from: fixture)
+            opened = first
+        } catch {
+            fail("Could not copy the fixture into a folder of two: \(error)"); return
+        }
         after(30) { [self] in
             if phase != .finished { fail("Smoke timed out in phase \(phase) after \(renders) render calls") }
         }
         // Idle: the render context exists, nothing is loaded, nothing may be drawn.
         after(0.6) { [self] in
             guard renders == 0 else { fail("\(renders) render calls while idle"); return }
+            // The Welcome view lists the seeded history while nothing plays.
+            if let problem = app?.history.smokeWelcomeFailure(fixture: fixture, snapshotDirectory: app?.snapshotDirectory) {
+                fail(problem); return
+            }
             // A file in a folder that does not exist, so no folder listing follows.
             phase = .failing
             app?.play(NSTemporaryDirectory() + "okp-smoke-missing-\(getpid())/missing.mp4")
@@ -444,11 +541,12 @@ final class SmokeRun {
     /// Retry reopened the missing file and it failed again: open the fixture, which
     /// shows the loading indicator with its name.
     private func playFixture() {
-        guard let app, let path else { return }
+        guard let app, let opened else { return }
         if let directory = app.snapshotDirectory { app.captureAppearances(to: directory, prefix: "status") }
         phase = .playing
-        app.play(path)
-        let name = (path as NSString).lastPathComponent
+        // Opened the way Finder's Open With opens a file.
+        app.application(NSApplication.shared, open: [URL(fileURLWithPath: opened)])
+        let name = (opened as NSString).lastPathComponent
         guard case .progress(let line) = app.statusLayer.display, line.contains(name),
               !app.statusLayer.overlay.progressPanel.isHidden else {
             fail("No loading indicator naming \(name) (\(app.statusLayer.display))"); return
@@ -492,6 +590,9 @@ final class SmokeRun {
                 fail("The status layer shows \(display) during playback"); return
             }
             if let failure = app?.windowBehaviour?.smokeFitFailure(video: snapshot.video) { fail(failure); return }
+            if app?.history.showsWelcome == true { fail("The Welcome view stayed up during playback"); return }
+            if let opened, let failure = app?.smokeOpenFailure(fixture: opened) { fail(failure); return }
+            if let failure = app?.smokeMenuFailure() { fail(failure); return }
             phase = .pausing
             playingRenders = renders
             // Now Playing and the display-sleep assertion, then pause as a media key would.
@@ -530,6 +631,19 @@ final class SmokeRun {
         if let problem = app.system.smokeCheckPausedThenResume() { fail(problem) }
     }
 
+    /// Copy `fixture` twice into a new temporary folder; returns the first copy.
+    private func makeTwoItemFolder(from fixture: String) throws -> String {
+        let files = FileManager.default
+        let source = URL(fileURLWithPath: fixture)
+        let folder = files.temporaryDirectory.appendingPathComponent("okp-smoke-\(UUID().uuidString)")
+        try files.createDirectory(at: folder, withIntermediateDirectories: true)
+        self.folder = folder
+        let stem = source.deletingPathExtension().lastPathComponent, ext = source.pathExtension
+        let copies = (1...2).map { folder.appendingPathComponent("\(stem) \($0)").appendingPathExtension(ext) }
+        for copy in copies { try files.copyItem(at: source, to: copy) }
+        return copies[0].path
+    }
+
     private func resize() {
         guard let window = app?.window else { return }
         resizeRenders = renders
@@ -555,10 +669,11 @@ final class SmokeRun {
         guard counts.swaps == counts.renders else {
             fail("\(counts.swaps) swaps reached libmpv for \(counts.renders) frames drawn"); return
         }
+        if let problem = app.tracks.smokeStart(window: app.window) { fail(problem); return }
         phase = .hiding
         // Playing without pointer activity: the controls hide once the idle timeout
         // has passed. The scrubber holds keyboard focus first, as after a click;
-        // hidden, it has to give it back to the video, which handles Space.
+        // hidden, it has to give it back to the video.
         app.osc.noteActivity()
         guard app.window.makeFirstResponder(app.osc.scrubber) else {
             fail("The scrubber did not take keyboard focus during playback"); return
@@ -605,15 +720,29 @@ final class SmokeRun {
         }
         phase = .fullscreen
         let pressesBefore = app.keyPresses
+        let performedBefore = app.commands.performedCounts
         behaviour.smokeFullscreenRoundTrip(timeout: 8) { [weak self] failure in
             guard let self, let app = self.app, let client = app.client, let layer = app.video?.videoLayer,
                   !self.cancelled else { return }
             if let failure { self.fail(failure); return }
-            // F and Escape went through the window, which reports each key press to
-            // the transport controls as activity.
+            if let problem = app.tracks.smokeFinish() { self.fail(problem); return }
+            // F and Escape ran the registry's fullscreen commands through the
+            // shortcut table, and the window reported each key press to the
+            // transport controls as activity.
+            if let failure = app.commands.smokeFullscreenKeysFailure(since: performedBefore) {
+                self.fail(failure); return
+            }
             let presses = app.keyPresses - pressesBefore
             guard presses >= 2 else {
                 self.fail("\(presses) of the F and Escape presses reached the transport controls"); return
+            }
+            // Up Next, opened through the menu bar's registry command, lists the
+            // folder's two copies.
+            guard app.commands.run(UpNextController.commandID) == .performed, app.upNext.isShown else {
+                self.fail("The menu bar's Up Next command did not open the panel"); return
+            }
+            if let failure = app.upNext.smokeShowFailure(playlist: app.playlist.state) {
+                self.fail(failure); return
             }
             let counts = layer.counts, use = layer.surface.contextUse
             let snapshot = client.store.snapshot
@@ -625,7 +754,8 @@ final class SmokeRun {
                   + "volume=\(Int(snapshot.volume ?? -1)) tracks=\(snapshot.tracks.count) \(behaviour.smokeFitSummary) "
                   + "fullscreen=entered_and_left osc_paused_shown=true osc_auto_hidden=true osc_focus_returned=true "
                   + "osc_titlebar_faded=true osc_key_activity=\(presses) osc_elapsed=\(elapsed) osc_trailing=\(trailing) "
-                  + "playlist_items=\(items) osc_steps=\(steps ? "enabled" : "disabled")")
+                  + "playlist_items=\(items) osc_steps=\(steps ? "enabled" : "disabled") \(app.tracks.smokeSummary) "
+                  + "\(app.upNext.smokeSummary)")
             // One toast before the snapshots: the session confirms a volume nudge.
             self.phase = .toasting
             _ = client.dispatch(.nudgeVolume(delta: -5))
@@ -653,6 +783,7 @@ final class SmokeRun {
 public enum PlayerLauncher {
     @MainActor
     public static func run() {
+        if let status = DocumentTypeCheck.runIfRequested(CommandLine.arguments) { exit(status) }
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
         let delegate = PlayerApp()

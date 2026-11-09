@@ -11,7 +11,7 @@ import AppKit
 /// (`dispatch`); nothing here changes playback state itself. The controls hide
 /// with the cursor after the session's idle timeout while media plays (`AutoHide`).
 /// The scrubber gives keyboard focus back to `focusReturn` whenever it may no
-/// longer hold it, so Space keeps toggling pause.
+/// longer hold it.
 final class TransportOverlay: NSView {
     /// Sends a command to the session.
     var dispatch: ((Command) -> Void)?
@@ -27,7 +27,7 @@ final class TransportOverlay: NSView {
     /// Called whenever the controls show or hide.
     var onRevealChange: ((Bool) -> Void)?
     /// Where keyboard focus goes when the scrubber may no longer hold it (the
-    /// controls hid, or the media cannot be sought): the video, which handles Space.
+    /// controls hid, or the media cannot be sought): the video.
     weak var focusReturn: NSView?
 
     let autoHide: AutoHide
@@ -44,6 +44,9 @@ final class TransportOverlay: NSView {
     let muteButton = TransportOverlay.iconButton("speaker.wave.2.fill", "Mute")
     let volumeSlider = VolumeSliderView()
     let fullscreenButton = TransportOverlay.iconButton("arrow.up.left.and.arrow.down.right", "Enter Full Screen")
+    /// The controls right of the time readout: speed, mute, volume and fullscreen;
+    /// other surfaces put their buttons here (Tracks/, `addTrailingControl`).
+    let trailingControls = NSStackView()
 
     /// The last transport view the session gave.
     private(set) var transport: TransportView?
@@ -131,8 +134,8 @@ final class TransportOverlay: NSView {
         if !next.focusable || !scrubber.isEnabled { returnFocus() }
     }
 
-    /// Hidden or disabled, the scrubber lets go of keyboard focus: Space then
-    /// reaches the video, and Left/Right no longer seek through hidden controls.
+    /// Hidden or disabled, the scrubber lets go of keyboard focus, which goes
+    /// back to the video.
     private func returnFocus() {
         guard let window, window.firstResponder === scrubber else { return }
         _ = window.makeFirstResponder(focusReturn)
@@ -195,12 +198,27 @@ final class TransportOverlay: NSView {
     /// A scroll over the video changes the volume. True when it was used.
     private func scrolled(_ event: NSEvent) -> Bool {
         guard event.window === window, surface?.visible == true else { return false }
-        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return false }
+        guard takesScroll(at: event.locationInWindow) else { return false }
         autoHide.activity()
         if let command = VolumeScrollAccumulator.command(steps: scrollSteps.steps(for: ScrollInput(event: event))) {
             dispatch?(command)
         }
         return true
+    }
+
+    /// Whether a scroll at `point` (window coordinates) changes the volume: over the
+    /// video or these controls, but not over a view laid over them, such as the Up
+    /// Next panel, which scrolls its own list.
+    func takesScroll(at point: NSPoint) -> Bool {
+        guard bounds.contains(convert(point, from: nil)) else { return false }
+        guard let root = window?.contentView else { return true }
+        guard let hit = root.hitTest(root.superview?.convert(point, from: nil) ?? point) else { return true }
+        return hit === focusReturn || hit.isDescendant(of: self)
+    }
+
+    /// Add a control to the bar's trailing group, before the fullscreen button.
+    func addTrailingControl(_ control: NSView) {
+        trailingControls.insertArrangedSubview(control, at: Swift.max(0, trailingControls.arrangedSubviews.count - 1))
     }
 
     // MARK: Controls
@@ -326,16 +344,14 @@ final class TransportOverlay: NSView {
         previousButton.isEnabled = false
         nextButton.isEnabled = false
         scrubber.onScrub = { [weak self] phase, fraction in self?.scrubbed(phase, fraction) }
-        scrubber.onStep = { [weak self] seconds in
-            self?.dispatch?(.seek(seconds: seconds, mode: .relative, precision: .keyframe))
-        }
-        scrubber.onTogglePause = { [weak self] in self?.togglePause() }
         volumeSlider.onFraction = { [weak self] fraction in self?.volumeDragged(to: fraction) }
 
         let leading = NSStackView(views: [previousButton, playButton, nextButton, elapsedLabel, trailingLabel])
         leading.spacing = 6
         leading.setCustomSpacing(12, after: nextButton)
-        let trailingControls = NSStackView(views: [speedLabel, muteButton, volumeSlider, fullscreenButton])
+        for control in [speedLabel, muteButton, volumeSlider, fullscreenButton] as [NSView] {
+            trailingControls.addArrangedSubview(control)
+        }
         trailingControls.spacing = 6
         for stack in [leading, trailingControls] {
             stack.orientation = .horizontal
@@ -374,7 +390,8 @@ final class TransportOverlay: NSView {
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .medium))
     }
 
-    private static func iconButton(_ name: String, _ label: String) -> NSButton {
+    /// A borderless 26-point button showing the SF Symbol `name` in the text colour.
+    static func iconButton(_ name: String, _ label: String) -> NSButton {
         let button = NSButton(title: "", target: nil, action: nil)
         button.isBordered = false
         button.imagePosition = .imageOnly
