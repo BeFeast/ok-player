@@ -341,7 +341,10 @@ Swift side only turns input into commands and keeps the hide timer.
   and scrolling or dragging up from 0 brings the sound back. Scrolling anywhere
   over the video sends `nudge_volume` steps: a wheel notch is one step however
   fast the wheel spins, trackpad points add up to steps (at most three per event),
-  and the inertia after lifting the fingers changes nothing.
+  and the inertia after lifting the fingers changes nothing. M, Up/Down and the
+  Audio menu's Mute and volume items run as the same `toggle_mute` and
+  `nudge_volume`, so M unmutes what the button muted, and the menu's Mute check
+  mark follows either.
 - **Speed:** 0.5, 0.75, 1, 1.25, 1.5 and 2×, with the current speed checked.
 - **Previous/next item:** send the session playlist's `previous` and `next`
   (`SessionPlaylist`), enabled while the playlist has two items or more.

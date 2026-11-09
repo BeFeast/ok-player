@@ -177,15 +177,20 @@ under their shortcut action ids. Each `command_registry` row carries `id`,
 keyboard-only command), `label`, `available`, `enabled`, `checked` and
 `shortcut`, the primary chord bound to it on the config's platform.
 `enabled`, `checked` and the state-dependent labels ("Mute" checked while
-muted, "Exit fullscreen") are resolved against the session state at the time
+muted, that is while libmpv's mute flag is on or the level is 0, as the
+transport view's `muted`; "Exit fullscreen") are resolved against the session state at the time
 of the query, the session playlist included: `next-item` and `previous-item`
 are enabled while it holds two items or more. The window state is the shell's, so it passes `fullscreen` and
 `mini_player` in the query. Query when a menu opens; no event announces a
 change.
 
 The session runs some commands itself: `play-pause`, `close-media`,
-`seek-back`/`seek-forward` (5 s), `volume-down`/`volume-up` (5 points, within
-0-130), `mute`, `subtitle-delay-back`/`subtitle-delay-forward` (0.05 s). For
+`seek-back`/`seek-forward` (5 s), `volume-down`/`volume-up` (a
+`nudge_volume` of 5 points), `mute` (a `toggle_mute`),
+`subtitle-delay-back`/`subtitle-delay-forward` (0.05 s). The volume steps and
+mute go through the same volume model as the transport controls (see
+Transport controls): a step builds on the level asked for last, and `mute`
+unmutes a mute made from the controls and the other way round. For
 these, `enabled` is exactly when the session accepts the command:
 `play-pause`, the seeks and the subtitle nudges while the status is `playing`
 or `paused` (not while a file opens, after it ends or after a load error,

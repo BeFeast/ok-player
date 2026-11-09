@@ -25,12 +25,12 @@ use okp_core::shortcuts::{
     SHORTCUT_ACTIONS, ShortcutAction, ShortcutBinding, ShortcutChord, chords_for_action_on,
     default_bindings_on, default_chord_for_action_on,
 };
-use okp_core::volume::{UNITY_VOLUME, VolumeState};
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::{
     Command, RejectReason, SeekMode, SeekPrecision, SessionSnapshot, SourceKind, Status,
 };
+use crate::transport::audio_muted;
 
 /// Seconds the seek keys jump, as in the GTK shell.
 const SEEK_STEP_SECONDS: f64 = 5.0;
@@ -307,16 +307,17 @@ impl CommandRegistry {
 }
 
 /// The session command a session-run registry command stands for, given the
-/// current state; `None` for a command the shell carries out.
+/// current state; `None` for a command the shell carries out. The volume steps
+/// and mute are the transport controls' own `nudge_volume` and `toggle_mute`,
+/// so a key, a menu item and the controls share one volume model: a step builds
+/// on the level asked for last, and M unmutes what the mute button muted.
 fn session_command(id: &str, snapshot: &SessionSnapshot) -> Option<Command> {
     let seek = |seconds| Command::Seek {
         seconds,
         mode: SeekMode::Relative,
         precision: SeekPrecision::Exact,
     };
-    let volume = |delta| Command::SetVolume {
-        volume: VolumeState::new(snapshot.volume.unwrap_or(UNITY_VOLUME)).nudge(delta),
-    };
+    let volume = |delta| Command::NudgeVolume { delta };
     let subtitle_delay = |delta| Command::SetSubtitleDelay {
         seconds: snapshot.subtitle_delay + delta,
     };
@@ -327,9 +328,7 @@ fn session_command(id: &str, snapshot: &SessionSnapshot) -> Option<Command> {
         "seek-forward" => seek(SEEK_STEP_SECONDS),
         "volume-down" => volume(-VOLUME_STEP),
         "volume-up" => volume(VOLUME_STEP),
-        "mute" => Command::SetMute {
-            muted: !snapshot.mute,
-        },
+        "mute" => Command::ToggleMute {},
         "subtitle-delay-forward" => subtitle_delay(SUBTITLE_DELAY_STEP_SECONDS),
         "subtitle-delay-back" => subtitle_delay(-SUBTITLE_DELAY_STEP_SECONDS),
         _ => return None,
@@ -390,7 +389,8 @@ fn keyboard_state(
         // Every other keyboard command acts on the open media.
         _ => context.has_media,
     });
-    (enabled, action == ShortcutAction::Mute && snapshot.mute)
+    let checked = action == ShortcutAction::Mute && audio_muted(snapshot.volume, snapshot.mute);
+    (enabled, checked)
 }
 
 /// The registry command an action runs: the core command bound to it, or the
@@ -512,6 +512,17 @@ mod tests {
             state(&local, "mute"),
             (true, true),
             "mute is checked while muted"
+        );
+        // Muted the way `toggle_mute` mutes: the level is 0, libmpv's flag is off.
+        let toggled = SessionSnapshot {
+            volume: Some(0.0),
+            mute: false,
+            ..film.clone()
+        };
+        assert_eq!(
+            state(&registry.resolve(&toggled, window, 0), "mute"),
+            (true, true),
+            "mute is checked at level 0"
         );
         assert_eq!(state(&local, "add-to-queue"), (true, false));
         assert_eq!(state(&local, "save-video"), (false, false), "local media");
@@ -825,7 +836,6 @@ mod tests {
     fn an_invocation_runs_a_session_command_or_hands_over_to_the_shell() {
         let registry = registry(Platform::MacOs, &["open-file"]);
         let mut snapshot = playing(SourceKind::Local, "/media/film.mkv");
-        snapshot.volume = Some(128.0);
         snapshot.subtitle_delay = 0.25;
 
         assert_eq!(
@@ -838,7 +848,7 @@ mod tests {
         );
         assert_eq!(
             registry.invocation("mute", &snapshot),
-            Invocation::Run(Command::SetMute { muted: true })
+            Invocation::Run(Command::ToggleMute {})
         );
         assert_eq!(
             registry.invocation("seek-back", &snapshot),
@@ -848,23 +858,19 @@ mod tests {
                 precision: SeekPrecision::Exact,
             })
         );
-        // The volume keys stop at the core maximum.
+        // The volume keys are nudges: the session builds them on the level it
+        // asked for last and clamps them to the core range.
         assert_eq!(
             registry.invocation("volume-up", &snapshot),
-            Invocation::Run(Command::SetVolume { volume: 130.0 })
+            Invocation::Run(Command::NudgeVolume { delta: 5.0 })
         );
         assert_eq!(
             registry.invocation("volume-down", &snapshot),
-            Invocation::Run(Command::SetVolume { volume: 123.0 })
+            Invocation::Run(Command::NudgeVolume { delta: -5.0 })
         );
         assert_eq!(
             registry.invocation("subtitle-delay-back", &snapshot),
             Invocation::Run(Command::SetSubtitleDelay { seconds: 0.2 })
-        );
-        snapshot.mute = true;
-        assert_eq!(
-            registry.invocation("mute", &snapshot),
-            Invocation::Run(Command::SetMute { muted: false })
         );
 
         assert_eq!(
