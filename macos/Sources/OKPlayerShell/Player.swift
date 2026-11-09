@@ -125,6 +125,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     lazy var playlist: SessionPlaylist = SessionPlaylist { [weak self] command in
         self?.client?.dispatch(command) ?? .rejected(reason: .noActiveMedia, message: "No playback session")
     }
+    /// The idle Welcome view (Continue watching) and the History window.
+    lazy var history: HistoryIntegration = HistoryIntegration(app: self)
     /// Key presses the window received; each one counts as activity for the transport controls.
     private(set) var keyPresses = 0
     var shuttingDown = false
@@ -140,6 +142,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let openItem = fileMenu.addItem(withTitle: "Open…", action: #selector(openFile), keyEquivalent: "o")
         openItem.target = self
         fileMenu.addItem(system.makeOpenRecentItem())
+        fileMenu.addItem(history.makeMenuItem())
         let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: ""); fileItem.submenu = fileMenu
         menu.addItem(fileItem); NSApp.mainMenu = menu
         let behaviour = PlayerWindowController(contentRect: NSRect(x: 0, y: 0, width: 960, height: 580))
@@ -169,6 +172,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             prompt.centerXAnchor.constraint(equalTo: root.centerXAnchor), prompt.centerYAnchor.constraint(equalTo: root.centerYAnchor),
             prompt.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 12)
         ])
+        history.install(in: root, above: osc.panel)
         behaviour.install(in: root, videoArea: videoArea)
         // The title bar's traffic lights and title strip show and hide with the
         // transport controls, and a key press brings the controls back like a
@@ -178,9 +182,12 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         behaviour.window.onKeyDown = { [weak self] in self?.keyPressed() }
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         guard let video else { fail("No OpenGL pixel format is available for video"); return }
+        let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
+        let path = pendingPath ?? args.first
         let client: SessionClient
         do {
-            client = try SessionClient(config: .forApp())
+            // The smoke runs on a seeded history of its own (`SmokeHistory`).
+            client = try SessionClient(config: smoke ? SmokeHistory.config(fixture: path) : .forApp())
         } catch {
             fail("\(error)"); return
         }
@@ -201,8 +208,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         osc.focusReturn = video
         video.videoLayer.onError = { [weak self] message in self?.fail(message) }
         if let handle = client.handle { video.videoLayer.attach(session: handle) }
-        let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
-        let path = pendingPath ?? args.first
+        updateWelcome(client.store.snapshot)
         if smoke {
             smokeRun = SmokeRun(app: self, path: path)
             smokeRun?.start()
@@ -221,14 +227,19 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
     func play(_ path: String) {
+        play(MediaSource(kind: .local, location: path))
+    }
+    /// Open `source`; `resumeFrom` `nil` leaves the start position to the session's resume rule.
+    func play(_ source: MediaSource, resumeFrom: Double? = nil) {
         guard let client else { return }
         errorShown = false
-        switch client.dispatch(.open(source: MediaSource(kind: .local, location: path))) {
+        switch client.dispatch(.open(source: source, resumeFrom: resumeFrom)) {
         case .accepted, .noOp, .perform, .history, .applied: break
         case .rejected(_, let message), .failed(_, let message): fail(message); return
         }
-        window.title = "\((path as NSString).lastPathComponent) — OK Player"
+        window.title = "\((source.location as NSString).lastPathComponent) — OK Player"
         showStatus("Opening…", .textMuted)
+        history.setWelcomeShown(false)
         prompt.isHidden = false
     }
     @objc func togglePause() { client?.dispatch(.togglePause) }
@@ -244,6 +255,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// The session reported a batch; the store already holds the new state.
     func sessionChanged(_ batch: EventBatch) {
         guard !shuttingDown, let client else { return }
+        history.sessionChanged(batch)
         playlist.state = client.store.playlist
         system.privateSession = client.store.privateSession
         system.update(client.store.snapshot)
@@ -258,12 +270,14 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         osc.sessionChanged(snapshot)
         osc.playlistSteps = (previous: playlist.canStep(.previous), next: playlist.canStep(.next))
         prompt.isHidden = snapshot.source != nil && snapshot.status != .opening
+        updateWelcome(snapshot)
         smokeRun?.sessionChanged(snapshot)
     }
     func fail(_ message: String) {
         guard !shuttingDown, !errorShown else { return }
         errorShown = true
         showStatus(message, .danger)
+        history.setWelcomeShown(false)
         prompt.isHidden = false
         fputs("OK Player: \(message)\n", stderr)
         if smoke { shutdown(); exit(1) }
@@ -307,6 +321,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             client.close()
         }
         client = nil
+        SmokeHistory.cleanUp()
     }
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         windowBehaviour?.windowWillResize(to: frameSize) ?? frameSize
@@ -330,7 +345,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 /// The bounded smoke the macOS workflows run (`--smoke-test`). Each step is checked
 /// against what the session reported and what the video layer counted:
 ///
-/// 1. idle: no render calls before a file is open;
+/// 1. idle: no render calls before a file is open; the Welcome view shows the seeded
+///    Continue watching shelf (`SmokeHistory`) and the fixture is opened from its card;
 /// 2. playing: the position and the render calls advance; Now Playing shows the file
 ///    as playing video, the display-sleep assertion is held and the system offers the
 ///    remote commands; the pause is sent through the handler the system holds for its
@@ -390,7 +406,10 @@ final class SmokeRun {
         after(0.6) { [self] in
             guard renders == 0 else { fail("\(renders) render calls while idle"); return }
             phase = .playing
-            app?.play(path)
+            // Open the fixture from its Continue watching card, as a click does.
+            if let problem = app?.history.smokeOpenFromWelcome(fixture: path, snapshotDirectory: app?.snapshotDirectory) {
+                fail(problem)
+            }
         }
     }
 
@@ -400,6 +419,7 @@ final class SmokeRun {
         switch phase {
         case .playing where snapshot.status == .playing && position > 0.7 && renders > 10:
             if let failure = app?.windowBehaviour?.smokeFitFailure(video: snapshot.video) { fail(failure); return }
+            if app?.history.showsWelcome == true { fail("The Welcome view stayed up during playback"); return }
             phase = .pausing
             playingRenders = renders
             // Now Playing and the display-sleep assertion, then pause as a media key would.

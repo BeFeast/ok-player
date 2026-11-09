@@ -24,8 +24,11 @@ toggles pause once the double-click interval has passed, so a double click never
 pauses first. The traffic lights and the title strip hide and show with the
 transport controls (`WindowChromeVisibility`); hidden ones take no clicks.
 
+While nothing is loaded the window shows the Welcome view, and **File → History…**
+(Command-Y) opens the History window (see [Welcome and History](#welcome-and-history)).
+
 This preview is for local testing. It does not yet contain the Linux shell's URL
-resolver, History, saving/cache UI, subtitle controls or update service. Its chrome
+resolver, saving/cache UI, subtitle controls or update service. Its chrome
 uses the shared BeFeast palette in light and dark, following the system appearance;
 the full macOS UI redesign is still ahead. The app needs macOS 14 or later on Apple
 Silicon. It is signed with a stable self-signed identity when one is configured (see
@@ -256,7 +259,9 @@ The workflow uploads `ok-player-macos-arm64.zip`, source identity, SHA-256, vers
 signing mode, compiler and test logs, dylib/rpath/signature inspection and smoke
 output. With smoke enabled it also uploads `snapshots/window-light.png` and
 `window-dark.png`: after the playback check the app renders its own window content in
-each appearance, overriding only that window's appearance. The OpenGL video area is
+each appearance, overriding only that window's appearance. `welcome-light.png` and
+`welcome-dark.png` are the Welcome view on the seeded history, rendered by SwiftUI
+before playback. The OpenGL video area is
 not part of that render and stays empty. The app does not require
 `DYLD_LIBRARY_PATH` or a fixed installation path.
 
@@ -351,6 +356,33 @@ Swift side only turns input into commands and keeps the hide timer.
   them. Hidden controls take no clicks, and clicks outside the bar always reach the
   video.
 
+## Welcome and History
+
+`Sources/OKPlayerShell/History/` holds two SwiftUI islands over the session's watch
+history (`docs/session-abi.md`, "Watch history"). The session picks, buckets,
+searches and labels the entries with the core's rules; the views only ask, show the
+answer and send commands. Both are asked again on the session's `history.changed`
+and `history.private_session` events while they are on screen.
+
+- **Welcome view.** An `NSHostingView` centred in the player window, between the
+  title strip and the transport controls, shown while nothing is loaded, no folder
+  is being read and no error is up. With an empty history it is a first-run card:
+  Open… and a drop hint. Otherwise it is the Continue watching shelf from the
+  `welcome_shelf` query (three entries, as on Linux): per card the title, the watched
+  bar, the state ("30m left", "✓ Finished") and when it was last opened, as many
+  cards as the width takes, then the History button, Open… and the drop hint. No
+  posters yet. A click on a card opens it without a `resume_from`, so the session's
+  resume rule decides the position.
+- **History window.** An `NSHostingController` window from **File → History…**
+  (Command-Y) or the shelf's History button. It shows the `page` query: the search
+  field (every change asks the session again), the private-session switch with its
+  banner, the session's day groups and end line, and a loading, an error (with
+  Retry), an empty and a no-match state. A click on a row resumes it; its menu and
+  context menu hold Resume, Play from Start (`resume_from` 0), Remove from History
+  (`history.remove`; a failed save is reported and the row stays) and Reveal in
+  Finder (local files only). When the session could not read the history file it
+  started with, a notice says so and names the copy it kept.
+
 ## System integration
 
 `System/SystemIntegration.swift` connects the player to macOS. It is handed the
@@ -388,6 +420,11 @@ The optional bounded smoke mode opens the deterministic local fixture in a nativ
 window and checks, from the session's events and the video layer's counters:
 
 - no render calls while idle, before the file is open;
+- while idle, the Welcome view shows the Continue watching shelf of the smoke's own
+  seeded history (a new temporary directory, never the user's history, removed at
+  exit): the fixture, finished so it plays from the start, then a stream left
+  halfway. It writes `welcome-light.png` and `welcome-dark.png`, the fixture is
+  opened by activating its card, and the Welcome view is gone once it plays;
 - the position and the render calls advance while playing;
 - while playing, the system's Now Playing reports the fixture as playing video,
   IOKit lists the display-sleep assertion, and `MPRemoteCommandCenter` has play,
