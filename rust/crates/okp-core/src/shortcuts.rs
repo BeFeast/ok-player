@@ -194,6 +194,29 @@ impl ShortcutAction {
             .copied()
             .find(|action| action.id() == id)
     }
+
+    /// Whether a held key runs the action again on every auto-repeat. Steps
+    /// through a value (seeking, frame stepping, volume, subtitle delay, size
+    /// and cues) repeat. Toggles, dialogs and item changes run once per physical
+    /// press, as [`crate::key_press::KeyPressLatch`] decides for a toolkit
+    /// without repeat flags, so a held Space, M or F does not flip back and forth.
+    pub fn repeats_while_held(self) -> bool {
+        matches!(
+            self,
+            Self::SeekBack
+                | Self::SeekForward
+                | Self::FrameForward
+                | Self::FrameBack
+                | Self::VolumeDown
+                | Self::VolumeUp
+                | Self::SubtitleDelayForward
+                | Self::SubtitleDelayBack
+                | Self::SubtitleSizeDown
+                | Self::SubtitleSizeUp
+                | Self::SubtitlePreviousCue
+                | Self::SubtitleNextCue
+        )
+    }
 }
 
 /// An action serialises as its config identifier (`"open-file"`).
@@ -873,6 +896,46 @@ mod tests {
 
     fn portable_chord(text: &str) -> ShortcutChord {
         parse_chord(text, 0, &PortableKeyNames).expect("chord should parse")
+    }
+
+    #[test]
+    fn held_keys_repeat_steps_and_press_toggles_once() {
+        let repeating: Vec<&str> = SHORTCUT_ACTIONS
+            .iter()
+            .filter(|action| action.repeats_while_held())
+            .map(|action| action.id())
+            .collect();
+        assert_eq!(
+            repeating,
+            [
+                "seek-back",
+                "seek-forward",
+                "frame-forward",
+                "frame-back",
+                "volume-down",
+                "volume-up",
+                "subtitle-delay-forward",
+                "subtitle-delay-back",
+                "subtitle-size-down",
+                "subtitle-size-up",
+                "subtitle-previous-cue",
+                "subtitle-next-cue",
+            ]
+        );
+        // Toggles, dialogs and item changes: one run per physical press.
+        for action in [
+            ShortcutAction::PlayPause,
+            ShortcutAction::Mute,
+            ShortcutAction::Fullscreen,
+            ShortcutAction::EscapeFullscreen,
+            ShortcutAction::AbLoop,
+            ShortcutAction::OpenFile,
+            ShortcutAction::CloseMedia,
+            ShortcutAction::NextItem,
+            ShortcutAction::PreviousItem,
+        ] {
+            assert!(!action.repeats_while_held(), "{action:?}");
+        }
     }
 
     #[test]

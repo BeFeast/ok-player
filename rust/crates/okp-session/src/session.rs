@@ -286,17 +286,25 @@ impl Session {
             Query::CommandRegistry {
                 fullscreen,
                 mini_player,
-            } => QueryResult::CommandRegistry {
-                commands: self.commands.resolve(
-                    &self.snapshot(),
-                    WindowState {
-                        fullscreen: *fullscreen,
-                        mini_player: *mini_player,
-                    },
-                ),
-            },
+            } => {
+                let snapshot = self.snapshot();
+                let playlist_items = lock(&self.shared.state).playlist.len();
+                QueryResult::CommandRegistry {
+                    commands: self.commands.resolve(
+                        &snapshot,
+                        WindowState {
+                            fullscreen: *fullscreen,
+                            mini_player: *mini_player,
+                        },
+                        playlist_items,
+                    ),
+                }
+            }
             Query::ShortcutTable {} => QueryResult::ShortcutTable {
                 shortcuts: self.commands.shortcut_table(),
+            },
+            Query::RepeatingShortcuts {} => QueryResult::RepeatingShortcuts {
+                actions: self.commands.repeating_shortcuts(),
             },
         }
     }

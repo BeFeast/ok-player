@@ -6,7 +6,8 @@ and the same libmpv engine as the Linux player. It opens local videos through
 **File → Open**, the Open button, a file argument, or Finder's Open With action.
 The video fills the window and the transport controls float over it (see
 [Transport controls](#transport-controls)); **Space** and their play button toggle
-pause. Closing the window stops playback,
+pause, and the menu bar and the single-key shortcuts run the player's commands (see
+[Menu bar and keys](#menu-bar-and-keys)). Closing the window stops playback,
 destroys the render context and then frees the session. Errors stay visible until
 another explicit open attempt.
 
@@ -351,6 +352,42 @@ Swift side only turns input into commands and keeps the hide timer.
   them. Hidden controls take no clicks, and clicks outside the bar always reach the
   video.
 
+## Menu bar and keys
+
+`Sources/OKPlayerShell/Menu/` builds the menu bar and handles the player window's keys
+from the session's command registry and shortcut table (`docs/session-abi.md`,
+"Command registry"). Swift keeps no player command's label, chord or enabled rule.
+
+- **Menus:** App, File, Edit, View, Playback, Audio, Subtitles, Window and Help.
+  `MenuBarLayout` only places registry ids among the standard macOS items; a command it
+  does not place goes to the menu of its registry group. A command that neither the
+  session nor this shell carries out is reported unavailable and left out. Each player
+  item sends `performPlayerCommand:` through the responder chain; validating it queries
+  the registry (once per menu opening and per session batch) for the label, the check
+  mark and the enabled state.
+- **Standard items:** About, Services, Hide, Hide Others, Show All, Quit, Open Recent,
+  Close (Command-W), Undo, Redo, Cut, Copy, Paste, Delete, Select All, Minimize
+  (Command-M), Zoom and Bring All to Front, with AppKit's own actions, so text fields get
+  the Edit commands. The Window menu is AppKit's window list and the Help menu carries
+  its menu search.
+- **Key equivalents:** only Command chords of the registry become menu key equivalents
+  (Command-O for Open file).
+- **Single keys:** a key press no view took reaches the player window, which looks it up
+  in the shortcut table and runs the registry command: Space, Left/Right (five seconds),
+  Up/Down (volume), M, F, Escape in fullscreen, Page Up/Down, X and the rest of the table.
+  A key that runs nothing now goes on to the window. Keys are named like the core's
+  table; a layout whose characters are not ASCII uses the key in the same place on the
+  US layout. Every key press reveals the transport controls.
+- **Held keys:** the session's `repeating_shortcuts` query lists the steps a held key
+  repeats (seek, volume, frame, subtitle delay, size and cues). Any other command runs
+  once per physical press: AppKit's auto-repeats of a held Space, M or F are taken and
+  run nothing.
+- **Commands this shell carries out:** Open file, Fullscreen and Escape fullscreen, Next
+  and Previous item (the session playlist) and the Playback speed submenu. They are
+  registered with `PlayerCommands` before the session starts and passed in the config's
+  `shell_commands`. A `DynamicSubmenuProvider` fills a registry command's submenu each
+  time it opens; the audio and subtitle track menus plug in there.
+
 ## System integration
 
 `System/SystemIntegration.swift` connects the player to macOS. It is handed the
@@ -411,8 +448,12 @@ window and checks, from the session's events and the video layer's counters:
   traffic lights with them, hand the scrubber's keyboard focus back to the video
   as they hide, and come back on activity with the session's time readout, so
   both window snapshots show them;
+- while playing, the menu bar has its nine menus with AppKit's window list and help
+  menu, Play/Pause from the registry validates enabled through the responder chain, and
+  a held Space's auto-repeat sent to the window toggles nothing;
 - F and Escape, sent as key events to the video view, enter native fullscreen and
-  leave it again, and each press reaches the transport controls as activity;
+  leave it again through the shortcut table's registry commands, and each press reaches
+  the transport controls as activity;
 - closing the window during playback tears down in order (close, destroy the
   render context, free the session), after which the center has none of those
   commands enabled and no handler of the app's.
