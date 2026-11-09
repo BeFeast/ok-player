@@ -85,7 +85,8 @@ struct State {
     history: SessionHistory,
     /// The volume asked for and not yet reported, which volume nudges build on.
     volume: VolumeTarget,
-    /// The track details the menus' labels need, and the subtitle size.
+    /// The track details the menus' labels need, and the subtitle delay and
+    /// size asked for.
     tracks: TrackState,
 }
 
