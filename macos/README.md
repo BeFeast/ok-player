@@ -309,6 +309,36 @@ Ticks without a due frame pause the link again, so a paused or idle player draws
 nothing and stops ticking. A resize redraws the current frame once; it never
 creates another GL context. Nothing draws on the main thread.
 
+## System integration
+
+`System/SystemIntegration.swift` connects the player to macOS. It is handed the
+session snapshot after every drained batch and keeps no playback state of its own:
+
+- **Now Playing.** `MPNowPlayingInfoCenter` gets the title (libmpv's media title,
+  else the file name), duration, elapsed time, rate, media type, queue index and count,
+  chapter count and the app icon as artwork, and `playbackState`, which is what makes
+  the app the Now Playing app on macOS. It is written when the state changes and when
+  the position moves more than 0.75 s away from where elapsed time and rate put it (a
+  seek), not on every time update. An audio file counts as audio even when embedded
+  cover art gives libmpv a video frame. Ended and idle sessions clear it.
+- **Remote commands.** Play, pause, play/pause, stop, next and previous item, change
+  position, skip ±10 s and change rate from `MPRemoteCommandCenter` become session
+  commands (stop closes the file; rates are kept within 0.25-4). This covers the F7-F9
+  media keys, Control Center and AirPods with no event tap, so no Accessibility or
+  Input Monitoring permission. Next and previous send the session playlist's `next`
+  and `previous` commands (`System/SessionPlaylist.swift`, over the playlist
+  `SessionStore` keeps from `playlist_changed`), and are offered only while the
+  playlist has two items or more: the session wraps at both ends.
+- **Display sleep.** An `IOPMAssertionCreateWithName` assertion of type
+  `kIOPMAssertionTypePreventUserIdleDisplaySleep` is held while video plays and
+  released on pause, end, close, audio-only media and quit.
+- **Recent documents.** Every local file that loads, including ones the session opens
+  by itself, goes to `NSDocumentController.noteNewRecentDocumentURL`, except during a
+  private session (the session's `history.private_session` event). File > Open Recent is rebuilt from that list each time it opens, and
+  macOS lists the same files in the Dock menu.
+- **Dock menu.** Play or Pause, Next and Previous, enabled from the snapshot and the
+  playlist; Next and Previous step the session playlist.
+
 ## Verification boundary
 
 The optional bounded smoke mode opens the deterministic local fixture in a native
@@ -316,7 +346,14 @@ window and checks, from the session's events and the video layer's counters:
 
 - no render calls while idle, before the file is open;
 - the position and the render calls advance while playing;
-- while paused, the position holds and the render calls stay flat for two seconds;
+- while playing, the system's Now Playing reports the fixture as playing video,
+  IOKit lists the display-sleep assertion, and `MPRemoteCommandCenter` has play,
+  pause, play/pause, stop, both skips (10 s), change position and change rate enabled
+  (with the offered rates) and next and previous off; the pause is sent by running
+  the handler registered with the center's pause command;
+- while paused, the position holds and the render calls stay flat for two seconds,
+  Now Playing reports the pause at rate 0 and the assertion is gone; the resume is sent
+  through the handler registered with the center's play command;
 - both advance again after resuming;
 - after six window resizes during playback, Core Animation holds exactly one GL
   context (each `copyCGLContext` but one is balanced by `releaseCGLContext`) and
@@ -329,7 +366,8 @@ window and checks, from the session's events and the video layer's counters:
 - F and Escape, sent as key events to the video view, enter native fullscreen and
   leave it again;
 - closing the window during playback tears down in order (close, destroy the
-  render context, free the session).
+  render context, free the session), after which the center has none of those
+  commands enabled and no handler of the app's.
 
 Its `OKP_SMOKE` line also reports those counts, the pixel format, the
 volume and track count from the session snapshot, and the fitted size, the video

@@ -258,6 +258,16 @@ final class SessionProtocolTests: XCTestCase {
         let store = SessionStore()
         store.apply(batch)
         XCTAssertEqual(store.snapshot, SessionSnapshot(status: .opening))
+        XCTAssertEqual(store.playlist, playlist, "the store keeps the playlist the event carries")
+    }
+
+    func testTheStoreFollowsThePrivateSession() throws {
+        let store = SessionStore()
+        XCTAssertFalse(store.privateSession, "every session starts with it off")
+        store.apply(try GoldenFixtures.decode(EventBatch.self, "history/events.json"))
+        XCTAssertTrue(store.privateSession)
+        store.apply(EventBatch(schemaVersion: 1, events: [.history(event: .privateSession(enabled: false))]))
+        XCTAssertFalse(store.privateSession)
     }
 
     func testTheSnapshotReplyDecodesEveryField() throws {
