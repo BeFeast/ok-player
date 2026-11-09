@@ -64,6 +64,8 @@ const CHECKED: &[&str] = &[
     "query-reply-command-registry.json",
     "query-shortcut-table.json",
     "query-reply-shortcut-table.json",
+    "query-repeating-shortcuts.json",
+    "query-reply-repeating-shortcuts.json",
     "events-batch.json",
     "events-empty.json",
     "enums.json",
@@ -460,6 +462,7 @@ fn the_command_registry_query_and_its_reply_match_their_fixtures() {
                         fullscreen: true,
                         mini_player: false,
                     },
+                    1,
                 ),
             },
         },
@@ -481,6 +484,26 @@ fn the_shortcut_table_query_and_its_reply_match_their_fixtures() {
             schema_version: SCHEMA_VERSION,
             result: QueryResult::ShortcutTable {
                 shortcuts: macos_registry().shortcut_table(),
+            },
+        },
+    );
+}
+
+#[test]
+fn the_repeating_shortcuts_query_and_its_reply_match_their_fixtures() {
+    golden(
+        "query-repeating-shortcuts.json",
+        QueryEnvelope {
+            schema_version: SCHEMA_VERSION,
+            query: Query::RepeatingShortcuts {},
+        },
+    );
+    golden(
+        "query-reply-repeating-shortcuts.json",
+        QueryReply {
+            schema_version: SCHEMA_VERSION,
+            result: QueryResult::RepeatingShortcuts {
+                actions: macos_registry().repeating_shortcuts(),
             },
         },
     );

@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use okp_core::app::AppIdentity;
 use okp_core::player as core;
 use okp_core::playlist::PlaylistItem;
+use okp_core::shortcuts::ShortcutAction;
 use serde::{Deserialize, Serialize};
 
 pub use crate::commands::{CommandGroup, CommandMenu, RegistryCommand, ShortcutRow};
@@ -294,6 +295,9 @@ pub enum Query {
     },
     /// Every bindable action with its chords on this platform.
     ShortcutTable {},
+    /// The actions whose key repeats while held; every other action runs once
+    /// per physical press.
+    RepeatingShortcuts {},
     /// A watch-history query; see [`HistoryQuery`].
     History { query: HistoryQuery },
     /// The playlist as it is now.
@@ -333,6 +337,9 @@ pub enum QueryResult {
     },
     ShortcutTable {
         shortcuts: Vec<ShortcutRow>,
+    },
+    RepeatingShortcuts {
+        actions: Vec<ShortcutAction>,
     },
     /// The answer to a `history` query.
     History {

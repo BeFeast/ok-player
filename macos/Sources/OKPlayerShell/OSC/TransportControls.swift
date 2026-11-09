@@ -2,8 +2,9 @@ import AppKit
 
 /// The seek bar: track, buffered range, progress, chapter ticks and a knob, in
 /// palette colours. A click or drag reports the fraction under the pointer, and a
-/// press it accepted always reports its release. While it has keyboard focus, Left
-/// and Right report a five-second step and Space toggles pause, as over the video.
+/// press it accepted always reports its release. It handles no keys: while it has
+/// keyboard focus, a key press goes on up the responder chain to the player
+/// window's shortcut table, as from the video.
 final class ScrubberView: NSView {
     enum Phase { case began, moved, ended }
 
@@ -16,8 +17,6 @@ final class ScrubberView: NSView {
     /// The controls are shown, so the bar may take keyboard focus.
     var allowsFocus = true
     var onScrub: ((Phase, Double) -> Void)?
-    var onStep: ((Double) -> Void)?
-    var onTogglePause: (() -> Void)?
     /// A press on the enabled bar that has not been released yet.
     private(set) var isPressed = false
 
@@ -90,18 +89,6 @@ final class ScrubberView: NSView {
         guard isPressed else { return }
         isPressed = false
         onScrub?(.ended, fraction(of: event))
-    }
-
-    override func keyDown(with event: NSEvent) {
-        if event.charactersIgnoringModifiers == " " {
-            onTogglePause?()
-            return
-        }
-        switch event.keyCode {
-        case 123: onStep?(-5)  // Left
-        case 124: onStep?(5)   // Right
-        default: super.keyDown(with: event)
-        }
     }
 
     override func becomeFirstResponder() -> Bool {
