@@ -9,8 +9,17 @@ class PlayerWindow: NSWindow {
     /// Carries out a command from a key; returns whether it did anything.
     var onCommand: ((WindowCommand) -> Bool)?
 
+    /// Called for every key press the window receives, before anything handles it:
+    /// the transport controls count it as activity.
+    var onKeyDown: (() -> Void)?
+
     /// The window is in native fullscreen. (Tests stand in a flagged window.)
     var isInFullscreen: Bool { styleMask.contains(.fullScreen) }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown { onKeyDown?() }
+        super.sendEvent(event)
+    }
 
     override func keyDown(with event: NSEvent) {
         if let command = WindowKeys.command(forKey: event.charactersIgnoringModifiers, keyCode: event.keyCode,

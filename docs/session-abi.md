@@ -79,9 +79,9 @@ written as `null` and may be left out on input.
 | Document | Shape |
 |---|---|
 | Config (`okp_session_new`) | `schema_version`, `app` (`name`, `platform`), absolute `data_dir`, `config_dir`, `cache_dir`, optional `hwdec`, ordered `mpv_options` (`name`, `value`) applied after the session defaults, optional `shell_commands` (see Command registry) |
-| Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay`, `invoke_command {id}`, `playlist` (see Playlist) |
+| Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay`, `invoke_command {id}`, `playlist` (see Playlist), `nudge_volume` and `toggle_mute` (see Transport controls) |
 | Reply | `{"schema_version":1,"result":{...}}`: `accepted {request_id}`, `no_op {}`, `rejected {reason, message}`, `failed {request_id, message}` when the engine refused an accepted command at once, `perform {}` (`invoke_command` only), or `applied {}` when the session carried the command out itself and nothing reached libmpv yet |
-| Query (`okp_session_query`) | `{"schema_version":1,"query":{...}}`: `snapshot {}`, answered with `result.snapshot.snapshot` (the full state); `command_registry {fullscreen, mini_player}` (both optional), answered with `result.command_registry.commands`; `shortcut_table {}`, answered with `result.shortcut_table.shortcuts`; `playlist {}`, answered with `result.playlist.playlist`; `window_fit`, `initial_window_fit` and `video_click` (see Window queries); or `result.rejected`; `history` queries are below |
+| Query (`okp_session_query`) | `{"schema_version":1,"query":{...}}`: `snapshot {}`, answered with `result.snapshot.snapshot` (the full state); `command_registry {fullscreen, mini_player}` (both optional), answered with `result.command_registry.commands`; `shortcut_table {}`, answered with `result.shortcut_table.shortcuts`; `playlist {}`, answered with `result.playlist.playlist`; `transport {at}` (`at` optional), answered with `result.transport.transport` (see Transport controls); `window_fit`, `initial_window_fit` and `video_click` (see Window queries); or `result.rejected`; `history` queries are below |
 | Event batch (`okp_session_drain_events`) | `{"schema_version":1,"events":[...]}` |
 
 An open source is `{"kind":"local"|"url","location":"..."}`. A URL is handed
@@ -209,6 +209,48 @@ the platform defaults and `secondary` is `null`. A chord is
 the canonical key name (`space`, `comma`, `Left`, `o`) and `label` the display
 text (`Shift+Cmd+O`). On macOS menu commands use Cmd chords and in-window keys
 stay single keys.
+
+## Transport controls
+
+The `transport` query answers what the transport controls show for the
+current snapshot, computed with the core's rules so a shell does not repeat
+them. A shell asks for it after each drained batch.
+
+| Field | Meaning (core rule) |
+|---|---|
+| `elapsed` | `MM:SS`, or `HH:MM:SS` from the first hour (`time_code::format_clock`) |
+| `remaining`, `total` | the trailing label in either mode; `--:--` for a URL without a known duration, `-00:00` / `00:00` for a local file still loading (`time_code::format_trailing`) |
+| `progress` | the playhead as a fraction of the duration, 0 while it is unknown |
+| `buffered` | how far the cache reaches, as a fraction (`timeline_buffer::fraction`) |
+| `chapter_ticks` | chapter starts as fractions (`chapter_math::fractions`) |
+| `seekable` | media is loaded and its duration known |
+| `volume` | `level`, `max` (130), `fraction`, `unity_fraction` (100 %), `muted` (muted or 0 %), `boosted`, `readout` (`Muted`, `85%`, `54.7%`) (`volume`) |
+| `speed`, `speeds` | the current speed as `1.00×` and the menu choices 0.5, 0.75, 1, 1.25, 1.5 and 2× with `selected` |
+| `osc` | `revealed` and `hidden`: the controls' `visible`, `mapped`, `focusable` and `hit_testable` while shown and once hidden for inactivity (`osc_visibility::project`); `auto_hide`: they hide after `hide_after_ms` (2500, PRD P1-D6) without activity, only while media plays |
+
+With `"at": <seconds>` the time readout and `progress` are projected at that
+position instead of the playhead, which is what a scrubber shows while it is
+dragged; `buffered` stays with the playhead.
+
+`{"nudge_volume":{"delta":<percent>}}` changes the volume relative to the
+level the session asked libmpv for last, or the reported level when libmpv has
+caught up, clamped to 0-130 % (`volume::VolumeState::nudge`). It is forwarded
+as a `set_volume` and answered like one. libmpv reports volume changes
+asynchronously, so nudges that arrive faster than its reports (a scroll wheel)
+all count instead of each building on the same stale report
+(`volume::reconcile_observed_level`).
+
+`{"toggle_mute":{}}` mutes the way the core and the Linux player do: mute is a
+level of 0 that remembers the last level above it, and the next toggle goes
+back there (`volume::VolumeState::toggle_mute`). The remembered level is the
+last level above 0 that was asked for or reported, so a slider dragged to 0 %
+or a level nudged down to 0 is unmuted by the same toggle, and a nudge or a
+`set_volume` above 0 is audible again. It is forwarded as a `set_volume` and
+built on the level asked for last, like a nudge. `set_mute` is libmpv's
+separate mute flag, which leaves the level alone; while it is on, `toggle_mute`
+is forwarded as `set_mute(false)` instead, so the first toggle always clears it.
+
+The documents are pinned by `rust/crates/okp-session/fixtures/transport/`.
 
 ## Events
 

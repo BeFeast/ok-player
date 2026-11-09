@@ -563,6 +563,41 @@ fn many_preference_changes_are_written_once_with_the_next_save() {
     assert_eq!(entry.preferences.subtitle_delay, Some(3.0));
 }
 
+#[test]
+fn a_volume_nudge_and_a_mute_toggle_are_remembered_as_the_level_they_set() {
+    let root = unique_temp_dir("okp-session-history-volume-nudge");
+    let harness = playing(root.path(), "/media/a.mkv");
+    let remembered = || {
+        harness
+            .saved("/media/a.mkv")
+            .and_then(|entry| entry.preferences.volume)
+    };
+    let accepted = |command: Command| {
+        let reply = harness.dispatch(command.clone());
+        assert!(
+            matches!(reply, DispatchResult::Accepted { .. }),
+            "{command:?}: {reply:?}"
+        );
+    };
+    accepted(Command::SetVolume { volume: 60.0 });
+    accepted(Command::NudgeVolume { delta: -5.0 });
+    accepted(Command::SetPaused { paused: true });
+    assert_eq!(remembered(), Some(55.0), "the nudged level, not the nudge");
+
+    accepted(Command::SetPaused { paused: false });
+    accepted(Command::ToggleMute {});
+    accepted(Command::SetPaused { paused: true });
+    assert_eq!(remembered(), Some(0.0), "the mute level");
+    assert_eq!(
+        harness
+            .forwarded()
+            .into_iter()
+            .filter(|command| matches!(command, Command::SetVolume { .. }))
+            .collect::<Vec<_>>(),
+        [60.0, 55.0, 0.0].map(|volume| Command::SetVolume { volume })
+    );
+}
+
 /// While the disk takes its time over a save, the session keeps answering: the
 /// file is written on the writer thread, not under the session lock.
 #[cfg(unix)]

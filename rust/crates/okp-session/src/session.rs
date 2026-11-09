@@ -27,6 +27,7 @@ use crate::protocol::{
     parse_envelope, to_json,
 };
 use crate::reconcile::{core_end_reason, endfile_error, event_matches_source};
+use crate::transport::{TransportView, VolumeTarget};
 use crate::window;
 
 /// Called from the session's event thread when a new batch of events is ready.
@@ -81,6 +82,8 @@ struct State {
     end_failed: bool,
     /// Resume, progress, per-file memory and the private session.
     history: SessionHistory,
+    /// The volume asked for and not yet reported, which volume nudges build on.
+    volume: VolumeTarget,
 }
 
 /// Wakes the event thread: set by the engine listener, by commands and by
@@ -171,6 +174,7 @@ impl Session {
                 fit: window::SourceFit::default(),
                 end_failed: false,
                 history,
+                volume: VolumeTarget::default(),
             }),
             signal,
             wakeup: Mutex::new(None),
@@ -239,6 +243,9 @@ impl Session {
         match query {
             Query::Snapshot {} => QueryResult::Snapshot {
                 snapshot: self.snapshot(),
+            },
+            Query::Transport { at } => QueryResult::Transport {
+                transport: TransportView::project(&self.snapshot(), *at),
             },
             Query::Playlist {} => QueryResult::Playlist {
                 playlist: lock(&self.shared.state).playlist.state(),
@@ -520,7 +527,14 @@ impl State {
     /// The history has its say first: an open may resume where the media was
     /// left.
     fn forward(&mut self, engine: &dyn Engine, command: &Command) -> DispatchResult {
-        let command = self.prepare(command);
+        // A volume nudge or a mute toggle becomes the level (or mute flag) it
+        // stands for before anything else sees it.
+        let (observed_volume, muted) = {
+            let core = self.machine.machine().snapshot();
+            (core.volume, core.mute)
+        };
+        let resolved = self.volume.resolve(command, observed_volume, muted);
+        let command = self.prepare(&resolved);
         let Route::Player(core) = command.route() else {
             // Playlist, history and registry commands never reach here.
             return rejected(RejectReason::Malformed);
@@ -533,6 +547,8 @@ impl State {
         });
         if engine_result.is_ok() {
             self.track_load(&command, outcome, load);
+        } else if matches!(*command, Command::SetVolume { .. }) {
+            self.volume.forget();
         }
         if matches!(outcome, CommandOutcome::Accepted { .. }) {
             self.history_dispatched(&command, engine_result.is_ok(), engine);
@@ -786,6 +802,7 @@ impl State {
 
     fn reconcile_observation(&mut self, observation: &Observation) {
         let playback = observation.playback;
+        self.volume.observe(playback.volume);
         // Volume and speed are engine-global and hold without media.
         self.machine
             .apply_event(PlayerEvent::Property(PropertyChange::Volume(
@@ -1211,6 +1228,134 @@ mod tests {
         assert_eq!(
             engine.forwarded(),
             vec![open("/media/a.mkv"), Command::TogglePause {}]
+        );
+    }
+
+    #[test]
+    fn volume_nudges_reach_the_engine_as_levels_built_on_the_level_asked_for() {
+        let (session, engine) = fake_session();
+        assert!(wait_for(|| session.snapshot().volume == Some(100.0)));
+        let nudge = |delta| session.dispatch(&Command::NudgeVolume { delta });
+
+        // The engine has not reported either change yet: the second nudge still
+        // builds on the first, so no step is lost.
+        assert!(matches!(nudge(1.0), DispatchResult::Accepted { .. }));
+        assert!(matches!(nudge(1.0), DispatchResult::Accepted { .. }));
+        publish_and_settle(&engine, |observation| {
+            observation.playback.volume = Some(102.0);
+        });
+        assert!(matches!(nudge(-5.0), DispatchResult::Accepted { .. }));
+        assert!(matches!(nudge(40.0), DispatchResult::Accepted { .. }));
+        assert_eq!(
+            engine.forwarded(),
+            [101.0, 102.0, 97.0, 130.0].map(|volume| Command::SetVolume { volume }),
+            "nudges are clamped to the core's 0-130 % range"
+        );
+
+        assert_eq!(
+            nudge(f64::INFINITY),
+            DispatchResult::Rejected {
+                reason: RejectReason::NotFinite,
+                message: RejectReason::NotFinite.describe().to_owned(),
+            }
+        );
+        assert_eq!(
+            engine.forwarded().len(),
+            4,
+            "a refused nudge reaches nothing"
+        );
+    }
+
+    #[test]
+    fn toggle_mute_follows_the_core_mute_level_and_restores_the_level_before_it() {
+        let (session, engine) = fake_session();
+        assert!(wait_for(|| session.snapshot().volume == Some(100.0)));
+        let accepted = |command: Command| {
+            let reply = session.dispatch(&command);
+            assert!(
+                matches!(reply, DispatchResult::Accepted { .. }),
+                "{command:?}: {reply:?}"
+            );
+        };
+        accepted(Command::SetVolume { volume: 72.5 });
+        // Faster than the engine reports: the second toggle builds on the first.
+        accepted(Command::ToggleMute {});
+        accepted(Command::ToggleMute {});
+        // The slider dragged to 0 %: the button brings the sound back.
+        accepted(Command::SetVolume { volume: 0.0 });
+        publish_and_settle(&engine, |observation| {
+            observation.playback.volume = Some(0.0);
+        });
+        accepted(Command::ToggleMute {});
+        // Muted with the button, a nudge up is audible again.
+        publish_and_settle(&engine, |observation| {
+            observation.playback.volume = Some(72.5);
+        });
+        accepted(Command::ToggleMute {});
+        accepted(Command::NudgeVolume { delta: 1.0 });
+        assert_eq!(
+            engine.forwarded(),
+            [72.5, 0.0, 72.5, 0.0, 72.5, 0.0, 1.0].map(|volume| Command::SetVolume { volume })
+        );
+        assert!(!session.snapshot().mute, "libmpv's mute flag is left alone");
+
+        // A client that set libmpv's mute flag: the first toggle clears it.
+        accepted(Command::SetMute { muted: true });
+        accepted(Command::ToggleMute {});
+        assert_eq!(
+            engine.forwarded()[7..],
+            [
+                Command::SetMute { muted: true },
+                Command::SetMute { muted: false }
+            ]
+        );
+        assert!(!session.snapshot().mute);
+    }
+
+    #[test]
+    fn the_transport_query_projects_the_current_state() {
+        let (session, engine) = fake_session();
+        let transport = |query: &str| -> TransportView {
+            let reply: crate::protocol::QueryReply =
+                serde_json::from_str(&session.query_json(query)).expect("a query reply");
+            match reply.result {
+                QueryResult::Transport { transport } => transport,
+                other => panic!("not a transport reply: {other:?}"),
+            }
+        };
+        let idle = transport(r#"{"schema_version":1,"query":{"transport":{}}}"#);
+        assert!(!idle.osc.revealed.visible, "no media, no controls");
+        assert!(!idle.seekable);
+
+        assert!(matches!(
+            session.dispatch(&open("/media/a.mkv")),
+            DispatchResult::Accepted { .. }
+        ));
+        loaded(&engine, 120.0);
+        publish_and_settle(&engine, |observation| {
+            observation.playback.time_pos = Some(45.5);
+            observation.playback.cache_duration = Some(15.0);
+        });
+        assert!(wait_for(|| session.snapshot().time_pos == Some(45.5)));
+
+        let now = transport(r#"{"schema_version":1,"query":{"transport":{"at":null}}}"#);
+        assert_eq!(
+            now,
+            TransportView::project(&session.snapshot(), None),
+            "the reply is the projection of the snapshot"
+        );
+        assert_eq!(
+            (now.elapsed.as_str(), now.remaining.as_str()),
+            ("00:45", "-01:14")
+        );
+        assert!(now.seekable);
+        assert!(now.osc.auto_hide);
+        assert_eq!(now.buffered, 60.5 / 120.0);
+
+        let dragged = transport(r#"{"schema_version":1,"query":{"transport":{"at":90}}}"#);
+        assert_eq!(
+            (dragged.elapsed.as_str(), dragged.progress),
+            ("01:30", 0.75)
         );
     }
 

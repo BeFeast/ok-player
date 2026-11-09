@@ -22,6 +22,7 @@ pub use crate::history::{
     HistoryQueryResult, HistorySection, HistoryState,
 };
 pub use crate::playlist::{PlaylistAction, PlaylistEntry, PlaylistState, QueueMode, RepeatMode};
+pub use crate::transport::{OscSurface, OscView, SpeedChoice, TransportView, VolumeView};
 pub use crate::window::{VideoClickIntent, WindowRect, WindowSize};
 
 /// Version of every envelope below. Bump on any change a shell built against
@@ -150,6 +151,15 @@ pub enum Command {
     Playlist {
         action: PlaylistAction,
     },
+    /// Change the volume by `delta` percent from the level asked for last, or
+    /// the reported one, clamped to 0-130 %. Forwarded as a `set_volume`.
+    NudgeVolume {
+        delta: f64,
+    },
+    /// Mute as the core does: a level of 0 that remembers the last level above
+    /// it, which the next toggle restores. Forwarded as a `set_volume`, or as
+    /// `set_mute(false)` while libmpv's own mute flag is on.
+    ToggleMute {},
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -288,6 +298,12 @@ pub enum Query {
     History { query: HistoryQuery },
     /// The playlist as it is now.
     Playlist {},
+    /// What the transport controls show for that state; with `at`, the time
+    /// readout at that position instead of the playhead (a scrubber drag).
+    Transport {
+        #[serde(default)]
+        at: Option<f64>,
+    },
 }
 
 /// `{"schema_version":1,"result":{...}}`, the answer to a query.
@@ -324,6 +340,9 @@ pub enum QueryResult {
     },
     Playlist {
         playlist: PlaylistState,
+    },
+    Transport {
+        transport: TransportView,
     },
     Rejected {
         reason: RejectReason,
@@ -583,6 +602,11 @@ impl Command {
                 seconds: seek_seconds(*seconds, *mode),
             }),
             Self::SetVolume { volume } => core::PlayerCommand::SetVolume(*volume),
+            // The session turns a nudge into a `set_volume` before validation
+            // (`transport::VolumeTarget`); validated on its own, it is a level.
+            Self::NudgeVolume { delta } => core::PlayerCommand::SetVolume(*delta),
+            // Resolved by the session as well; on its own it is the mute level.
+            Self::ToggleMute {} => core::PlayerCommand::SetVolume(okp_core::volume::MIN_VOLUME),
             Self::SetMute { muted } => core::PlayerCommand::SetMute(*muted),
             Self::SetSpeed { speed } => core::PlayerCommand::SetSpeed(*speed),
             Self::SelectTrack { kind, id } => core::PlayerCommand::SelectTrack {

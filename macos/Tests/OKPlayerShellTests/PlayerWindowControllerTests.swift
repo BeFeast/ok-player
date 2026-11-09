@@ -135,6 +135,22 @@ final class PlayerWindowControllerTests: XCTestCase {
         XCTAssertEqual(fullscreenToggles, 1)
     }
 
+    func testEveryKeyPressTheWindowReceivesIsReportedBeforeItIsHandled() throws {
+        var reported: [Int] = []
+        window.onKeyDown = { [unowned self] in reported.append(self.fullscreenToggles) }
+        XCTAssertTrue(window.makeFirstResponder(video))
+        window.sendEvent(try key("f", keyCode: 3))
+        // Space is the video's own key and X nobody's: both are still reported.
+        window.sendEvent(try key(" ", keyCode: 49))
+        window.sendEvent(try key("x", keyCode: 7))
+        XCTAssertEqual(reported, [0, 1, 1], "each press is reported once, before F toggles fullscreen")
+        let release = try XCTUnwrap(NSEvent.keyEvent(with: .keyUp, location: .zero, modifierFlags: [], timestamp: 0,
+                                                     windowNumber: window.windowNumber, context: nil, characters: "f",
+                                                     charactersIgnoringModifiers: "f", isARepeat: false, keyCode: 3))
+        window.sendEvent(release)
+        XCTAssertEqual(reported.count, 3, "a key release is not a press")
+    }
+
     func testControlCommandFIsTheWindowsFullScreenKeyEquivalent() throws {
         XCTAssertTrue(window.makeFirstResponder(video))
         XCTAssertTrue(window.performKeyEquivalent(with: try key("f", keyCode: 3, modifiers: [.command, .control])))

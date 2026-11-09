@@ -96,6 +96,11 @@ enum Command: Codable, Equatable {
     case history(action: HistoryAction)
     /// Open, step through and edit the playlist.
     case playlist(action: PlaylistAction)
+    /// Change the volume by `delta` percent; the session clamps it (OSC/TransportProtocol.swift).
+    case nudgeVolume(delta: Double)
+    /// Mute as the core does: a level of 0 that the next toggle takes back to the
+    /// last level above it (docs/session-abi.md, "Transport controls").
+    case toggleMute
 }
 
 struct CommandEnvelope: Codable, Equatable {
@@ -150,6 +155,8 @@ enum Query: Codable, Equatable {
     case history(query: HistoryQuery)
     /// The playlist as it is now.
     case playlist
+    /// What the transport controls show; with `at`, the readout at that position.
+    case transport(at: Double? = nil)
 }
 
 struct QueryEnvelope: Codable, Equatable {
@@ -165,6 +172,7 @@ enum QueryResult: Codable, Equatable {
     case shortcutTable(shortcuts: [ShortcutRow])
     case history(result: HistoryQueryResult)
     case playlist(playlist: PlaylistState)
+    case transport(transport: TransportView)
     case rejected(reason: RejectReason, message: String)
 }
 
