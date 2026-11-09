@@ -52,11 +52,16 @@ final class SessionClientTests: XCTestCase {
 
     func testTheSessionReadsEverySwiftEncodedCommand() {
         let missing = root.appendingPathComponent("missing.mkv").path
+        // The fixture opens name media that is not there, and a URL libmpv would
+        // fetch; open a missing local file instead.
         var commands = SessionProtocolTests.commands.values.filter {
-            if case .open = $0 { return false }
-            return true
+            switch $0 {
+            case .open, .playlist(.open): return false
+            default: return true
+            }
         }
         commands.append(.open(source: MediaSource(kind: .local, location: missing), resumeFrom: 3, audioTrack: 1, subtitleTrack: nil))
+        commands.append(.playlist(action: .open(sources: [MediaSource(kind: .local, location: missing)])))
         for command in commands {
             switch client.dispatch(command) {
             case .rejected(let reason, let message) where reason == .malformed || reason == .unsupportedSchemaVersion:
@@ -117,6 +122,28 @@ final class SessionClientTests: XCTestCase {
             client.query(.history(query: .page(utcOffsetSeconds: 0))) else {
             return XCTFail("the page does not report the private session")
         }
+    }
+
+    func testTheSessionAnswersThePlaylistQueryAndReportsItsChanges() {
+        guard case .playlist(let empty)? = client.query(.playlist) else {
+            return XCTFail("the playlist query was not answered with the playlist")
+        }
+        XCTAssertEqual(empty, PlaylistState(), "a new session has an empty playlist")
+
+        let reported = expectation(description: "a drained batch carries the new repeat mode")
+        reported.assertForOverFulfill = false
+        client.onBatch = { batch in
+            for case .playlistChanged(let playlist) in batch.events where playlist.repeat == .all {
+                reported.fulfill()
+            }
+        }
+        XCTAssertEqual(client.dispatch(.playlist(action: .setRepeat(mode: .all))), .applied)
+        XCTAssertEqual(client.dispatch(.playlist(action: .setRepeat(mode: .all))), .noOp)
+        wait(for: [reported], timeout: 5)
+        guard case .playlist(let playlist)? = client.query(.playlist) else {
+            return XCTFail("the playlist query was not answered with the playlist")
+        }
+        XCTAssertEqual(playlist.repeat, .all)
     }
 
     func testAClosedClientRefusesCommandsWithoutTouchingTheSession() {

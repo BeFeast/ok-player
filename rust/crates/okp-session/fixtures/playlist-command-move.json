@@ -1,0 +1,1 @@
+{ "schema_version": 1, "command": { "playlist": { "action": { "move": { "from": 2, "to": 0 } } } } }

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "result": {
+    "playlist": {
+      "playlist": {
+        "items": [],
+        "current_index": null,
+        "repeat": "off",
+        "shuffle": false,
+        "scanning": false
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "result": {
+    "playlist": {
+      "playlist": {
+        "items": [
+          {
+            "source": { "kind": "local", "location": "/Users/example/Movies/Show/Episode 1.mkv" },
+            "title": "Episode 1.mkv"
+          },
+          {
+            "source": { "kind": "local", "location": "/Users/example/Movies/Show/Episode 2.mkv" },
+            "title": "Episode 2.mkv"
+          },
+          {
+            "source": { "kind": "url", "location": "https://example.com/clip.mp4?token=a" },
+            "title": "clip.mp4"
+          }
+        ],
+        "current_index": 1,
+        "repeat": "all",
+        "shuffle": true,
+        "scanning": false
+      }
+    }
+  }
+}

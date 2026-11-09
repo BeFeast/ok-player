@@ -5,7 +5,9 @@
 //! engine sees it, an event thread, and a coalescing event queue. A shell talks
 //! to it in JSON documents ([`protocol`]): it dispatches commands, queries the
 //! full state, and drains batches of events after the session's wakeup fires.
-//! The C ABI over this lives in `okp-ffi` (`okp_session_*`).
+//! The C ABI over this lives in `okp-ffi` (`okp_session_*`). The session also
+//! owns the playlist ([`protocol::PlaylistAction`]): folder playlists, opens of
+//! several sources and M3U files, the queue, repeat, shuffle and auto-advance.
 //!
 //! The session decides; a shell only renders what it reports.
 
@@ -14,6 +16,7 @@ pub mod commands;
 mod engine;
 pub mod history;
 pub mod machine;
+mod playlist;
 pub mod protocol;
 pub mod reconcile;
 mod session;
@@ -21,5 +24,6 @@ mod session;
 pub use coalesce::TIMELINE_INTERVAL;
 pub use commands::{CommandRegistry, WindowState};
 pub use machine::SessionMachine;
+pub use playlist::FOLDER_SCAN_LIMIT;
 pub use protocol::SCHEMA_VERSION;
 pub use session::{RenderUpdate, Session, Wakeup};
