@@ -2,13 +2,17 @@ import COKPCore
 import Foundation
 import Observation
 
-/// The shell's view of the session: the snapshot as of the last drain, the latest
-/// error the session reported, and whether the engine has shut down. It changes
-/// only on the main queue, when `SessionClient` drains a batch. SwiftUI islands bind
-/// to it; AppKit code reads it from `SessionClient.onBatch`.
+/// The shell's view of the session: the snapshot and the playlist as of the last
+/// drain, whether the private session is on, the latest error the session reported,
+/// and whether the engine has shut down. It changes only on the main queue, when
+/// `SessionClient` drains a batch. SwiftUI islands bind to it; AppKit code reads it
+/// from `SessionClient.onBatch`.
 @Observable
 final class SessionStore {
     private(set) var snapshot = SessionSnapshot()
+    private(set) var playlist = PlaylistState()
+    /// Follows the `history.private_session` event; every session starts with it off.
+    private(set) var privateSession = false
     private(set) var lastError: String?
     private(set) var shutDown = false
 
@@ -16,19 +20,27 @@ final class SessionStore {
         self.snapshot = snapshot
     }
 
+    func replace(playlist: PlaylistState) {
+        self.playlist = playlist
+    }
+
     func apply(_ batch: EventBatch) {
         for event in batch.events {
             switch event {
             case .snapshotChanged(let changes):
                 for change in changes { snapshot.apply(change) }
+            case .playlistChanged(let playlist):
+                // The whole playlist as it is at the drain.
+                self.playlist = playlist
+            case .history(.privateSession(let enabled)):
+                privateSession = enabled
+            case .history:
+                // A shell showing the history queries it again.
+                break
             case .error(_, let message, _):
                 lastError = message
             case .shutdown:
                 shutDown = true
-            case .history, .playlistChanged:
-                // Neither changes a snapshot field; a shell showing the history
-                // or the playlist reads them from the event or queries again.
-                break
             }
         }
     }
@@ -63,6 +75,9 @@ final class SessionClient {
         // The state so far, so the drained changes apply to it.
         if case .snapshot(let snapshot)? = query(.snapshot) {
             store.replace(with: snapshot)
+        }
+        if case .playlist(let playlist)? = query(.playlist) {
+            store.replace(playlist: playlist)
         }
         mailbox.client = self
         okp_session_set_wakeup(created, sessionWakeup, Unmanaged.passUnretained(mailbox).toOpaque())
