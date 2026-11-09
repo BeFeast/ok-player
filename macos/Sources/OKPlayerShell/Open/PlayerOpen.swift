@@ -41,8 +41,8 @@ extension PlayerApp {
     /// returns whether anything was.
     @discardableResult
     func connectOpenRouter(_ client: SessionClient) -> Bool {
-        // TODO(#882): load dropped subtitles with the session's add-subtitle command:
-        // openRouter.addSubtitle = { [weak client] path in client?.dispatch(...) }.
+        // TODO(#882): once the session has its `add_subtitle {path}` command, load
+        // subtitles dropped on playing media with it through openRouter.addSubtitle.
         guard let outcome = openRouter.connect(client) else { return false }
         return showOpenOutcome(outcome)
     }

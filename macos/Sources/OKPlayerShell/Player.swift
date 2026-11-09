@@ -211,7 +211,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             smokeRun = SmokeRun(app: self, path: path)
             smokeRun?.start()
         } else if !connectOpenRouter(client), let path = args.first {
-            open([URL(fileURLWithPath: path)])
+            self.open([URL(fileURLWithPath: path)])
         }
     }
     func play(_ path: String) {
