@@ -184,6 +184,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard case .transport(let view)? = client?.query(.transport(at: at)) else { return nil }
             return view
         }
+        osc.onPrevious = { [weak self] in _ = self?.playlist.step(.previous) }
+        osc.onNext = { [weak self] in _ = self?.playlist.step(.next) }
         video.onTogglePause = { [weak self] in self?.togglePause() }
         osc.focusReturn = video
         video.videoLayer.onError = { [weak self] message in self?.fail(message) }
@@ -233,6 +235,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let snapshot = client.store.snapshot
         video?.hasVideo = snapshot.video != nil
         osc.sessionChanged(snapshot)
+        osc.playlistSteps = (previous: playlist.canStep(.previous), next: playlist.canStep(.next))
         prompt.isHidden = snapshot.source != nil && snapshot.status != .opening
         smokeRun?.sessionChanged(snapshot)
     }
@@ -458,6 +461,13 @@ final class SmokeRun {
         guard app.osc.isRevealed, !app.osc.panel.isHidden, elapsed.contains(":"), elapsed != "00:00" else {
             fail("The transport controls did not come back with the time (\(elapsed))"); return
         }
+        // Previous and next follow the session playlist: the fixture's folder decides
+        // whether there is anything to step to.
+        let items = app.playlist.state.items.count
+        let steps = app.osc.nextButton.isEnabled
+        guard steps == (items >= 2), app.osc.previousButton.isEnabled == steps else {
+            fail("Previous/next are \(steps ? "enabled" : "disabled") with \(items) playlist items"); return
+        }
         phase = .finished
         let counts = layer.counts, use = layer.surface.contextUse
         let snapshot = client.store.snapshot
@@ -467,7 +477,8 @@ final class SmokeRun {
               + "before_resize=\(resizeRenders) ca_contexts_held=\(use.held) ca_context_copies=\(use.copies) "
               + "draw_contexts=\(use.drawnInto.count) pixel_format=\(pixelFormat) "
               + "volume=\(Int(snapshot.volume ?? -1)) tracks=\(snapshot.tracks.count) "
-              + "osc_paused_shown=true osc_auto_hidden=true osc_focus_returned=true osc_elapsed=\(elapsed) osc_trailing=\(trailing)")
+              + "osc_paused_shown=true osc_auto_hidden=true osc_focus_returned=true osc_elapsed=\(elapsed) osc_trailing=\(trailing) "
+              + "playlist_items=\(items) osc_steps=\(steps ? "enabled" : "disabled")")
         if let directory = app.snapshotDirectory { app.captureAppearances(to: directory) }
         // Closing the window during playback runs the real teardown path; the app
         // reports it once teardown has returned.
