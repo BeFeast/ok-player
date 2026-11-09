@@ -94,6 +94,8 @@ enum Command: Codable, Equatable {
     case invokeCommand(id: String)
     /// A watch-history action, answered with `DispatchResult.history`.
     case history(action: HistoryAction)
+    /// Open, step through and edit the playlist.
+    case playlist(action: PlaylistAction)
 }
 
 struct CommandEnvelope: Codable, Equatable {
@@ -121,6 +123,10 @@ enum DispatchResult: Codable, Equatable {
     case perform
     /// The answer to a `history` command.
     case history(result: HistoryActionResult)
+    /// Carried out by the session itself (a playlist edit, or an open whose
+    /// folders are being read); nothing reached the engine yet. Events report the
+    /// effect.
+    case applied
 }
 
 struct DispatchReply: Codable, Equatable {
@@ -142,6 +148,8 @@ enum Query: Codable, Equatable {
     case shortcutTable
     /// A watch-history query, answered with `QueryResult.history`.
     case history(query: HistoryQuery)
+    /// The playlist as it is now.
+    case playlist
 }
 
 struct QueryEnvelope: Codable, Equatable {
@@ -156,6 +164,7 @@ enum QueryResult: Codable, Equatable {
     case commandRegistry(commands: [RegistryCommand])
     case shortcutTable(shortcuts: [ShortcutRow])
     case history(result: HistoryQueryResult)
+    case playlist(playlist: PlaylistState)
     case rejected(reason: RejectReason, message: String)
 }
 
@@ -317,18 +326,75 @@ enum SnapshotChange: Codable, Equatable {
     case cacheAhead(value: Double?)
 }
 
-/// One entry of a drained batch: at most one `snapshotChanged`, first; errors in
-/// the order they happened; `shutdown` last.
+/// One entry of a drained batch: at most one `snapshotChanged`, first; then at
+/// most one `playlistChanged`; errors in the order they happened; `shutdown` last.
 enum Event: Codable, Equatable {
     case snapshotChanged(changes: [SnapshotChange])
+    /// The playlist changed: its items, current item, play modes or scanning.
+    case playlistChanged(playlist: PlaylistState)
     case error(kind: ErrorKind, message: String, requestId: UInt64?)
     case shutdown
     case history(event: HistoryEvent)
 }
 
+extension Event {
+    /// Whether `name` (an `events` entry's key, after the decoder's snake case
+    /// conversion) is an event this shell knows.
+    static func isKnown(_ name: String) -> Bool {
+        CodingKeys(stringValue: name) != nil
+    }
+}
+
 struct EventBatch: Codable, Equatable {
     var schemaVersion: Int
     var events: [Event]
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, events
+    }
+
+    init(schemaVersion: Int, events: [Event]) {
+        self.schemaVersion = schemaVersion
+        self.events = events
+    }
+
+    /// Decodes the entries one by one and drops an event this shell does not know,
+    /// keeping the rest of the batch (docs/session-abi.md, "Compatibility within a
+    /// version"). A known event that does not decode still fails the batch.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        var entries = try container.nestedUnkeyedContainer(forKey: .events)
+        var events: [Event] = []
+        while !entries.isAtEnd {
+            if let event = try entries.decode(EventEntry.self).event {
+                events.append(event)
+            }
+        }
+        self.events = events
+    }
+}
+
+/// One entry of a batch's `events`: the event, or `nil` for one this shell does
+/// not know.
+private struct EventEntry: Decodable {
+    let event: Event?
+
+    init(from decoder: Decoder) throws {
+        let names = try decoder.container(keyedBy: EntryName.self).allKeys
+        guard names.contains(where: { Event.isKnown($0.stringValue) }) else {
+            event = nil
+            return
+        }
+        event = try Event(from: decoder)
+    }
+
+    private struct EntryName: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+        init(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { return nil }
+    }
 }
 
 // MARK: - Watch history (rust/crates/okp-session/src/history/wire.rs)
@@ -416,4 +482,54 @@ enum HistoryEvent: Codable, Equatable {
     case privateSession(enabled: Bool)
     /// The history file could not be written; reported once until a save succeeds.
     case saveFailed(message: String)
+}
+
+// MARK: - Playlist (rust/crates/okp-session/src/playlist/mod.rs)
+
+/// What happens when an item ends.
+enum RepeatMode: String, Codable, CaseIterable {
+    case off, one, all
+}
+
+/// Where queued sources go.
+enum QueueMode: String, Codable, CaseIterable {
+    case append
+    case playNext = "play_next"
+}
+
+/// A playlist command. Indexes count from 0 in the order of `PlaylistState.items`.
+enum PlaylistAction: Codable, Equatable {
+    /// Files, folders, M3U playlists or URLs, replacing the playlist.
+    case open(sources: [MediaSource])
+    case next
+    case previous
+    case jump(index: Int)
+    case queue(sources: [MediaSource], mode: QueueMode)
+    /// Move the item at `index` to play right after the current one.
+    case playNext(index: Int)
+    /// Move the item at `from` to `to` (a position after its removal).
+    case move(from: Int, to: Int)
+    /// Never the current item or the last one.
+    case remove(index: Int)
+    /// Remove every item except the current one.
+    case clearQueue
+    case setRepeat(mode: RepeatMode)
+    /// A `seed` makes the order reproducible.
+    case setShuffle(enabled: Bool, seed: UInt64? = nil)
+}
+
+/// One item of the playlist.
+struct PlaylistEntry: Codable, Equatable {
+    var source: MediaSource
+    /// A short label: the file name, or the URL's last segment.
+    var title: String
+}
+
+struct PlaylistState: Codable, Equatable {
+    var items: [PlaylistEntry] = []
+    var currentIndex: Int?
+    var `repeat` = RepeatMode.off
+    var shuffle = false
+    /// A folder or playlist file is being read.
+    var scanning = false
 }

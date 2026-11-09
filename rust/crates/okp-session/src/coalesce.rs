@@ -7,11 +7,12 @@
 //! keep their order. The playhead fields (`time_pos`, `cache_ahead`) change on
 //! every frame, so on their own they are published at most once per
 //! [`TIMELINE_INTERVAL`]; whenever anything else changes they ride along at once.
+//! The playlist is reported whole, at most once per batch, with its latest state.
 
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
-use crate::protocol::{Event, SessionSnapshot, SnapshotChange};
+use crate::protocol::{Event, PlaylistState, SessionSnapshot, SnapshotChange};
 
 /// Minimum spacing of playhead-only updates: about 10 Hz.
 pub const TIMELINE_INTERVAL: Duration = Duration::from_millis(100);
@@ -156,6 +157,8 @@ pub(crate) struct Coalescer {
     dirty: BTreeSet<Field>,
     discrete: Vec<Event>,
     last_timeline: Option<Instant>,
+    /// The latest playlist not yet drained.
+    playlist: Option<PlaylistState>,
 }
 
 impl Coalescer {
@@ -165,6 +168,7 @@ impl Coalescer {
             dirty: BTreeSet::new(),
             discrete: Vec::new(),
             last_timeline: None,
+            playlist: None,
         }
     }
 
@@ -204,6 +208,11 @@ impl Coalescer {
         self.discrete.push(event);
     }
 
+    /// Queue the playlist's latest state, replacing any not yet drained.
+    pub(crate) fn set_playlist(&mut self, playlist: PlaylistState) {
+        self.playlist = Some(playlist);
+    }
+
     /// Queue `event` unless an equal event is already waiting to be drained.
     pub(crate) fn push_once(&mut self, event: Event) {
         if !self.discrete.contains(&event) {
@@ -212,7 +221,7 @@ impl Coalescer {
     }
 
     pub(crate) fn has_pending(&self) -> bool {
-        !self.dirty.is_empty() || !self.discrete.is_empty()
+        !self.dirty.is_empty() || !self.discrete.is_empty() || self.playlist.is_some()
     }
 
     /// Take everything queued as one batch.
@@ -224,6 +233,9 @@ impl Coalescer {
                 .map(|field| field.change(&self.published))
                 .collect();
             events.push(Event::SnapshotChanged { changes });
+        }
+        if let Some(playlist) = self.playlist.take() {
+            events.push(Event::PlaylistChanged { playlist });
         }
         // Shutdown is always reported last, after any error it caused.
         let (shutdown, mut rest): (Vec<Event>, Vec<Event>) = std::mem::take(&mut self.discrete)

@@ -739,7 +739,8 @@ fn every_fixture_file_is_checked() {
     let on_disk: BTreeSet<String> = fs::read_dir(fixtures_dir())
         .expect("the fixtures directory exists")
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|name| name.ends_with(".json"))
+        // The playlist's documents are checked by `golden_playlist.rs`.
+        .filter(|name| name.ends_with(".json") && !name.starts_with("playlist-"))
         .collect();
     let checked: BTreeSet<String> = CHECKED.iter().map(|name| (*name).to_owned()).collect();
     assert_eq!(on_disk, checked);

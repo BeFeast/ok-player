@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "command": {
+    "playlist": {
+      "action": {
+        "queue": {
+          "sources": [{ "kind": "local", "location": "/Users/example/Movies/next.mkv" }],
+          "mode": "play_next"
+        }
+      }
+    }
+  }
+}

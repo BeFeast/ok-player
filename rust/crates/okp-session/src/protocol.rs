@@ -21,10 +21,14 @@ pub use crate::history::{
     HistoryAction, HistoryActionResult, HistoryBucket, HistoryEntry, HistoryEvent, HistoryQuery,
     HistoryQueryResult, HistorySection, HistoryState,
 };
+pub use crate::playlist::{PlaylistAction, PlaylistEntry, PlaylistState, QueueMode, RepeatMode};
 pub use crate::window::{VideoClickIntent, WindowRect, WindowSize};
 
 /// Version of every envelope below. Bump on any change a shell built against
-/// the previous version could not decode or would misread.
+/// the previous version could not decode or would misread. A new command,
+/// query or event, or a reply variant that answers only a new command, keeps
+/// the version: shells skip events they do not know (`docs/session-abi.md`,
+/// "Compatibility within a version").
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// What the shell passes when it creates a session.
@@ -142,6 +146,10 @@ pub enum Command {
     History {
         action: HistoryAction,
     },
+    /// Open, step through and edit the playlist; see [`PlaylistAction`].
+    Playlist {
+        action: PlaylistAction,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,6 +204,10 @@ pub enum DispatchResult {
     Perform {},
     /// The answer to a `history` command.
     History { result: HistoryActionResult },
+    /// Carried out by the session itself (a playlist edit, or an open whose
+    /// folders are being read); nothing reached the engine yet. Events report
+    /// the effect.
+    Applied {},
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -274,6 +286,8 @@ pub enum Query {
     ShortcutTable {},
     /// A watch-history query; see [`HistoryQuery`].
     History { query: HistoryQuery },
+    /// The playlist as it is now.
+    Playlist {},
 }
 
 /// `{"schema_version":1,"result":{...}}`, the answer to a query.
@@ -308,6 +322,9 @@ pub enum QueryResult {
     History {
         result: HistoryQueryResult,
     },
+    Playlist {
+        playlist: PlaylistState,
+    },
     Rejected {
         reason: RejectReason,
         message: String,
@@ -324,13 +341,18 @@ pub struct EventBatch {
 
 /// One entry of a drained batch. A batch holds at most one `snapshot_changed`,
 /// first, carrying the latest value of every field that changed since the
-/// previous batch; `error` events follow in the order they happened; `shutdown`
-/// comes last.
+/// previous batch; then at most one `playlist_changed` with the latest
+/// playlist; `error` events follow in the order they happened; `shutdown` comes
+/// last.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Event {
     SnapshotChanged {
         changes: Vec<SnapshotChange>,
+    },
+    /// The playlist changed: its items, current item, play modes or scanning.
+    PlaylistChanged {
+        playlist: PlaylistState,
     },
     Error {
         kind: ErrorKind,
@@ -529,6 +551,9 @@ pub(crate) enum Route<'a> {
     /// `invoke_command`, which names a registry command instead of carrying
     /// one; the session resolves it before routing.
     Registry,
+    /// A playlist command: the session's playlist decides it and plays an item
+    /// with an `open`, so the command itself is never forwarded.
+    Playlist(&'a PlaylistAction),
 }
 
 impl Command {
@@ -570,6 +595,7 @@ impl Command {
             Self::SetSubtitleDelay { seconds } => core::PlayerCommand::SetSubtitleDelay(*seconds),
             Self::History { action } => return Route::History(action),
             Self::InvokeCommand { .. } => return Route::Registry,
+            Self::Playlist { action } => return Route::Playlist(action),
         })
     }
 }

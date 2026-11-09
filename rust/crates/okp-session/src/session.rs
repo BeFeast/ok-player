@@ -19,10 +19,11 @@ use crate::commands::{CommandRegistry, Invocation, WindowState};
 use crate::engine::{Engine, MpvEngine, Observation};
 use crate::history::{HistoryAction, HistoryActionResult, Report, SessionHistory};
 use crate::machine::SessionMachine;
+use crate::playlist::{Background, PlannedOpen, SessionPlaylist, Step};
 use crate::protocol::{
     Command, CommandEnvelope, DispatchReply, DispatchResult, ErrorKind, Event, EventBatch,
-    MediaSource, Query, QueryEnvelope, QueryReply, QueryResult, RejectReason, Route,
-    SCHEMA_VERSION, SessionConfig, SessionSnapshot, Track, TrackKind, VideoGeometry,
+    MediaSource, PlaylistAction, Query, QueryEnvelope, QueryReply, QueryResult, RejectReason,
+    Route, SCHEMA_VERSION, SessionConfig, SessionSnapshot, Track, TrackKind, VideoGeometry,
     parse_envelope, to_json,
 };
 use crate::reconcile::{core_end_reason, endfile_error, event_matches_source};
@@ -73,6 +74,7 @@ struct State {
     load: Option<i64>,
     /// Tracks the current open asked for, selected once its file has loaded.
     pending_tracks: Vec<(TrackKind, i64)>,
+    playlist: SessionPlaylist,
     /// The initial window fit the current source is owed.
     fit: window::SourceFit,
     /// The end of file that ended the current media carried an error.
@@ -153,6 +155,7 @@ impl Session {
         let signal = Arc::new(Signal::default());
         let listener_signal = Arc::clone(&signal);
         engine.set_listener(Some(Arc::new(move || listener_signal.notify())));
+        let playlist_signal = Arc::clone(&signal);
         let history_signal = Arc::clone(&signal);
         history.set_waker(Arc::new(move || history_signal.notify()));
         let shared = Arc::new(Shared {
@@ -164,6 +167,7 @@ impl Session {
                 observed_paused: None,
                 load: None,
                 pending_tracks: Vec::new(),
+                playlist: SessionPlaylist::new(Arc::new(move || playlist_signal.notify())),
                 fit: window::SourceFit::default(),
                 end_failed: false,
                 history,
@@ -204,66 +208,27 @@ impl Session {
     }
 
     /// Validate `command` with the core state machine and, only if it accepts,
-    /// hand it to the engine. A history action is carried out by the session
-    /// itself.
+    /// hand it to the engine. A playlist command is decided by the session's
+    /// playlist, and an item it plays is opened the same way. A history action
+    /// is carried out by the session itself.
     pub fn dispatch(&self, command: &Command) -> DispatchResult {
         if let Command::InvokeCommand { id } = command {
             return self.invoke_command(id);
         }
         let engine = &*self.shared.engine;
         let mut state = lock(&self.shared.state);
-        let command = state.prepare(command);
-        let core = match command.route() {
-            Route::Player(core) => core,
-            Route::History(action) => {
-                let result = state.history_action(action);
-                drop(state);
-                self.shared.signal.notify();
-                return DispatchResult::History { result };
-            }
+        let result = match command.route() {
+            Route::Playlist(action) => state.dispatch_playlist(engine, action),
+            Route::History(action) => DispatchResult::History {
+                result: state.history_action(action),
+            },
             // Handled above, before the state is locked.
-            Route::Registry => return rejected(RejectReason::Malformed),
-        };
-        let mut load = None;
-        let (outcome, engine_result) = state.machine.dispatch(&core, |_, request_id| {
-            engine
-                .forward(&command, request_id)
-                .map(|entry| load = entry)
-        });
-        if engine_result.is_ok() {
-            state.track_load(&command, outcome, load);
-        }
-        if matches!(outcome, CommandOutcome::Accepted { .. }) {
-            state.history_dispatched(&command, engine_result.is_ok(), engine);
-        }
-        if matches!(outcome, CommandOutcome::Accepted { .. })
-            && matches!(*command, Command::Open { .. } | Command::Close {})
-        {
-            // Whatever the engine makes of it, the previous source is gone, and
-            // with it any fit still owed to it.
-            state.fit.begin_source();
-        }
-        let result = match (outcome, engine_result) {
-            (CommandOutcome::Accepted { request_id }, Ok(())) => {
-                DispatchResult::Accepted { request_id }
+            Route::Registry => rejected(RejectReason::Malformed),
+            Route::Player(_) => {
+                let result = state.forward(engine, command);
+                state.playlist.follow(command, &result);
+                result
             }
-            (CommandOutcome::Accepted { request_id }, Err(message)) => {
-                state.queue.push(Event::Error {
-                    kind: if matches!(core, PlayerCommand::Open(_)) {
-                        ErrorKind::LoadFailed
-                    } else {
-                        ErrorKind::CommandFailed
-                    },
-                    message: message.clone(),
-                    request_id: Some(request_id),
-                });
-                DispatchResult::Failed {
-                    request_id,
-                    message,
-                }
-            }
-            (CommandOutcome::NoOp, _) => DispatchResult::NoOp {},
-            (CommandOutcome::Rejected(reason), _) => rejected(reason.into()),
         };
         drop(state);
         self.shared.signal.notify();
@@ -274,6 +239,9 @@ impl Session {
         match query {
             Query::Snapshot {} => QueryResult::Snapshot {
                 snapshot: self.snapshot(),
+            },
+            Query::Playlist {} => QueryResult::Playlist {
+                playlist: lock(&self.shared.state).playlist.state(),
             },
             Query::WindowFit {
                 video,
@@ -510,6 +478,7 @@ impl State {
         if loaded {
             self.select_pending_tracks(engine);
         }
+        self.advance_playlist(engine);
         let current = self.project(&observation);
         self.fit.observe(current.video.as_ref());
         let held = self.queue.observe(&current, now);
@@ -544,6 +513,103 @@ impl State {
     fn quit(&mut self, engine: &dyn Engine) {
         self.refresh(engine, Instant::now());
         self.history.quit(&mut self.queue);
+    }
+
+    /// Validate `command` with the core state machine and, only if it accepts,
+    /// hand it to the engine.
+    /// The history has its say first: an open may resume where the media was
+    /// left.
+    fn forward(&mut self, engine: &dyn Engine, command: &Command) -> DispatchResult {
+        let command = self.prepare(command);
+        let Route::Player(core) = command.route() else {
+            // Playlist, history and registry commands never reach here.
+            return rejected(RejectReason::Malformed);
+        };
+        let mut load = None;
+        let (outcome, engine_result) = self.machine.dispatch(&core, |_, request_id| {
+            engine
+                .forward(&command, request_id)
+                .map(|entry| load = entry)
+        });
+        if engine_result.is_ok() {
+            self.track_load(&command, outcome, load);
+        }
+        if matches!(outcome, CommandOutcome::Accepted { .. }) {
+            self.history_dispatched(&command, engine_result.is_ok(), engine);
+        }
+        if matches!(outcome, CommandOutcome::Accepted { .. })
+            && matches!(*command, Command::Open { .. } | Command::Close {})
+        {
+            // Whatever the engine makes of it, the previous source is gone, and
+            // with it any fit still owed to it.
+            self.fit.begin_source();
+        }
+        match (outcome, engine_result) {
+            (CommandOutcome::Accepted { request_id }, Ok(())) => {
+                DispatchResult::Accepted { request_id }
+            }
+            (CommandOutcome::Accepted { request_id }, Err(message)) => {
+                self.queue.push(Event::Error {
+                    kind: if matches!(core, PlayerCommand::Open(_)) {
+                        ErrorKind::LoadFailed
+                    } else {
+                        ErrorKind::CommandFailed
+                    },
+                    message: message.clone(),
+                    request_id: Some(request_id),
+                });
+                DispatchResult::Failed {
+                    request_id,
+                    message,
+                }
+            }
+            (CommandOutcome::NoOp, _) => DispatchResult::NoOp {},
+            (CommandOutcome::Rejected(reason), _) => rejected(reason.into()),
+        }
+    }
+
+    fn dispatch_playlist(
+        &mut self,
+        engine: &dyn Engine,
+        action: &PlaylistAction,
+    ) -> DispatchResult {
+        let current = self.machine.machine().snapshot().source.clone();
+        match self.playlist.dispatch(action, current.as_ref()) {
+            Step::Reply(result) => result,
+            Step::Open(open) => self.open_planned(engine, open),
+        }
+    }
+
+    /// Open an item the playlist chose, as an `open` command would.
+    fn open_planned(&mut self, engine: &dyn Engine, open: PlannedOpen) -> DispatchResult {
+        let result = self.forward(engine, &open.command());
+        self.playlist.opened(open, &result);
+        result
+    }
+
+    /// Play what finished folder reads and an end of file call for, and queue
+    /// the playlist if it changed.
+    fn advance_playlist(&mut self, engine: &dyn Engine) {
+        let core = self.machine.machine();
+        let ended = (core.status() == PlaybackStatus::Ended)
+            .then(|| core.snapshot().source.clone())
+            .flatten();
+        for step in self.playlist.poll(ended.as_ref()) {
+            match step {
+                Background::Open(open) => {
+                    // An engine refusal is already queued as an error event.
+                    let _ = self.open_planned(engine, open);
+                }
+                Background::NothingPlayable => self.queue.push(Event::Error {
+                    kind: ErrorKind::LoadFailed,
+                    message: "nothing playable was found".to_owned(),
+                    request_id: None,
+                }),
+            }
+        }
+        if let Some(playlist) = self.playlist.take_changed() {
+            self.queue.set_playlist(playlist);
+        }
     }
 
     /// Remember what a forwarded command means for the current load.
@@ -644,6 +710,9 @@ impl State {
                     return false;
                 }
                 self.end_failed = error.is_some();
+                if reason == EndFileReason::Eof && error.is_none() {
+                    self.playlist.end_of_file();
+                }
                 if let Some(message) = error {
                     self.machine.apply_event(PlayerEvent::Error(PlayerError {
                         kind: PlayerErrorKind::LoadFailed,
@@ -1825,4 +1894,7 @@ mod tests {
             }
         }
     }
+
+    /// The playlist through the session: folder scans, auto-advance, commands.
+    mod playlist;
 }

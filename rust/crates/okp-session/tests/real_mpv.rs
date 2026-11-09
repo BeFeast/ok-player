@@ -48,7 +48,7 @@ impl Store {
                     }
                 }
                 Event::Error { message, .. } => self.errors.push(message),
-                Event::Shutdown {} | Event::History { .. } => {}
+                Event::PlaylistChanged { .. } | Event::Shutdown {} | Event::History { .. } => {}
             }
         }
     }
@@ -214,7 +214,7 @@ fn a_missing_file_ends_with_a_load_error() {
                     }
                 }
                 Event::Error { message, .. } => errors.push(message),
-                Event::Shutdown {} | Event::History { .. } => {}
+                Event::PlaylistChanged { .. } | Event::Shutdown {} | Event::History { .. } => {}
             }
         }
         state.status == Status::Ended
