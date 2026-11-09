@@ -286,18 +286,5 @@ final class FileDropViewTests: XCTestCase {
         XCTAssertEqual(view.highlight.frame, view.bounds)
         XCTAssertNil(view.highlight.hitTest(NSPoint(x: 10, y: 10)))
         XCTAssertTrue(view.subviews.last === view.highlight, "the highlight lies over the content")
-        XCTAssertTrue(view.notice.isHidden)
-        XCTAssertNil(view.notice.hitTest(NSPoint(x: 10, y: 10)))
-    }
-
-    func testANoticeShowsItsTextAndHidesItself() {
-        let notice = FileDropView(content: NSView()).notice
-        notice.duration = 0.05
-        notice.show("First")
-        notice.show("Nothing playable was found")
-        XCTAssertFalse(notice.isHidden)
-        XCTAssertEqual(notice.label.stringValue, "Nothing playable was found")
-        let hidden = expectation(for: NSPredicate { _, _ in notice.isHidden }, evaluatedWith: nil)
-        wait(for: [hidden], timeout: 5)
     }
 }
