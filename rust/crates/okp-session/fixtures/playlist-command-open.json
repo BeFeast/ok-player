@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "command": {
+    "playlist": {
+      "action": {
+        "open": {
+          "sources": [
+            { "kind": "local", "location": "/Users/example/Movies/Show/Episode 1.mkv" },
+            { "kind": "local", "location": "/Users/example/Movies/Extras" },
+            { "kind": "local", "location": "/Users/example/Music/queue.m3u8" },
+            { "kind": "url", "location": "https://example.com/clip.mp4" }
+          ]
+        }
+      }
+    }
+  }
+}

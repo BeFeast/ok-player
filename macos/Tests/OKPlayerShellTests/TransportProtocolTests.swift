@@ -5,7 +5,8 @@ import XCTest
 /// The transport documents (rust/crates/okp-session/fixtures/transport), read and
 /// written by the Swift models.
 final class TransportProtocolTests: XCTestCase {
-    private static let covered: Set<String> = [
+    /// Every transport fixture, by its name in `transport/`.
+    static let covered: Set<String> = [
         "query-transport.json", "query-transport-at.json", "query-reply-transport.json", "command-nudge-volume.json",
         "command-toggle-mute.json",
     ]

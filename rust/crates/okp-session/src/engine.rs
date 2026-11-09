@@ -200,6 +200,18 @@ impl Engine for MpvEngine {
                 TrackKind::Subtitle => engine.select_subtitle(*id),
             },
             Command::SetSubtitleDelay { seconds } => engine.set_subtitle_delay(*seconds),
+            Command::Playlist { .. } => {
+                return Err("playlist commands are carried out by the session".to_owned());
+            }
+            // The session carries history actions out itself.
+            Command::History { .. } => {
+                return Err("a history action is not an engine command".to_owned());
+            }
+            // The session resolves an invoked registry command to the command it
+            // stands for before anything reaches the engine.
+            Command::InvokeCommand { id } => {
+                return Err(format!("invoke_command `{id}` is not an engine command"));
+            }
             // The session resolves a nudge into a `set_volume` first.
             Command::NudgeVolume { .. } => {
                 return Err("a volume nudge must be resolved by the session".to_owned());
@@ -299,6 +311,7 @@ mod tests {
                 name: "input-vo-keyboard".to_owned(),
                 value: "yes".to_owned(),
             }],
+            shell_commands: Vec::new(),
         };
         let options = engine_options(&config);
         let last = options

@@ -42,6 +42,7 @@ pub fn headless_config(dir: &Path) -> SessionConfig {
                 value: value.to_owned(),
             })
             .collect(),
+        shell_commands: Vec::new(),
     }
 }
 

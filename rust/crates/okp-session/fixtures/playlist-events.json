@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "events": [
+    {
+      "snapshot_changed": {
+        "changes": [{ "status": { "value": "opening" } }]
+      }
+    },
+    {
+      "playlist_changed": {
+        "playlist": {
+          "items": [
+            {
+              "source": { "kind": "local", "location": "/Users/example/Movies/Show/Episode 2.mkv" },
+              "title": "Episode 2.mkv"
+            }
+          ],
+          "current_index": 0,
+          "repeat": "off",
+          "shuffle": false,
+          "scanning": true
+        }
+      }
+    }
+  ]
+}
