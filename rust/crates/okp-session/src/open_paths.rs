@@ -53,8 +53,13 @@ impl OpenFormats {
 pub enum OpenPlan {
     /// Replace the playlist with these sources, in the given order, through the
     /// playlist's `open`: media files, folders and M3U files. Subtitle files
-    /// and files of any other kind among them are left out.
-    Open { sources: Vec<MediaSource> },
+    /// are retained for loading after the first media; other files are left out.
+    Open {
+        sources: Vec<MediaSource>,
+        /// External subtitles to load once the first opened media has loaded.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        subtitles: Vec<String>,
+    },
     /// Only subtitle files, while media is loaded: load them onto that media.
     AddSubtitles { paths: Vec<String> },
     /// Nothing to open: no media file, folder or M3U file, and no subtitle file
@@ -94,7 +99,7 @@ pub fn plan(paths: &[String], folders: &[String], status: Status) -> OpenPlan {
         }
     }
     if !sources.is_empty() {
-        return OpenPlan::Open { sources };
+        return OpenPlan::Open { sources, subtitles };
     }
     if !subtitles.is_empty() && matches!(status, Status::Playing | Status::Paused) {
         return OpenPlan::AddSubtitles { paths: subtitles };
@@ -127,6 +132,7 @@ mod tests {
         assert_eq!(
             plan,
             OpenPlan::Open {
+                subtitles: Vec::new(),
                 sources: vec![local("/m/b.mkv"), local("/m/a.mp3")]
             }
         );
@@ -139,12 +145,14 @@ mod tests {
         assert_eq!(
             plan(&paths(&["/m/Show"]), &paths(&["/m/Show"]), Status::Playing),
             OpenPlan::Open {
+                subtitles: Vec::new(),
                 sources: vec![local("/m/Show")]
             }
         );
         assert_eq!(
             plan(&paths(&["/m/queue.M3U8"]), &[], Status::Idle),
             OpenPlan::Open {
+                subtitles: Vec::new(),
                 sources: vec![local("/m/queue.M3U8")]
             }
         );
@@ -156,6 +164,7 @@ mod tests {
                 Status::Idle
             ),
             OpenPlan::Open {
+                subtitles: Vec::new(),
                 sources: vec![local("/m/Extras.srt")]
             }
         );
@@ -185,6 +194,7 @@ mod tests {
         assert_eq!(
             plan(&paths(&["/m/doc.pdf", "/m/film.mkv"]), &[], Status::Playing),
             OpenPlan::Open {
+                subtitles: Vec::new(),
                 sources: vec![local("/m/film.mkv")]
             }
         );
@@ -219,14 +229,20 @@ mod tests {
     }
 
     #[test]
-    fn subtitles_next_to_media_are_left_out_of_the_open() {
+    fn mixed_selections_retain_each_subtitle_in_order() {
         assert_eq!(
             plan(
-                &paths(&["/m/film.srt", "/m/film.mkv"]),
+                &paths(&[
+                    "/m/film.srt",
+                    "/m/film.mkv",
+                    "/m/film.srt",
+                    "/m/film.de.ass"
+                ]),
                 &[],
                 Status::Playing
             ),
             OpenPlan::Open {
+                subtitles: paths(&["/m/film.srt", "/m/film.de.ass"]),
                 sources: vec![local("/m/film.mkv")]
             }
         );

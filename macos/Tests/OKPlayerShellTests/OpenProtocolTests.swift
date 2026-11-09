@@ -38,7 +38,7 @@ final class OpenProtocolTests: XCTestCase {
                 MediaSource(kind: .local, location: "\(movies)/Show"),
                 MediaSource(kind: .local, location: "\(movies)/film.mkv"),
                 MediaSource(kind: .local, location: "/Users/example/Music/queue.m3u8"),
-            ]),
+            ], subtitles: ["\(movies)/film.en.srt"]),
             "query-reply-open-paths-add-subtitles.json": .addSubtitles(paths: ["\(movies)/film.en.srt"]),
             "query-reply-open-paths-nothing.json": .nothing,
         ]

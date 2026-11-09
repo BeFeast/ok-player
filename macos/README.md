@@ -412,10 +412,12 @@ playlists is okp-core's rule; the shell has no extension list.
 
 Several files, folders or a playlist file become one session playlist (`playlist`
 `open`); one file plays with its folder as the playlist. A subtitle file dropped or
-opened on its own while media plays is planned onto that media (`add_subtitles`), but
-this shell does not load it with the session's `add_subtitle` yet, so the drop is
-refused and File > Open or Finder says so; subtitle files opened together with media
-are left out. #910 loads both.
+opened on its own while media plays or is paused is added to that media without
+replacing it (`add_subtitle`). The drag receives the same accent frame as media.
+Subtitle files selected together with media travel in the playlist open; the Rust
+session waits for the first chosen file to load, then adds them in selection order,
+each once. A replacement, close, failed load or superseded folder read discards those
+pending subtitles, so they never carry over to another video.
 
 An open that plays nothing says why in a toast (see Status and toasts), over playing
 media and over the Welcome view alike: a selection the session plans nothing for, or

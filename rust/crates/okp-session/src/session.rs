@@ -78,6 +78,8 @@ struct State {
     load: Option<i64>,
     /// Tracks the current open asked for, selected once its file has loaded.
     pending_tracks: Vec<(TrackKind, i64)>,
+    /// External subtitles owed to this engine load, never to a later open.
+    pending_subtitles: Option<PendingSubtitles>,
     playlist: SessionPlaylist,
     /// The initial window fit the current source is owed.
     fit: window::SourceFit,
@@ -92,6 +94,11 @@ struct State {
     /// The track details the menus' labels need, and the subtitle delay and
     /// size asked for.
     tracks: TrackState,
+}
+
+struct PendingSubtitles {
+    request_id: u64,
+    paths: Vec<String>,
 }
 
 /// Wakes the event thread: set by the engine listener, by commands and by
@@ -178,6 +185,7 @@ impl Session {
                 observed_paused: None,
                 load: None,
                 pending_tracks: Vec::new(),
+                pending_subtitles: None,
                 playlist: SessionPlaylist::new(Arc::new(move || playlist_signal.notify())),
                 fit: window::SourceFit::default(),
                 end_failed: false,
@@ -527,6 +535,7 @@ impl State {
         );
         if loaded {
             self.select_pending_tracks(engine);
+            self.add_pending_subtitles(engine);
         }
         self.advance_playlist(engine);
         let current = self.project(&observation);
@@ -612,6 +621,7 @@ impl State {
         {
             // Whatever the engine makes of it, the previous source is gone, and
             // with it any fit still owed to it and any failure it showed.
+            self.pending_subtitles = None;
             self.fit.begin_source();
             self.status.begin_source();
         }
@@ -657,11 +667,23 @@ impl State {
         engine: &dyn Engine,
         action: &PlaylistAction,
     ) -> DispatchResult {
+        let previous_subtitles = if matches!(action, PlaylistAction::Open { .. }) {
+            std::mem::take(&mut self.pending_subtitles)
+        } else {
+            None
+        };
         let current = self.machine.machine().snapshot().source.clone();
         let result = match self.playlist.dispatch(action, current.as_ref()) {
             Step::Reply(result) => result,
             Step::Open(open) => self.open_planned(engine, open),
         };
+        if matches!(
+            result,
+            DispatchResult::NoOp {} | DispatchResult::Rejected { .. }
+        ) && matches!(action, PlaylistAction::Open { .. })
+        {
+            self.pending_subtitles = previous_subtitles;
+        }
         if let Some(text) = status::playlist_notice(action, &result) {
             self.queue.push(Event::Notice { text });
         }
@@ -671,6 +693,17 @@ impl State {
     /// Open an item the playlist chose, as an `open` command would.
     fn open_planned(&mut self, engine: &dyn Engine, open: PlannedOpen) -> DispatchResult {
         let result = self.forward(engine, &open.command());
+        if let DispatchResult::Accepted { request_id } = result {
+            let mut paths = Vec::new();
+            for path in &open.subtitles {
+                if !paths.contains(path) {
+                    paths.push(path.clone());
+                }
+            }
+            if !paths.is_empty() {
+                self.pending_subtitles = Some(PendingSubtitles { request_id, paths });
+            }
+        }
         self.playlist.opened(open, &result);
         result
     }
@@ -772,6 +805,28 @@ impl State {
         }
     }
 
+    /// Attach a selection's external subtitles only to the load that accepted
+    /// them. Replacement/close clears this list, and failed loads discard it.
+    fn add_pending_subtitles(&mut self, engine: &dyn Engine) {
+        if !is_loaded(self.machine.machine().status()) {
+            return;
+        }
+        let Some(pending) = self.pending_subtitles.take() else {
+            return;
+        };
+        for path in pending.paths {
+            if let DispatchResult::Rejected { message, .. } =
+                self.forward(engine, &Command::AddSubtitle { path })
+            {
+                self.queue.push(Event::Error {
+                    kind: ErrorKind::CommandFailed,
+                    message,
+                    request_id: None,
+                });
+            }
+        }
+    }
+
     /// Fold one engine event in. Returns whether it was the current file
     /// finishing its load.
     fn reconcile_event(&mut self, event: EntryEvent, observation: &Observation) -> bool {
@@ -802,6 +857,7 @@ impl State {
                 if !self.ends_current_media(entry, reason, error.is_some(), path.as_deref()) {
                     return false;
                 }
+                self.pending_subtitles = None;
                 self.end_failed = error.is_some();
                 if reason == EndFileReason::Eof && error.is_none() {
                     self.playlist.end_of_file();
@@ -831,6 +887,13 @@ impl State {
             }
             MpvEvent::CommandReply { request_id, error } => {
                 let result = if error < 0 {
+                    if self
+                        .pending_subtitles
+                        .as_ref()
+                        .is_some_and(|pending| pending.request_id == request_id)
+                    {
+                        self.pending_subtitles = None;
+                    }
                     let message = error_description(error);
                     self.queue.push(Event::Error {
                         kind: ErrorKind::CommandFailed,

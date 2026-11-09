@@ -387,7 +387,7 @@ from 0 in the order of the playlist's `items`.
 
 | Action | Effect | Reply |
 |---|---|---|
-| `open {sources}` | replaces the playlist; see Opening below | the open's reply, `applied` while folders or a playlist file are read, `no_op` when nothing is playable |
+| `open {sources, subtitles?}` | replaces the playlist; see Opening below | the open's reply, `applied` while folders or a playlist file are read, `no_op` when nothing is playable |
 | `next {}`, `previous {}` | one step in play order, wrapping at both ends whatever the repeat mode | the open's reply; `no_op` with fewer than two items |
 | `jump {index}` | plays that item (the current one restarts) | the open's reply; `no_op` out of range |
 | `queue {sources, mode}` | `append` or `play_next` around the current item; only media files and plain `http`/`https` URLs, each once | `applied`; `no_op` when nothing new is queueable; `rejected`/`no_active_media` without media |
@@ -453,11 +453,15 @@ reads the filesystem.
   events. `folders` (optional, empty when left out) lists those of `paths` the
   shell knows are folders, from their file URLs; the session cannot tell
   without reading the filesystem.
-  - `open {sources}`: the media files (by okp-core's rules), M3U files and
+  - `open {sources, subtitles?}`: the media files (by okp-core's rules), M3U files and
     folders among the paths, as local sources in the given order and each once.
     The shell sends them as a playlist `open` (see Playlist), which plays media
-    files, lists folders and reads M3U files on its scan thread. Subtitle files
-    and files of any other kind among them are left out.
+    files, lists folders and reads M3U files on its scan thread. `subtitles`,
+    omitted when empty, preserves the selected subtitle paths in order, each once.
+    The shell passes them through in the playlist `open`. The session owns them
+    across folder/M3U resolution and adds them only after the first chosen media
+    has loaded. Replacement, close, resolution failure or load failure discards
+    them; auto-advance never adds them to a later item. Other files are left out.
   - `add_subtitles {paths}`: no media file, M3U file or folder was given, but
     subtitle files were, and media is `playing` or `paused`: they belong to that
     media.

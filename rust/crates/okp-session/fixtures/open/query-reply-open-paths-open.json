@@ -17,6 +17,9 @@
               "kind": "local",
               "location": "/Users/example/Music/queue.m3u8"
             }
+          ],
+          "subtitles": [
+            "/Users/example/Movies/film.en.srt"
           ]
         }
       }

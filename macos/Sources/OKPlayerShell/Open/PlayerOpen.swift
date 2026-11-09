@@ -52,8 +52,6 @@ extension PlayerApp {
     /// returns whether anything was.
     @discardableResult
     func connectOpenRouter(_ session: OpenSession) -> Bool {
-        // TODO(#910): once the session has its `add_subtitle {path}` command (#882),
-        // load subtitles dropped on playing media with it through openRouter.addSubtitle.
         guard let outcome = openRouter.connect(session) else { return false }
         return showOpenOutcome(outcome)
     }
@@ -94,7 +92,7 @@ extension PlayerApp {
             return results.contains { if case .accepted = $0 { return true } else { return false } }
         case .held:
             return true
-        case .unsupported, .nothing:
+        case .nothing:
             return false
         }
     }

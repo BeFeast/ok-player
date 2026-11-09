@@ -92,6 +92,7 @@ fn every_playlist_command_matches_its_fixture() {
     golden(
         "playlist-command-open.json",
         playlist(PlaylistAction::Open {
+            subtitles: Vec::new(),
             sources: vec![
                 local("/Users/example/Movies/Show/Episode 1.mkv"),
                 local("/Users/example/Movies/Extras"),

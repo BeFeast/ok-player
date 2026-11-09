@@ -318,6 +318,7 @@ fn a_finished_job_that_is_no_longer_in_flight_is_ignored() {
     let (mut playlist, _) = playing_local(vec![local("/media/current.mkv")]);
     playlist.next_job = 4;
     playlist.active = Some(ActiveJob {
+        subtitles: Vec::new(),
         id: 4,
         cancel: Arc::new(AtomicBool::new(false)),
         kind: JobKind::Folder,

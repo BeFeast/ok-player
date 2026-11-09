@@ -45,6 +45,7 @@ fn a_dropped_subtitle_is_planned_onto_media_only_once_it_has_loaded() {
     assert_eq!(
         open_paths(&session, &["/media/Show", "/media/b.mkv"], &["/media/Show"]),
         OpenPlan::Open {
+            subtitles: Vec::new(),
             sources: vec![
                 MediaSource {
                     kind: SourceKind::Local,
@@ -77,6 +78,7 @@ fn a_query_without_folders_takes_none_for_folders() {
             .ok(),
         Some(QueryResult::OpenPaths {
             plan: OpenPlan::Open {
+                subtitles: Vec::new(),
                 sources: vec![MediaSource {
                     kind: SourceKind::Local,
                     location: "/media/a.mkv".to_owned()

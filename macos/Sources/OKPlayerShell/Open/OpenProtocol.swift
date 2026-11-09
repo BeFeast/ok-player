@@ -20,7 +20,7 @@ struct OpenFormats: Codable, Equatable {
 enum OpenPlan: Codable, Equatable {
     /// Replace the playlist with these sources through the playlist's `open`:
     /// media files, folders and M3U files, in the given order.
-    case open(sources: [MediaSource])
+    case open(sources: [MediaSource], subtitles: [String]? = nil)
     /// Only subtitle files, while media is loaded: load them onto that media.
     case addSubtitles(paths: [String])
     /// No paths, or only subtitle files with no media loaded.

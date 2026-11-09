@@ -94,19 +94,22 @@ final class OpenRouterTests: XCTestCase {
         router.connect(session)
         let urls = paths.map(file)
 
-        // Until the session has a command for it, a subtitle drop is refused.
-        XCTAssertFalse(router.accepts(urls))
-        XCTAssertEqual(router.open(urls), .unsupported(.addSubtitles(paths: paths)))
-
-        var loaded: [String] = []
-        router.addSubtitle = { path in
-            loaded.append(path)
-            return .accepted(requestId: 7)
-        }
         XCTAssertTrue(router.accepts(urls))
-        XCTAssertEqual(router.open(urls), .subtitlesAdded(results: [.accepted(requestId: 7), .accepted(requestId: 7)]))
-        XCTAssertEqual(loaded, paths)
-        XCTAssertTrue(session.dispatched.isEmpty, "the playlist is left alone")
+        XCTAssertEqual(router.open(urls), .subtitlesAdded(results: [.accepted(requestId: 1), .accepted(requestId: 1)]))
+        XCTAssertEqual(session.dispatched, paths.map { .addSubtitle(path: $0) }, "the playlist is left alone")
+    }
+
+    func testAMixedSelectionForwardsItsSubtitlesWithThePlaylistOpen() {
+        let sources = [local("/m/film.mkv")]
+        let subtitles = ["/m/film.srt", "/m/film.de.ass"]
+        let router = OpenRouter()
+        let session = FakeOpenSession(plan: .open(sources: sources, subtitles: subtitles))
+        router.connect(session)
+        XCTAssertTrue(router.accepts([file("/m/film.mkv"), file("/m/film.srt")]))
+        let command = Command.playlist(action: .open(sources: sources, subtitles: subtitles))
+        XCTAssertEqual(router.open([file("/m/film.mkv"), file("/m/film.srt")]),
+                       .opened(command: command, result: .accepted(requestId: 1), title: "film.mkv"))
+        XCTAssertEqual(session.dispatched, [command], "the session owns when these subtitles are attached")
     }
 
     func testANothingPlanIsRefusedAndSendsNothing() {
@@ -202,9 +205,9 @@ final class OpenSessionRoutingTests: XCTestCase {
         XCTAssertTrue(router.accepts([folder("/m/Show")]))
     }
 
-    func testASubtitleBesideMediaIsLeftOutAndASubtitleAloneNeedsPlayingMedia() {
+    func testASubtitleBesideMediaIsCarriedAndASubtitleAloneNeedsPlayingMedia() {
         XCTAssertEqual(router.plan(for: [file("/m/film.srt"), file("/m/film.mkv")]),
-                       .open(sources: [local("/m/film.mkv")]))
+                       .open(sources: [local("/m/film.mkv")], subtitles: ["/m/film.srt"]))
         // Nothing plays in this session.
         XCTAssertEqual(router.plan(for: [file("/m/film.srt")]), .nothing)
         XCTAssertFalse(router.accepts([file("/m/film.srt")]))
@@ -218,6 +221,71 @@ final class OpenSessionRoutingTests: XCTestCase {
         let command = Command.playlist(action: .open(sources: [local(folder.standardizedFileURL.path)]))
         // A folder is read on the session's scan thread: the open is applied, not refused.
         XCTAssertEqual(outcome, .opened(command: command, result: .applied, title: "Empty Show"))
+    }
+
+    /// A PCM WAV keeps the real engine loaded without an external encoder.
+    private func mediaAndSubtitle() throws -> (URL, URL) {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let media = root.appendingPathComponent("tone.wav")
+        let subtitle = root.appendingPathComponent("manual.srt")
+        var wav = Data()
+        func word(_ value: UInt32, bytes: Int) {
+            for offset in 0..<bytes { wav.append(UInt8((value >> (offset * 8)) & 255)) }
+        }
+        let samples: UInt32 = 8_000 * 5 * 2
+        wav.append(Data("RIFF".utf8)); word(36 + samples, bytes: 4)
+        wav.append(Data("WAVEfmt ".utf8)); word(16, bytes: 4)
+        word(1, bytes: 2); word(1, bytes: 2); word(8_000, bytes: 4)
+        word(16_000, bytes: 4); word(2, bytes: 2); word(16, bytes: 2)
+        wav.append(Data("data".utf8)); word(samples, bytes: 4)
+        wav.append(Data(repeating: 0, count: Int(samples)))
+        try wav.write(to: media)
+        try "1\n00:00:00,000 --> 00:00:04,000\nSelected subtitle\n".write(to: subtitle, atomically: true, encoding: .utf8)
+        return (media, subtitle)
+    }
+
+    private func awaitSnapshot(_ description: String, _ predicate: @escaping (SessionSnapshot) -> Bool) {
+        if predicate(client.store.snapshot) { return }
+        let ready = expectation(description: description)
+        ready.assertForOverFulfill = false
+        client.onBatch = { [weak client] _ in
+            if let snapshot = client?.store.snapshot, predicate(snapshot) { ready.fulfill() }
+        }
+        wait(for: [ready], timeout: 5)
+        client.onBatch = nil
+    }
+
+    func testAMixedSelectionLoadsItsSubtitleThroughTheRealSessionAfterMedia() throws {
+        let (media, subtitle) = try mediaAndSubtitle()
+        let expected = OpenPlan.open(sources: [local(media.path)], subtitles: [subtitle.path])
+        XCTAssertEqual(router.plan(for: [media, subtitle, subtitle]), expected)
+        guard case .opened(_, .accepted, _) = router.open([media, subtitle]) else {
+            return XCTFail("the mixed open was not accepted")
+        }
+        awaitSnapshot("mixed-open subtitle appears and is selected") { snapshot in
+            snapshot.tracks.contains { $0.kind == .subtitle && $0.external && $0.selected }
+        }
+        XCTAssertEqual(client.store.snapshot.source, local(media.path))
+        XCTAssertEqual(client.store.snapshot.tracks.filter { $0.kind == .subtitle && $0.external }.count, 1)
+    }
+
+    func testASubtitleOnlyOpenLoadsOntoPausedMediaWithoutReplacingIt() throws {
+        let (media, subtitle) = try mediaAndSubtitle()
+        _ = router.open([media])
+        awaitSnapshot("media loaded") { $0.status == .playing }
+        _ = client.dispatch(.setPaused(paused: true))
+        awaitSnapshot("media paused") { $0.status == .paused }
+        XCTAssertTrue(router.accepts([subtitle]), "subtitle drop receives the highlight while paused")
+        guard case .subtitlesAdded(let replies) = router.open([subtitle]) else {
+            return XCTFail("the subtitle-only open was refused")
+        }
+        XCTAssertEqual(replies.count, 1)
+        guard case .accepted = replies[0] else { return XCTFail("the subtitle command was not accepted") }
+        awaitSnapshot("external subtitle added while paused") { snapshot in
+            snapshot.tracks.contains { $0.kind == .subtitle && $0.external && $0.selected }
+        }
+        XCTAssertEqual(client.store.snapshot.source, local(media.path))
+        XCTAssertEqual(client.store.snapshot.status, .paused)
     }
 
     func testTheSessionListsTheCoreFormats() throws {

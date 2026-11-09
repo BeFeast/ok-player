@@ -50,6 +50,9 @@ pub enum PlaylistAction {
     /// M3U file counts only when nothing else is media.
     Open {
         sources: Vec<MediaSource>,
+        /// Load these external subtitles onto the first opened media, once loaded.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        subtitles: Vec<String>,
     },
     /// The next item in play order, wrapping at the end.
     Next {},
@@ -162,6 +165,7 @@ impl From<RepeatMode> for CoreRepeatMode {
 /// An item the session should open, and what the playlist does once it has.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PlannedOpen {
+    pub(crate) subtitles: Vec<String>,
     item: PlaylistItem,
     effect: Effect,
 }
@@ -208,6 +212,7 @@ pub(crate) enum Background {
 struct ActiveJob {
     id: u64,
     cancel: Arc<AtomicBool>,
+    subtitles: Vec<String>,
     kind: JobKind,
 }
 
@@ -298,11 +303,12 @@ impl SessionPlaylist {
         current: Option<&PlaylistItem>,
     ) -> Step {
         match action {
-            PlaylistAction::Open { sources } => self.plan_open(sources),
+            PlaylistAction::Open { sources, subtitles } => self.plan_open(sources, subtitles),
             PlaylistAction::Next {} => self.plan_step(1),
             PlaylistAction::Previous {} => self.plan_step(-1),
             PlaylistAction::Jump { index } => match self.list.get(*index) {
                 Some(item) => Step::Open(PlannedOpen {
+                    subtitles: Vec::new(),
                     item: item.clone(),
                     effect: Effect::Cursor(*index),
                 }),
@@ -363,7 +369,14 @@ impl SessionPlaylist {
                     }
                     _ => Effect::List(vec![item.clone()]),
                 };
-                self.opened(PlannedOpen { item, effect }, result);
+                self.opened(
+                    PlannedOpen {
+                        item,
+                        effect,
+                        subtitles: Vec::new(),
+                    },
+                    result,
+                );
             }
             Command::Close {} => {
                 self.supersede();
@@ -452,7 +465,7 @@ impl SessionPlaylist {
                         JobKind::Resolve { queued } => queued,
                         JobKind::Folder => Vec::new(),
                     };
-                    steps.push(self.resolved(resolution, &queued));
+                    steps.push(self.resolved(resolution, &queued, &active.subtitles));
                 }
             }
         }
@@ -470,6 +483,7 @@ impl SessionPlaylist {
             && let Some(item) = self.list.get(index)
         {
             steps.push(Background::Open(PlannedOpen {
+                subtitles: Vec::new(),
                 item: item.clone(),
                 effect: Effect::Cursor(index),
             }));
@@ -479,7 +493,12 @@ impl SessionPlaylist {
 
     /// What a finished open's read plays: its items, then whatever of
     /// `queued` is still in the playlist, in playlist order.
-    fn resolved(&self, resolution: scan::Resolution, queued: &[PlaylistItem]) -> Background {
+    fn resolved(
+        &self,
+        resolution: scan::Resolution,
+        queued: &[PlaylistItem],
+        subtitles: &[String],
+    ) -> Background {
         let queued = self
             .list
             .items()
@@ -488,6 +507,7 @@ impl SessionPlaylist {
             .cloned();
         match resolution {
             scan::Resolution::Folder(path) => Background::Open(PlannedOpen {
+                subtitles: subtitles.to_vec(),
                 item: PlaylistItem::Local(path),
                 effect: Effect::Folder {
                     queued: queued.collect(),
@@ -500,6 +520,7 @@ impl SessionPlaylist {
                     }
                 }
                 Background::Open(PlannedOpen {
+                    subtitles: subtitles.to_vec(),
                     item: items[0].clone(),
                     effect: Effect::List(items),
                 })
@@ -508,21 +529,26 @@ impl SessionPlaylist {
         }
     }
 
-    fn plan_open(&mut self, sources: &[MediaSource]) -> Step {
+    fn plan_open(&mut self, sources: &[MediaSource], subtitles: &[String]) -> Step {
         let items: Vec<PlaylistItem> = sources.iter().map(MediaSource::to_item).collect();
         match scan::classify(&items) {
             Classified::Resolved(scan::Resolution::Nothing) => Step::Reply(DispatchResult::NoOp {}),
             Classified::Resolved(scan::Resolution::Folder(path)) => Step::Open(PlannedOpen {
+                subtitles: subtitles.to_vec(),
                 item: PlaylistItem::Local(path),
                 effect: Effect::Folder { queued: Vec::new() },
             }),
             Classified::Resolved(scan::Resolution::List(items)) => Step::Open(PlannedOpen {
+                subtitles: subtitles.to_vec(),
                 item: items[0].clone(),
                 effect: Effect::List(items),
             }),
             Classified::NeedsFilesystem => {
                 self.supersede();
                 self.start(Job::Resolve(items));
+                if let Some(active) = &mut self.active {
+                    active.subtitles = subtitles.to_vec();
+                }
                 self.touch();
                 Step::Reply(DispatchResult::Applied {})
             }
@@ -538,6 +564,7 @@ impl SessionPlaylist {
             .and_then(|index| Some((index, self.list.get(index)?.clone())))
         {
             Some((index, item)) => Step::Open(PlannedOpen {
+                subtitles: Vec::new(),
                 item,
                 effect: Effect::Cursor(index),
             }),
@@ -645,6 +672,7 @@ impl SessionPlaylist {
             self.active = Some(ActiveJob {
                 id: self.next_job,
                 cancel,
+                subtitles: Vec::new(),
                 kind,
             });
         }

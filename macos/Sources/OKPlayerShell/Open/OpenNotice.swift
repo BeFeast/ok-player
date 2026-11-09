@@ -7,14 +7,9 @@ enum OpenNotice: Equatable {
     /// The session's plan opens nothing: no media file, folder or playlist file,
     /// and no subtitle file to load onto playing media.
     case nothingToOpen
-    /// Only subtitle files, onto playing media, which this shell cannot load yet
-    /// (#910).
-    case subtitlesNotLoaded
-
     var text: String {
         switch self {
         case .nothingToOpen: return "Nothing to play in the selection"
-        case .subtitlesNotLoaded: return "Subtitle files cannot be added yet"
         }
     }
 
@@ -24,7 +19,6 @@ enum OpenNotice: Equatable {
     init?(_ outcome: OpenOutcome) {
         switch outcome {
         case .nothing, .opened(_, .noOp, _): self = .nothingToOpen
-        case .unsupported: self = .subtitlesNotLoaded
         case .opened, .subtitlesAdded, .held: return nil
         }
     }

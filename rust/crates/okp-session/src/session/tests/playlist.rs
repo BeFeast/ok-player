@@ -472,6 +472,7 @@ fn opening_several_files_plays_them_in_the_given_order_without_a_scan() {
     let reply = act(
         &session,
         PlaylistAction::Open {
+            subtitles: Vec::new(),
             sources: vec![
                 source("/media/b.mkv"),
                 source("/media/subs.srt"),
@@ -495,6 +496,7 @@ fn opening_several_files_plays_them_in_the_given_order_without_a_scan() {
         act(
             &session,
             PlaylistAction::Open {
+                subtitles: Vec::new(),
                 sources: vec![source("/media/subs.srt")]
             }
         ),
@@ -516,6 +518,7 @@ fn an_m3u_open_is_read_off_the_callers_thread_and_plays_its_entries() {
     let reply = act(
         &session,
         PlaylistAction::Open {
+            subtitles: Vec::new(),
             sources: vec![source("/lists/shows/queue.m3u8")],
         },
     );
@@ -549,6 +552,7 @@ fn opening_a_folder_plays_its_media_and_an_empty_one_reports_an_error() {
         act(
             &session,
             PlaylistAction::Open {
+                subtitles: Vec::new(),
                 sources: vec![source("/shows")]
             }
         ),
@@ -562,6 +566,7 @@ fn opening_a_folder_plays_its_media_and_an_empty_one_reports_an_error() {
     let _ = act(
         &session,
         PlaylistAction::Open {
+            subtitles: Vec::new(),
             sources: vec![source("/empty")],
         },
     );
@@ -783,6 +788,7 @@ fn reading_a_slow_open(slow: &[&str]) -> (Session, Arc<FakeState>, Arc<FakeFolde
         act(
             &session,
             PlaylistAction::Open {
+                subtitles: Vec::new(),
                 sources: vec![source("/slow")],
             }
         ),
@@ -914,6 +920,7 @@ fn the_registry_steps_through_the_playlist_once_it_has_two_items() {
     let _ = act(
         &session,
         PlaylistAction::Open {
+            subtitles: Vec::new(),
             sources: vec![source("/media/a.mkv")],
         },
     );
@@ -923,9 +930,189 @@ fn the_registry_steps_through_the_playlist_once_it_has_two_items() {
     let _ = act(
         &session,
         PlaylistAction::Open {
+            subtitles: Vec::new(),
             sources: vec![source("/media/a.mkv"), source("/media/b.mkv")],
         },
     );
     playing(&session, &engine);
     assert_eq!(steps(&session), (true, true), "two items");
+}
+
+fn open_with_subtitles(session: &Session, paths: &[&str], subtitles: &[&str]) -> DispatchResult {
+    act(
+        session,
+        PlaylistAction::Open {
+            sources: paths.iter().map(|path| source(path)).collect(),
+            subtitles: subtitles.iter().map(|path| (*path).to_owned()).collect(),
+        },
+    )
+}
+
+fn added_subtitles(engine: &FakeState) -> Vec<String> {
+    engine
+        .forwarded()
+        .into_iter()
+        .filter_map(|command| match command {
+            Command::AddSubtitle { path } => Some(path),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn mixed_open_subtitles_wait_for_loaded_media_and_are_not_repeated_on_next() {
+    let (session, engine, _) = session_with(FakeFolders::default());
+    let reply = open_with_subtitles(
+        &session,
+        &["/m/a.mkv", "/m/b.mkv"],
+        &["/m/a.en.srt", "/m/a.en.srt", "/m/a.de.ass"],
+    );
+    assert!(matches!(reply, DispatchResult::Accepted { .. }));
+    assert!(
+        added_subtitles(&engine).is_empty(),
+        "never attach while opening"
+    );
+    loaded(&engine, 30.0);
+    assert!(wait_for(|| added_subtitles(&engine).len() == 2));
+    assert_eq!(added_subtitles(&engine), ["/m/a.en.srt", "/m/a.de.ass"]);
+    // Another FileLoaded or a playlist step never replays the attachment.
+    loaded(&engine, 30.0);
+    let _ = act(&session, PlaylistAction::Next {});
+    loaded(&engine, 30.0);
+    assert!(wait_for(|| session.snapshot().status == Status::Playing));
+    assert_eq!(added_subtitles(&engine).len(), 2);
+}
+
+#[test]
+fn mixed_open_subtitles_follow_load_identity_even_when_the_same_path_is_reopened() {
+    let (session, engine, _) = session_with(FakeFolders::default());
+    engine.report_loads.store(true, Ordering::SeqCst);
+    let _ = open_with_subtitles(&session, &["/m/a.mkv"], &["/m/old.srt"]);
+    let _ = open_with_subtitles(&session, &["/m/a.mkv"], &["/m/new.srt"]);
+    engine.publish_for_loads(
+        |_| {},
+        vec![(
+            MpvEvent::FileLoaded {
+                video_dimensions: None,
+            },
+            Some(1),
+        )],
+    );
+    publish_and_settle(&engine, |_| {});
+    assert!(
+        added_subtitles(&engine).is_empty(),
+        "the older load is not this open"
+    );
+    engine.publish_for_loads(
+        |_| {},
+        vec![(
+            MpvEvent::FileLoaded {
+                video_dimensions: None,
+            },
+            Some(2),
+        )],
+    );
+    assert!(wait_for(|| added_subtitles(&engine) == ["/m/new.srt"]));
+}
+
+#[test]
+fn mixed_open_subtitles_are_discarded_by_close_load_failure_or_an_engine_refusal() {
+    for failure in ["close", "load", "immediate"] {
+        let (session, engine, _) = session_with(FakeFolders::default());
+        if failure == "immediate" {
+            *lock(&engine.refuse_with) = Some("refused".to_owned());
+        }
+        let _ = open_with_subtitles(&session, &["/m/a.mkv"], &["/m/old.srt"]);
+        if failure == "close" {
+            let _ = session.dispatch(&Command::Close {});
+        } else if failure == "load" {
+            engine.publish(
+                |_| {},
+                vec![MpvEvent::EndFile {
+                    reason: EndFileReason::Error(-13),
+                    path: Some("/m/a.mkv".to_owned()),
+                    diagnostic_messages: vec![],
+                    last_duration: None,
+                }],
+            );
+            assert!(wait_for(|| session.snapshot().status != Status::Opening));
+            // Even a delayed Loaded for this failed item must not attach its files.
+            loaded(&engine, 30.0);
+            assert!(wait_for(|| session.snapshot().status == Status::Playing));
+            assert!(added_subtitles(&engine).is_empty());
+        }
+        let _ = session.dispatch(&open("/m/later.mkv"));
+        loaded(&engine, 30.0);
+        assert!(wait_for(|| session.snapshot().status == Status::Playing));
+        assert!(
+            added_subtitles(&engine).is_empty(),
+            "{failure} left stale subtitles"
+        );
+    }
+}
+
+#[test]
+fn mixed_open_subtitles_survive_folder_resolution_but_not_a_superseded_scan() {
+    for superseded in [false, true] {
+        let (folders, gate) = FakeFolders::default()
+            .folder("/show", &["a.mkv", "b.mkv"])
+            .gated("/show");
+        let _release = ReleaseOnDrop(Arc::clone(&gate));
+        let (session, engine, folders) = session_with(folders);
+        assert_eq!(
+            open_with_subtitles(&session, &["/show"], &["/show/custom.srt"]),
+            DispatchResult::Applied {}
+        );
+        assert!(wait_for(|| folders.reading.load(Ordering::SeqCst) > 0));
+        assert!(added_subtitles(&engine).is_empty());
+        if superseded {
+            let _ = session.dispatch(&open("/later.mkv"));
+        }
+        gate.release();
+        if !superseded {
+            assert!(wait_for(
+                || opened(&engine).contains(&"/show/a.mkv".to_owned())
+            ));
+        }
+        loaded(&engine, 30.0);
+        assert!(wait_for(|| session.snapshot().status == Status::Playing));
+        if superseded {
+            assert!(added_subtitles(&engine).is_empty());
+        } else {
+            assert!(wait_for(|| added_subtitles(&engine) == ["/show/custom.srt"]));
+        }
+    }
+}
+
+#[test]
+fn mixed_open_subtitles_discard_only_the_failed_open_request() {
+    for stale in [false, true] {
+        let (session, engine, _) = session_with(FakeFolders::default());
+        let old = open_with_subtitles(&session, &["/m/a.mkv"], &["/m/old.srt"]);
+        let new = open_with_subtitles(&session, &["/m/a.mkv"], &["/m/new.srt"]);
+        let DispatchResult::Accepted { request_id: old } = old else {
+            panic!("old open rejected")
+        };
+        let DispatchResult::Accepted { request_id: new } = new else {
+            panic!("new open rejected")
+        };
+        engine.publish(
+            |_| {},
+            vec![MpvEvent::CommandReply {
+                request_id: if stale { old } else { new },
+                error: -13,
+            }],
+        );
+        publish_and_settle(&engine, |_| {});
+        loaded(&engine, 30.0);
+        assert!(wait_for(|| session.snapshot().status == Status::Playing));
+        if stale {
+            assert!(wait_for(|| added_subtitles(&engine) == ["/m/new.srt"]));
+        } else {
+            assert!(
+                added_subtitles(&engine).is_empty(),
+                "the failed request kept pending subtitles"
+            );
+        }
+    }
 }

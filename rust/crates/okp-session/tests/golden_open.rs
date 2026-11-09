@@ -103,8 +103,8 @@ fn the_open_paths_query_matches_its_fixture() {
 
 #[test]
 fn the_plan_replies_are_what_the_core_rules_answer() {
-    // Media, a folder and an M3U file open; the subtitle and the document beside
-    // them are left out.
+    // Media, a folder and an M3U file open; the subtitle is carried with
+    // them for the first loaded media, and the document is left out.
     golden(
         "query-reply-open-paths-open.json",
         reply(QueryResult::OpenPaths {

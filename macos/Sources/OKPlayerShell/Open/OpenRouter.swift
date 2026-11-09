@@ -1,6 +1,6 @@
 import AppKit
 
-/// The session as the open router uses it: one query and one command. The app
+/// The session as the open router uses it: plan queries and playback commands. The app
 /// passes its `SessionClient`; tests pass a fake.
 protocol OpenSession: AnyObject {
     func query(_ query: Query) -> QueryResult?
@@ -14,13 +14,11 @@ enum OpenOutcome: Equatable {
     /// The session was sent the playlist open the plan names; `title` names what
     /// opens (the first file or folder), for the window title.
     case opened(command: Command, result: DispatchResult, title: String)
-    /// Each subtitle file went to `OpenRouter.addSubtitle`, with these replies.
+    /// Each subtitle file went to the session, with these replies.
     case subtitlesAdded(results: [DispatchResult])
     /// Kept until the session exists: an open event that arrived while the app
     /// was still launching.
     case held
-    /// The plan names something this shell cannot carry out yet.
-    case unsupported(OpenPlan)
     /// Nothing to open: no local files, or the session's plan says so.
     case nothing
 }
@@ -36,10 +34,6 @@ enum OpenOutcome: Equatable {
 /// the router its session.
 final class OpenRouter {
     private(set) weak var session: OpenSession?
-    /// Loads one subtitle file onto the media that plays. `nil` while the session
-    /// has no command for it (#910); a subtitle-only plan is then unsupported, and
-    /// a drop of subtitles is refused.
-    var addSubtitle: ((String) -> DispatchResult)?
     /// Open events held until the session exists, oldest first.
     private(set) var held: [URL] = []
     /// What the latest `open(_:)` came to.
@@ -84,7 +78,7 @@ final class OpenRouter {
     func accepts(_ urls: [URL]) -> Bool {
         switch plan(for: urls) {
         case .open: return true
-        case .addSubtitles: return addSubtitle != nil
+        case .addSubtitles: return true
         case .nothing: return false
         }
     }
@@ -106,14 +100,14 @@ final class OpenRouter {
         }
         let answer = self.plan(for: urls)
         switch answer {
-        case .open(let sources):
+        case .open(let sources, let subtitles):
             guard let session, let first = sources.first else { return .nothing }
-            let command = Command.playlist(action: .open(sources: sources))
+            let command = Command.playlist(action: .open(sources: sources, subtitles: subtitles))
             let title = (first.location as NSString).lastPathComponent
             return .opened(command: command, result: session.dispatch(command), title: title)
         case .addSubtitles(let paths):
-            guard let addSubtitle, !paths.isEmpty else { return .unsupported(answer) }
-            return .subtitlesAdded(results: paths.map(addSubtitle))
+            guard let session, !paths.isEmpty else { return .nothing }
+            return .subtitlesAdded(results: paths.map { session.dispatch(.addSubtitle(path: $0)) })
         case .nothing:
             return .nothing
         }

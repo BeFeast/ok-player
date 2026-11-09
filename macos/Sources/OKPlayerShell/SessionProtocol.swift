@@ -537,7 +537,7 @@ enum QueueMode: String, Codable, CaseIterable {
 /// A playlist command. Indexes count from 0 in the order of `PlaylistState.items`.
 enum PlaylistAction: Codable, Equatable {
     /// Files, folders, M3U playlists or URLs, replacing the playlist.
-    case open(sources: [MediaSource])
+    case open(sources: [MediaSource], subtitles: [String]? = nil)
     case next
     case previous
     case jump(index: Int)
