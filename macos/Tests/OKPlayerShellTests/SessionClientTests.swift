@@ -118,6 +118,7 @@ final class SessionClientTests: XCTestCase {
         XCTAssertEqual(client.dispatch(.history(action: .setPrivate(enabled: true))), .history(result: .done))
         XCTAssertEqual(client.dispatch(.history(action: .setPrivate(enabled: true))), .history(result: .unchanged))
         wait(for: [reported], timeout: 5)
+        XCTAssertTrue(client.store.privateSession, "the drained private session reached the store")
         guard case .history(.page(true, _, _, _, _, _))? =
             client.query(.history(query: .page(utcOffsetSeconds: 0))) else {
             return XCTFail("the page does not report the private session")
@@ -140,6 +141,7 @@ final class SessionClientTests: XCTestCase {
         XCTAssertEqual(client.dispatch(.playlist(action: .setRepeat(mode: .all))), .applied)
         XCTAssertEqual(client.dispatch(.playlist(action: .setRepeat(mode: .all))), .noOp)
         wait(for: [reported], timeout: 5)
+        XCTAssertEqual(client.store.playlist.repeat, .all, "the drained playlist reached the store")
         guard case .playlist(let playlist)? = client.query(.playlist) else {
             return XCTFail("the playlist query was not answered with the playlist")
         }

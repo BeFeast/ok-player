@@ -20,15 +20,15 @@ final class SystemIntegration: NSObject {
     /// The display-sleep assertion the smoke saw while playing.
     private var smokeAssertion: UInt32?
 
-    /// While on, loaded files are not added to the recent documents. Set by whoever
-    /// follows the session's private mode (the session reports it once #878 lands).
+    /// While on, loaded files are not added to the recent documents. The app follows
+    /// the session's `history.private_session` event (`SessionStore.privateSession`).
     var privateSession: Bool {
         get { recents.privateSession }
         set { recents.privateSession = newValue }
     }
 
-    /// Next and previous item for the remote commands and the Dock menu.
-    /// TODO(#877): set this once the shell decodes the session playlist; until then the
+    /// Next and previous item for the remote commands and the Dock menu, and the queue
+    /// position Now Playing shows. The app sets a `SessionPlaylist`; without one the
     /// open file is the only item and Next and Previous are offered nowhere.
     var playlist: PlaylistNavigation? {
         didSet {

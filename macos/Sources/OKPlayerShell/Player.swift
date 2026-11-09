@@ -130,6 +130,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.client?.dispatch(command) ?? .rejected(reason: .noActiveMedia, message: "No playback session")
         },
         open: { [weak self] path in self?.play(path) })
+    /// Next and previous item for the remote commands and the Dock menu.
+    lazy var playlist: SessionPlaylist = SessionPlaylist { [weak self] command in
+        self?.client?.dispatch(command) ?? .rejected(reason: .noActiveMedia, message: "No playback session")
+    }
     var shuttingDown = false
     var closing = false
     var errorShown = false
@@ -182,6 +186,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         self.client = client
         client.onBatch = { [weak self] batch in self?.sessionChanged(batch) }
+        playlist.state = client.store.playlist
+        system.playlist = playlist
         system.start()
         video.onTogglePause = { [weak self] in self?.togglePause() }
         video.videoLayer.onError = { [weak self] message in self?.fail(message) }
@@ -220,6 +226,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// The session reported a batch; the store already holds the new state.
     func sessionChanged(_ batch: EventBatch) {
         guard !shuttingDown, let client else { return }
+        playlist.state = client.store.playlist
+        system.privateSession = client.store.privateSession
         system.update(client.store.snapshot)
         for case .error(_, let message, _) in batch.events {
             fail(message); return

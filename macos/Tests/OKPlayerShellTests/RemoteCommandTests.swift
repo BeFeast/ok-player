@@ -49,6 +49,10 @@ final class RemoteCommandTests: XCTestCase {
             (.rejected(reason: .noActiveMedia, message: "nothing is open"), .noActionableNowPlayingItem),
             (.rejected(reason: .notFinite, message: "not finite"), .commandFailed),
             (.failed(requestId: 4, message: "libmpv refused"), .commandFailed),
+            (.applied, .success),
+            (.perform, .success),
+            (.history(result: .done), .success),
+            (.history(result: .failed(message: "disk full")), .commandFailed),
         ]
         for (reply, status) in answers {
             session.reply = reply
@@ -76,6 +80,36 @@ final class RemoteCommandTests: XCTestCase {
         let writes = source.offeredSteps.count
         controller.refresh()
         XCTAssertEqual(source.offeredSteps.count, writes, "an unchanged offer is not written again")
+    }
+
+    func testNextAndPreviousTrackSendTheSessionPlaylistCommands() {
+        controller.start()
+        let playlist = SessionPlaylist { [unowned self] in self.session.dispatch($0) }
+        controller.playlist = playlist
+        controller.refresh()
+        XCTAssertEqual(source.offeredSteps.last?.next, false, "an empty playlist has nothing to step to")
+        XCTAssertEqual(playlist.position, .single)
+
+        let item = { (name: String) in PlaylistEntry(source: MediaSource(kind: .local, location: "/m/\(name)"), title: name) }
+        playlist.state = PlaylistState(items: [item("a.mkv")], currentIndex: 0)
+        controller.refresh()
+        XCTAssertEqual(source.offeredSteps.last?.next, false, "the session answers no_op with fewer than two items")
+        XCTAssertEqual(source.offeredSteps.last?.previous, false)
+        XCTAssertEqual(source.fire(.nextTrack), .noSuchContent)
+        XCTAssertTrue(session.commands.isEmpty)
+
+        playlist.state = PlaylistState(items: [item("a.mkv"), item("b.mkv"), item("c.mkv")], currentIndex: 2)
+        controller.refresh()
+        XCTAssertEqual(playlist.position, QueuePosition(index: 2, count: 3))
+        XCTAssertEqual(source.offeredSteps.last?.next, true, "the session wraps at the end whatever the repeat mode")
+        XCTAssertEqual(source.offeredSteps.last?.previous, true)
+        XCTAssertEqual(source.fire(.nextTrack), .success)
+        session.reply = .applied
+        XCTAssertEqual(source.fire(.previousTrack), .success)
+        XCTAssertEqual(session.commands, [.playlist(action: .next), .playlist(action: .previous)])
+
+        playlist.state = PlaylistState(items: [item("a.mkv"), item("b.mkv")], currentIndex: nil)
+        XCTAssertEqual(playlist.position, .single, "no current item is shown as a lone item")
     }
 
     func testStoppingRemovesTheHandler() {

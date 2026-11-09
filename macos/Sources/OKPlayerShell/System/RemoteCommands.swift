@@ -20,7 +20,7 @@ enum PlaylistStep: Equatable {
 }
 
 /// Next and previous item, and the current item's place, as the OS integration needs
-/// them. Implemented over the session playlist once the shell decodes it.
+/// them. `SessionPlaylist` implements it over the session playlist.
 protocol PlaylistNavigation: AnyObject {
     var position: QueuePosition { get }
     func canStep(_ step: PlaylistStep) -> Bool
@@ -69,9 +69,11 @@ enum RemoteCommandMapping {
     /// The handler status for the session's answer.
     static func status(_ result: DispatchResult) -> MPRemoteCommandHandlerStatus {
         switch result {
-        case .accepted, .noOp: return .success
+        // `applied`: the session carried it out itself (a playlist step whose
+        // folder is still being read, for instance).
+        case .accepted, .noOp, .applied, .perform, .history(.done), .history(.unchanged): return .success
         case .rejected(.noActiveMedia, _): return .noActionableNowPlayingItem
-        case .rejected, .failed: return .commandFailed
+        case .rejected, .failed, .history(.failed): return .commandFailed
         }
     }
 }

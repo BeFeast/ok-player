@@ -311,17 +311,19 @@ session snapshot after every drained batch and keeps no playback state of its ow
   position, skip ±10 s and change rate from `MPRemoteCommandCenter` become session
   commands (stop closes the file; rates are kept within 0.25-4). This covers the F7-F9
   media keys, Control Center and AirPods with no event tap, so no Accessibility or
-  Input Monitoring permission. Next and previous are offered only while the playlist
-  can step; until the shell decodes the session playlist (#877) they stay off.
+  Input Monitoring permission. Next and previous send the session playlist's `next`
+  and `previous` commands (`System/SessionPlaylist.swift`, over the playlist
+  `SessionStore` keeps from `playlist_changed`), and are offered only while the
+  playlist has two items or more: the session wraps at both ends.
 - **Display sleep.** An `IOPMAssertionCreateWithName` assertion of type
   `kIOPMAssertionTypePreventUserIdleDisplaySleep` is held while video plays and
   released on pause, end, close, audio-only media and quit.
 - **Recent documents.** Every local file that loads, including ones the session opens
   by itself, goes to `NSDocumentController.noteNewRecentDocumentURL`, except during a
-  private session. File > Open Recent is rebuilt from that list each time it opens, and
+  private session (the session's `history.private_session` event). File > Open Recent is rebuilt from that list each time it opens, and
   macOS lists the same files in the Dock menu.
 - **Dock menu.** Play or Pause, Next and Previous, enabled from the snapshot and the
-  playlist.
+  playlist; Next and Previous step the session playlist.
 
 ## Verification boundary
 
