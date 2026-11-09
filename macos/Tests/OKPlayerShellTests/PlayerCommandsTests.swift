@@ -134,13 +134,17 @@ final class PlayerCommandsTests: XCTestCase {
     }
 }
 
-/// The keys on a real player window: a key pressed on the video goes past it to
-/// the window, which offers it to the shortcut table before its own F and Escape.
+private struct NotATransportReply: Error {}
+
+/// The keys on a real player window: a key pressed on the video, or on the
+/// focused scrubber of the transport controls, goes past it to the window, which
+/// offers it to the shortcut table before its own F and Escape.
 final class ShortcutWindowTests: XCTestCase {
     private var window: PlayerWindow!
     private var video: VideoView!
     private var session: StandInSession!
     private var commands: PlayerCommands!
+    private var overlay: TransportOverlay?
     private var toggles = 0
 
     override func setUpWithError() throws {
@@ -161,16 +165,48 @@ final class ShortcutWindowTests: XCTestCase {
     }
 
     override func tearDown() {
+        // Off the window before it closes: the overlay drops its event monitor.
+        overlay?.removeFromSuperview()
+        overlay = nil
         video?.shutdown()
         window?.close()
         window = nil
         video = nil
     }
 
-    private func key(_ characters: String, keyCode: UInt16, repeat isRepeat: Bool = false) throws -> NSEvent {
-        try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+    private func key(_ characters: String, keyCode: UInt16, repeat isRepeat: Bool = false,
+                     modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
                                        windowNumber: window.windowNumber, context: nil, characters: characters,
                                        charactersIgnoringModifiers: characters, isARepeat: isRepeat, keyCode: keyCode))
+    }
+
+    /// The transport controls over the video, shown with seekable media playing,
+    /// and their scrubber holding keyboard focus, as after a click on it. Every
+    /// command the controls send themselves goes to `sent`.
+    private func focusedScrubber(sent: @escaping (Command) -> Void) throws -> TransportOverlay {
+        let decoded = try GoldenFixtures.decode(QueryReply.self, "transport/query-reply-transport.json")
+        guard case .transport(var transport) = decoded.result else { throw NotATransportReply() }
+        transport.seekable = true
+        let overlay = TransportOverlay(hideTimer: ManualHideTimer())
+        overlay.dispatch = sent
+        overlay.query = { _ in transport }
+        let root = NSView(frame: window.contentLayoutRect)
+        window.contentView = root
+        for view in [video!, overlay] as [NSView] {
+            view.frame = root.bounds
+            root.addSubview(view)
+        }
+        overlay.focusReturn = video
+        self.overlay = overlay
+        var snapshot = SessionSnapshot()
+        snapshot.status = .playing
+        snapshot.source = MediaSource(kind: .local, location: "/Users/example/Movies/film.mkv")
+        snapshot.duration = 4000
+        snapshot.timePos = 1000
+        overlay.sessionChanged(snapshot)
+        XCTAssertTrue(window.makeFirstResponder(overlay.scrubber), "the shown scrubber takes focus")
+        return overlay
     }
 
     func testSpacePressedOnTheVideoRunsPlayPauseOncePerPress() throws {
@@ -187,6 +223,20 @@ final class ShortcutWindowTests: XCTestCase {
         window.sendEvent(try key("\u{F701}", keyCode: 125))
         window.sendEvent(try key("m", keyCode: 46))
         XCTAssertEqual(session.invoked, ["seek-forward", "seek-back", "volume-up", "volume-down", "mute"])
+    }
+
+    func testKeysOnTheFocusedScrubberGoThroughTheShortcutTable() throws {
+        var sent: [Command] = []
+        let overlay = try focusedScrubber { sent.append($0) }
+        window.sendEvent(try key(" ", keyCode: 49))
+        window.sendEvent(try key(" ", keyCode: 49, repeat: true))
+        window.sendEvent(try key(" ", keyCode: 49, repeat: true))
+        window.sendEvent(try key(" ", keyCode: 49, modifiers: .shift))
+        window.sendEvent(try key("\u{F702}", keyCode: 123))
+        XCTAssertEqual(session.invoked, ["play-pause", "seek-back"],
+                       "a held Space toggles once, and Shift-Space is not in the table")
+        XCTAssertEqual(sent, [], "the scrubber itself sends nothing for a key")
+        XCTAssertTrue(window.firstResponder === overlay.scrubber)
     }
 
     func testFRunsTheRegistrysFullscreenCommandOnce() throws {

@@ -336,8 +336,9 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 /// 2. playing: the position and the render calls advance; Now Playing shows the file
 ///    as playing video, the display-sleep assertion is held and the system offers the
 ///    remote commands; the menu bar has its nine menus, Play/Pause from the registry
-///    validates enabled and a held Space's auto-repeat toggles nothing; the pause is
-///    sent through the handler the system holds for its pause command;
+///    validates enabled and a held Space's auto-repeat toggles nothing, on the
+///    focused scrubber and on the video; the pause is sent through the handler the
+///    system holds for its pause command;
 /// 3. paused: the position holds and the render calls stay flat for two seconds; Now
 ///    Playing shows the pause and the assertion is released; the resume is sent
 ///    through the handler for the system's play command;
@@ -471,7 +472,7 @@ final class SmokeRun {
         phase = .hiding
         // Playing without pointer activity: the controls hide once the idle timeout
         // has passed. The scrubber holds keyboard focus first, as after a click;
-        // hidden, it has to give it back to the video, which handles Space.
+        // hidden, it has to give it back to the video.
         app.osc.noteActivity()
         guard app.window.makeFirstResponder(app.osc.scrubber) else {
             fail("The scrubber did not take keyboard focus during playback"); return

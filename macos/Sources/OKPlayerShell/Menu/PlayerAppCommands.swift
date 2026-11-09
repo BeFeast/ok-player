@@ -59,7 +59,8 @@ extension PlayerApp {
     /// What is wrong with the menu bar and the window keys while the smoke's file
     /// plays, or nil: the bar has its nine menus with AppKit's window list and
     /// help menu, Play/Pause from the registry validates enabled through the
-    /// responder chain, and a held Space's auto-repeat is taken without toggling.
+    /// responder chain, and a held Space's auto-repeat is taken without toggling,
+    /// with the scrubber focused as after a click on it and with the video focused.
     func smokeMenuFailure() -> String? {
         guard let menuBar, let window, let video else { return "The menu bar was not installed" }
         let titles = NSApp.mainMenu?.items.map(\.title) ?? []
@@ -79,18 +80,30 @@ extension PlayerApp {
             return "Play/Pause validated \(playPause.isEnabled ? "enabled" : "disabled") as \"\(playPause.title)\" "
                 + "while playing"
         }
-        guard window.makeFirstResponder(video),
-              let space = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+        guard let space = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
                                            timestamp: ProcessInfo.processInfo.systemUptime,
                                            windowNumber: window.windowNumber, context: nil, characters: " ",
                                            charactersIgnoringModifiers: " ", isARepeat: true, keyCode: 49) else {
-            return "Could not press Space on the video"
+            return "Could not make a Space key event"
         }
+        let heldSpace = PlayerCommands.Invocation(id: "play-pause", outcome: .heldRepeat)
+        // No registry command has run yet, so the scrubber's press is the first one
+        // recorded: it has to reach the shortcut table, not toggle pause itself.
+        guard commands.lastInvocation == nil else {
+            return "\(String(describing: commands.lastInvocation)) ran before the held Space was pressed"
+        }
+        osc.noteActivity()
+        guard window.makeFirstResponder(osc.scrubber) else { return "The scrubber did not take keyboard focus" }
         window.sendEvent(space)
-        guard commands.lastInvocation == PlayerCommands.Invocation(id: "play-pause", outcome: .heldRepeat) else {
+        guard commands.lastInvocation == heldSpace else {
+            return "A held Space on the focused scrubber came out as \(String(describing: commands.lastInvocation))"
+        }
+        guard window.makeFirstResponder(video) else { return "Could not press Space on the video" }
+        window.sendEvent(space)
+        guard commands.lastInvocation == heldSpace else {
             return "A held Space's auto-repeat came out as \(String(describing: commands.lastInvocation))"
         }
-        print("OKP_SMOKE menu_bar=\(titles.count) play_pause=validated held_space=ignored")
+        print("OKP_SMOKE menu_bar=\(titles.count) play_pause=validated held_space=ignored scrubber_keys=shortcut_table")
         return nil
     }
 }

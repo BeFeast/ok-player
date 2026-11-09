@@ -327,10 +327,11 @@ Swift side only turns input into commands and keeps the hide timer.
 
 - **Scrubber:** a click or drag sends keyframe seeks while the pointer moves and
   one exact seek where it is released; the readout follows the drag position. It
-  shows the buffered range and chapter ticks. While it has keyboard focus,
-  Left/Right step five seconds and Space toggles pause. It gives keyboard focus
-  back to the video as soon as the controls hide or the media can no longer be
-  sought, so Space always reaches the player. If the file ends under a held
+  shows the buffered range and chapter ticks. It handles no keys: while it has
+  keyboard focus, a key press goes on to the player window's shortcut table, as
+  from the video (see [Menu bar and keys](#menu-bar-and-keys)). It gives keyboard
+  focus back to the video as soon as the controls hide or the media can no
+  longer be sought. If the file ends under a held
   press, the drag ends there: nothing seeks on release, and the next file shows
   its own playhead.
 - **Time:** elapsed time and a trailing label that switches between remaining and
@@ -384,7 +385,7 @@ from the session's command registry and shortcut table (`docs/session-abi.md`,
 - **Held keys:** the session's `repeating_shortcuts` query lists the steps a held key
   repeats (seek, volume, frame, subtitle delay, size and cues). Any other command runs
   once per physical press: AppKit's auto-repeats of a held Space, M or F are taken and
-  run nothing.
+  run nothing, whether the video or the scrubber has keyboard focus.
 - **Commands this shell carries out:** Open file, Fullscreen and Escape fullscreen, Next
   and Previous item (the session playlist) and the Playback speed submenu. They are
   registered with `PlayerCommands` before the session starts and passed in the config's
@@ -453,7 +454,8 @@ window and checks, from the session's events and the video layer's counters:
   both window snapshots show them;
 - while playing, the menu bar has its nine menus with AppKit's window list and help
   menu, Play/Pause from the registry validates enabled through the responder chain, and
-  a held Space's auto-repeat sent to the window toggles nothing;
+  a held Space's auto-repeat sent to the window toggles nothing, with the scrubber
+  focused (it reaches the shortcut table) and with the video focused;
 - F and Escape, sent as key events to the video view, enter native fullscreen and
   leave it again through the shortcut table's registry commands, and each press reaches
   the transport controls as activity;
