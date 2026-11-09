@@ -2,8 +2,17 @@ import AppKit
 import XCTest
 @testable import OKPlayerShell
 
-/// Stands in for the video: records the clicks that reach it.
-private final class ClickTarget: NSView {}
+/// Stands in for the video: the clicks that reach it, and keyboard focus, which it
+/// takes like the video view.
+private final class ClickTarget: NSView {
+    override var acceptsFirstResponder: Bool { true }
+}
+
+/// A key view that takes focus whatever the keyboard navigation setting, where a
+/// card button takes it only with keyboard navigation on.
+private final class FocusableView: NSView {
+    override var acceptsFirstResponder: Bool { true }
+}
 
 /// The status layer over real AppKit views, in a window that is never shown: what
 /// each state draws, which clicks the card takes, what its buttons do, and the toast.
@@ -32,6 +41,7 @@ final class StatusOverlayTests: XCTestCase {
         timer = ManualHideTimer()
         layer = StatusLayer(timer: timer)
         layer.install(in: root, above: video)
+        layer.overlay.focusReturn = video
         layer.query = { [unowned self] in self.surface }
         layer.onRetry = { [unowned self] source in self.retried.append(source) }
         layer.onOpenAnother = { [unowned self] in self.openedAnother += 1 }
@@ -114,9 +124,78 @@ final class StatusOverlayTests: XCTestCase {
         XCTAssertEqual(overlay.titleLabel.stringValue, StatusRules.shellFailureTitle)
         XCTAssertEqual(overlay.messageLabel.stringValue, "The playback engine stopped")
         XCTAssertTrue(overlay.buttons.isEmpty)
-        // Later surfaces do not replace it.
+        // Later surfaces, opens and failures do not replace it.
         show(.clear)
+        layer.opened(.accepted(requestId: 7))
+        XCTAssertFalse(layer.showShellFailure("Video rendering failed", clearsOnOpen: true))
         XCTAssertEqual(layer.display, .shellFailure("The playback engine stopped"))
+    }
+
+    func testARendererFailureStaysUntilTheNextAcceptedOpenThenTheSessionsSurfaceShows() {
+        show(.loading(label: "Opening film.mkv"))
+        XCTAssertTrue(layer.showShellFailure("Video rendering failed", clearsOnOpen: true))
+        let overlay = layer.overlay
+        root.layoutSubtreeIfNeeded()
+        XCTAssertEqual(layer.display, .shellFailure("Video rendering failed"))
+        XCTAssertTrue(overlay.buttons.isEmpty)
+        let cardCenter = overlay.cardPanel.convert(
+            NSPoint(x: overlay.cardPanel.bounds.midX, y: overlay.cardPanel.bounds.midY), to: root)
+        // Playback goes on under it until an open.
+        show(.clear)
+        XCTAssertEqual(layer.display, .shellFailure("Video rendering failed"))
+        // An open the session rejects leaves it and toasts the reason.
+        layer.opened(.rejected(reason: .unavailable, message: "The engine is not available"))
+        XCTAssertEqual(layer.display, .shellFailure("Video rendering failed"))
+        XCTAssertEqual(toasted, ["The engine is not available"])
+        // The next accepted open shows the session's surface for the new source.
+        surface = .loading(label: "Opening next.mkv")
+        layer.opened(.accepted(requestId: 8))
+        root.layoutSubtreeIfNeeded()
+        XCTAssertEqual(layer.display, .progress("Opening next.mkv"))
+        XCTAssertTrue(overlay.cardPanel.isHidden)
+        XCTAssertTrue(hit(at: cardCenter) === video, "clicks on the video reach it again")
+        show(.failed(card: StatusTests.card))
+        XCTAssertEqual(layer.display, .failure(StatusTests.card))
+        // An engine that quits after a renderer failure stays for good.
+        XCTAssertTrue(layer.showShellFailure("Video rendering failed", clearsOnOpen: true))
+        XCTAssertTrue(layer.showShellFailure("The playback engine stopped"))
+        layer.opened(.accepted(requestId: 9))
+        XCTAssertEqual(layer.display, .shellFailure("The playback engine stopped"))
+    }
+
+    /// Puts keyboard focus on the card: on its Retry button when the host has
+    /// keyboard navigation on, else on a key view placed in the card.
+    private func focusTheCard() throws -> NSView {
+        let overlay = layer.overlay
+        let retry = try XCTUnwrap(overlay.button(for: .retry))
+        if window.makeFirstResponder(retry) { return retry }
+        let inCard = FocusableView(frame: NSRect(x: 0, y: 0, width: 4, height: 4))
+        overlay.cardPanel.addSubview(inCard)
+        XCTAssertTrue(window.makeFirstResponder(inCard))
+        return inCard
+    }
+
+    func testFocusOnTheCardGoesBackToTheVideoWhenTheCardHidesOrItsButtonsChange() throws {
+        show(.failed(card: StatusTests.card))
+        let holder = try focusTheCard()
+        XCTAssertTrue(window.firstResponder === holder)
+        // Retry or Open another moves the card on to loading, which hides it.
+        show(.loading(label: "Opening film.mkv"))
+        XCTAssertTrue(window.firstResponder === video, "Space would not reach the video")
+        // A second failure's card replaces the buttons.
+        show(.failed(card: StatusTests.card))
+        _ = try focusTheCard()
+        var next = StatusTests.card
+        next.kind = .missingCodec
+        next.title = "Missing codec"
+        show(.failed(card: next))
+        XCTAssertTrue(window.firstResponder === video)
+        // Focus outside the card stays where it is.
+        let elsewhere = FocusableView(frame: NSRect(x: 0, y: 0, width: 4, height: 4))
+        root.addSubview(elsewhere)
+        XCTAssertTrue(window.makeFirstResponder(elsewhere))
+        show(.clear)
+        XCTAssertTrue(window.firstResponder === elsewhere)
     }
 
     func testABatchsNoticesShowAsAToastNearTheTopThatTakesNoClicks() {

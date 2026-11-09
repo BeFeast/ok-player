@@ -371,11 +371,14 @@ notices") what covers the video, and shows it:
   another and Copy details. Retry opens the card's source again, Open another shows
   the open panel and Copy details puts the core's short detail (source and reason)
   on the pasteboard. The card stays until the next open or close. It replaces the
-  alert sheet the preview showed; a failure of the shell itself (no renderer, no
-  session, the engine quit) shows the same card without buttons.
+  alert sheet the preview showed; a failure of the shell itself shows the same card
+  without buttons. A frame that did not render shows it until the next open the
+  session accepts; no renderer, no session or an engine that quit keep it for good.
 
 Only the card takes clicks: a click or double click anywhere else still reaches the
-video. The toast is one line on a rounded pill near the top of the window, under the
+video. When the card hides or its buttons change while one of them has keyboard
+focus (keyboard navigation on), the focus goes back to the video, so Space still
+toggles pause. The toast is one line on a rounded pill near the top of the window, under the
 title bar and clear of captions; it stays 1.7 seconds and a newer one replaces it. It
 shows the session's `notice` events (volume, speed, subtitle delay, track changes,
 relative seeks, "Resumed at", "Added to Up Next", "Plays next") and the message of

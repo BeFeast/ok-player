@@ -25,6 +25,8 @@ final class StatusLayer {
 
     private(set) var surface = StatusSurface.clear
     private(set) var shellFailure: String?
+    /// Whether the next accepted open clears `shellFailure`.
+    private(set) var shellFailureClearsOnOpen = false
     var display: StatusDisplay { overlay.display }
 
     init(timer: HideTimer = MainQueueHideTimer()) {
@@ -66,10 +68,31 @@ final class StatusLayer {
         overlay.show(StatusRules.display(surface, shellFailure: shellFailure))
     }
 
-    /// The shell itself failed; the card stays, since nothing can be retried.
-    func showShellFailure(_ message: String) {
+    /// The shell itself failed. A failure that `clearsOnOpen` (a frame that did not
+    /// render, after which later frames may) stays until the next accepted open.
+    /// Any other (no renderer, no session, the engine quit) stays for good: nothing
+    /// replaces it, since nothing can be retried. Returns whether the card shows
+    /// `message`.
+    @discardableResult
+    func showShellFailure(_ message: String, clearsOnOpen: Bool = false) -> Bool {
+        if shellFailure != nil, !shellFailureClearsOnOpen { return false }
         shellFailure = message
+        shellFailureClearsOnOpen = clearsOnOpen
         overlay.show(StatusRules.display(surface, shellFailure: message))
+        return true
+    }
+
+    /// The shell asked the session to open a source and got `result`. A rejection
+    /// shows as a toast; any other answer clears a shell failure that the next open
+    /// clears, so the session's surface for the new source shows.
+    func opened(_ result: DispatchResult) {
+        if case .rejected(_, let message) = result {
+            toast.show(message)
+        } else if shellFailureClearsOnOpen {
+            shellFailure = nil
+            shellFailureClearsOnOpen = false
+        }
+        refresh()
     }
 
     /// Show a short notice. The one way for any part of the shell to toast.

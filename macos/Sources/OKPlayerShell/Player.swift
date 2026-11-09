@@ -207,7 +207,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         osc.onNext = { [weak self] in _ = self?.playlist.step(.next) }
         video.onTogglePause = { [weak self] in self?.togglePause() }
         osc.focusReturn = video
-        video.videoLayer.onError = { [weak self] message in self?.fail(message) }
+        statusLayer.overlay.focusReturn = video
+        video.videoLayer.onError = { [weak self] message, transient in self?.fail(message, clearsOnOpen: transient) }
         if let handle = client.handle { video.videoLayer.attach(session: handle) }
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
         let path = pendingPath ?? args.first
@@ -235,9 +236,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func open(_ source: MediaSource) {
         guard let client else { return }
         let result = client.dispatch(.open(source: source))
-        if case .rejected(_, let message) = result { statusLayer.show(toast: message) }
         window.title = "\((source.location as NSString).lastPathComponent) — OK Player"
-        statusLayer.refresh()
+        statusLayer.opened(result)
         prompt.isHidden = true
     }
     @objc func togglePause() { client?.dispatch(.togglePause) }
@@ -268,10 +268,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         smokeRun?.sessionChanged(snapshot)
     }
     /// The shell itself cannot play: no renderer, no session, the engine quit, or a
-    /// failed smoke step. The status layer shows it as a card without actions.
-    func fail(_ message: String) {
-        guard !shuttingDown, statusLayer.shellFailure == nil else { return }
-        statusLayer.showShellFailure(message)
+    /// failed smoke step. The status layer shows it as a card without actions; one
+    /// that `clearsOnOpen` (a frame did not render) goes with the next open.
+    func fail(_ message: String, clearsOnOpen: Bool = false) {
+        guard !shuttingDown, statusLayer.showShellFailure(message, clearsOnOpen: clearsOnOpen) else { return }
         prompt.isHidden = true
         fputs("OK Player: \(message)\n", stderr)
         if smoke { shutdown(); exit(1) }

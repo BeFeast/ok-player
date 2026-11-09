@@ -111,8 +111,10 @@ final class VideoLayer: CAOpenGLLayer {
     let renderQueue = DispatchQueue(label: "uk.oklabs.ok-player.render", qos: .userInteractive)
     /// Starts the display link; called on the main queue.
     var startLink: (() -> Void)?
-    /// Reports a renderer failure; called on the main queue.
-    var onError: ((String) -> Void)?
+    /// Reports a renderer failure on the main queue, and whether it may pass: later
+    /// frames may render after one that did not, while a renderer that could not be
+    /// created never draws.
+    var onError: ((_ message: String, _ transient: Bool) -> Void)?
 
     // Render-queue state.
     private var session: OpaquePointer?
@@ -163,7 +165,7 @@ final class VideoLayer: CAOpenGLLayer {
             if created {
                 self.session = session
             } else {
-                reportError("Could not create the video renderer: \(String(cString: error))")
+                reportError("Could not create the video renderer: \(String(cString: error))", transient: false)
             }
         }
     }
@@ -208,7 +210,7 @@ final class VideoLayer: CAOpenGLLayer {
         display()
         CATransaction.flush()
         drawing = false
-        if renderFailed { reportError("Video rendering failed") }
+        if renderFailed { reportError("Video rendering failed", transient: true) }
         guard drewFrame else { return }
         let reported = surface.withCurrentContext { okp_session_render_report_swap(session) }
         countersLock.lock()
@@ -217,10 +219,10 @@ final class VideoLayer: CAOpenGLLayer {
         countersLock.unlock()
     }
 
-    private func reportError(_ message: String) {
+    private func reportError(_ message: String, transient: Bool) {
         guard !errorReported else { return }
         errorReported = true
-        DispatchQueue.main.async { [weak self] in self?.onError?(message) }
+        DispatchQueue.main.async { [weak self] in self?.onError?(message, transient) }
     }
 
     override func copyCGLPixelFormat(forDisplayMask mask: UInt32) -> CGLPixelFormatObj {

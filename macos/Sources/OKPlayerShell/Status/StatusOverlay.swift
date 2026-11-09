@@ -2,10 +2,14 @@ import AppKit
 
 /// The loading, buffering and failure states over the video (`StatusDisplay`): a
 /// spinner with a line beside it, or a card with the failure's title, message and
-/// buttons. Only the card takes clicks; everywhere else they reach the video.
+/// buttons. Only the card takes clicks; everywhere else they reach the video. A card
+/// button that holds keyboard focus gives it to `focusReturn` before the card hides
+/// or its buttons go, so Space keeps toggling pause.
 final class StatusOverlay: NSView {
     /// A card button was pressed, with the card it belongs to.
     var onAction: ((FailureAction, FailureCard) -> Void)?
+    /// Takes keyboard focus back from the card: the video view.
+    weak var focusReturn: NSView?
 
     let progressPanel = NSVisualEffectView()
     let spinner = NSProgressIndicator()
@@ -35,6 +39,10 @@ final class StatusOverlay: NSView {
 
     func show(_ display: StatusDisplay) {
         guard display != self.display else { return }
+        // With the card up, any change hides it or replaces its buttons. AppKit would
+        // hand a focused button's focus to the next key view or the window, not the
+        // video.
+        returnFocus()
         self.display = display
         switch display {
         case .clear:
@@ -74,6 +82,13 @@ final class StatusOverlay: NSView {
         buttonRow.isHidden = buttons.isEmpty
         progressPanel.isHidden = true
         cardPanel.isHidden = false
+    }
+
+    private func returnFocus() {
+        guard let window, let focused = window.firstResponder as? NSView, focused.isDescendant(of: cardPanel) else {
+            return
+        }
+        _ = window.makeFirstResponder(focusReturn)
     }
 
     @objc private func pressed(_ sender: NSButton) {
