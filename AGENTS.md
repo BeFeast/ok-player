@@ -1,4 +1,40 @@
-# Repository worker guidance
+# AGENTS.md — BeFeast/ok-player
+
+Code facts for agents. Process, roles, release cadence and hosts live in the private vault area `Dev/Areas/ok-player/AGENTS.md`; it wins on process. Product requirements: `docs/OK-Player-PRD.md`. Development happens on Forgejo; GitHub is a mirror that still hosts the Windows update feed and some build workflows.
+
+## Purpose and layout
+
+A native media player over libmpv on three platforms, sharing one Rust core. Shells are logic-free projections of the core: new portable logic goes into `okp-core` first.
+
+```
+rust/crates/okp-core       shared core: parsing, state machines, playlist, persistence, subtitle sync
+rust/crates/okp-ffi        C ABI the Windows shell uses
+rust/crates/okp-linux-gtk  Linux shell (GTK4, gtk-rs/Relm4)
+rust/crates/okp-mpv, okp-session, okp-test-fixtures
+src/OkPlayer.*             Windows shell (C#, WinUI 3, Mica), OkPlayer.sln
+macos/                     macOS shell (Swift package)
+browser-extension/, native/  browser bridge and native host
+scripts/, scripts/tests/   CI gates and their tests
+.forgejo/workflows/        rust.yml, macos-pr-check.yml, macos-player-preview.yml, github-intake.yml
+.github/workflows/         release, packaging and Windows workflows (run on GitHub)
+```
+
+## Commands
+
+Durations are from Forgejo CI (2026-11-09); local runs not measured.
+
+| What | Command | Where | Time |
+|---|---|---|---|
+| Rust format, lint, test | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` in `rust/` | a build host or CI job «Rust workspace (Linux)» (needs GTK4, libadwaita, libmpv dev packages) | whole job: 553–1075 s |
+| Linux shell build | `cargo build --manifest-path rust/Cargo.toml -p okp-linux-gtk` | same | (in the job above) |
+| Gate scripts | `python3 scripts/check-unfinished-work.py --root .`, `python3 scripts/check-source-grep-tests.py --root .` | anywhere with Python 3 | not measured |
+| Browser bridge tests | `node --test browser-extension/tests/bridge.test.mjs`, `python3 -m unittest discover -s browser-extension/tests -p 'test_*.py'` | anywhere | not measured |
+| macOS app | job «Apple Silicon app (GitHub-hosted)» in `macos-pr-check.yml` | CI only | 269–450 s |
+| Windows | `.github/workflows/ci.yml` on `windows-latest` | GitHub only; WinUI does not build on Linux | not measured |
+
+## Merge gate
+
+Branch protection on `main` requires «Rust workspace (Linux)» (`.forgejo/workflows/rust.yml`); it also runs the unfinished-work and source-grep gates on the PR title and body, so a body needs real text and no open acceptance block. «Apple Silicon app (GitHub-hosted)» must be green when the change touches the macOS build. Releases are separate from merges and never made by workers. Install/update, packaging, signing and anything that can lose user settings get one async review by another model family.
 
 ## Definition of done
 
@@ -89,3 +125,7 @@ them does not make an unfinished change finished.
   the repository. Link to durable storage and bind each artifact by checksum.
 - Never put machine paths, hostnames, credentials, or private infrastructure
   details in a QA record.
+
+## Public-repo hygiene
+
+The repo is public (GPL-3.0-or-later). Never commit hostnames, machine paths, local user paths, internal infrastructure references or secrets; reference services abstractly. Extend `THIRD-PARTY-NOTICES.md` when an artifact starts bundling GPL libraries.
