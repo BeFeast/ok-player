@@ -93,6 +93,12 @@ pub struct mpv_event_log_message {
     pub log_level: c_int,
 }
 
+#[repr(C)]
+pub struct mpv_event_hook {
+    pub name: *const c_char,
+    pub id: u64,
+}
+
 pub const MPV_EVENT_NONE: c_int = 0;
 pub const MPV_EVENT_SHUTDOWN: c_int = 1;
 pub const MPV_EVENT_LOG_MESSAGE: c_int = 2;
@@ -103,6 +109,7 @@ pub const MPV_EVENT_FILE_LOADED: c_int = 8;
 pub const MPV_EVENT_VIDEO_RECONFIG: c_int = 17;
 pub const MPV_EVENT_PLAYBACK_RESTART: c_int = 21;
 pub const MPV_EVENT_PROPERTY_CHANGE: c_int = 22;
+pub const MPV_EVENT_HOOK: c_int = 25;
 pub const MPV_ERROR_OPTION_NOT_FOUND: c_int = -5;
 pub const MPV_END_FILE_REASON_EOF: c_int = 0;
 pub const MPV_END_FILE_REASON_STOP: c_int = 2;
@@ -191,6 +198,13 @@ unsafe extern "C" {
     );
     pub fn mpv_wait_event(ctx: *mut mpv_handle, timeout: f64) -> *mut mpv_event;
     pub fn mpv_request_log_messages(ctx: *mut mpv_handle, min_level: *const c_char) -> c_int;
+    pub fn mpv_hook_add(
+        ctx: *mut mpv_handle,
+        reply_userdata: u64,
+        name: *const c_char,
+        priority: c_int,
+    ) -> c_int;
+    pub fn mpv_hook_continue(ctx: *mut mpv_handle, id: u64) -> c_int;
 
     pub fn mpv_render_context_create(
         res: *mut *mut mpv_render_context,

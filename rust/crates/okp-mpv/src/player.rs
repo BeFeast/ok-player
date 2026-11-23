@@ -460,6 +460,21 @@ impl RawReader {
         self.handle
     }
 
+    pub(crate) fn set_string_property(&self, name: &str, value: &str) -> Result<(), MpvError> {
+        let name = CString::new(name)?;
+        let value = CString::new(value)?;
+        // MPV_FORMAT_STRING passes char**; libmpv copies the string.
+        let mut value_ptr = value.as_ptr();
+        check(unsafe {
+            ffi::mpv_set_property(
+                self.handle.as_ptr(),
+                name.as_ptr(),
+                ffi::MPV_FORMAT_STRING,
+                (&mut value_ptr as *mut *const c_char).cast(),
+            )
+        })
+    }
+
     /// The path/URL mpv reports for the current entry — the file path for local media
     /// or the URL string for a stream. Read by the pump at `EndFile` time so the
     /// shell can match the ended source against the current one and drop a stale
@@ -885,7 +900,7 @@ impl RawReader {
         if code < 0 { Ok(None) } else { Ok(Some(value)) }
     }
 
-    fn get_flag(&self, name: &str) -> Result<Option<bool>, MpvError> {
+    pub(crate) fn get_flag(&self, name: &str) -> Result<Option<bool>, MpvError> {
         let name = CString::new(name)?;
         let mut value: c_int = 0;
         let code = unsafe {
@@ -919,7 +934,7 @@ impl RawReader {
         if code < 0 { Ok(None) } else { Ok(Some(value)) }
     }
 
-    fn get_string(&self, name: &str) -> Result<Option<String>, MpvError> {
+    pub(crate) fn get_string(&self, name: &str) -> Result<Option<String>, MpvError> {
         let name = CString::new(name)?;
         let value = unsafe { ffi::mpv_get_property_string(self.handle.as_ptr(), name.as_ptr()) };
         if value.is_null() {
@@ -1299,6 +1314,7 @@ pub struct Mpv {
     pump: Option<EventPump>,
     next_request_id: AtomicU64,
     loadfile_has_index: bool,
+    discover_sidecars: bool,
     #[cfg(debug_assertions)]
     blocking_read_guard: crate::guard::BlockingReadGuard,
 }
@@ -1344,7 +1360,7 @@ impl Mpv {
     }
 
     pub fn new_with_options(hwdec: &str, options: &[(String, String)]) -> Result<Self, MpvError> {
-        let this = Self::new_uninitialized()?;
+        let mut this = Self::new_uninitialized()?;
         this.configure_before_initialize(hwdec, "libmpv", options)?;
         this.initialize()
     }
@@ -1390,6 +1406,7 @@ impl Mpv {
             pump: None,
             next_request_id: AtomicU64::new(1),
             loadfile_has_index: true,
+            discover_sidecars: true,
             #[cfg(debug_assertions)]
             blocking_read_guard: Default::default(),
         };
@@ -1398,7 +1415,7 @@ impl Mpv {
     }
 
     fn configure_before_initialize(
-        &self,
+        &mut self,
         hwdec: &str,
         video_output: &str,
         options: &[(String, String)],
@@ -1409,11 +1426,11 @@ impl Mpv {
         self.set_option("force-window", "no")?;
         self.set_option("vo", video_output)?;
         self.set_option("hwdec", hwdec)?;
-        // Exact same-stem subtitle discovery is an mpv passthrough boundary:
-        // libmpv parses and renders SRT/WebVTT cue payloads, while OK Player
-        // only surfaces the resulting track metadata. Keep this explicit so
-        // config=no cannot make sidecar support depend on mpv's default value.
+        // Clients that do not run an event pump keep native mpv discovery.
         self.set_option("sub-auto", "exact")?;
+        self.discover_sidecars = !options
+            .iter()
+            .any(|(name, _)| name == "sub-auto" || name.starts_with("sub-file-paths"));
         // Preserve authored ASS/SSA styling. `scale` is deliberate: mpv keeps
         // script fonts, colors, inline layout, and signs, but still honors OK
         // Player's explicit sub-scale/sub-pos controls. Older supported libmpv
@@ -1484,6 +1501,7 @@ impl Mpv {
     /// created (and, in the shell, after `mark_ui_thread`).
     pub fn start_event_pump(&mut self) {
         if self.pump.is_none() {
+            self.enable_sidecar_discovery();
             self.pump = Some(EventPump::start(self.handle));
         }
     }
@@ -1496,7 +1514,17 @@ impl Mpv {
     /// player sessions use [`Mpv::start_event_pump`] and keep device discovery.
     pub fn start_event_pump_without_audio_devices(&mut self) {
         if self.pump.is_none() {
+            self.enable_sidecar_discovery();
             self.pump = Some(EventPump::start_without_audio_devices(self.handle));
+        }
+    }
+
+    fn enable_sidecar_discovery(&self) {
+        if self.discover_sidecars
+            && crate::sidecar_subtitles::register(self.handle)
+            && let Err(error) = self.set_string_property("options/sub-auto", "no")
+        {
+            eprintln!("[okp-mpv] could not switch subtitle discovery: {error}");
         }
     }
 
@@ -1806,11 +1834,10 @@ impl Mpv {
     pub fn add_subtitle_file(&self, path: &Path) -> Result<(), MpvError> {
         let command = CString::new("sub-add")?;
         let path = path_to_cstring(path)?;
-        let select = CString::new("select")?;
         let args = [
             command.as_ptr(),
             path.as_ptr(),
-            select.as_ptr(),
+            c"cached".as_ptr(),
             ptr::null(),
         ];
 
@@ -2222,20 +2249,7 @@ impl Mpv {
     }
 
     fn set_string_property(&self, name: &str, value: &str) -> Result<(), MpvError> {
-        let name = CString::new(name)?;
-        let value = CString::new(value)?;
-        // MPV_FORMAT_STRING passes `char**`; libmpv copies the string, so the
-        // CString only has to outlive this call.
-        let mut value_ptr = value.as_ptr();
-
-        check(unsafe {
-            ffi::mpv_set_property(
-                self.handle.as_ptr(),
-                name.as_ptr(),
-                ffi::MPV_FORMAT_STRING,
-                &mut value_ptr as *mut _ as *mut c_void,
-            )
-        })
+        self.reader().set_string_property(name, value)
     }
 
     fn set_double(&self, name: &str, mut value: f64) -> Result<(), MpvError> {
@@ -3036,12 +3050,12 @@ pub(crate) fn media_info_with_source(info: Option<MediaInfo>, source: &Path) -> 
 }
 
 #[cfg(unix)]
-fn path_to_cstring(path: &Path) -> Result<CString, NulError> {
+pub(crate) fn path_to_cstring(path: &Path) -> Result<CString, NulError> {
     CString::new(path.as_os_str().as_bytes())
 }
 
 #[cfg(not(unix))]
-fn path_to_cstring(path: &Path) -> Result<CString, NulError> {
+pub(crate) fn path_to_cstring(path: &Path) -> Result<CString, NulError> {
     CString::new(path.to_string_lossy().as_bytes())
 }
 

@@ -66,6 +66,7 @@ pub mod subtitle_format;
 pub mod subtitle_import;
 pub mod subtitle_lift;
 pub mod subtitle_search;
+pub mod subtitle_sidecars;
 pub mod subtitle_style;
 pub mod subtitle_sync;
 pub mod subtitle_tracks;

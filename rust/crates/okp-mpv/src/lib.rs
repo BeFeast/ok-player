@@ -3,6 +3,7 @@ mod ffi;
 mod guard;
 mod player;
 mod pump;
+mod sidecar_subtitles;
 pub mod version;
 
 pub use player::{

@@ -13,6 +13,10 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 SCENARIOS = ROOT / "macos" / "verification"
 ARCHIVE = "ok-player-macos-arm64.zip"
+FIXTURE_SUBTITLES = {
+    "subtitle-lift.mp4": (".srt",),
+    "A Serious Man (2009) {tmdb-12573}.mp4": (".en.hi.srt", ".he.srt", ".ru.hi.srt"),
+}
 # Keep both lines active across the exact seeks and the real OSC timeout.
 SIDECAR = """1
 00:00:02,000 --> 00:00:17,500
@@ -37,7 +41,7 @@ def command(*args, **kwargs):
 def read_scenario(path):
     spec = json.loads(path.read_text())
     actions = {"open", "pause", "seek", "capture", "play_to", "play_until_hidden", "pointer_reveal",
-               "enter_fullscreen", "leave_fullscreen"}
+               "enter_fullscreen", "leave_fullscreen", "check_subtitle_menu"}
     if (spec["schema_version"] != 1 or spec["id"] != path.stem
             or spec["appearances"] != ["light", "dark"] or not spec["steps"]):
         raise ValueError("Unsupported scenario ID, schema or appearances")
@@ -50,15 +54,21 @@ def read_scenario(path):
             if (step.get("expect") not in {"no_cue", "clearance", "base_margin"}
                     or not step.get("name", "").replace("-", "").isalnum()):
                 raise ValueError("Invalid capture checkpoint")
-    if spec["fixture"] != "subtitle-lift.mp4":
+        if step["action"] == "check_subtitle_menu":
+            labels = step["subtitle_labels"]
+            if (not isinstance(labels, list) or not all(isinstance(label, str) for label in labels)
+                    or step["selected_subtitle"] not in labels):
+                raise ValueError("Subtitle menu check needs labels and an expected selected item")
+    if spec["fixture"] not in FIXTURE_SUBTITLES:
         raise ValueError("Unknown scenario fixture")
     return spec
 
 
 def fixture(ffmpeg, temporary, spec, receipt):
     video = temporary / spec["fixture"]
-    subtitles = video.with_suffix(".srt")
-    subtitles.write_text(SIDECAR, encoding="utf-8")
+    subtitles = [video.with_suffix(suffix) for suffix in FIXTURE_SUBTITLES[spec["fixture"]]]
+    for subtitle in subtitles:
+        subtitle.write_text(SIDECAR, encoding="utf-8")
     version = command(ffmpeg, "-version", capture_output=True, text=True).stdout.splitlines()[0]
     command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
             "-f", "lavfi", "-i", "color=c=0x303030:s=640x360:r=24:d=18",
@@ -68,7 +78,7 @@ def fixture(ffmpeg, temporary, spec, receipt):
             "-movflags", "+faststart", str(video))
     receipt["fixture"] = {
         "ffmpeg_version": version, "ffmpeg_sha256": digest(Path(ffmpeg)),
-        video.name: digest(video), subtitles.name: digest(subtitles),
+        **{path.name: digest(path) for path in [video, *subtitles]},
     }
     return video
 

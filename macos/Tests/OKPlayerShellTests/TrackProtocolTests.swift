@@ -58,7 +58,7 @@ final class TrackProtocolTests: XCTestCase {
             subtitles: [
                 TrackChoice(id: nil, label: "Off", selected: false),
                 TrackChoice(id: 1, label: "English SDH · PGS · Image · Default", selected: false),
-                TrackChoice(id: 2, label: "en · SRT · EXT", selected: true),
+                TrackChoice(id: 2, label: "en · SRT · External", selected: true),
             ],
             subtitleDelay: SubtitleValue(value: 0.25, label: "+250 ms", reported: 0.25),
             subtitleScale: SubtitleValue(value: 1.1, label: "110%", reported: 1.0),

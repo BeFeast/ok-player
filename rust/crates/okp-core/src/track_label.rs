@@ -106,7 +106,7 @@ pub fn subtitle_track_label(
         parts.push("Native style".to_owned());
     }
     if external {
-        parts.push("EXT".to_owned());
+        parts.push("External".to_owned());
     } else if default {
         parts.push("Default".to_owned());
     }
@@ -240,7 +240,7 @@ mod tests {
                 true,
                 false,
             ),
-            "English · WebVTT · EXT"
+            "English · WebVTT · External"
         );
         assert_eq!(
             subtitle_track_label(
@@ -252,7 +252,7 @@ mod tests {
                 true,
                 false,
             ),
-            "English · SRT · EXT"
+            "English · SRT · External"
         );
     }
 
@@ -283,7 +283,7 @@ mod tests {
                 true,
                 false,
             ),
-            "fre · VobSub · Image · EXT"
+            "fre · VobSub · Image · External"
         );
     }
 
@@ -315,7 +315,7 @@ mod tests {
                 true,
                 false,
             ),
-            "Signs · SSA · Native style · EXT"
+            "Signs · SSA · Native style · External"
         );
         assert_eq!(
             subtitle_track_label(6, None, None, None, None, false, false),

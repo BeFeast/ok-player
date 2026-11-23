@@ -29,7 +29,14 @@ struct VerificationOptions {
         config.dataDir = profile.appendingPathComponent("data").path
         config.configDir = profile.appendingPathComponent("config").path
         config.cacheDir = profile.appendingPathComponent("cache").path
+        if let spec = try? readScenario(), let languages = spec.preferredSubtitleLanguages {
+            config.mpvOptions.append(MpvOption(name: "slang", value: languages))
+        }
         return config
+    }
+
+    func readScenario() throws -> VerificationScenario {
+        try SessionJSON.makeDecoder().decode(VerificationScenario.self, from: Data(contentsOf: scenario))
     }
 
     func write(_ result: [String: Any]) throws {
@@ -50,17 +57,21 @@ struct VerificationScenario: Decodable {
         let seconds: Double?
         let name: String?
         let expect: Expectation?
+        let subtitleLabels: [String]?
+        let selectedSubtitle: String?
     }
     enum Action: String, Decodable {
         case open, pause, seek, capture
         case playTo = "play_to", playUntilHidden = "play_until_hidden", pointerReveal = "pointer_reveal"
         case enterFullscreen = "enter_fullscreen", leaveFullscreen = "leave_fullscreen"
+        case checkSubtitleMenu = "check_subtitle_menu"
     }
     enum Expectation: String, Decodable {
         case noCue = "no_cue", clearance, baseMargin = "base_margin"
     }
     let schemaVersion: Int
     let id: String
+    let preferredSubtitleLanguages: String?
     let steps: [Step]
 }
 
@@ -83,6 +94,7 @@ final class VerifyRun {
     private var visibleCueBottom: CGFloat?
     private var hiddenCueBottom: CGFloat?
     private var compositorStatus = "not_probed"
+    private var subtitleMenu: [String: [String]]?
 
     init(app: PlayerApp, options: VerificationOptions) {
         self.app = app
@@ -99,8 +111,8 @@ final class VerifyRun {
         ]
         var code: Int32 = 0
         do {
-            let scenario = try SessionJSON.makeDecoder().decode(VerificationScenario.self, from: Data(contentsOf: options.scenario))
-            guard scenario.schemaVersion == 1, scenario.id == "subtitle-lift" else {
+            let scenario = try options.readScenario()
+            guard scenario.schemaVersion == 1, ["subtitle-lift", "tagged-sidecars"].contains(scenario.id) else {
                 throw VerifyError("Unsupported scenario or schema")
             }
             try await wait("mapped AppKit window", blocked: true) {
@@ -134,6 +146,7 @@ final class VerifyRun {
         result["checkpoints"] = observations
         result["assertion_failures"] = failures
         result["compositor"] = compositorStatus
+        result["subtitle_menu"] = subtitleMenu
         do {
             try options.write(result)
         } catch {
@@ -204,6 +217,17 @@ final class VerifyRun {
                 throw VerifyError("Capture lacks its name or expectation")
             }
             try await capture(name, expecting: expectation)
+        case .checkSubtitleMenu:
+            guard let expectedLabels = step.subtitleLabels, let expectedSelected = step.selectedSubtitle else {
+                throw VerifyError("Subtitle menu check lacks labels or selection")
+            }
+            let items = app.tracks.menuItems(.subtitle).prefix { !$0.isSeparatorItem }
+            let labels = items.map(\.title)
+            let selected = items.filter { $0.state == .on }.map(\.title)
+            subtitleMenu = ["labels": labels, "selected": selected]
+            if labels != expectedLabels || selected != [expectedSelected] {
+                failures.append("subtitle_menu")
+            }
         }
     }
 
