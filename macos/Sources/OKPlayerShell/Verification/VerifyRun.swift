@@ -53,7 +53,7 @@ struct VerificationScenario: Decodable {
     }
     enum Action: String, Decodable {
         case open, pause, seek, capture
-        case playUntilHidden = "play_until_hidden", pointerReveal = "pointer_reveal"
+        case playTo = "play_to", playUntilHidden = "play_until_hidden", pointerReveal = "pointer_reveal"
         case enterFullscreen = "enter_fullscreen", leaveFullscreen = "leave_fullscreen"
     }
     enum Expectation: String, Decodable {
@@ -162,6 +162,12 @@ final class VerifyRun {
             try seek(seconds)
             try await wait("seek to \(seconds) s and fresh swap") {
                 abs((self.snapshot.timePos ?? -1) - seconds) < 0.08 && self.swaps > before
+            }
+        case .playTo:
+            guard let seconds = step.seconds else { throw VerifyError("Playback step lacks a timestamp") }
+            try pressKey(" ", code: 49)
+            try await wait("playing through subtitle packet at \(seconds) s") {
+                self.snapshot.status == .playing && (self.snapshot.timePos ?? -1) >= seconds
             }
         case .playUntilHidden:
             try pressKey(" ", code: 49)

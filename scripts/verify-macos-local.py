@@ -20,6 +20,7 @@ FIRST CUE
 2
 00:00:07,000 --> 00:00:17,500
 SECOND SUBTITLE CUE
+
 """
 
 
@@ -37,7 +38,7 @@ def command(*args, **kwargs):
 
 def read_scenario(path):
     spec = json.loads(path.read_text())
-    actions = {"open", "pause", "seek", "capture", "play_until_hidden", "pointer_reveal",
+    actions = {"open", "pause", "seek", "capture", "play_to", "play_until_hidden", "pointer_reveal",
                "enter_fullscreen", "leave_fullscreen"}
     if (spec["schema_version"] != 1 or spec["id"] != path.stem
             or spec["appearances"] != ["light", "dark"] or not spec["steps"]):
@@ -45,8 +46,8 @@ def read_scenario(path):
     for step in spec["steps"]:
         if step["action"] not in actions:
             raise ValueError(f"Unsupported action {step['action']!r}")
-        if step["action"] == "seek" and not isinstance(step.get("seconds"), (float, int)):
-            raise ValueError("Seek requires numeric seconds")
+        if step["action"] in {"seek", "play_to"} and not isinstance(step.get("seconds"), (float, int)):
+            raise ValueError("Seek and playback targets require numeric seconds")
         if step["action"] == "capture":
             if (step.get("expect") not in {"no_cue", "clearance", "base_margin"}
                     or not step.get("name", "").replace("-", "").isalnum()):
