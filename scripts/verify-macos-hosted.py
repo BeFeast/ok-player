@@ -5,11 +5,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import subprocess
 import sys
 import tempfile
 import uuid
+import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 FORGEJO = "https://git.oklabs.uk/BeFeast/ok-player.git"
@@ -28,12 +30,16 @@ def main():
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--sha", help="full, published Forgejo SHA (default: Forgejo main)")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--negative-control", action="store_true",
+                        help="disable transport clearance in the verifier instance")
     args = parser.parse_args()
     if args.list:
         print("\n".join(sorted(scenarios)))
         return 0
     if args.scenario not in scenarios:
         parser.error("unknown scenario; use --list")
+    if args.negative_control and args.scenario != "subtitle-lift":
+        parser.error("negative control is only available for subtitle-lift")
     if args.sha is not None and not FULL_SHA.fullmatch(args.sha):
         parser.error("--sha must be a full 40-character Forgejo SHA")
     try:
@@ -55,7 +61,8 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     if any(output.iterdir()):
         parser.error("--output must be empty")
-    ref = f"mac-ci/verify/{args.scenario}/{uuid.uuid4().hex}"
+    tag = "negative-" if args.negative_control else ""
+    ref = f"mac-ci/verify/{args.scenario}/{tag}{uuid.uuid4().hex}"
     run = subprocess.run([
         sys.executable, str(ROOT / "scripts/mac-ci-bridge.py"), "run",
         "--sha", sha, "--ref", ref, "--repo", str(ROOT), "--github-repo", GITHUB,
@@ -75,6 +82,9 @@ def main():
         if result["source_sha"] != sha or result["scenario"] != args.scenario:
             raise ValueError("Returned verdict names the wrong source or scenario")
         if status in ("passed", "failed"):
+            control = "subtitle_clearance_disabled" if args.negative_control else "none"
+            if result["control"] != control:
+                raise ValueError("Returned verdict names the wrong control mode")
             if (output / "source-sha.txt").read_text().strip() != sha:
                 raise ValueError("Returned artifact names the wrong Forgejo SHA")
             archive = output / "ok-player-macos-arm64.zip"
@@ -86,6 +96,10 @@ def main():
             if result["app_zip_sha256"] != archive_digest or archive_digest != (
                     output / "SHA256SUMS.txt").read_text().split()[0]:
                 raise ValueError("Returned verdict is not bound to the app ZIP")
+            with zipfile.ZipFile(archive) as package:
+                info = plistlib.loads(package.read("OK Player.app/Contents/Info.plist"))
+            if info["OKPSourceSHA"] != sha:
+                raise ValueError("The downloaded ZIP embeds a different source SHA")
             if {case["appearance"] for case in result["appearances"]} != {"light", "dark"}:
                 raise ValueError("The hosted verdict is missing an appearance")
             for appearance in result["appearances"]:
@@ -99,7 +113,8 @@ def main():
             return 0
         if status == "failed" and run.returncode == 1:
             return 1
-    except (OSError, ValueError, KeyError, IndexError, TypeError) as error:
+    except (OSError, ValueError, KeyError, IndexError, TypeError,
+            plistlib.InvalidFileException, zipfile.BadZipFile) as error:
         print(f"Invalid hosted evidence: {error}", file=sys.stderr)
     return 2
 
