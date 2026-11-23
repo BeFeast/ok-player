@@ -46,9 +46,9 @@ jobs:
           set -euo pipefail
           mapfile -t packages < <(./scripts/linux-candidate-toolchain.sh --print-portable-debian-packages)
           apt-get install -y --no-install-recommends "${packages[@]}" \
-            appstream appstream-compose curl dbus-x11 fonts-dejavu-core imagemagick \
+            appstream appstream-compose curl dbus fonts-dejavu-core grim jq libgl1-mesa-dri \
             libadwaita-1-dev libegl1-mesa-dev libgl1-mesa-dev libglx-dev libgtk-4-dev libmpv-dev \
-            squashfs-tools unzip xauth xdotool xvfb xz-utils
+            squashfs-tools sway unzip xz-utils
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.98.1
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
@@ -71,10 +71,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          smoke_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$smoke_dir"' EXIT
+          cp artifacts/appimage/*.AppImage "$smoke_dir/ok-player.AppImage"
+          cp scripts/smoke-linux-appimage.sh "$smoke_dir/"
           ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=1280x720:rate=24 \
-            -c:v libx264 -pix_fmt yuv420p -t 20 "$RUNNER_TEMP/playback.mp4"
-          xvfb-run -a -s '-screen 0 1280x800x24' dbus-run-session -- \
-            ./scripts/smoke-linux-appimage.sh artifacts/appimage/*.AppImage "$RUNNER_TEMP/playback.mp4" artifacts/appimage/smoke
+            -c:v libx264 -pix_fmt yuv420p -t 20 "$smoke_dir/playback.mp4"
+          mkdir "$smoke_dir/evidence"
+          chown -R nobody:nogroup "$smoke_dir"
+          trap 'cp -R "$smoke_dir/evidence" artifacts/appimage/smoke; rm -rf -- "$smoke_dir"' EXIT
+          runuser -u nobody -- env HOME="$smoke_dir" TMPDIR="$smoke_dir" \
+            "$smoke_dir/smoke-linux-appimage.sh" "$smoke_dir/ok-player.AppImage" \
+            "$smoke_dir/playback.mp4" "$smoke_dir/evidence"
       - name: Hand off the verified AppImage and evidence
         uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
         with:

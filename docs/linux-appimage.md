@@ -16,7 +16,9 @@ Run `ok-player --update beta` or `ok-player --update stable` when the player is 
 The launcher and updater share a lock. This keeps a running image in place and makes an update
 available on the next launch. The updater verifies the selected channel manifest's OpenPGP
 signature, the immutable provenance it names, the AppImage signature, and the payload size and
-SHA-256. The signing authority is the checked-in OK Player Linux archive key. The updater accepts
+SHA-256. The updater uses an immutable signature addressed by the manifest's SHA-256. This keeps
+the current manifest verifiable if publication stops before advancing the channel. The signing
+authority is the checked-in OK Player Linux archive key. The updater accepts
 only newer builds and retains previous build directories for rollback. Settings and history use
 the same per-user locations across builds.
 

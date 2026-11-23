@@ -76,6 +76,20 @@ def read_signed(read, key, verifier):
     return json.loads(data)
 
 
+def channel_key(channel):
+    return f"{PREFIX}/{channel}/latest.json"
+
+
+def channel_signature_key(channel, data):
+    return f"{PREFIX}/{channel}/manifests/{digest(data)}.sig"
+
+
+def read_channel(read, channel, verifier):
+    data = read(channel_key(channel))
+    verifier.verify(data, read(channel_signature_key(channel, data)))
+    return json.loads(data)
+
+
 def payload(read, release, channel, verifier):
     build = release["build"]
     if type(build) is not int or build < 1:
@@ -182,8 +196,9 @@ def publish_archive(store, metadata, image, signer, verifier):
     return json.loads(release)
 
 
-def publish_channel(store, release, signer):
-    key = f"{PREFIX}/{release['channel']}/latest.json"
+def publish_channel(store, release, signer, verifier):
+    channel = release["channel"]
+    key = channel_key(channel)
     data = encode(release)
     current = store.read(key, missing=True)
     if current is not None:
@@ -192,7 +207,16 @@ def publish_channel(store, release, signer):
             raise ValueError("Refusing to move an AppImage channel backwards")
         if active["build"] == release["build"] and current != data:
             raise ValueError("Conflicting AppImage channel descriptor for the same build")
-    store.put(f"{key}.sig", signer(data))
+    signature_key = channel_signature_key(channel, data)
+    signature = store.read(signature_key, missing=True)
+    if signature is None:
+        signature = signer(data)
+        store.put(signature_key, signature, immutable=True)
+    else:
+        verifier.verify(data, signature)
+    # Clients use the immutable signature for the exact bytes they fetched.
+    # The moving signature remains available for manual verification.
+    store.put(f"{key}.sig", signature)
     store.put(key, data)
 
 
@@ -268,7 +292,7 @@ def main():
         verification.mkdir(mode=0o700)
         verifier = Verifier(verification, args.keyring)
         if args.command == "update":
-            release = read_signed(fetch, f"{PREFIX}/{args.channel}/latest.json", verifier)
+            release = read_channel(fetch, args.channel, verifier)
             root = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "ok-player"
             current = installed_build(root / "OK-Player.AppImage")
             if current and current >= release["build"]:
@@ -294,14 +318,14 @@ def main():
                     raise ValueError("AppImage filename does not match the build identity")
                 release = publish_archive(store, metadata, image, signer, verifier)
                 if not args.archive_only:
-                    publish_channel(store, release, signer)
+                    publish_channel(store, release, signer, verifier)
             else:
                 beta = read_signed(store.read, f"{archive(args.build)}/release.json", verifier)
                 payload(store.read, beta, "beta", verifier)
                 if beta["build"] != args.build:
                     raise ValueError("Archive points to a different AppImage build")
                 release = {**beta, "channel": "stable"}
-                publish_channel(store, release, signer)
+                publish_channel(store, release, signer, verifier)
             print(f"{ORIGIN}/{release['key']}  SHA-256 {release['sha256']}")
         finally:
             if shutil.which("gpgconf"):

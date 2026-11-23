@@ -17,6 +17,7 @@ class MemoryStore:
     def __init__(self):
         self.objects = {}
         self.writes = []
+        self.interrupt_at = None
 
     def read(self, key, limit=None, missing=False):
         if missing:
@@ -24,6 +25,8 @@ class MemoryStore:
         return self.objects[key]
 
     def put(self, key, data, immutable=False):
+        if key == self.interrupt_at:
+            raise OSError("Interrupted channel publication")
         if immutable and key in self.objects:
             raise AssertionError(f"Attempt to replace {key}")
         self.objects[key] = data
@@ -72,15 +75,29 @@ class AppImageTests(unittest.TestCase):
     def test_promoted_channel_points_at_the_same_signed_image(self):
         beta = self.archive()
         stable = {**beta, "channel": "stable"}
-        appimage.publish_channel(self.store, stable, self.signer.sign)
+        appimage.publish_channel(self.store, stable, self.signer.sign, self.signer)
         pointer = f"{appimage.PREFIX}/stable/latest.json"
         self.assertEqual(self.store.writes[-2:], [f"{pointer}.sig", pointer])
-        fetched = appimage.read_signed(self.store.read, pointer, self.signer)
+        fetched = appimage.read_channel(self.store.read, "stable", self.signer)
         self.assertEqual(appimage.payload(self.store.read, fetched, "stable", self.signer), self.data)
         older = appimage.descriptor(appimage.identity("2" * 40, 10, fixture(2)), "stable")
         with self.assertRaisesRegex(ValueError, "backwards"):
-            appimage.publish_channel(self.store, older, self.signer.sign)
-        self.assertEqual(appimage.read_signed(self.store.read, pointer, self.signer), fetched)
+            appimage.publish_channel(self.store, older, self.signer.sign, self.signer)
+        self.assertEqual(appimage.read_channel(self.store.read, "stable", self.signer), fetched)
+
+    def test_current_channel_stays_verifiable_when_publication_is_interrupted(self):
+        current = self.archive()
+        appimage.publish_channel(self.store, current, self.signer.sign, self.signer)
+        next_data = fixture(2)
+        next_meta = appimage.identity("2" * 40, 12, next_data)
+        newer = appimage.publish_archive(self.store, next_meta, next_data, self.signer.sign, self.signer)
+        self.store.interrupt_at = appimage.channel_key("beta")
+        with self.assertRaisesRegex(OSError, "Interrupted channel publication"):
+            appimage.publish_channel(self.store, newer, self.signer.sign, self.signer)
+        self.assertEqual(appimage.read_channel(self.store.read, "beta", self.signer), current)
+        self.store.interrupt_at = None
+        appimage.publish_channel(self.store, newer, self.signer.sign, self.signer)
+        self.assertEqual(appimage.read_channel(self.store.read, "beta", self.signer), newer)
 
     def test_payload_and_descriptors_fail_closed_on_tampering(self):
         beta = self.archive()
