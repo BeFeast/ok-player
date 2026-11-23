@@ -320,6 +320,51 @@ not verify. The bounded smoke runs as in the Forgejo workflow, but the step also
 unless the app wrote both window snapshots. The artifact carries the same files plus
 the generated fixture's SHA-256.
 
+## Hosted scenario verification
+
+From a checkout with the verifier, run:
+
+```sh
+scripts/verify-macos --list
+scripts/verify-macos subtitle-lift
+scripts/verify-macos subtitle-lift --sha <full-forgejo-sha> --output <empty-directory>
+```
+
+The default source is canonical Forgejo `main`. Publish the candidate to Forgejo
+before verifying it. Choose a revision that includes the scenario and its
+packaged AppKit verification mode. The command uses `MAC_CI_GITHUB_TOKEN` or the
+active GitHub CLI credential with the bridge's workflow access. It prints the
+GitHub Actions run URL and downloads its output to a new temporary directory or
+the specified directory, including failed scenarios.
+
+Open `verify/result.json` for the verdict, source and ZIP digests, fixture
+provenance, both appearances and the checksums of their checkpoint PNGs.
+`hosted-run.md` links the run and gives the build result. Exit 0 means a verified
+pass, 1 means a completed scenario with a failed assertion, and 2 means a build,
+environment, or evidence error.
+
+`subtitle-lift` opens a synthetic H.264 clip with a same-stem SRT through the
+app's normal file-open path. It checks the engine-selected subtitle and exact
+seek, OSC hit testing, the cue rectangle relative to the OSC, and the base
+position after auto-hide. Its 2× renderer reads glyphs on a controlled gray
+fixture before the window chrome is composited. The screenshot mode records
+either a 2× WindowServer capture or a 2× render from the live libmpv context
+composited with the app's laid-out chrome. The result records the physical
+window's backing scale separately. The app-composite images use AppKit's
+snapshot of the visual-effect view, whose compositor blur can differ on a
+physical display.
+
+On a suitable Apple Silicon workstation, the in-process half can rerun an
+existing bundle without a build:
+
+```sh
+OKP_VERIFY_FFMPEG=<pinned-ffmpeg> scripts/verify subtitle-lift --zip <preview.zip> --output <empty-directory>
+```
+
+Use `--app` to test a bundle. With neither `--zip` nor `--app`, the command
+uses the normal preview build and requires the pinned runtime in
+`OKP_MPV_PREFIX`.
+
 ## Session and rendering
 
 `SessionClient` owns the session handle. The session's event thread calls its

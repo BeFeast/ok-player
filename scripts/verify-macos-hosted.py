@@ -38,9 +38,7 @@ def main():
         parser.error("--sha must be a full 40-character Forgejo SHA")
     try:
         sha = args.sha or git("ls-remote", FORGEJO, "refs/heads/main").split()[0]
-        git("fetch", "--no-tags", FORGEJO, sha)
-        if git("rev-parse", "FETCH_HEAD") != sha:
-            raise ValueError("Forgejo returned a different commit")
+        git("fetch", "--no-tags", "--no-write-fetch-head", FORGEJO, sha)
         # The packaged-app protocol is carried by the tested commit.
         git("cat-file", "-e", f"{sha}:macos/verification/{args.scenario}.json")
     except (OSError, subprocess.SubprocessError, ValueError, IndexError) as error:
@@ -79,8 +77,17 @@ def main():
         if status in ("passed", "failed"):
             if (output / "source-sha.txt").read_text().strip() != sha:
                 raise ValueError("Returned artifact names the wrong Forgejo SHA")
-            if result["app_zip_sha256"] != (output / "SHA256SUMS.txt").read_text().split()[0]:
+            archive = output / "ok-player-macos-arm64.zip"
+            archive_hash = hashlib.sha256()
+            with archive.open("rb") as stream:
+                for data in iter(lambda: stream.read(1024 * 1024), b""):
+                    archive_hash.update(data)
+            archive_digest = archive_hash.hexdigest()
+            if result["app_zip_sha256"] != archive_digest or archive_digest != (
+                    output / "SHA256SUMS.txt").read_text().split()[0]:
                 raise ValueError("Returned verdict is not bound to the app ZIP")
+            if {case["appearance"] for case in result["appearances"]} != {"light", "dark"}:
+                raise ValueError("The hosted verdict is missing an appearance")
             for appearance in result["appearances"]:
                 for checkpoint in appearance["checkpoints"]:
                     png = verdict.parent / checkpoint["png"]
@@ -92,7 +99,7 @@ def main():
             return 0
         if status == "failed" and run.returncode == 1:
             return 1
-    except (OSError, ValueError, KeyError, IndexError) as error:
+    except (OSError, ValueError, KeyError, IndexError, TypeError) as error:
         print(f"Invalid hosted evidence: {error}", file=sys.stderr)
     return 2
 

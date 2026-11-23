@@ -50,7 +50,9 @@ struct VerificationScenario: Decodable {
         let expect: Expectation?
     }
     enum Action: String, Decodable {
-        case open, pause, seek, capture, playUntilHidden = "play_until_hidden", pointerReveal = "pointer_reveal"
+        case open, pause, seek, capture
+        case playUntilHidden = "play_until_hidden", pointerReveal = "pointer_reveal"
+        case enterFullscreen = "enter_fullscreen", leaveFullscreen = "leave_fullscreen"
     }
     enum Expectation: String, Decodable {
         case noCue = "no_cue", clearance, baseMargin = "base_margin"
@@ -110,6 +112,7 @@ final class VerifyRun {
                 throw VerifyError("WindowServer did not list the expected window/PID", blocked: true)
             }
             result["window_id"] = app.window.windowNumber
+            result["source_sha"] = Bundle.main.object(forInfoDictionaryKey: "OKPSourceSHA")
             result["revision"] = Bundle.main.object(forInfoDictionaryKey: "OKPSourceRevision")
             result["window_backing_scale"] = app.window.backingScaleFactor
             compositorStatus = CGPreflightScreenCaptureAccess() ? "available" : "permission_unavailable"
@@ -146,7 +149,7 @@ final class VerifyRun {
                 self.snapshot.status == .playing && self.selectedExternal != nil && self.swaps > before
             }
         case .pause:
-            try pressSpace()
+            try pressKey(" ", code: 49)
             try await wait("pause via window responder") { self.snapshot.status == .paused }
         case .seek:
             guard let seconds = step.seconds else { throw VerifyError("Seek lacks a timestamp") }
@@ -156,7 +159,7 @@ final class VerifyRun {
                 abs((self.snapshot.timePos ?? -1) - seconds) < 0.08 && self.swaps > before
             }
         case .playUntilHidden:
-            try pressSpace()
+            try pressKey(" ", code: 49)
             try await wait("playing with OSC auto-hidden") {
                 self.snapshot.status == .playing && !self.app.osc.isRevealed
             }
@@ -172,6 +175,19 @@ final class VerifyRun {
             // Deliver to the same tracking-area responder that receives a real window mouse move.
             app.osc.mouseMoved(with: event)
             try await wait("OSC revealed by pointer tracking") { self.app.osc.isRevealed }
+        case .enterFullscreen, .leaveFullscreen:
+            let entering = step.action == .enterFullscreen
+            guard let behaviour = app.windowBehaviour else {
+                throw VerifyError("The native fullscreen controller is unavailable", blocked: true)
+            }
+            var completed = false
+            let before = swaps
+            behaviour.onFullscreenChanged = { completed = $0 == entering }
+            defer { behaviour.onFullscreenChanged = nil }
+            try pressKey(entering ? "f" : "\u{1b}", code: entering ? 3 : 53)
+            try await wait("native fullscreen \(entering ? "entered" : "exited") and frame swapped", blocked: true) {
+                completed && self.swaps > before
+            }
         case .capture:
             guard let name = step.name, let expectation = step.expect else {
                 throw VerifyError("Capture lacks its name or expectation")
@@ -193,14 +209,16 @@ final class VerifyRun {
         print("OKP_VERIFY \(step)")
     }
 
-    private func pressSpace() throws {
+    private func pressKey(_ characters: String, code: UInt16) throws {
         let window = app.window!
         guard window.makeFirstResponder(app.video),
               let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
                                            timestamp: ProcessInfo.processInfo.systemUptime,
                                            windowNumber: window.windowNumber, context: nil,
-                                           characters: " ", charactersIgnoringModifiers: " ", isARepeat: false,
-                                           keyCode: 49) else { throw VerifyError("Cannot focus the video for Space") }
+                                           characters: characters, charactersIgnoringModifiers: characters,
+                                           isARepeat: false, keyCode: code) else {
+            throw VerifyError("Cannot deliver a key event to the video responder")
+        }
         window.sendEvent(event)
     }
 
@@ -283,6 +301,7 @@ final class VerifyRun {
 
         var checkpoint: [String: Any] = [
             "name": name, "time_seconds": time, "playback": snapshot.status.rawValue,
+            "fullscreen": app.window.styleMask.contains(.fullScreen),
             "track_id": track.id, "track_external": track.external, "swap_count": frameSwaps,
             "osc_visible": visible, "osc_hit_testable": panelHit, "osc_rect_points": dimensions(rect),
             "seek_ax_role": app.osc.scrubber.accessibilityRole()?.rawValue ?? "",
@@ -308,8 +327,8 @@ final class VerifyRun {
             let bottom = glyphs.minY / 2
             if expectation == .clearance {
                 if bottom < rect.maxY + 1 { failures.append("subtitle_clearance:\(name)") }
-                if name == "second-cue" { visibleCueBottom = bottom }
-                if name == "revealed-osc", let hiddenCueBottom, bottom <= hiddenCueBottom + 1 {
+                if name.hasSuffix("second-cue") { visibleCueBottom = bottom }
+                if name.hasSuffix("revealed-osc"), let hiddenCueBottom, bottom <= hiddenCueBottom + 1 {
                     failures.append("subtitle_reveal_did_not_lift")
                 }
             } else {
@@ -365,7 +384,8 @@ final class VerifyRun {
             let bounds = view.bounds
             guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(ceil(bounds.width * 2)),
                                                pixelsHigh: Int(ceil(bounds.height * 2)), bitsPerSample: 8,
-                                               samplesPerPixel: 4, hasAlpha: true, colorSpaceName: .deviceRGB,
+                                               samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                               colorSpaceName: .deviceRGB,
                                                bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
             bitmap.size = bounds.size
             view.effectiveAppearance.performAsCurrentDrawingAppearance { view.cacheDisplay(in: bounds, to: bitmap) }

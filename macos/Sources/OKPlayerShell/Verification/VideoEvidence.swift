@@ -36,7 +36,7 @@ struct VideoEvidence {
                                   provider: provider, decode: nil, shouldInterpolate: false,
                                   intent: .defaultIntent) else { return nil }
         self.image = image
-        videoPresent = [0, 1, 2].allSatisfy { (12...100).contains(rgba[stride * (height / 2) + (width / 8) * 4 + $0]) }
+        videoPresent = [0, 1, 2].allSatisfy { (12...100).contains(rgba[stride * (height / 2) + (width / 2) * 4 + $0]) }
         glyphBounds = count > 0 ? CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1) : nil
         glyphPixels = count
     }

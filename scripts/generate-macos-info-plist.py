@@ -13,7 +13,7 @@ CI run number (0 for a local build). Both only grow, so a newer build carries a 
 CFBundleVersion, which is what LaunchServices compares when two copies exist.
 
 OKPSourceRevision keeps the full `git describe` output (tag, distance, abbreviated
-commit), so a copy on disk names the commit it was built from.
+commit) for display. OKPSourceSHA records the full commit for verification.
 
 A shallow clone has neither the tags nor the true commit count. It is refused rather
 than stamped with a wrong version.
@@ -87,6 +87,7 @@ def bundle_version(repo, build_number):
         "CFBundleShortVersionString": ".".join(str(int(part)) for part in tag.groups()),
         "CFBundleVersion": f"{commits}.{int(build_number)}",
         "OKPSourceRevision": describe,
+        "OKPSourceSHA": git(repo, "rev-parse", "HEAD"),
     }
 
 

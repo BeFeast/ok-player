@@ -15,6 +15,17 @@
     {"action": "play_until_hidden"},
     {"action": "capture", "name": "hidden-osc", "expect": "base_margin"},
     {"action": "pointer_reveal"},
-    {"action": "capture", "name": "revealed-osc", "expect": "clearance"}
+    {"action": "capture", "name": "revealed-osc", "expect": "clearance"},
+    {"action": "pause"},
+    {"action": "enter_fullscreen"},
+    {"action": "seek", "seconds": 2.5},
+    {"action": "capture", "name": "fullscreen-first-cue", "expect": "clearance"},
+    {"action": "seek", "seconds": 8.0},
+    {"action": "capture", "name": "fullscreen-second-cue", "expect": "clearance"},
+    {"action": "play_until_hidden"},
+    {"action": "capture", "name": "fullscreen-hidden-osc", "expect": "base_margin"},
+    {"action": "pointer_reveal"},
+    {"action": "capture", "name": "fullscreen-revealed-osc", "expect": "clearance"},
+    {"action": "leave_fullscreen"}
   ]
 }
