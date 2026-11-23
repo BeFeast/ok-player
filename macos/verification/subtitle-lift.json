@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "subtitle-lift",
+  "fixture": "subtitle-lift.mp4",
+  "appearances": ["light", "dark"],
+  "steps": [
+    {"action": "open"},
+    {"action": "pause"},
+    {"action": "seek", "seconds": 0.5},
+    {"action": "capture", "name": "lead-in", "expect": "no_cue"},
+    {"action": "seek", "seconds": 2.5},
+    {"action": "capture", "name": "first-cue", "expect": "clearance"},
+    {"action": "seek", "seconds": 8.0},
+    {"action": "capture", "name": "second-cue", "expect": "clearance"},
+    {"action": "play_until_hidden"},
+    {"action": "capture", "name": "hidden-osc", "expect": "base_margin"},
+    {"action": "pointer_reveal"},
+    {"action": "capture", "name": "revealed-osc", "expect": "clearance"}
+  ]
+}

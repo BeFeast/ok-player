@@ -153,6 +153,13 @@ final class VideoLayer: CAOpenGLLayer {
         return (renders, swaps)
     }
 
+    func verificationFrame(width: Int, height: Int) -> VideoEvidence? {
+        renderQueue.sync {
+            guard let session else { return nil }
+            return surface.verificationFrame(session: session, width: GLsizei(width), height: GLsizei(height))
+        }
+    }
+
     /// Create the session's render context on the render queue. `session` must
     /// stay alive until `detach()` has returned.
     func attach(session: OpaquePointer) {

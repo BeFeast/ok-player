@@ -51,6 +51,8 @@ MACOS_PATHS = (
     "scripts/macos-*.sh",
     "scripts/tests/macos-*.sh",
     "scripts/mac-ci-bridge.py",
+    "scripts/verify",
+    "scripts/verify-macos*",
     "brand/**",
     "rust/Cargo.toml",
     "rust/Cargo.lock",
