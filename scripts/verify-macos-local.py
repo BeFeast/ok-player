@@ -13,13 +13,11 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 SCENARIOS = ROOT / "macos" / "verification"
 ARCHIVE = "ok-player-macos-arm64.zip"
+# Keep both lines active across the exact seeks and the real OSC timeout.
 SIDECAR = """1
-00:00:02,000 --> 00:00:05,000
-FIRST CUE
-
-2
-00:00:07,000 --> 00:00:17,500
-SECOND SUBTITLE CUE
+00:00:02,000 --> 00:00:17,500
+FIRST SUBTITLE LINE
+SECOND SUBTITLE LINE
 
 """
 
@@ -65,6 +63,7 @@ def fixture(ffmpeg, temporary, spec, receipt):
     command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
             "-f", "lavfi", "-i", "color=c=0x303030:s=640x360:r=24:d=18",
             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-threads", "1",
+            "-g", "12", "-keyint_min", "12", "-sc_threshold", "0",
             "-map_metadata", "-1", "-fflags", "+bitexact", "-flags", "+bitexact",
             "-movflags", "+faststart", str(video))
     receipt["fixture"] = {
@@ -203,7 +202,11 @@ def main():
             states = {result["status"] for result in receipt["appearances"]}
             receipt["status"] = next((state for state in ("error", "blocked_environment", "failed") if state in states), "passed")
             if args.negative_control and receipt["status"] in {"passed", "failed"}:
-                if not all(any(failure.startswith("subtitle_clearance:") for failure in result["assertion_failures"])
+                expected_failures = {
+                    f"subtitle_clearance:{step['name']}" for step in spec["steps"]
+                    if step.get("expect") == "clearance"
+                }
+                if not all(expected_failures <= set(result["assertion_failures"])
                            for result in receipt["appearances"]):
                     receipt.update(status="error", error="Negative control did not expose clearance in both themes")
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:

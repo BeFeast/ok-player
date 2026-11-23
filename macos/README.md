@@ -347,7 +347,7 @@ and actions while disconnecting the OSC's subtitle-clearance feedback in the
 verification instance. Its expected exit is 1, with an occluded cue reported in
 both appearances.
 
-`subtitle-lift` opens a synthetic H.264 clip with a same-stem SRT through the
+`subtitle-lift` opens a synthetic H.264 clip with a two-line same-stem SRT through the
 app's normal file-open path. It checks the engine-selected subtitle and exact
 seek, OSC hit testing, the cue rectangle relative to the OSC, and the base
 position after auto-hide in normal and fullscreen windows. Its 2× renderer reads glyphs on a controlled gray

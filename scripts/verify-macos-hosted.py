@@ -5,11 +5,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import subprocess
 import sys
 import tempfile
 import uuid
+import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 FORGEJO = "https://git.oklabs.uk/BeFeast/ok-player.git"
@@ -94,6 +96,10 @@ def main():
             if result["app_zip_sha256"] != archive_digest or archive_digest != (
                     output / "SHA256SUMS.txt").read_text().split()[0]:
                 raise ValueError("Returned verdict is not bound to the app ZIP")
+            with zipfile.ZipFile(archive) as package:
+                info = plistlib.loads(package.read("OK Player.app/Contents/Info.plist"))
+            if info["OKPSourceSHA"] != sha:
+                raise ValueError("The downloaded ZIP embeds a different source SHA")
             if {case["appearance"] for case in result["appearances"]} != {"light", "dark"}:
                 raise ValueError("The hosted verdict is missing an appearance")
             for appearance in result["appearances"]:
@@ -107,7 +113,8 @@ def main():
             return 0
         if status == "failed" and run.returncode == 1:
             return 1
-    except (OSError, ValueError, KeyError, IndexError, TypeError) as error:
+    except (OSError, ValueError, KeyError, IndexError, TypeError,
+            plistlib.InvalidFileException, zipfile.BadZipFile) as error:
         print(f"Invalid hosted evidence: {error}", file=sys.stderr)
     return 2
 

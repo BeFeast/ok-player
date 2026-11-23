@@ -278,9 +278,18 @@ final class VerifyRun {
         let frameSwaps = swaps
         let frameWidth = Int((video.bounds.width * 2).rounded())
         let frameHeight = Int((video.bounds.height * 2).rounded())
-        guard frameWidth > 0, frameHeight > 0,
-              let frame = video.videoLayer.verificationFrame(width: frameWidth, height: frameHeight),
-              frame.videoPresent else {
+        guard frameWidth > 0, frameHeight > 0 else {
+            throw VerifyError("The 2× framebuffer has no area", blocked: true)
+        }
+        var observed: VideoEvidence?
+        // A seek can swap video before libmpv has updated the subtitle plane.
+        // Retry missing glyphs, independent of their clearance relative to the OSC.
+        for attempt in 0..<8 {
+            observed = video.videoLayer.verificationFrame(width: frameWidth, height: frameHeight)
+            if let observed, observed.videoPresent, expectation == .noCue || observed.glyphPixels > 100 { break }
+            if attempt < 7 { try await Task.sleep(nanoseconds: 130_000_000) }
+        }
+        guard let frame = observed, frame.videoPresent else {
             throw VerifyError("Genuine 2× libmpv capture is unavailable at \(name)", blocked: true)
         }
         let time = snapshot.timePos ?? -1
@@ -320,7 +329,8 @@ final class VerifyRun {
             "window_frame_points": dimensions(app.window.frame),
             "video_bounds_points": dimensions(video.bounds), "glyph_pixels": frame.glyphPixels,
             "render_scale": 2, "framebuffer_pixels": [frameWidth, frameHeight],
-            "capture": captureMode, "color_space": "sRGB", "png": file.lastPathComponent,
+            "capture": captureMode, "color_space": (composite.colorSpace?.name as String?) ?? "unknown",
+            "png": file.lastPathComponent,
         ]
         if let glyphs = frame.glyphBounds {
             checkpoint["glyph_bounds_pixels_bottom_origin"] = dimensions(glyphs)
