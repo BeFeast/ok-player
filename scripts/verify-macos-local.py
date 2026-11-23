@@ -37,7 +37,8 @@ def command(*args, **kwargs):
 
 def read_scenario(path):
     spec = json.loads(path.read_text())
-    actions = {"open", "pause", "seek", "capture", "play_until_hidden", "pointer_reveal"}
+    actions = {"open", "pause", "seek", "capture", "play_until_hidden", "pointer_reveal",
+               "enter_fullscreen", "leave_fullscreen"}
     if (spec["schema_version"] != 1 or spec["id"] != path.stem
             or spec["appearances"] != ["light", "dark"] or not spec["steps"]):
         raise ValueError("Unsupported scenario ID, schema or appearances")
@@ -50,6 +51,8 @@ def read_scenario(path):
             if (step.get("expect") not in {"no_cue", "clearance", "base_margin"}
                     or not step.get("name", "").replace("-", "").isalnum()):
                 raise ValueError("Invalid capture checkpoint")
+    if spec["fixture"] != "subtitle-lift.mp4":
+        raise ValueError("Unknown scenario fixture")
     return spec
 
 
@@ -97,10 +100,9 @@ def prepare_app(args, temporary, receipt):
     if plist["CFBundleIdentifier"] != "uk.oklabs.ok-player":
         raise ValueError("Unexpected bundle identifier")
     receipt["bundle_revision"] = plist["OKPSourceRevision"]
-    if args.source_sha:
-        commit = plist["OKPSourceRevision"].rsplit("-g", 1)[-1]
-        if not args.source_sha.startswith(commit):
-            raise ValueError("Bundle revision does not match the requested Forgejo SHA")
+    receipt["bundle_source_sha"] = plist["OKPSourceSHA"]
+    if args.source_sha and args.source_sha != plist["OKPSourceSHA"]:
+        raise ValueError("Bundle revision does not match the requested Forgejo SHA")
     return executable
 
 
@@ -128,7 +130,11 @@ def run_appearance(executable, scenario, video, temporary, output, appearance):
         return {"appearance": appearance, "status": "error",
                 "error": f"App produced no readable verdict (exit {run.returncode})"}
     result["exit_code"] = run.returncode
-    if run.returncode == 0 and result.get("status") == "passed" or run.returncode == 1 and result.get("status") == "failed":
+    status = result.get("status")
+    if (run.returncode, status) in {(0, "passed"), (1, "failed")}:
+        expected = [step["name"] for step in read_scenario(scenario)["steps"] if step["action"] == "capture"]
+        if [point["name"] for point in result["checkpoints"]] != expected:
+            return {**result, "status": "error", "error": "App did not return every checkpoint"}
         for checkpoint in result["checkpoints"]:
             path = folder / checkpoint["png"]
             checkpoint["png"] = f"{appearance}/{path.name}"
@@ -178,10 +184,13 @@ def main():
             executable = prepare_app(args, temporary, receipt)
             video = fixture(args.ffmpeg, temporary, spec, receipt)
             for appearance in spec["appearances"]:
-                receipt["appearances"].append(run_appearance(executable, scenario, video, temporary, output, appearance))
+                result = run_appearance(executable, scenario, video, temporary, output, appearance)
+                if result["status"] in {"passed", "failed"} and result.get("source_sha") != receipt["bundle_source_sha"]:
+                    result.update(status="error", error="Running bundle SHA differed from the relocated package")
+                receipt["appearances"].append(result)
             states = {result["status"] for result in receipt["appearances"]}
             receipt["status"] = next((state for state in ("error", "blocked_environment", "failed") if state in states), "passed")
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         receipt["error"] = str(error)
     finally:
         verdict = output / "result.json"
