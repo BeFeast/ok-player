@@ -46,6 +46,11 @@ pub(crate) trait Engine: Send + Sync {
     fn take_events(&self) -> Vec<EntryEvent>;
     fn set_listener(&self, listener: Option<ChangeListener>);
 
+    /// Keep captions above the controls that overlap the bottom of the video surface.
+    fn set_subtitle_clearance(&self, _surface_height: f64, _obscured_bottom: f64) -> bool {
+        false
+    }
+
     /// Create the OpenGL render context with advanced control and `on_update`
     /// installed; the caller's OpenGL context is current.
     fn render_create(&self, _on_update: RenderUpdate) -> Result<(), String> {
@@ -77,6 +82,7 @@ pub(crate) struct MpvEngine {
     /// Declared before `mpv` so it is dropped first, as libmpv requires.
     renderer: Mutex<Option<OpenGlRenderer>>,
     mpv: Mpv,
+    base_subtitle_position: f64,
 }
 
 // SAFETY: the libmpv client API is thread-safe, and `Mpv` serialises its own
@@ -97,12 +103,14 @@ impl MpvEngine {
             &engine_options(config),
         )
         .map_err(|error| format!("libmpv could not start: {error}"))?;
+        let base_subtitle_position = mpv.subtitle_position().ok().flatten().unwrap_or(100.0);
         // Audio-device discovery is not part of the session contract yet, and
         // enumerating devices can stall on hosts without a desktop audio service.
         mpv.start_event_pump_without_audio_devices();
         Ok(Self {
             renderer: Mutex::new(None),
             mpv,
+            base_subtitle_position,
         })
     }
 
@@ -262,6 +270,22 @@ impl Engine for MpvEngine {
 
     fn set_listener(&self, listener: Option<ChangeListener>) {
         self.mpv.set_observation_listener(listener);
+    }
+
+    fn set_subtitle_clearance(&self, surface_height: f64, obscured_bottom: f64) -> bool {
+        use okp_core::subtitle_lift;
+
+        if !surface_height.is_finite() || surface_height <= 0.0 || !obscured_bottom.is_finite() {
+            return false;
+        }
+        let lift = subtitle_lift::for_surface(surface_height, obscured_bottom, 0.0);
+        let position = if lift == 0.0 {
+            self.base_subtitle_position
+        } else {
+            // mpv 0.36 accepts only integer sub-pos values. Round towards more clearance.
+            subtitle_lift::apply_to_position(self.base_subtitle_position, lift).floor()
+        };
+        self.mpv.set_subtitle_position_async(position).is_ok()
     }
 
     fn render_create(&self, on_update: RenderUpdate) -> Result<(), String> {

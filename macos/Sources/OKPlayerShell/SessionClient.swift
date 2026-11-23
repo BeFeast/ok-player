@@ -113,6 +113,12 @@ final class SessionClient {
         }
     }
 
+    /// Update the bottom edge subtitles must clear, measured in view points.
+    func setSubtitleClearance(surfaceHeight: CGFloat, obscuredBottom: CGFloat) -> Bool {
+        guard let handle else { return false }
+        return okp_session_set_subtitle_clearance(handle, Double(surfaceHeight), Double(obscuredBottom))
+    }
+
     /// Take the waiting batch. Runs on the main queue after a wakeup.
     func drainEvents() {
         guard let handle else { return }

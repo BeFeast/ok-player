@@ -1,3 +1,4 @@
+import AppKit
 import COKPCore
 import Foundation
 import OpenGL.GL3
@@ -6,14 +7,14 @@ import XCTest
 
 final class SubtitleRenderTests: XCTestCase {
     func testSameStemSRTIsRenderedAutomatically() throws {
-        try checkSubtitles(file: "subtitle-sidecar.mp4", external: true)
+        try checkSubtitles(file: "subtitle-sidecar.mp4", external: true, backingScale: 2)
     }
 
     func testSelectedEmbeddedSRTIsRendered() throws {
-        try checkSubtitles(file: "subtitle-embedded.mkv", external: false)
+        try checkSubtitles(file: "subtitle-embedded.mkv", external: false, backingScale: 1)
     }
 
-    private func checkSubtitles(file: String, external: Bool) throws {
+    private func checkSubtitles(file: String, external: Bool, backingScale: GLsizei) throws {
         let env = ProcessInfo.processInfo.environment
         guard let fixtures = env["OKP_MACOS_SUBTITLE_FIXTURES"] else {
             throw XCTSkip("The hosted macOS workflow generates these video fixtures")
@@ -32,7 +33,7 @@ final class SubtitleRenderTests: XCTestCase {
         let client = try SessionClient(config: config)
         defer { client.close() }
         let renderer = SubtitleFrameReader(surface: try XCTUnwrap(GLSurface.make()),
-                                           session: try XCTUnwrap(client.handle))
+                                           session: try XCTUnwrap(client.handle), backingScale: backingScale)
         defer { renderer.close() }
         try renderer.start()
 
@@ -57,16 +58,72 @@ final class SubtitleRenderTests: XCTestCase {
             snapshot.tracks.first { $0.kind == .subtitle && $0.id == track.id && $0.selected }
         }, "libmpv did not report the subtitle as selected: \(log)")
 
+        _ = NSApplication.shared
+        let controls = TrackControls()
+        controls.query = {
+            guard case .tracks(let tracks)? = client.query(.tracks) else { return nil }
+            return tracks
+        }
+        let items = controls.menuItems(.subtitle).prefix { !$0.isSeparatorItem }
+        XCTAssertEqual(items.count, external ? 2 : 3)
+        XCTAssertEqual(items.first?.title, "Off")
+        XCTAssertTrue(items.allSatisfy { !$0.title.isEmpty })
+        let checked = items.filter { $0.state == .on }
+        XCTAssertEqual(checked.count, 1)
+        XCTAssertEqual((checked.first?.representedObject as? TrackActionBox)?.action,
+                       .select(kind: .subtitle, id: track.id))
+        if external { XCTAssertTrue(checked.first?.title.hasSuffix("EXT") == true) }
+
+        let timer = ManualHideTimer()
+        let osc = TransportOverlay(hideTimer: timer)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 360),
+                              styleMask: [.titled], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = osc
+        osc.subtitleSession = client
+        osc.query = { at in
+            guard case .transport(let transport)? = client.query(.transport(at: at)) else { return nil }
+            return transport
+        }
+        osc.sessionChanged(client.store.snapshot)
+        osc.layoutSubtreeIfNeeded()
+        XCTAssertFalse(osc.panel.isHidden, "The transport controls should be visible")
+        let panelTop = osc.panel.frame.maxY - osc.bounds.minY
+        XCTAssertGreaterThan(panelTop, 20, "The panel must have its real laid-out geometry")
+        let obscuredRows = Int(ceil(panelTop * CGFloat(backingScale)))
+        timer.elapse()
+        XCTAssertTrue(osc.panel.isHidden, "The transport controls should have auto-hidden")
+
         // The fixture's flat gray video stays the same before and during the cue.
         // Require a real video frame with no glyphs first, then white pixels that
         // can only come from the cue. No commands here display an mpv OSD.
-        let blank = waitFor(client) { _ in renderer.frame(hasGlyphs: false) }
-        XCTAssertNotNil(blank, "No blank video frame before the cue: \(log)")
-        let cue = try XCTUnwrap(waitFor(client) { snapshot in
-            guard let time = snapshot.timePos, time >= 2, time < 9 else { return nil as Int? }
-            return renderer.frame(hasGlyphs: true)
-        }, "The selected subtitle drew no glyphs into the OpenGL framebuffer: \(log)")
-        print("Subtitle render: \(file) had \(cue) bright pixels during the cue")
+        XCTAssertNotNil(waitFor(client) { _ in
+            renderer.frame.flatMap { $0.brightPixels == 0 ? $0 : nil }
+        }, "No blank video frame before the cue: \(log)")
+        let natural = try XCTUnwrap(waitForCue(client, renderer) { $0.lowestBrightRow < obscuredRows },
+                                    "The selected subtitle did not draw in the default position: \(log)")
+
+        osc.noteActivity()
+        XCTAssertFalse(osc.panel.isHidden, "Activity should reveal the controls")
+        let lifted = try XCTUnwrap(waitForCue(client, renderer) { $0.lowestBrightRow >= obscuredRows },
+                                   "The selected subtitle is covered by the visible transport controls: \(log)")
+        timer.elapse()
+        XCTAssertTrue(osc.panel.isHidden, "The transport controls should have auto-hidden again")
+        let restored = try XCTUnwrap(waitForCue(client, renderer) { $0.lowestBrightRow == natural.lowestBrightRow },
+                                     "The selected subtitle did not return to its default position: \(log)")
+        print("Subtitle render: \(file) at \(backingScale)x, OSC top=\(obscuredRows) px, "
+              + "glyph pixels=\(lifted.brightPixels), default/lifted/restored bottom="
+              + "\(natural.lowestBrightRow)/\(lifted.lowestBrightRow)/\(restored.lowestBrightRow) px")
+    }
+
+    private func waitForCue(_ client: SessionClient, _ renderer: SubtitleFrameReader,
+                            where matches: (SubtitleFrame) -> Bool) -> SubtitleFrame? {
+        waitFor(client) { snapshot in
+            guard let time = snapshot.timePos, time >= 2, time < 9,
+                  let frame = renderer.frame, frame.brightPixels > 100, matches(frame) else { return nil }
+            return frame
+        }
     }
 
     private func waitFor<Value>(_ client: SessionClient,
@@ -81,21 +138,30 @@ final class SubtitleRenderTests: XCTestCase {
     }
 }
 
+private struct SubtitleFrame {
+    let brightPixels: Int
+    let lowestBrightRow: Int
+}
+
 /// Uses the same CGL format and session render ABI as VideoLayer, with an offscreen
 /// framebuffer so window chrome and desktop contents cannot affect the pixels.
 private final class SubtitleFrameReader {
-    private let width: GLsizei = 640
-    private let height: GLsizei = 360
+    private let width: GLsizei
+    private let height: GLsizei
     private let surface: GLSurface
     private let queue = DispatchQueue(label: "subtitle-render-test")
     private var session: OpaquePointer?
     private var framebuffer: GLuint = 0
     private var color: GLuint = 0
-    private var latestBrightPixels: Int?
+    private var pixels: [UInt8]
+    private var latestFrame: SubtitleFrame?
 
-    init(surface: GLSurface, session: OpaquePointer) {
+    init(surface: GLSurface, session: OpaquePointer, backingScale: GLsizei) {
         self.surface = surface
         self.session = session
+        width = 640 * backingScale
+        height = 360 * backingScale
+        pixels = [UInt8](repeating: 0, count: Int(width * height * 4))
     }
 
     func start() throws {
@@ -135,11 +201,8 @@ private final class SubtitleFrameReader {
         }
     }
 
-    func frame(hasGlyphs: Bool) -> Int? {
-        queue.sync {
-            guard let count = latestBrightPixels else { return nil }
-            return (hasGlyphs ? count > 100 : count == 0) ? count : nil
-        }
+    var frame: SubtitleFrame? {
+        queue.sync { latestFrame }
     }
 
     fileprivate func update() {
@@ -150,7 +213,6 @@ private final class SubtitleFrameReader {
                 glBindFramebuffer(GLenum(GL_FRAMEBUFFER), framebuffer)
                 guard okp_session_render(session, width, height) else { return }
                 glBindFramebuffer(GLenum(GL_FRAMEBUFFER), framebuffer)
-                var pixels = [UInt8](repeating: 0, count: Int(width * height * 4))
                 pixels.withUnsafeMutableBytes { buffer in
                     glReadPixels(0, 0, width, height, GLenum(GL_RGBA), GLenum(GL_UNSIGNED_BYTE), buffer.baseAddress)
                 }
@@ -158,8 +220,16 @@ private final class SubtitleFrameReader {
                 // Ignore pre-playback clears. The gray video is visible at the top
                 // left throughout the fixture (far from the subtitle).
                 guard (12...100).contains(pixels[0]) else { return }
-                latestBrightPixels = stride(from: 0, to: pixels.count, by: 4)
-                    .count { pixels[$0] > 180 && pixels[$0 + 1] > 180 && pixels[$0 + 2] > 180 }
+                var bright = 0
+                var lowestBrightRow = -1
+                // glReadPixels starts at the displayed bottom, with the same flip as VideoLayer.
+                for i in stride(from: 0, to: pixels.count, by: 4) {
+                    if pixels[i] > 180 && pixels[i + 1] > 180 && pixels[i + 2] > 180 {
+                        if bright == 0 { lowestBrightRow = i / (Int(width) * 4) }
+                        bright += 1
+                    }
+                }
+                latestFrame = SubtitleFrame(brightPixels: bright, lowestBrightRow: lowestBrightRow)
             }
         }
     }

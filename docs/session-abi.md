@@ -26,10 +26,17 @@ bool        okp_session_render_update(const OkpSession *session);
 bool        okp_session_render(const OkpSession *session, int32_t width, int32_t height);
 uint64_t    okp_session_render_report_swap(const OkpSession *session);
 void        okp_session_render_destroy(const OkpSession *session);
+bool        okp_session_set_subtitle_clearance(const OkpSession *session, double surface_height,
+                                               double obscured_bottom);
 ```
 
 The render calls draw video frames into the framebuffer bound in the shell's
 OpenGL context; see Rendering and Threading below.
+
+When shell controls overlap the bottom of the video, the shell reports the
+surface height and the bottom portion to clear in the same units. This queues a
+subtitle position update without blocking the shell. Passing zero clearance
+restores the configured position when the controls hide.
 
 ## Rendering
 

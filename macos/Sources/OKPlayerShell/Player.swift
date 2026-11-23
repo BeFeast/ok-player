@@ -222,6 +222,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return surface
         }
         osc.dispatch = { [weak client] command in _ = client?.dispatch(command) }
+        osc.subtitleSession = client
         osc.query = { [weak client] at in
             guard case .transport(let view)? = client?.query(.transport(at: at)) else { return nil }
             return view
