@@ -313,14 +313,19 @@ jobs:
           exit "$status"
 
       - name: Verify the relocated ZIP at 2×
-        if: startsWith(github.ref_name, 'mac-ci/verify/')
+        if: env.RUN_SMOKE == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          scenario="${GITHUB_REF_NAME#mac-ci/verify/}"
-          scenario="${scenario%%/*}"
+          scenario=subtitle-lift
+          set --
+          if [[ "$GITHUB_REF_NAME" == mac-ci/verify/* ]]; then
+            requested="${GITHUB_REF_NAME#mac-ci/verify/}"
+            scenario="${requested%%/*}"
+            if [[ "${requested#*/}" == negative-* ]]; then set -- --negative-control; fi
+          fi
           scripts/verify "$scenario" --source-sha "$SOURCE_SHA" \
-            --zip "$OKP_MACOS_OUTPUT/ok-player-macos-arm64.zip" --output "$OKP_MACOS_OUTPUT/verify"
+            --zip "$OKP_MACOS_OUTPUT/ok-player-macos-arm64.zip" --output "$OKP_MACOS_OUTPUT/verify" "$@"
 
       - name: Record the app checksum, version and signing
         if: always()

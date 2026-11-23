@@ -222,14 +222,17 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         behaviour.connect(client) { [weak self] in self?.togglePause() }
         client.onBatch = { [weak self] batch in self?.sessionChanged(batch) }
         playlist.state = client.store.playlist
-        system.playlist = playlist
-        system.start()
+        if verification == nil {
+            system.playlist = playlist
+            system.start()
+        }
         statusLayer.query = { [weak client] in
             guard case .statusSurface(let surface)? = client?.query(.statusSurface) else { return nil }
             return surface
         }
         osc.dispatch = { [weak client] command in _ = client?.dispatch(command) }
-        osc.subtitleSession = client
+        // The negative control leaves the real panel in place and disconnects only its subtitle feedback.
+        osc.subtitleSession = verification?.controlDisablesClearance == true ? nil : client
         osc.query = { [weak client] at in
             guard case .transport(let view)? = client?.query(.transport(at: at)) else { return nil }
             return view
@@ -305,8 +308,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         history.sessionChanged(batch)
         commands.invalidate()
         playlist.state = client.store.playlist
-        system.privateSession = client.store.privateSession
-        system.update(client.store.snapshot)
+        if verification == nil {
+            system.privateSession = client.store.privateSession
+            system.update(client.store.snapshot)
+        }
         // Up Next only renders the store, and its rows send playlist commands by
         // index into the session's playlist, so it follows every batch, also while
         // a failure card is up: a jump from it does not go through play().
@@ -379,7 +384,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func shutdown() {
         guard !shuttingDown else { return }; shuttingDown = true
         smokeRun?.cancel()
-        system.shutdown()
+        if verification == nil { system.shutdown() }
         if let client {
             client.dispatch(.close)
             video?.shutdown()

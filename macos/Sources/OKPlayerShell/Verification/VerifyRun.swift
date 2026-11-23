@@ -7,6 +7,7 @@ struct VerificationOptions {
     let output: URL
     let profile: URL
     let appearance: String
+    let controlDisablesClearance: Bool
 
     init?(arguments: [String]) {
         func value(_ option: String) -> String? {
@@ -20,6 +21,7 @@ struct VerificationOptions {
         self.output = URL(fileURLWithPath: output, isDirectory: true)
         self.profile = URL(fileURLWithPath: profile, isDirectory: true)
         self.appearance = appearance
+        controlDisablesClearance = arguments.contains("--verify-no-subtitle-clearance")
     }
 
     func config(shellCommands: [String]) -> SessionConfig {
@@ -91,7 +93,10 @@ final class VerifyRun {
     private var swaps: Int { app.video?.videoLayer.counts.swaps ?? 0 }
 
     func run() async {
-        var result: [String: Any] = ["appearance": options.appearance, "pid": getpid()]
+        var result: [String: Any] = [
+            "appearance": options.appearance, "pid": getpid(),
+            "control": options.controlDisablesClearance ? "subtitle_clearance_disabled" : "none",
+        ]
         var code: Int32 = 0
         do {
             let scenario = try SessionJSON.makeDecoder().decode(VerificationScenario.self, from: Data(contentsOf: options.scenario))

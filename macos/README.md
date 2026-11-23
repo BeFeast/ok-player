@@ -328,6 +328,7 @@ From a checkout with the verifier, run:
 scripts/verify-macos --list
 scripts/verify-macos subtitle-lift
 scripts/verify-macos subtitle-lift --sha <full-forgejo-sha> --output <empty-directory>
+scripts/verify-macos subtitle-lift --sha <full-forgejo-sha> --negative-control
 ```
 
 The default source is canonical Forgejo `main`. Publish the candidate to Forgejo
@@ -341,12 +342,15 @@ Open `verify/result.json` for the verdict, source and ZIP digests, fixture
 provenance, both appearances and the checksums of their checkpoint PNGs.
 `hosted-run.md` links the run and gives the build result. Exit 0 means a verified
 pass, 1 means a completed scenario with a failed assertion, and 2 means a build,
-environment, or evidence error.
+environment, or evidence error. The negative control uses the same source, fixture
+and actions while disconnecting the OSC's subtitle-clearance feedback in the
+verification instance. Its expected exit is 1, with an occluded cue reported in
+both appearances.
 
 `subtitle-lift` opens a synthetic H.264 clip with a same-stem SRT through the
 app's normal file-open path. It checks the engine-selected subtitle and exact
 seek, OSC hit testing, the cue rectangle relative to the OSC, and the base
-position after auto-hide. Its 2× renderer reads glyphs on a controlled gray
+position after auto-hide in normal and fullscreen windows. Its 2× renderer reads glyphs on a controlled gray
 fixture before the window chrome is composited. The screenshot mode records
 either a 2× WindowServer capture or a 2× render from the live libmpv context
 composited with the app's laid-out chrome. The result records the physical

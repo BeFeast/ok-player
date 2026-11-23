@@ -106,7 +106,7 @@ def prepare_app(args, temporary, receipt):
     return executable
 
 
-def run_appearance(executable, scenario, video, temporary, output, appearance):
+def run_appearance(executable, scenario, video, temporary, output, appearance, negative_control):
     folder = output / appearance
     folder.mkdir()
     profile = temporary / appearance
@@ -114,12 +114,15 @@ def run_appearance(executable, scenario, video, temporary, output, appearance):
         (profile / subdir).mkdir(parents=True)
     env = {key: value for key, value in os.environ.items() if not key.startswith("DYLD_")}
     env.update({"TZ": "UTC", "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"})
+    argv = [executable, f"--verify-scenario={scenario}", f"--verify-fixture={video}",
+            f"--verify-output={folder}", f"--verify-profile={profile}",
+            f"--verify-appearance={appearance}"]
+    if negative_control:
+        argv.append("--verify-no-subtitle-clearance")
     with (folder / "app.log").open("w") as log:
         try:
             run = subprocess.run(
-                [executable, f"--verify-scenario={scenario}", f"--verify-fixture={video}",
-                 f"--verify-output={folder}", f"--verify-profile={profile}",
-                 f"--verify-appearance={appearance}"],
+                argv,
                 stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, env=env, timeout=105,
             )
         except subprocess.TimeoutExpired:
@@ -154,6 +157,8 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--ffmpeg", type=Path, default=os.environ.get("OKP_VERIFY_FFMPEG"))
     parser.add_argument("--source-sha")
+    parser.add_argument("--negative-control", action="store_true",
+                        help="disable transport clearance in the verifier instance")
     args = parser.parse_args()
     scenarios = {path.stem: path for path in SCENARIOS.glob("*.json")}
     if args.list:
@@ -161,6 +166,8 @@ def main():
         return 0
     if args.scenario not in scenarios:
         parser.error("unknown scenario; use --list")
+    if args.negative_control and args.scenario != "subtitle-lift":
+        parser.error("negative control is only available for subtitle-lift")
     scenario = scenarios[args.scenario]
     try:
         spec = read_scenario(scenario)
@@ -170,7 +177,8 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     if any(output.iterdir()):
         parser.error("--output must be empty")
-    receipt = {"schema_version": 1, "scenario": spec["id"], "source_sha": args.source_sha,
+    control = "subtitle_clearance_disabled" if args.negative_control else "none"
+    receipt = {"schema_version": 1, "scenario": spec["id"], "source_sha": args.source_sha, "control": control,
                "host": {"os": platform.system(), "version": platform.mac_ver()[0], "architecture": platform.machine()},
                "scenario_sha256": digest(scenario), "status": "error", "appearances": []}
     try:
@@ -184,12 +192,19 @@ def main():
             executable = prepare_app(args, temporary, receipt)
             video = fixture(args.ffmpeg, temporary, spec, receipt)
             for appearance in spec["appearances"]:
-                result = run_appearance(executable, scenario, video, temporary, output, appearance)
-                if result["status"] in {"passed", "failed"} and result.get("source_sha") != receipt["bundle_source_sha"]:
-                    result.update(status="error", error="Running bundle SHA differed from the relocated package")
+                result = run_appearance(executable, scenario, video, temporary, output, appearance, args.negative_control)
+                if result["status"] in {"passed", "failed"}:
+                    if result.get("source_sha") != receipt["bundle_source_sha"]:
+                        result.update(status="error", error="Running bundle SHA differed from the relocated package")
+                    elif result.get("control") != control:
+                        result.update(status="error", error="App did not report the requested control mode")
                 receipt["appearances"].append(result)
             states = {result["status"] for result in receipt["appearances"]}
             receipt["status"] = next((state for state in ("error", "blocked_environment", "failed") if state in states), "passed")
+            if args.negative_control and receipt["status"] in {"passed", "failed"}:
+                if not all(any(failure.startswith("subtitle_clearance:") for failure in result["assertion_failures"])
+                           for result in receipt["appearances"]):
+                    receipt.update(status="error", error="Negative control did not expose clearance in both themes")
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         receipt["error"] = str(error)
     finally:
