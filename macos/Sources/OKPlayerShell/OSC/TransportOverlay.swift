@@ -87,9 +87,11 @@ final class TransportOverlay: NSView {
 
     private func updateSubtitleClearance() {
         guard let subtitleSession, bounds.height > 0 else { return }
-        guard panel.isHidden || panel.frame.height > 0 else { return }
+        // Auto-hide leaves the panel laid out for pointer tracking at zero alpha.
+        let coversVideo = !panel.isHidden && panel.alphaValue > 0
+        guard !coversVideo || panel.frame.height > 0 else { return }
         // Both the panel and the video use view points, including on Retina.
-        let bottom = panel.isHidden ? 0 : panel.frame.maxY - bounds.minY + 8
+        let bottom = coversVideo ? panel.frame.maxY - bounds.minY + 8 : 0
         let height = bounds.height
         if let previous = subtitleClearance, previous.height == height, previous.bottom == bottom { return }
         if subtitleSession.setSubtitleClearance(surfaceHeight: height, obscuredBottom: bottom) {

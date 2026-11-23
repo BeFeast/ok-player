@@ -89,11 +89,12 @@ final class SubtitleRenderTests: XCTestCase {
         osc.sessionChanged(client.store.snapshot)
         osc.layoutSubtreeIfNeeded()
         XCTAssertFalse(osc.panel.isHidden, "The transport controls should be visible")
+        XCTAssertEqual(osc.panel.alphaValue, 1, "The transport controls should be visible")
         let panelTop = osc.panel.frame.maxY - osc.bounds.minY
         XCTAssertGreaterThan(panelTop, 20, "The panel must have its real laid-out geometry")
         let obscuredRows = Int(ceil(panelTop * CGFloat(backingScale)))
         timer.elapse()
-        XCTAssertTrue(osc.panel.isHidden, "The transport controls should have auto-hidden")
+        XCTAssertEqual(osc.panel.alphaValue, 0, "The transport controls should have auto-hidden")
 
         // The fixture's flat gray video stays the same before and during the cue.
         // Require a real video frame with no glyphs first, then white pixels that
@@ -105,11 +106,11 @@ final class SubtitleRenderTests: XCTestCase {
                                     "The selected subtitle did not draw in the default position: \(log)")
 
         osc.noteActivity()
-        XCTAssertFalse(osc.panel.isHidden, "Activity should reveal the controls")
+        XCTAssertEqual(osc.panel.alphaValue, 1, "Activity should reveal the controls")
         let lifted = try XCTUnwrap(waitForCue(client, renderer) { $0.lowestBrightRow >= obscuredRows },
                                    "The selected subtitle is covered by the visible transport controls: \(log)")
         timer.elapse()
-        XCTAssertTrue(osc.panel.isHidden, "The transport controls should have auto-hidden again")
+        XCTAssertEqual(osc.panel.alphaValue, 0, "The transport controls should have auto-hidden again")
         let restored = try XCTUnwrap(waitForCue(client, renderer) { $0.lowestBrightRow == natural.lowestBrightRow },
                                      "The selected subtitle did not return to its default position: \(log)")
         print("Subtitle render: \(file) at \(backingScale)x, OSC top=\(obscuredRows) px, "
