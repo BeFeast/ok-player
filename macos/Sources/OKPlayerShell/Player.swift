@@ -123,6 +123,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let snapshotDirectory = CommandLine.arguments.first { $0.hasPrefix("--snapshot-dir=") }
         .map { String($0.dropFirst("--snapshot-dir=".count)) }
     var smokeRun: SmokeRun?
+    let verification = VerificationOptions(arguments: CommandLine.arguments)
     /// Now Playing, remote commands, display sleep, recent documents, Dock menu.
     lazy var system: SystemIntegration = SystemIntegration(
         session: { [weak self] command in
@@ -205,9 +206,15 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let client: SessionClient
         do {
             // The smoke runs on a seeded history of its own (`SmokeHistory`).
-            client = try SessionClient(config: smoke
-                ? SmokeHistory.config(fixture: smokePath, shellCommands: commands.shellCommands)
-                : .forApp(shellCommands: commands.shellCommands))
+            let config: SessionConfig
+            if let verification {
+                config = verification.config(shellCommands: commands.shellCommands)
+            } else if smoke {
+                config = try SmokeHistory.config(fixture: smokePath, shellCommands: commands.shellCommands)
+            } else {
+                config = .forApp(shellCommands: commands.shellCommands)
+            }
+            client = try SessionClient(config: config)
         } catch {
             fail("\(error)"); return
         }
@@ -251,7 +258,12 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let handle = client.handle { video.videoLayer.attach(session: handle) }
         connectPlayerCommands(client)
         updateWelcome(client.store.snapshot)
-        if smoke {
+        if let verification {
+            connectOpenRouter(client)
+            Task { @MainActor in
+                await VerifyRun(app: self, options: verification).run()
+            }
+        } else if smoke {
             connectOpenRouter(client)
             smokeRun = SmokeRun(app: self, path: smokePath)
             smokeRun?.start()
@@ -338,6 +350,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         history.setWelcomeShown(false)
         prompt.isHidden = true
         fputs("OK Player: \(message)\n", stderr)
+        if let verification { verification.finish(status: "blocked_environment", error: message) }
         if smoke { shutdown(); exit(1) }
     }
     /// Smoke evidence: renders the window content in the light and the dark appearance

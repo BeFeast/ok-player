@@ -48,6 +48,8 @@ on:
       - 'scripts/macos-*.sh'
       - 'scripts/tests/macos-*.sh'
       - 'scripts/mac-ci-bridge.py'
+      - 'scripts/verify'
+      - 'scripts/verify-macos*'
       - 'brand/**'
       - 'rust/Cargo.toml'
       - 'rust/Cargo.lock'
@@ -186,6 +188,7 @@ jobs:
           unzip -q -j "$inputs/ffmpeg.whl" "$FFMPEG_WHEEL_MEMBER" -d "$inputs/ffmpeg"
           ffmpeg="$inputs/ffmpeg/${FFMPEG_WHEEL_MEMBER##*/}"
           chmod +x "$ffmpeg"
+          echo "OKP_VERIFY_FFMPEG=$ffmpeg" >> "$GITHUB_ENV"
           "$ffmpeg" -hide_banner -version > "$inputs/ffmpeg-version.txt"
           head -n 1 "$inputs/ffmpeg-version.txt" | tee -a "$OKP_MACOS_OUTPUT/toolchain.txt"
           "$ffmpeg" -nostdin -hide_banner -loglevel error \
@@ -309,6 +312,16 @@ jobs:
           done
           exit "$status"
 
+      - name: Verify the relocated ZIP at 2×
+        if: startsWith(github.ref_name, 'mac-ci/verify/')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          scenario="${GITHUB_REF_NAME#mac-ci/verify/}"
+          scenario="${scenario%%/*}"
+          scripts/verify "$scenario" --source-sha "$SOURCE_SHA" \
+            --zip "$OKP_MACOS_OUTPUT/ok-player-macos-arm64.zip" --output "$OKP_MACOS_OUTPUT/verify"
+
       - name: Record the app checksum, version and signing
         if: always()
         shell: bash
@@ -345,5 +358,6 @@ jobs:
             ${{ runner.temp }}/receipt/*.log
             ${{ runner.temp }}/receipt/*.txt
             ${{ runner.temp }}/receipt/snapshots/*.png
+            ${{ runner.temp }}/receipt/verify/**
           if-no-files-found: error
           retention-days: 30
