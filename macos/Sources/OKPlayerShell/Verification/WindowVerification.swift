@@ -13,8 +13,9 @@ extension VerifyRun {
             let small = step.action == .smallWorkArea
             let permitted = CGSize(width: min(area.width, small ? 750 : 1280),
                                    height: min(area.height, small ? 676 : 800))
-            let workArea = CGRect(x: area.midX - permitted.width / 2, y: area.midY - permitted.height / 2,
-                                  width: permitted.width, height: permitted.height)
+            let workArea = WindowRect(inside: CGRect(
+                x: area.midX - permitted.width / 2, y: area.midY - permitted.height / 2,
+                width: permitted.width, height: permitted.height)).cgRect
             if small { controller.verificationWorkArea = workArea }
             let idle = small ? CGRect(x: workArea.minX + 20, y: workArea.minY + 24,
                                       width: min(520, workArea.width), height: min(410, workArea.height)) : workArea

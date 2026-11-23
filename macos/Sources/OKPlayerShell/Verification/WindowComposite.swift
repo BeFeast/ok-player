@@ -12,10 +12,10 @@ extension VerifyRun {
                                       bytesPerRow: width * 4, space: space,
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         context.scaleBy(x: 2, y: 2)
-        root.effectiveAppearance.performAsCurrentDrawingAppearance {
-            context.setFillColor(PaletteRole.canvas.color.cgColor)
-            context.fill(root.bounds)
-        }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        PlayerCanvas.drawCanvas(in: root.bounds, appearance: root.effectiveAppearance)
+        NSGraphicsContext.restoreGraphicsState()
         if let frame {
             context.draw(frame, in: video.convert(video.bounds, to: root))
         }

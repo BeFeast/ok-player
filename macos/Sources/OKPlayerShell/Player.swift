@@ -76,7 +76,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.title = "OK Player"; window.delegate = self; window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 420, height: 280)
         window.backgroundColor = PaletteRole.canvas.color
-        let root = PaletteSurface(fill: .canvas); window.contentView = makeDropTarget(content: root)
+        let root = PlayerCanvas(); window.contentView = makeDropTarget(content: root)
         // The video area keeps its place in the layout even when no renderer exists.
         let surface = GLSurface.make()
         let videoArea: NSView = surface.map { VideoView(surface: $0) as NSView } ?? NSView()
@@ -129,6 +129,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         osc.onRevealChange = { [weak self] revealed in self?.oscRevealChanged(revealed) }
         behaviour.oscVisibilityChanged(osc.isRevealed, animated: false)
         behaviour.window.onKeyDown = { [weak self] in self?.keyPressed() }
+        behaviour.titleStrip.onPointerActivity = { [weak self] in self?.osc.noteActivity() }
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         guard let video else { fail("No OpenGL pixel format is available for video"); return }
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }

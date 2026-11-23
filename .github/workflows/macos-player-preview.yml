@@ -325,15 +325,25 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          scenario=subtitle-lift
-          set --
+          archive="$OKP_MACOS_OUTPUT/ok-player-macos-arm64.zip"
+          verify() {
+            local scenario="$1" output="$2"
+            shift 2
+            scripts/verify "$scenario" --source-sha "$SOURCE_SHA" --zip "$archive" --output "$output" "$@"
+          }
+
           if [[ "$GITHUB_REF_NAME" == mac-ci/verify/* ]]; then
             requested="${GITHUB_REF_NAME#mac-ci/verify/}"
-            scenario="${requested%%/*}"
+            set --
             if [[ "${requested#*/}" == negative-* ]]; then set -- --negative-control; fi
+            verify "${requested%%/*}" "$OKP_MACOS_OUTPUT/verify" "$@"
+          else
+            status=0
+            for scenario in subtitle-lift window-chrome window-fullscreen window-fit window-float; do
+              verify "$scenario" "$OKP_MACOS_OUTPUT/verify/$scenario" || status=1
+            done
+            exit "$status"
           fi
-          scripts/verify "$scenario" --source-sha "$SOURCE_SHA" \
-            --zip "$OKP_MACOS_OUTPUT/ok-player-macos-arm64.zip" --output "$OKP_MACOS_OUTPUT/verify" "$@"
 
       - name: Record the app checksum, version and signing
         if: always()

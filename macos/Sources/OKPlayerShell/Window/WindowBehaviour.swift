@@ -93,7 +93,7 @@ enum VideoAreaAspect {
 struct WindowChromeState: Equatable {
     var oscVisible = true
     var fullscreen = false
-    var hasMedia = true
+    var hasMedia = false
 
     var trafficLightsVisible: Bool { !hasMedia || oscVisible || fullscreen }
     var titleStripVisible: Bool { (!hasMedia || oscVisible) && !fullscreen }

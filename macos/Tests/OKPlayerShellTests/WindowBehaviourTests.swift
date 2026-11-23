@@ -195,6 +195,15 @@ final class WindowBehaviourTests: XCTestCase {
         XCTAssertLessThanOrEqual(aspectError(narrow, video: portrait, chrome: bar), 1, "\(narrow)")
     }
 
+    func testAResizeAtTheWorkAreaLimitKeepsControlsWithinReach() {
+        let workArea = CGSize(width: 700, height: 600)
+        let size = VideoAreaAspect.constrain(
+            proposed: CGSize(width: 680, height: 950), current: CGSize(width: 420, height: 580),
+            video: CGSize(width: 1080, height: 1920), chrome: CGSize(width: 0, height: 40),
+            minimum: CGSize(width: 420, height: 280), maximum: workArea)
+        XCTAssertEqual(size, CGSize(width: 420, height: 600), "a narrow portrait uses pillarboxing at the minimum width")
+    }
+
     func testOnlyAVideoWithASizeLocksTheAspect() {
         XCTAssertEqual(VideoAreaAspect.lock(for: VideoGeometry(width: 1920, height: 800, displayAspect: 2.4)),
                        CGSize(width: 1920, height: 800))
@@ -220,12 +229,18 @@ final class WindowBehaviourTests: XCTestCase {
     // MARK: Chrome
 
     func testTheTrafficLightsAndTheTitleFollowTheOSCInAWindow() {
-        var chrome = WindowChromeState()
+        var chrome = WindowChromeState(hasMedia: true)
         XCTAssertTrue(chrome.trafficLightsVisible)
         XCTAssertTrue(chrome.titleStripVisible)
         chrome.oscVisible = false
         XCTAssertFalse(chrome.trafficLightsVisible)
         XCTAssertFalse(chrome.titleStripVisible)
+    }
+
+    func testIdleChromeRemainsUsableWhenTheTransportIsHidden() {
+        let chrome = WindowChromeState(oscVisible: false)
+        XCTAssertTrue(chrome.trafficLightsVisible)
+        XCTAssertTrue(chrome.titleStripVisible)
     }
 
     func testFullscreenLeavesTheTitleBarToTheSystem() {

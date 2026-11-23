@@ -328,6 +328,14 @@ the generated fixture's SHA-256.
 
 ## Hosted scenario verification
 
+`window-chrome`, `window-fullscreen`, `window-fit`, and `window-float` cover the
+native title bar and player planes in Light and Dark. They exercise AppKit
+file-open, video double-click and Escape, resize proposals for all four edges,
+Close Media, and the Always on Top control. The float case reads the
+WindowServer order of two overlapping windows. Each case has a targeted
+`--negative-control` and writes its layout and 2× PNG checkpoints. The standard
+hosted preview runs all four cases and `subtitle-lift` against the same ZIP.
+
 From a checkout with the verifier, run:
 
 ```sh
@@ -348,10 +356,11 @@ Open `verify/result.json` for the verdict, source and ZIP digests, fixture
 provenance, both appearances and the checksums of their checkpoint PNGs.
 `hosted-run.md` links the run and gives the build result. Exit 0 means a verified
 pass, 1 means a completed scenario with a failed assertion, and 2 means a build,
-environment, or evidence error. The negative control uses the same source, fixture
-and actions while disconnecting the OSC's subtitle-clearance feedback in the
-verification instance. Its expected exit is 1, with an occluded cue reported in
-both appearances.
+environment, or evidence error. Each negative control uses the same source, fixture and actions as the positive
+run. The verifier disconnects the tested behavior in its own process and checks
+for the expected failures in both appearances. For `subtitle-lift`, this
+disconnects the OSC's subtitle-clearance feedback so the scenario reports the
+occluded cue.
 
 `subtitle-lift` opens a synthetic H.264 clip with a two-line same-stem SRT through the
 app's normal file-open path. It checks the engine-selected subtitle and exact

@@ -92,7 +92,7 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     private weak var rules: WindowRules?
     private weak var videoArea: NSView?
     private var clicks: VideoClickArbiter?
-    private var chrome = WindowChromeState(hasMedia: false)
+    private var chrome = WindowChromeState()
     /// Counts chrome changes, so a fade that finishes after a newer change
     /// leaves the newer one alone.
     private var chromeChanges = 0
@@ -120,7 +120,6 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
         accessoryView.addSubview(pinButton)
         pinAccessory.view = accessoryView
         pinAccessory.layoutAttribute = .right
-        pinAccessory.fullScreenMinHeight = 0
         window.addTitlebarAccessoryViewController(pinAccessory)
         updatePin()
         window.collectionBehavior.insert(.fullScreenPrimary)
@@ -190,12 +189,11 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
         if chrome.hasMedia != hasMedia {
             chrome.hasMedia = hasMedia
             titleStrip.hasMedia = hasMedia
-            window.title = hasMedia ? "\(titleStrip.title) — OK Player" : "OK Player"
             if !hasMedia { lastFit = nil }
             applyChrome(animated: false)
-        } else if hasMedia {
-            window.title = "\(titleStrip.title) — OK Player"
         }
+        let name = hasMedia ? "\(titleStrip.title) — OK Player" : "OK Player"
+        if window.title != name { window.title = name }
         aspect = VideoAreaAspect.lock(for: snapshot.video)
         if !hasMedia { restoreIdleFrame() }
         // The session owns which source is owed a fit.
@@ -221,7 +219,8 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     }
 
     private func updatePin() {
-        if applyFloatingLevel { window.level = isPinned && !chrome.fullscreen ? .floating : .normal }
+        let level: NSWindow.Level = isPinned && !chrome.fullscreen ? .floating : .normal
+        if applyFloatingLevel, window.level != level { window.level = level }
         pinButton.state = isPinned ? .on : .off
         let label = isPinned ? "Disable Always on Top" : "Always on Top"
         pinButton.toolTip = label

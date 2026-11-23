@@ -7,6 +7,8 @@ final class TitleStripView: NSView {
     let identity = NSView()
     let label = NSTextField(labelWithString: "OK Player")
     private let mark = TitleMarkView()
+    private var pointerArea: NSTrackingArea?
+    var onPointerActivity: (() -> Void)?
 
     var title: String {
         get { label.stringValue }
@@ -64,6 +66,17 @@ final class TitleStripView: NSView {
         super.hitTest(point) == nil ? nil : self
     }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let pointerArea { removeTrackingArea(pointerArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.inVisibleRect, .activeInKeyWindow, .mouseEnteredAndExited, .mouseMoved],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        pointerArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { onPointerActivity?() }
+    override func mouseMoved(with event: NSEvent) { onPointerActivity?() }
     override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
 }
 
@@ -84,5 +97,26 @@ private final class TitleMarkView: NSView {
         play.line(to: NSPoint(x: 12.1, y: 10.3))
         play.close()
         play.fill()
+    }
+}
+
+/// The theme's canvas under the idle player and under the transparent title strip.
+final class PlayerCanvas: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        Self.drawCanvas(in: bounds, appearance: effectiveAppearance)
+    }
+
+    static func drawCanvas(in bounds: NSRect, appearance: NSAppearance) {
+        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        appearance.performAsCurrentDrawingAppearance {
+            let start = (dark ? PaletteRole.surface : PaletteRole.canvas).color
+            let end = (dark ? PaletteRole.canvas : PaletteRole.surfaceRaised).color
+            NSGradient(starting: start, ending: end)?.draw(in: bounds, angle: -45)
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
     }
 }
