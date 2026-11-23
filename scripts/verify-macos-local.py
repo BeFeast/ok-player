@@ -13,6 +13,13 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 SCENARIOS = ROOT / "macos" / "verification"
 ARCHIVE = "ok-player-macos-arm64.zip"
+WINDOW_CONTROLS = {
+    "window-chrome": "title_identity_hidden",
+    "window-fullscreen": "video_fullscreen_disabled",
+    "window-fit": "initial_fit_disabled",
+    "window-float": "floating_level_disabled",
+}
+CONTROLS = {"subtitle-lift": "subtitle_clearance_disabled", **WINDOW_CONTROLS}
 # Keep both lines active across the exact seeks and the real OSC timeout.
 SIDECAR = """1
 00:00:02,000 --> 00:00:17,500
@@ -37,7 +44,8 @@ def command(*args, **kwargs):
 def read_scenario(path):
     spec = json.loads(path.read_text())
     actions = {"open", "pause", "seek", "capture", "play_to", "play_until_hidden", "pointer_reveal",
-               "enter_fullscreen", "leave_fullscreen"}
+               "enter_fullscreen", "leave_fullscreen", "size_window", "close_media", "double_click",
+               "small_work_area", "open_portrait", "resize_edges", "pin", "unpin", "overlap_window"}
     if (spec["schema_version"] != 1 or spec["id"] != path.stem
             or spec["appearances"] != ["light", "dark"] or not spec["steps"]):
         raise ValueError("Unsupported scenario ID, schema or appearances")
@@ -47,29 +55,42 @@ def read_scenario(path):
         if step["action"] in {"seek", "play_to"} and not isinstance(step.get("seconds"), (float, int)):
             raise ValueError("Seek and playback targets require numeric seconds")
         if step["action"] == "capture":
-            if (step.get("expect") not in {"no_cue", "clearance", "base_margin"}
+            if (step.get("expect") not in {"no_cue", "clearance", "base_margin", "welcome", "playing",
+                                           "fullscreen", "restored", "landscape", "portrait", "idle",
+                                           "floating", "normal", "repinned"}
                     or not step.get("name", "").replace("-", "").isalnum()):
                 raise ValueError("Invalid capture checkpoint")
-    if spec["fixture"] != "subtitle-lift.mp4":
+    if spec["fixture"] not in {"subtitle-lift.mp4", "01-h264-1080p24-tone.mp4", "landscape-4k.mp4"}:
         raise ValueError("Unknown scenario fixture")
     return spec
 
 
 def fixture(ffmpeg, temporary, spec, receipt):
     video = temporary / spec["fixture"]
-    subtitles = video.with_suffix(".srt")
-    subtitles.write_text(SIDECAR, encoding="utf-8")
     version = command(ffmpeg, "-version", capture_output=True, text=True).stdout.splitlines()[0]
-    command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", "color=c=0x303030:s=640x360:r=24:d=18",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-threads", "1",
-            "-g", "12", "-keyint_min", "12", "-sc_threshold", "0",
-            "-map_metadata", "-1", "-fflags", "+bitexact", "-flags", "+bitexact",
-            "-movflags", "+faststart", str(video))
-    receipt["fixture"] = {
-        "ffmpeg_version": version, "ffmpeg_sha256": digest(Path(ffmpeg)),
-        video.name: digest(video), subtitles.name: digest(subtitles),
-    }
+    receipt["fixture"] = {"ffmpeg_version": version, "ffmpeg_sha256": digest(Path(ffmpeg))}
+    if spec["id"] == "subtitle-lift":
+        subtitles = video.with_suffix(".srt")
+        subtitles.write_text(SIDECAR, encoding="utf-8")
+        receipt["fixture"][subtitles.name] = digest(subtitles)
+        command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "color=c=0x303030:s=640x360:r=24:d=18",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-threads", "1",
+                "-g", "12", "-keyint_min", "12", "-sc_threshold", "0",
+                "-map_metadata", "-1", "-fflags", "+bitexact", "-flags", "+bitexact",
+                "-movflags", "+faststart", str(video))
+        receipt["fixture"][video.name] = digest(video)
+    else:
+        fixtures = [(video, "1920x1080")]
+        if spec["id"] == "window-fit":
+            fixtures = [(video, "3840x2160"), (temporary / "portrait.mp4", "1080x1440")]
+        for path, size in fixtures:
+            command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i", f"smptebars=s={size}:r=24:d=25",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2", "-pix_fmt", "yuv420p",
+                    "-g", "48", "-map_metadata", "-1", "-fflags", "+bitexact", "-flags", "+bitexact",
+                    "-movflags", "+faststart", str(path), timeout=90)
+            receipt["fixture"][path.name] = digest(path)
     return video
 
 
@@ -118,7 +139,7 @@ def run_appearance(executable, scenario, video, temporary, output, appearance, n
             f"--verify-output={folder}", f"--verify-profile={profile}",
             f"--verify-appearance={appearance}"]
     if negative_control:
-        argv.append("--verify-no-subtitle-clearance")
+        argv.append("--verify-negative-control")
     with (folder / "app.log").open("w") as log:
         try:
             run = subprocess.run(
@@ -158,7 +179,7 @@ def main():
     parser.add_argument("--ffmpeg", type=Path, default=os.environ.get("OKP_VERIFY_FFMPEG"))
     parser.add_argument("--source-sha")
     parser.add_argument("--negative-control", action="store_true",
-                        help="disable transport clearance in the verifier instance")
+                        help="disconnect the selected scenario’s behavior in the verifier instance")
     args = parser.parse_args()
     scenarios = {path.stem: path for path in SCENARIOS.glob("*.json")}
     if args.list:
@@ -166,8 +187,8 @@ def main():
         return 0
     if args.scenario not in scenarios:
         parser.error("unknown scenario; use --list")
-    if args.negative_control and args.scenario != "subtitle-lift":
-        parser.error("negative control is only available for subtitle-lift")
+    if args.negative_control and args.scenario not in CONTROLS:
+        parser.error("this scenario has no negative control")
     scenario = scenarios[args.scenario]
     try:
         spec = read_scenario(scenario)
@@ -177,7 +198,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     if any(output.iterdir()):
         parser.error("--output must be empty")
-    control = "subtitle_clearance_disabled" if args.negative_control else "none"
+    control = CONTROLS[args.scenario] if args.negative_control else "none"
     receipt = {"schema_version": 1, "scenario": spec["id"], "source_sha": args.source_sha, "control": control,
                "host": {"os": platform.system(), "version": platform.mac_ver()[0], "architecture": platform.machine()},
                "scenario_sha256": digest(scenario), "status": "error", "appearances": []}
@@ -202,13 +223,23 @@ def main():
             states = {result["status"] for result in receipt["appearances"]}
             receipt["status"] = next((state for state in ("error", "blocked_environment", "failed") if state in states), "passed")
             if args.negative_control and receipt["status"] in {"passed", "failed"}:
-                expected_failures = {
-                    f"subtitle_clearance:{step['name']}" for step in spec["steps"]
-                    if step.get("expect") == "clearance"
-                }
+                if spec["id"] == "subtitle-lift":
+                    expected_failures = {
+                        f"subtitle_clearance:{step['name']}" for step in spec["steps"]
+                        if step.get("expect") == "clearance"
+                    }
+                else:
+                    checkpoints = {
+                        "window-chrome": ["welcome", "playing"],
+                        "window-fullscreen": ["fullscreen", "restored"],
+                        "window-fit": ["fit-4k", "fit-portrait"],
+                        "window-float": ["pinned", "pinned-after-fullscreen"],
+                    }
+                    prefix = spec["id"].replace("-", "_")
+                    expected_failures = {f"{prefix}:{name}" for name in checkpoints[spec["id"]]}
                 if not all(expected_failures <= set(result["assertion_failures"])
                            for result in receipt["appearances"]):
-                    receipt.update(status="error", error="Negative control did not expose clearance in both themes")
+                    receipt.update(status="error", error="Negative control did not expose all expected failures in both themes")
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         receipt["error"] = str(error)
     finally:

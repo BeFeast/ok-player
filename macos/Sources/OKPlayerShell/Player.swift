@@ -53,6 +53,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// The registry commands of the menu bar and the window keys (Menu/).
     let commands = PlayerCommands()
     var menuBar: MenuBar?
+    lazy var closeMediaItem = windowMenuItem("Close Media", action: #selector(closeMedia), key: "W")
+    lazy var pinItem = windowMenuItem("Always on Top", action: #selector(togglePlayerPin), key: "")
     /// Key presses the window received; each one counts as activity for the transport controls.
     private(set) var keyPresses = 0
     var shuttingDown = false
@@ -62,11 +64,15 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // One player window: no window tabs, so no tab items in View and Window.
         NSWindow.allowsAutomaticWindowTabbing = false
         let menuBar = MenuBar(commands: commands, openRecent: system.makeOpenRecentItem(),
-                              history: history.makeMenuItem())
+                              history: history.makeMenuItem(), closeMedia: closeMediaItem, pinPlayer: pinItem)
         self.menuBar = menuBar
         menuBar.install()
         let behaviour = PlayerWindowController(contentRect: NSRect(x: 0, y: 0, width: 960, height: 580))
         windowBehaviour = behaviour; window = behaviour.window
+        behaviour.showTitleIdentity = verification?.control != "title_identity_hidden"
+        behaviour.allowVideoFullscreen = verification?.control != "video_fullscreen_disabled"
+        behaviour.applyInitialFit = verification?.control != "initial_fit_disabled"
+        behaviour.applyFloatingLevel = verification?.control != "floating_level_disabled"
         window.title = "OK Player"; window.delegate = self; window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 420, height: 280)
         window.backgroundColor = PaletteRole.canvas.color
@@ -75,11 +81,11 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let surface = GLSurface.make()
         let videoArea: NSView = surface.map { VideoView(surface: $0) as NSView } ?? NSView()
         video = videoArea as? VideoView
-        // The video fills the window; the transport controls float over it.
+        // The normal title strip reserves its own plane. Fullscreen removes that inset.
         for view in [videoArea, osc] {
             view.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(view)
             NSLayoutConstraint.activate([
-                view.topAnchor.constraint(equalTo: root.topAnchor), view.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+                view.bottomAnchor.constraint(equalTo: root.bottomAnchor),
                 view.leadingAnchor.constraint(equalTo: root.leadingAnchor), view.trailingAnchor.constraint(equalTo: root.trailingAnchor)
             ])
         }
@@ -92,14 +98,26 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             prompt.centerXAnchor.constraint(equalTo: root.centerXAnchor), prompt.centerYAnchor.constraint(equalTo: root.centerYAnchor),
             prompt.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 12)
         ])
-        history.install(in: root, above: osc.panel)
         behaviour.install(in: root, videoArea: videoArea)
-        upNext.install(in: root, above: osc.panel)
+        for view in [videoArea, osc] {
+            view.topAnchor.constraint(equalTo: behaviour.titleStrip.bottomAnchor).isActive = true
+        }
+        history.install(in: root, below: behaviour.titleStrip, above: osc.panel)
+        upNext.install(in: root, below: behaviour.titleStrip, above: osc.panel)
+        upNext.onVisibilityChange = { [weak self] visible in
+            if visible { self?.osc.autoHide.pin() } else { self?.osc.autoHide.unpin() }
+        }
+        behaviour.dismissTransient = { [weak self] in
+            guard let self, self.upNext.isShown else { return false }
+            self.upNext.hide()
+            return true
+        }
+        behaviour.onPinChanged = { [weak self] pinned in self?.pinItem.state = pinned ? .on : .off }
         tracks.install(in: osc, over: root)
         osc.addTrailingControl(upNext.button)
         tracks.window = window
         // The status layer's toast goes on top of everything installed so far.
-        statusLayer.install(in: root, above: videoArea)
+        statusLayer.install(in: root, below: behaviour.titleStrip, above: videoArea)
         statusLayer.onRetry = { [weak self] source in self?.play(source) }
         statusLayer.onOpenAnother = { [weak self] in self?.openFile() }
         statusLayer.onToast = { [weak self] text in self?.smokeRun?.toastShown(text) }
@@ -246,6 +264,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let snapshot = client.store.snapshot
         windowBehaviour?.sessionChanged(snapshot)
         video?.hasVideo = snapshot.video != nil
+        if snapshot.source == nil { upNext.hide() }
         osc.sessionChanged(snapshot)
         tracks.sessionChanged(snapshot)
         osc.playlistSteps = (previous: playlist.canStep(.previous), next: playlist.canStep(.next))
@@ -288,6 +307,21 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         windowBehaviour?.windowWillResize(to: frameSize) ?? frameSize
     }
+    func windowDidFailToEnterFullScreen(_ window: NSWindow) { windowBehaviour?.fullscreenFailed() }
+    func windowDidFailToExitFullScreen(_ window: NSWindow) { windowBehaviour?.fullscreenFailed() }
+
+    private func windowMenuItem(_ title: String, action: Selector, key: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.target = self
+        return item
+    }
+
+    @objc func closeMedia() { client?.dispatch(.close) }
+    @objc func togglePlayerPin() {
+        osc.noteActivity()
+        windowBehaviour?.togglePin()
+    }
+
     func windowWillClose(_ notification: Notification) {
         // Terminating closes the window again; the first close does the work.
         guard !closing else { return }

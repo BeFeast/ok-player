@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "id": "window-fullscreen",
+  "fixture": "01-h264-1080p24-tone.mp4",
+  "appearances": [
+    "light",
+    "dark"
+  ],
+  "steps": [
+    {
+      "action": "size_window"
+    },
+    {
+      "action": "open"
+    },
+    {
+      "action": "double_click"
+    },
+    {
+      "action": "pointer_reveal"
+    },
+    {
+      "action": "capture",
+      "name": "fullscreen",
+      "expect": "fullscreen"
+    },
+    {
+      "action": "leave_fullscreen"
+    },
+    {
+      "action": "capture",
+      "name": "restored",
+      "expect": "restored"
+    }
+  ]
+}

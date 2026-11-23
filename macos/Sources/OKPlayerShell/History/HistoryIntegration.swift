@@ -47,14 +47,14 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
     }
 
     /// The first-run view is centred and the populated shelf is top-aligned.
-    func install(in root: NSView, above controls: NSView) {
+    func install(in root: NSView, below strip: NSView, above controls: NSView) {
         let host = welcomeView
         host.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(host)
+        root.addSubview(host, positioned: .below, relativeTo: strip)
         NSLayoutConstraint.activate([
             host.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             host.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            host.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor),
+            host.topAnchor.constraint(equalTo: strip.bottomAnchor),
             host.bottomAnchor.constraint(equalTo: controls.topAnchor),
         ])
     }

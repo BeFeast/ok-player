@@ -61,7 +61,7 @@ enum VideoAreaAspect {
     /// dimension the user changed more leads and the other follows; neither
     /// goes below `minimum`. Sizes are window content sizes in points.
     static func constrain(proposed: CGSize, current: CGSize, video: CGSize, chrome: CGSize,
-                          minimum: CGSize) -> CGSize {
+                          minimum: CGSize, maximum: CGSize? = nil) -> CGSize {
         guard video.width > 0, video.height > 0 else { return proposed }
         let aspect = video.width / video.height
         func height(forWidth width: CGFloat) -> CGFloat { max(1, width - chrome.width) / aspect + chrome.height }
@@ -73,6 +73,16 @@ enum VideoAreaAspect {
         if size.height < minimum.height {
             size = CGSize(width: width(forHeight: minimum.height), height: minimum.height)
         }
+        if let maximum {
+            let availableWidth = min(size.width, maximum.width)
+            let availableHeight = min(size.height, maximum.height)
+            let scaledWidth = min(availableWidth, width(forHeight: availableHeight))
+            let scaledHeight = height(forWidth: scaledWidth)
+            // A narrow portrait can reach the display's edge before there is
+            // room for the controls. Leave room for AppKit and let mpv pillarbox.
+            size = CGSize(width: min(maximum.width, max(minimum.width, scaledWidth)),
+                          height: min(maximum.height, max(minimum.height, scaledHeight)))
+        }
         return CGSize(width: size.width.rounded(), height: size.height.rounded())
     }
 }
@@ -83,9 +93,21 @@ enum VideoAreaAspect {
 struct WindowChromeState: Equatable {
     var oscVisible = true
     var fullscreen = false
+    var hasMedia = true
 
-    var trafficLightsVisible: Bool { oscVisible || fullscreen }
-    var titleStripVisible: Bool { oscVisible && !fullscreen }
+    var trafficLightsVisible: Bool { !hasMedia || oscVisible || fullscreen }
+    var titleStripVisible: Bool { (!hasMedia || oscVisible) && !fullscreen }
+}
+
+extension CGRect {
+    /// Keep the entire frame on the active work area, including the title strip.
+    func fitted(inside area: CGRect) -> CGRect {
+        let width = min(self.width, area.width)
+        let height = min(self.height, area.height)
+        return CGRect(x: min(max(minX, area.minX), area.maxX - width),
+                      y: min(max(minY, area.minY), area.maxY - height),
+                      width: width, height: height)
+    }
 }
 
 /// The window chrome that follows the transport OSC: the traffic lights and the

@@ -7,7 +7,20 @@ struct VerificationOptions {
     let output: URL
     let profile: URL
     let appearance: String
-    let controlDisablesClearance: Bool
+    let negativeControl: Bool
+    var scenarioID: String { scenario.deletingPathExtension().lastPathComponent }
+    var control: String {
+        guard negativeControl else { return "none" }
+        return switch scenarioID {
+        case "subtitle-lift": "subtitle_clearance_disabled"
+        case "window-chrome": "title_identity_hidden"
+        case "window-fullscreen": "video_fullscreen_disabled"
+        case "window-fit": "initial_fit_disabled"
+        case "window-float": "floating_level_disabled"
+        default: "unsupported_control"
+        }
+    }
+    var controlDisablesClearance: Bool { control == "subtitle_clearance_disabled" }
 
     init?(arguments: [String]) {
         func value(_ option: String) -> String? {
@@ -21,7 +34,7 @@ struct VerificationOptions {
         self.output = URL(fileURLWithPath: output, isDirectory: true)
         self.profile = URL(fileURLWithPath: profile, isDirectory: true)
         self.appearance = appearance
-        controlDisablesClearance = arguments.contains("--verify-no-subtitle-clearance")
+        negativeControl = arguments.contains("--verify-negative-control")
     }
 
     func config(shellCommands: [String]) -> SessionConfig {
@@ -55,16 +68,20 @@ struct VerificationScenario: Decodable {
         case open, pause, seek, capture
         case playTo = "play_to", playUntilHidden = "play_until_hidden", pointerReveal = "pointer_reveal"
         case enterFullscreen = "enter_fullscreen", leaveFullscreen = "leave_fullscreen"
+        case sizeWindow = "size_window", closeMedia = "close_media", doubleClick = "double_click"
+        case smallWorkArea = "small_work_area", openPortrait = "open_portrait", resizeEdges = "resize_edges"
+        case pin, unpin, overlapWindow = "overlap_window"
     }
     enum Expectation: String, Decodable {
         case noCue = "no_cue", clearance, baseMargin = "base_margin"
+        case welcome, playing, fullscreen, restored, landscape, portrait, idle, floating, normal, repinned
     }
     let schemaVersion: Int
     let id: String
     let steps: [Step]
 }
 
-private struct VerifyError: LocalizedError {
+struct VerifyError: LocalizedError {
     let message: String
     let blocked: Bool
     init(_ message: String, blocked: Bool = false) {
@@ -76,10 +93,15 @@ private struct VerifyError: LocalizedError {
 
 @MainActor
 final class VerifyRun {
-    private unowned let app: PlayerApp
-    private let options: VerificationOptions
-    private var observations: [[String: Any]] = []
-    private var failures: [String] = []
+    unowned let app: PlayerApp
+    let options: VerificationOptions
+    var observations: [[String: Any]] = []
+    var failures: [String] = []
+    var initialFrame: CGRect?
+    var preFullscreenFrame: CGRect?
+    var preFullscreenTime: Double?
+    var fullscreenEntries = 0
+    var testWindow: NSWindow?
     private var visibleCueBottom: CGFloat?
     private var hiddenCueBottom: CGFloat?
     private var compositorStatus = "not_probed"
@@ -89,18 +111,18 @@ final class VerifyRun {
         self.options = options
     }
 
-    private var snapshot: SessionSnapshot { app.client?.store.snapshot ?? SessionSnapshot() }
-    private var swaps: Int { app.video?.videoLayer.counts.swaps ?? 0 }
+    var snapshot: SessionSnapshot { app.client?.store.snapshot ?? SessionSnapshot() }
+    var swaps: Int { app.video?.videoLayer.counts.swaps ?? 0 }
 
     func run() async {
         var result: [String: Any] = [
             "appearance": options.appearance, "pid": getpid(),
-            "control": options.controlDisablesClearance ? "subtitle_clearance_disabled" : "none",
+            "control": options.control,
         ]
         var code: Int32 = 0
         do {
             let scenario = try SessionJSON.makeDecoder().decode(VerificationScenario.self, from: Data(contentsOf: options.scenario))
-            guard scenario.schemaVersion == 1, scenario.id == "subtitle-lift" else {
+            guard scenario.schemaVersion == 1, scenario.id == options.scenarioID else {
                 throw VerifyError("Unsupported scenario or schema")
             }
             try await wait("mapped AppKit window", blocked: true) {
@@ -122,7 +144,8 @@ final class VerifyRun {
             result["window_backing_scale"] = app.window.backingScaleFactor
             compositorStatus = CGPreflightScreenCaptureAccess() ? "available" : "permission_unavailable"
             for step in scenario.steps {
-                try await perform(step)
+                if scenario.id == "subtitle-lift" { try await perform(step) }
+                else { try await performWindowStep(step) }
             }
             result["status"] = failures.isEmpty ? "passed" : "failed"
             code = failures.isEmpty ? 0 : 1
@@ -144,7 +167,7 @@ final class VerifyRun {
         exit(code)
     }
 
-    private func perform(_ step: VerificationScenario.Step) async throws {
+    func perform(_ step: VerificationScenario.Step) async throws {
         switch step.action {
         case .open:
             let before = swaps
@@ -204,6 +227,8 @@ final class VerifyRun {
                 throw VerifyError("Capture lacks its name or expectation")
             }
             try await capture(name, expecting: expectation)
+        default:
+            throw VerifyError("Unsupported subtitle step")
         }
     }
 
@@ -211,7 +236,7 @@ final class VerifyRun {
         snapshot.tracks.first { $0.kind == .subtitle && $0.external && $0.selected }
     }
 
-    private func wait(_ step: String, blocked: Bool = false, condition: () -> Bool) async throws {
+    func wait(_ step: String, blocked: Bool = false, condition: () -> Bool) async throws {
         let limit = ProcessInfo.processInfo.systemUptime + 8
         while !condition() {
             if ProcessInfo.processInfo.systemUptime >= limit { throw VerifyError("Timed out: \(step)", blocked: blocked) }
@@ -220,7 +245,7 @@ final class VerifyRun {
         print("OKP_VERIFY \(step)")
     }
 
-    private func pressKey(_ characters: String, code: UInt16) throws {
+    func pressKey(_ characters: String, code: UInt16) throws {
         let window = app.window!
         guard window.makeFirstResponder(app.video),
               let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
@@ -254,7 +279,7 @@ final class VerifyRun {
         }
     }
 
-    private func dimensions(_ rect: CGRect) -> [String: Double] {
+    func dimensions(_ rect: CGRect) -> [String: Double] {
         ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
     }
 
@@ -296,20 +321,14 @@ final class VerifyRun {
         let file = options.output.appendingPathComponent(name + ".png")
         let captureMode: String
         let composite: CGImage
-        if let compositor = await captureCompositor(width: frameWidth, height: frameHeight) {
+        let windowWidth = Int((root.bounds.width * 2).rounded())
+        let windowHeight = Int((root.bounds.height * 2).rounded())
+        if let compositor = await captureCompositor(width: windowWidth, height: windowHeight) {
             captureMode = "window_compositor_2x"
             composite = compositor
         } else {
             captureMode = "app_composite_2x"
-            var chrome: [NSView] = []
-            if visible {
-                if let title = app.windowBehaviour?.titleStrip { chrome.append(title) }
-                chrome.append(panel)
-                for button: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
-                    if let view = app.window.standardWindowButton(button) { chrome.append(view) }
-                }
-            }
-            guard let image = appComposite(frame.image, over: video, chrome: chrome) else {
+            guard let image = windowComposite(root: root, video: video, frame: frame.image) else {
                 throw VerifyError("Could not compose the 2× video and actual AppKit chrome", blocked: true)
             }
             composite = image
@@ -359,11 +378,13 @@ final class VerifyRun {
                     failures.append("subtitle_base_margin_not_restored")
                 }
             }
+        default:
+            throw VerifyError("Unsupported subtitle checkpoint")
         }
         print("OKP_VERIFY captured \(name) via \(captureMode)")
     }
 
-    private func captureCompositor(width: Int, height: Int) async -> CGImage? {
+    func captureCompositor(width: Int, height: Int) async -> CGImage? {
         guard compositorStatus == "available" || compositorStatus == "captured" else { return nil }
         guard app.window.backingScaleFactor == 2 else {
             compositorStatus = "window_backing_is_not_2x"
@@ -394,25 +415,4 @@ final class VerifyRun {
         }
     }
 
-    private func appComposite(_ frame: CGImage, over video: VideoView, chrome: [NSView]) -> CGImage? {
-        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let context = CGContext(data: nil, width: frame.width, height: frame.height,
-                                      bitsPerComponent: 8, bytesPerRow: frame.width * 4, space: space,
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        context.draw(frame, in: CGRect(x: 0, y: 0, width: frame.width, height: frame.height))
-        context.scaleBy(x: 2, y: 2)
-        for view in chrome where !view.isHidden && view.alphaValue > 0 && !view.bounds.isEmpty {
-            let bounds = view.bounds
-            guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(ceil(bounds.width * 2)),
-                                               pixelsHigh: Int(ceil(bounds.height * 2)), bitsPerSample: 8,
-                                               samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                               colorSpaceName: .deviceRGB,
-                                               bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
-            bitmap.size = bounds.size
-            view.effectiveAppearance.performAsCurrentDrawingAppearance { view.cacheDisplay(in: bounds, to: bitmap) }
-            guard let image = bitmap.cgImage else { return nil }
-            context.draw(image, in: view.convert(bounds, to: video))
-        }
-        return context.makeImage()
-    }
 }

@@ -52,52 +52,6 @@ class PlayerWindow: NSWindow {
     }
 }
 
-/// The strip along the top of the window, under the transparent title bar: the
-/// media title over a soft scrim, so it reads over any video. It takes no
-/// clicks; the title bar above it drags the window.
-final class TitleStripView: NSView {
-    private let label = NSTextField(labelWithString: "")
-
-    init() {
-        super.init(frame: .zero)
-        label.font = NSFont.titleBarFont(ofSize: 0)
-        label.textColor = .white
-        label.alignment = .center
-        label.lineBreakMode = .byTruncatingMiddle
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        addSubview(label)
-        NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            // Clear of the traffic lights on the left, and as far from the right.
-            label.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 84),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -84),
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError("Use init()") }
-
-    /// The media title; empty shows neither text nor scrim.
-    var title: String {
-        get { label.stringValue }
-        set {
-            guard newValue != label.stringValue else { return }
-            label.stringValue = newValue
-            needsDisplay = true
-        }
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        guard !label.stringValue.isEmpty else { return }
-        // Darkest along the top edge, clear where the strip meets the video.
-        NSGradient(starting: NSColor.black.withAlphaComponent(0.45), ending: NSColor.black.withAlphaComponent(0))?
-            .draw(in: bounds, angle: -90)
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-}
-
 /// The player window's behaviour (#881): native fullscreen from F, Escape,
 /// Control-Command-F and a double click on the video; the window fitted to the
 /// video when a file opens; the video area's aspect kept while video shows; and
@@ -108,6 +62,23 @@ final class TitleStripView: NSView {
 final class PlayerWindowController: NSObject, WindowChromeVisibility {
     let window: PlayerWindow
     let titleStrip = TitleStripView()
+    let pinButton = NSButton()
+    private let pinAccessory = NSTitlebarAccessoryViewController()
+    private(set) var isPinned = false
+    private var stripHeight: NSLayoutConstraint?
+    private var idleFrame: CGRect?
+    private var normalFrame: CGRect?
+    private var fullscreenTransition = false
+    /// The menu and header expose the same player window preference.
+    var onPinChanged: ((Bool) -> Void)?
+    var dismissTransient: (() -> Bool)?
+    /// Optional work area supplied by hosted verification.
+    var verificationWorkArea: CGRect?
+    var showTitleIdentity = true
+    var applyInitialFit = true
+    var allowVideoFullscreen = true
+    var applyFloatingLevel = true
+    private var workArea: CGRect? { verificationWorkArea ?? window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame }
     /// Called when the window has entered (true) or left (false) fullscreen.
     var onFullscreenChanged: ((Bool) -> Void)?
     /// Enters or leaves native fullscreen. Tests replace it, so they never move
@@ -121,7 +92,7 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     private weak var rules: WindowRules?
     private weak var videoArea: NSView?
     private var clicks: VideoClickArbiter?
-    private var chrome = WindowChromeState()
+    private var chrome = WindowChromeState(hasMedia: false)
     /// Counts chrome changes, so a fade that finishes after a newer change
     /// leaves the newer one alone.
     private var chromeChanges = 0
@@ -139,6 +110,19 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
         super.init()
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+        window.titlebarSeparatorStyle = .none
+        let accessoryView = NSView(frame: NSRect(x: 0, y: 0, width: 44, height: 24))
+        pinButton.frame = accessoryView.bounds.insetBy(dx: 5, dy: 1)
+        pinButton.isBordered = false
+        pinButton.setButtonType(.onOff)
+        pinButton.target = self
+        pinButton.action = #selector(togglePin)
+        accessoryView.addSubview(pinButton)
+        pinAccessory.view = accessoryView
+        pinAccessory.layoutAttribute = .right
+        pinAccessory.fullScreenMinHeight = 0
+        window.addTitlebarAccessoryViewController(pinAccessory)
+        updatePin()
         window.collectionBehavior.insert(.fullScreenPrimary)
         window.onCommand = { [weak self] command in self?.perform(command) ?? false }
         let center = NotificationCenter.default
@@ -146,6 +130,8 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
                            name: NSWindow.willEnterFullScreenNotification, object: window)
         center.addObserver(self, selector: #selector(didEnterFullScreen(_:)),
                            name: NSWindow.didEnterFullScreenNotification, object: window)
+        center.addObserver(self, selector: #selector(willExitFullScreen(_:)),
+                           name: NSWindow.willExitFullScreenNotification, object: window)
         center.addObserver(self, selector: #selector(didExitFullScreen(_:)),
                            name: NSWindow.didExitFullScreenNotification, object: window)
     }
@@ -160,12 +146,13 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
         self.videoArea = videoArea
         titleStrip.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(titleStrip)
+        let height = titleStrip.heightAnchor.constraint(equalToConstant: TitleStripView.height)
+        stripHeight = height
         NSLayoutConstraint.activate([
+            height,
             titleStrip.topAnchor.constraint(equalTo: root.topAnchor),
             titleStrip.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             titleStrip.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            // Under a transparent title bar the safe area starts below the bar.
-            titleStrip.bottomAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor),
         ])
         (videoArea as? VideoView)?.onClick = { [weak self] clickCount in
             self?.clicks?.released(clickCount: clickCount)
@@ -184,35 +171,87 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
             classify: { [weak rules] clickCount in rules?.videoClickIntent(clickCount: clickCount) ?? .ignore },
             schedule: schedule)
         clicks.onTogglePause = togglePause
-        clicks.onToggleFullscreen = { [weak self] in _ = self?.perform(.toggleFullscreen) }
+        clicks.onToggleFullscreen = { [weak self] in
+            guard let self, self.allowVideoFullscreen else { return }
+            self.perform(.toggleFullscreen)
+        }
         self.clicks = clicks
     }
 
     /// The session reported a batch; `snapshot` is the state after it.
     func sessionChanged(_ snapshot: SessionSnapshot) {
-        titleStrip.title = snapshot.title ?? ""
+        if let source = snapshot.source {
+            if !chrome.hasMedia && !chrome.fullscreen { idleFrame = window.frame }
+            titleStrip.title = snapshot.title ?? (source.location as NSString).lastPathComponent
+        } else if chrome.hasMedia {
+            titleStrip.title = "OK Player"
+        }
+        let hasMedia = snapshot.source != nil
+        if chrome.hasMedia != hasMedia {
+            chrome.hasMedia = hasMedia
+            titleStrip.hasMedia = hasMedia
+            window.title = hasMedia ? "\(titleStrip.title) — OK Player" : "OK Player"
+            if !hasMedia { lastFit = nil }
+            applyChrome(animated: false)
+        } else if hasMedia {
+            window.title = "\(titleStrip.title) — OK Player"
+        }
         aspect = VideoAreaAspect.lock(for: snapshot.video)
-        // The session knows which source the size belongs to and answers with a
-        // fit once per opened source, so asking on every batch with video is safe.
+        if !hasMedia { restoreIdleFrame() }
+        // The session owns which source is owed a fit.
         if snapshot.video != nil { takeInitialFit() }
+    }
+
+    private func restoreIdleFrame() {
+        guard !chrome.hasMedia, !chrome.fullscreen, !fullscreenTransition, let frame = idleFrame else { return }
+        idleFrame = nil
+        restore(frame)
+    }
+
+    private func restore(_ frame: CGRect) {
+        let safe = workArea.map { frame.fitted(inside: $0) } ?? frame
+        if window.frame != safe { window.setFrame(safe, display: true) }
+    }
+
+    @objc func togglePin() {
+        guard !chrome.fullscreen, !fullscreenTransition else { return }
+        isPinned.toggle()
+        updatePin()
+        onPinChanged?(isPinned)
+    }
+
+    private func updatePin() {
+        if applyFloatingLevel { window.level = isPinned && !chrome.fullscreen ? .floating : .normal }
+        pinButton.state = isPinned ? .on : .off
+        let label = isPinned ? "Disable Always on Top" : "Always on Top"
+        pinButton.toolTip = label
+        pinButton.setAccessibilityLabel(label)
+        pinButton.image = NSImage(systemSymbolName: isPinned ? "pin.fill" : "pin", accessibilityDescription: label)
+        pinButton.contentTintColor = isPinned
+            ? (chrome.hasMedia ? PaletteRole.link.overVideo : PaletteRole.link.color)
+            : (chrome.hasMedia ? PaletteRole.onAccent.overVideo : PaletteRole.text.color)
     }
 
     /// The frame size a resize towards `frameSize` settles on: while video
     /// shows, the video area keeps the video's aspect. Called from the window
     /// delegate's `windowWillResize(_:to:)`.
     func windowWillResize(to frameSize: NSSize) -> NSSize {
-        guard let aspect, !window.isInFullscreen else { return frameSize }
-        let size = VideoAreaAspect.constrain(proposed: contentSize(forFrameSize: frameSize),
+        guard !chrome.fullscreen, !window.isInFullscreen, !fullscreenTransition else { return frameSize }
+        let proposed = contentSize(forFrameSize: frameSize)
+        let minimum = contentSize(forFrameSize: window.minSize)
+        let maximum = workArea.map { contentSize(forFrameSize: $0.size) }
+        let size = aspect.map { VideoAreaAspect.constrain(proposed: proposed,
                                              current: contentSize(forFrameSize: window.frame.size),
-                                             video: aspect, chrome: videoChrome,
-                                             minimum: contentSize(forFrameSize: window.minSize))
+                                             video: $0, chrome: videoChrome,
+                                             minimum: minimum, maximum: maximum) } ?? proposed
         return window.frameRect(forContentRect: NSRect(origin: .zero, size: size)).size
     }
 
     /// Carry out a window command; returns whether it did anything.
     @discardableResult
     func perform(_ command: WindowCommand) -> Bool {
-        guard command.togglesFullscreen(isFullscreen: window.isInFullscreen) else { return false }
+        if command == .exitFullscreen, dismissTransient?() == true { return true }
+        guard !fullscreenTransition, command.togglesFullscreen(isFullscreen: window.isInFullscreen) else { return false }
         toggleFullscreen()
         return true
     }
@@ -241,17 +280,19 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     /// fullscreen the fit is spent without resizing: like core's initial fit, it
     /// never leaves a window state the user chose.
     private func takeInitialFit() {
-        guard let rules, let screen = window.screen ?? NSScreen.main,
+        guard let rules, let area = workArea, let screen = window.screen ?? NSScreen.main,
+              !fullscreenTransition,
               let content = rules.initialWindowFit(backingScale: screen.backingScaleFactor,
-                                                   visibleFrame: screen.visibleFrame,
+                                                   visibleFrame: area,
                                                    minSize: contentSize(forFrameSize: window.minSize),
                                                    chrome: videoChrome),
-              !window.isInFullscreen else { return }
-        window.setFrame(window.frameRect(forContentRect: content), display: true)
-        lastFit = content
+              !window.isInFullscreen, applyInitialFit else { return }
+        let safe = window.frameRect(forContentRect: content).fitted(inside: area)
+        window.setFrame(safe, display: true)
+        lastFit = window.contentRect(forFrameRect: safe)
     }
 
-    private var trafficLights: [NSButton] {
+    var trafficLights: [NSButton] {
         [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
             .compactMap { window.standardWindowButton($0) }
     }
@@ -261,39 +302,43 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     private func applyChrome(animated: Bool) {
         chromeChanges += 1
         let change = chromeChanges
+        stripHeight?.constant = chrome.fullscreen ? 0 : TitleStripView.height
+        updatePin()
+        pinAccessory.isHidden = chrome.fullscreen
         let showLights = chrome.trafficLightsVisible
         let showStrip = chrome.titleStripVisible
         let lights = trafficLights
-        let strip = titleStrip
-        // Whatever fades in is unhidden first, so the fade can be seen.
-        if showLights { for button in lights { button.isHidden = false } }
-        if showStrip { strip.isHidden = false }
-        let hideFaded = {
-            if !showLights { for button in lights { button.isHidden = true } }
-            if !showStrip { strip.isHidden = true }
-        }
-        guard animated else {
-            for button in lights { button.alphaValue = showLights ? 1 : 0 }
-            strip.alphaValue = showStrip ? 1 : 0
-            hideFaded()
+        let identity = titleStrip.identity
+        titleStrip.isHidden = chrome.fullscreen
+        let views: [(NSView, Bool)] = lights.map { ($0 as NSView, showLights) }
+            + [(pinButton, showStrip), (identity, showStrip && showTitleIdentity)]
+        pinButton.isEnabled = showStrip
+        for (view, show) in views where show { view.isHidden = false }
+        guard animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            for (view, show) in views {
+                view.alphaValue = show ? 1 : 0
+                view.isHidden = !show
+            }
             return
         }
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.2
-            for button in lights { button.animator().alphaValue = showLights ? 1 : 0 }
-            strip.animator().alphaValue = showStrip ? 1 : 0
+            context.duration = 0.18
+            for (view, show) in views { view.animator().alphaValue = show ? 1 : 0 }
         }, completionHandler: { [weak self] in
             guard let self, self.chromeChanges == change else { return }
-            hideFaded()
+            for (view, show) in views where !show { view.isHidden = true }
         })
     }
 
     @objc private func willEnterFullScreen(_ notification: Notification) {
+        normalFrame = window.frame
+        fullscreenTransition = true
         chrome.fullscreen = true
         applyChrome(animated: false)
     }
 
     @objc private func didEnterFullScreen(_ notification: Notification) {
+        fullscreenTransition = false
         onFullscreenChanged?(true)
         // The smoke leaves again with Escape, once the new Space has settled.
         guard smokeRoundTrip != nil else { return }
@@ -302,11 +347,28 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
         }
     }
 
+    @objc private func willExitFullScreen(_ notification: Notification) {
+        fullscreenTransition = true
+    }
+
     @objc private func didExitFullScreen(_ notification: Notification) {
+        fullscreenTransition = false
         chrome.fullscreen = false
         applyChrome(animated: false)
+        if let frame = normalFrame { restore(frame) }
+        normalFrame = nil
+        restoreIdleFrame()
         onFullscreenChanged?(false)
         finishSmokeRoundTrip(nil)
+    }
+
+    func fullscreenFailed() {
+        fullscreenTransition = false
+        chrome.fullscreen = window.isInFullscreen
+        if !chrome.fullscreen { normalFrame = nil }
+        applyChrome(animated: false)
+        restoreIdleFrame()
+        finishSmokeRoundTrip("AppKit could not change fullscreen state")
     }
 }
 

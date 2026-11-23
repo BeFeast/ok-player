@@ -110,7 +110,8 @@ final class PlayerWindowControllerTests: XCTestCase {
     }
 
     private func playing(_ video: VideoGeometry?) -> SessionSnapshot {
-        SessionSnapshot(status: video == nil ? .opening : .playing, title: "clip.mp4", video: video)
+        SessionSnapshot(status: video == nil ? .opening : .playing,
+                        source: MediaSource(kind: .local, location: "/media/clip.mp4"), title: "clip.mp4", video: video)
     }
 
     private var contentFrame: CGRect { window.contentRect(forFrameRect: window.frame) }
@@ -239,6 +240,7 @@ final class PlayerWindowControllerTests: XCTestCase {
     }
 
     func testTrafficLightsAndTitleHiddenWithTheOSCAreHiddenNotOnlyTransparent() {
+        controller.sessionChanged(playing(nil))
         XCTAssertEqual(trafficLights.count, 3)
         XCTAssertFalse(trafficLights.contains { $0.isHidden })
         controller.oscVisibilityChanged(false, animated: false)
@@ -246,17 +248,18 @@ final class PlayerWindowControllerTests: XCTestCase {
             XCTAssertTrue(button.isHidden, "a transparent button would still take the click")
             XCTAssertEqual(button.alphaValue, 0)
         }
-        XCTAssertTrue(controller.titleStrip.isHidden)
+        XCTAssertTrue(controller.titleStrip.identity.isHidden)
 
         controller.oscVisibilityChanged(true, animated: false)
         for button in trafficLights {
             XCTAssertFalse(button.isHidden)
             XCTAssertEqual(button.alphaValue, 1)
         }
-        XCTAssertFalse(controller.titleStrip.isHidden)
+        XCTAssertFalse(controller.titleStrip.identity.isHidden)
     }
 
     func testAFadeOutHidesTheLightsWhenItEndsUnlessTheOSCCameBack() throws {
+        controller.sessionChanged(playing(nil))
         let close = try XCTUnwrap(window.standardWindowButton(.closeButton))
         controller.oscVisibilityChanged(false, animated: true)
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in close.isHidden }, object: nil)],
@@ -270,6 +273,6 @@ final class PlayerWindowControllerTests: XCTestCase {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { settled.fulfill() }
         wait(for: [settled], timeout: 3)
         XCTAssertFalse(close.isHidden, "the fade-out that ended after the OSC came back leaves the lights")
-        XCTAssertFalse(controller.titleStrip.isHidden)
+        XCTAssertFalse(controller.titleStrip.identity.isHidden)
     }
 }

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "id": "window-chrome",
+  "fixture": "01-h264-1080p24-tone.mp4",
+  "appearances": [
+    "light",
+    "dark"
+  ],
+  "steps": [
+    {
+      "action": "size_window"
+    },
+    {
+      "action": "capture",
+      "name": "welcome",
+      "expect": "welcome"
+    },
+    {
+      "action": "open"
+    },
+    {
+      "action": "pointer_reveal"
+    },
+    {
+      "action": "capture",
+      "name": "playing",
+      "expect": "playing"
+    }
+  ]
+}

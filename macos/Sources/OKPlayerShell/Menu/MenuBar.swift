@@ -15,15 +15,20 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let commands: PlayerCommands
     private let openRecent: NSMenuItem?
     private let history: NSMenuItem?
+    private let closeMedia: NSMenuItem?
+    private let pinPlayer: NSMenuItem?
     /// The registry command each provider-filled submenu stands for.
     private var dynamic: [ObjectIdentifier: String] = [:]
 
     /// `openRecent` and `history` are the items other parts of the app provide for
     /// File > Open Recent and File > History…; nil leaves them out.
-    init(commands: PlayerCommands, openRecent: NSMenuItem?, history: NSMenuItem? = nil) {
+    init(commands: PlayerCommands, openRecent: NSMenuItem?, history: NSMenuItem? = nil,
+         closeMedia: NSMenuItem? = nil, pinPlayer: NSMenuItem? = nil) {
         self.commands = commands
         self.openRecent = openRecent
         self.history = history
+        self.closeMedia = closeMedia
+        self.pinPlayer = pinPlayer
         super.init()
     }
 
@@ -48,12 +53,17 @@ final class MenuBar: NSObject, NSMenuDelegate {
         dynamic = [:]
         servicesMenu = nil
         // The Open Recent item moves to the new File menu.
-        for item in [openRecent, history].compactMap({ $0 }) { item.menu?.removeItem(item) }
+        for item in [openRecent, history, closeMedia, pinPlayer].compactMap({ $0 }) { item.menu?.removeItem(item) }
         for model in MenuBarLayout.build(registry: commands.registry, submenus: commands.submenuCommands) {
             let menu = NSMenu(title: model.menu.title)
             menu.delegate = self
             for entry in model.entries {
                 if let item = makeItem(entry) { menu.addItem(item) }
+            }
+            if model.menu == .file, let closeMedia { menu.addItem(closeMedia) }
+            if model.menu == .window, let pinPlayer {
+                menu.addItem(.separator())
+                menu.addItem(pinPlayer)
             }
             let item = NSMenuItem(title: model.menu.title, action: nil, keyEquivalent: "")
             item.submenu = menu

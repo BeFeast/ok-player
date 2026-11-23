@@ -17,6 +17,13 @@ ROOT = Path(__file__).resolve().parent.parent
 FORGEJO = "https://git.oklabs.uk/BeFeast/ok-player.git"
 GITHUB = "BeFeast/ok-player"
 FULL_SHA = re.compile(r"[0-9a-f]{40}")
+CONTROLS = {
+    "subtitle-lift": "subtitle_clearance_disabled",
+    "window-chrome": "title_identity_hidden",
+    "window-fullscreen": "video_fullscreen_disabled",
+    "window-fit": "initial_fit_disabled",
+    "window-float": "floating_level_disabled",
+}
 
 
 def git(*args):
@@ -31,15 +38,15 @@ def main():
     parser.add_argument("--sha", help="full, published Forgejo SHA (default: Forgejo main)")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--negative-control", action="store_true",
-                        help="disable transport clearance in the verifier instance")
+                        help="disconnect the selected scenario’s behavior in the verifier instance")
     args = parser.parse_args()
     if args.list:
         print("\n".join(sorted(scenarios)))
         return 0
     if args.scenario not in scenarios:
         parser.error("unknown scenario; use --list")
-    if args.negative_control and args.scenario != "subtitle-lift":
-        parser.error("negative control is only available for subtitle-lift")
+    if args.negative_control and args.scenario not in CONTROLS:
+        parser.error("this scenario has no negative control")
     if args.sha is not None and not FULL_SHA.fullmatch(args.sha):
         parser.error("--sha must be a full 40-character Forgejo SHA")
     try:
@@ -82,7 +89,7 @@ def main():
         if result["source_sha"] != sha or result["scenario"] != args.scenario:
             raise ValueError("Returned verdict names the wrong source or scenario")
         if status in ("passed", "failed"):
-            control = "subtitle_clearance_disabled" if args.negative_control else "none"
+            control = CONTROLS[args.scenario] if args.negative_control else "none"
             if result["control"] != control:
                 raise ValueError("Returned verdict names the wrong control mode")
             if (output / "source-sha.txt").read_text().strip() != sha:

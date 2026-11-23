@@ -7,6 +7,7 @@ import OpenGL.GL3
 struct VideoEvidence {
     let image: CGImage
     let videoPresent: Bool
+    let hasPicture: Bool
     let glyphBounds: CGRect?
     let glyphPixels: Int
 
@@ -37,6 +38,12 @@ struct VideoEvidence {
                                   intent: .defaultIntent) else { return nil }
         self.image = image
         videoPresent = [0, 1, 2].allSatisfy { (12...100).contains(rgba[stride * (height / 2) + (width / 2) * 4 + $0]) }
+        hasPicture = [height / 4, height / 2, height * 3 / 4].contains { row in
+            [width / 4, width / 2, width * 3 / 4].contains { column in
+                let offset = row * stride + column * 4
+                return rgba[offset..<(offset + 3)].contains { $0 > 15 }
+            }
+        }
         glyphBounds = count > 0 ? CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1) : nil
         glyphPixels = count
     }

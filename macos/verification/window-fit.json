@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "id": "window-fit",
+  "fixture": "landscape-4k.mp4",
+  "appearances": [
+    "light",
+    "dark"
+  ],
+  "steps": [
+    {
+      "action": "small_work_area"
+    },
+    {
+      "action": "open"
+    },
+    {
+      "action": "capture",
+      "name": "fit-4k",
+      "expect": "landscape"
+    },
+    {
+      "action": "resize_edges"
+    },
+    {
+      "action": "open_portrait"
+    },
+    {
+      "action": "capture",
+      "name": "fit-portrait",
+      "expect": "portrait"
+    },
+    {
+      "action": "resize_edges"
+    },
+    {
+      "action": "close_media"
+    },
+    {
+      "action": "capture",
+      "name": "restored-welcome",
+      "expect": "idle"
+    }
+  ]
+}

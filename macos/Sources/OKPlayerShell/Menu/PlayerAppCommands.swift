@@ -10,7 +10,9 @@ extension PlayerApp: PlayerCommandResponder, NSMenuItemValidation {
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        commands.validate(menuItem)
+        if menuItem === closeMediaItem { return client?.store.snapshot.source != nil }
+        if menuItem === pinItem { return windowBehaviour?.window.isInFullscreen == false }
+        return commands.validate(menuItem)
     }
 
     /// The registry commands this shell carries out. Call it before the session

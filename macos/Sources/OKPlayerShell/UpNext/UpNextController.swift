@@ -23,6 +23,7 @@ final class UpNextController: NSObject {
     /// Whether the window is in fullscreen, for the registry query.
     var isFullscreen: () -> Bool = { false }
     private(set) var isShown = false
+    var onVisibilityChange: ((Bool) -> Void)?
     private var shownPlaylist = PlaylistState()
     private var shownTitle: String?
 
@@ -38,14 +39,14 @@ final class UpNextController: NSObject {
     /// Lay the panel over the right of `root`, from under the title bar down to just
     /// above `bar` (the transport controls), so it never covers them. Call it after
     /// the video and the controls are in `root`, so the panel is above both.
-    func install(in root: NSView, above bar: NSView) {
+    func install(in root: NSView, below strip: NSView? = nil, above bar: NSView) {
         panel.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(panel)
         // Narrower than this only in a window too small to hold it.
         let width = panel.widthAnchor.constraint(equalToConstant: 300)
         width.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            panel.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 8),
+            panel.topAnchor.constraint(equalTo: strip?.bottomAnchor ?? root.safeAreaLayoutGuide.topAnchor, constant: 8),
             panel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             panel.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: -10),
             panel.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 12),
@@ -112,7 +113,9 @@ final class UpNextController: NSObject {
     }
 
     private func setShown(_ shown: Bool) {
+        guard isShown != shown else { return }
         isShown = shown
+        onVisibilityChange?(shown)
         if !shown { panel.returnFocus() }
         panel.isHidden = !shown
         button.contentTintColor = (shown ? PaletteRole.link : PaletteRole.text).overVideo

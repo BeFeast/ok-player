@@ -40,17 +40,17 @@ final class StatusLayer {
 
     /// Put the overlay right above the video and the toast above everything, near
     /// the top of the window under the title bar.
-    func install(in root: NSView, above video: NSView) {
+    func install(in root: NSView, below strip: NSView? = nil, above video: NSView) {
         overlay.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(overlay, positioned: .above, relativeTo: video)
         toastView.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(toastView)
         NSLayoutConstraint.activate([
-            overlay.topAnchor.constraint(equalTo: root.topAnchor),
+            overlay.topAnchor.constraint(equalTo: strip?.bottomAnchor ?? root.topAnchor),
             overlay.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             overlay.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             overlay.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            toastView.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 12),
+            toastView.topAnchor.constraint(equalTo: strip?.bottomAnchor ?? root.safeAreaLayoutGuide.topAnchor, constant: 12),
             toastView.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             toastView.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 16),
         ])
