@@ -82,10 +82,12 @@ struct WelcomeView: View {
             Text("Open a file to start playing.")
                 .foregroundStyle(PaletteRole.textMuted.swiftUI)
             VStack(spacing: 4) {
-                Button("Open File…") { model.openFile() }
-                    .buttonStyle(.link)
-                    .tint(PaletteRole.link.swiftUI)
-                    .font(.system(size: 13, weight: .semibold))
+                Button { model.openFile() } label: {
+                    Text("Open File…")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(PaletteRole.link.swiftUI)
+                }
+                .buttonStyle(.plain)
                 dropHint
             }
             .frame(width: 300, height: 78)

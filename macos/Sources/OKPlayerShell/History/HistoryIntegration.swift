@@ -151,7 +151,10 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
             playerWindow.contentView?.layoutSubtreeIfNeeded()
             guard !welcomeView.bounds.isEmpty else { return "The live Welcome view has no bounds" }
             SmokeSnapshots.capture(playerWindow, in: snapshotDirectory, as: "welcome")
-            smokeCaptureFirstRun(to: snapshotDirectory)
+            let capturedFirstRun = MainActor.assumeIsolated {
+                smokeCaptureFirstRun(in: playerWindow, to: snapshotDirectory)
+            }
+            guard capturedFirstRun else { return "No live Welcome host to capture at first run" }
             let window = makeHistoryWindow(rememberFrame: false)
             page.refresh()
             window.center()
@@ -165,31 +168,18 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
         return nil
     }
 
-    /// Render the unseeded Welcome state at the player window's initial content size.
-    private func smokeCaptureFirstRun(to directory: String) {
+    /// Capture the unseeded state with the same host and constraints as the live shelf.
+    @MainActor
+    private func smokeCaptureFirstRun(in window: NSWindow, to directory: String) -> Bool {
+        guard let host = welcomeView as? NSHostingView<WelcomeView> else { return false }
         let firstRun = ContinueWatchingModel(session: HistorySessionLink(query: { _ in nil },
             dispatch: { _ in .rejected(reason: .noActiveMedia, message: "No playback session") }),
             open: { _, _ in })
-        for (name, appearanceName) in SmokeSnapshots.appearances {
-            guard let appearance = NSAppearance(named: appearanceName) else { continue }
-            appearance.performAsCurrentDrawingAppearance {
-                MainActor.assumeIsolated {
-                    let png = Self.renderWelcome(firstRun, dark: name == "dark")
-                    SmokeSnapshots.write(png, in: directory, as: "first-run-\(name)")
-                }
-            }
-        }
-    }
-
-    @MainActor
-    private static func renderWelcome(_ model: ContinueWatchingModel, dark: Bool) -> Data? {
-        let renderer = ImageRenderer(content: WelcomeView(model: model)
-            .frame(width: 960, height: 580)
-            .background(PaletteRole.canvas.swiftUI)
-            .environment(\.colorScheme, dark ? .dark : .light))
-        renderer.scale = 2
-        guard let image = renderer.cgImage else { return nil }
-        return NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+        let shelf = host.rootView
+        defer { host.rootView = shelf }
+        host.rootView = WelcomeView(model: firstRun)
+        SmokeSnapshots.capture(window, in: directory, as: "first-run")
+        return true
     }
 }
 
