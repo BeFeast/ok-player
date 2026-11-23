@@ -62,6 +62,8 @@ final class TrackControls: NSObject, NSPopoverDelegate {
     override init() {
         super.init()
         popover.behavior = .transient
+        // Track choices have the same light over-video material in either theme.
+        popover.appearance = NSAppearance(named: .aqua)
         popover.contentViewController = popoverContent
         popover.delegate = self
         popoverContent.onAction = { [weak self] action, closes in

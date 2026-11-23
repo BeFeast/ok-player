@@ -28,7 +28,11 @@ final class UpNextPanel: PalettePanel, NSTableViewDataSource, NSTableViewDelegat
     private let scrollView = NSScrollView()
 
     init() {
-        super.init(radius: 12)
+        // Like the track popovers, the over-video sheet uses the light surface
+        // in both appearances, so video-adjacent controls read consistently.
+        let surface = NSColor.fromSRGB(PaletteRole.surface.srgb.light).withAlphaComponent(0.96)
+        super.init(fill: surface, radius: 12)
+        appearance = NSAppearance(named: .aqua)
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityLabel("Up Next")

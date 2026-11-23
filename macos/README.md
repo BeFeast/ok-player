@@ -277,7 +277,7 @@ translucent OSC uses dark-appearance foreground roles in either theme:
 | Scrubber track, buffered range, progress and knob | `borderSubtle`, `border`, `accent`, `onAccent` |
 | Volume track, level up to 100 %, boost above it, 100 % mark | `borderSubtle`, `accent`, `warning`, `text` |
 | Volume level while muted | `textMuted` |
-| Up Next panel and its border | `surface`, `borderSubtle` |
+| Up Next and track popovers over video | Light `surface`, `borderSubtle`, `text`, `selected` |
 | Up Next title, item titles; item numbers, heading, NOW PLAYING | `text`; `textMuted` |
 | Now Playing card and the current item's row | `selected` |
 | Play mark of the current item; Up Next button while the panel is open | `link` |
