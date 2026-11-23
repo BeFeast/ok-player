@@ -104,7 +104,7 @@ prefix (`OKP_MPV_PREFIX`), into an empty `OKP_MACOS_OUTPUT`, with an isolated
    the XCTest target against the staged dylibs.
 5. It assembles `OK Player.app`: executable, dylibs, `Info.plist` stamped by
    `scripts/generate-macos-info-plist.py` with the version and the generated document
-   types (checked with `plutil -lint`), `Resources/AppIcon.icns`, licence, this
+   types (checked with `plutil -lint`), `Resources/OKPlayer.icns` and the Welcome tile, licence, this
    README and the runtime provenance. Every rpath that points into a build machine is
    removed.
 6. It signs every dylib, the executable and the bundle with one identity, records the
@@ -129,11 +129,16 @@ The Swift package (`Package.swift`, no Xcode project) has three targets:
   then the CI run number (0 locally), so a newer build always has the higher value.
   The build needs the full history and tags; a shallow clone fails instead of
   stamping a wrong version.
-- **Icon.** `Resources/AppIcon.icns` is generated from the Linux app icon SVGs in
-  `rust/packaging/linux/` by `scripts/generate-macos-icon.py`, on Apple's icon grid
-  (an 824-unit body on a 1024-unit canvas), with the size-tuned hicolor SVGs at 64 px
-  and below. It is checked in, because rasterising needs librsvg; rerun the script
-  after the icon source changes.
+- **Icon.** `Resources/OKPlayer.icns` and the Welcome tile use
+  `brand/ok-player-mark.svg`, the blue frame-ticks and play artwork from the GTK
+  About pane. The bundle icon puts the pale tile on Apple's icon grid with an
+  824-unit body on a 1024-unit canvas. To regenerate both assets with librsvg,
+  run from the repository root:
+
+  ```sh
+  python3 scripts/generate-macos-icon.py macos/Resources/OKPlayer.icns macos/Resources/WelcomeIcon.png
+  ```
+
 - `NSLocalNetworkUsageDescription` explains the local network prompt.
 - **Document types.** `CFBundleDocumentTypes` (a Video and an Audio viewer at rank
   Default, then a Folder viewer for `public.folder` and a Playlist viewer for
@@ -348,7 +353,7 @@ creates another GL context. Nothing draws on the main thread.
 ## Transport controls
 
 The transport controls (`Sources/OKPlayerShell/OSC/`) float at the bottom of the
-video on a `popover` visual-effect material: the scrubber, previous and next item,
+video on a dark translucent surface from the brand palette in both appearances: the scrubber, previous and next item,
 play/pause, the time readout, the speed menu, mute, the volume slider and the
 fullscreen button. Every string, fraction and rule they show comes from the
 session's `transport` query (`docs/session-abi.md`, "Transport controls"), which
@@ -629,8 +634,8 @@ counters:
 - while idle, the Welcome view shows the Continue watching shelf of the smoke's own
   seeded history (a new temporary directory, never the user's history, removed at
   exit): the fixture, finished so it plays from the start, then a stream left
-  halfway. It writes `welcome-light.png` and `welcome-dark.png`, and the Welcome view
-  is gone once the fixture plays. The card itself is not activated: the fixture opens
+  halfway. It captures the first-run, Continue watching and History views in light
+  and dark, and the Welcome view is gone once the fixture plays. The card itself is not activated: the fixture opens
   through the open router (next item), and a card's open is covered by XCTest;
 - the fixture, opened through `application(_:open:)` as Finder opens a file, reached
   the session through the open router as the playlist open of the fixture, which the
@@ -659,7 +664,7 @@ counters:
   timeout once playback resumes without pointer activity, take the title bar's
   traffic lights with them, hand the scrubber's keyboard focus back to the video
   as they hide, and come back on activity with the session's time readout, so
-  both window snapshots show them;
+  both playing snapshots show them;
 - while playing, the menu bar has its nine menus with AppKit's window list and help
   menu, Play/Pause from the registry validates enabled through the responder chain, and
   a held Space's auto-repeat sent to the window toggles nothing, with the scrubber
@@ -690,7 +695,8 @@ volume and track count from the session snapshot, the time readout the controls
 showed, and the fitted size, the video view's size after the fit and after the
 resize, the aspect and the title strip height; a second `OKP_SMOKE` line reports the
 status steps and the toast's text. The failure card is captured as
-`snapshots/status-light.png` and `status-dark.png`. The complete app is copied
+`snapshots/status-light.png` and `status-dark.png`. The smoke also captures the Dock and Finder icons at 512px using AppKit as
+`snapshots/dock-icon-512.png` and `snapshots/finder-icon-512.png`. The complete app is copied
 to a new directory and launched with `DYLD_LIBRARY_PATH` unset. A separate 40-second
 process deadline prevents a blocked render callback from keeping the job alive.
 

@@ -79,7 +79,8 @@ python3 "$root/scripts/generate-macos-info-plist.py" "$package/Info.plist" "$app
   --repo "$root" --build-number "${OKP_MACOS_BUILD_NUMBER:-0}" \
   --document-types "$work/document-types.plist" | tee "$output/version.txt"
 plutil -lint "$app/Contents/Info.plist" | tee -a "$output/tests.log"
-cp "$package/Resources/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
+icon_file="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIconFile' "$app/Contents/Info.plist")"
+cp "$package/Resources/$icon_file" "$package/Resources/WelcomeIcon.png" "$app/Contents/Resources/"
 cp "$root/LICENSE" "$app/Contents/Resources/"
 cp "$package/README.md" "$app/Contents/Resources/README.md"
 cp "$OKP_MPV_PREFIX/provenance.json" "$app/Contents/Resources/runtime-provenance.json"

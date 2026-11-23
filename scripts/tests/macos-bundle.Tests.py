@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PLIST_SCRIPT = ROOT / "scripts" / "generate-macos-info-plist.py"
 ICON_SCRIPT = ROOT / "scripts" / "generate-macos-icon.py"
 TEMPLATE = ROOT / "macos" / "Info.plist"
-ICON = ROOT / "macos" / "Resources" / "AppIcon.icns"
+ICON = ROOT / "macos" / "Resources" / "OKPlayer.icns"
 
 spec = importlib.util.spec_from_file_location("generate_macos_icon", ICON_SCRIPT)
 icon = importlib.util.module_from_spec(spec)
@@ -149,7 +149,7 @@ class InfoPlistTests(unittest.TestCase):
         self.assertEqual(code, 0, stderr)
         self.assertEqual(info["CFBundleIdentifier"], "uk.oklabs.ok-player")
         self.assertEqual(info["CFBundleExecutable"], "ok-player")
-        self.assertEqual(info["CFBundleIconFile"], "AppIcon")
+        self.assertEqual(info["CFBundleIconFile"], ICON.name)
         self.assertEqual(info["LSMinimumSystemVersion"], "14.0")
         self.assertTrue(info["NSLocalNetworkUsageDescription"].strip())
         self.assertEqual((info["CFBundleShortVersionString"], info["CFBundleVersion"]), ("2.0.0", "1.3"))
@@ -215,13 +215,16 @@ class IconTests(unittest.TestCase):
         self.assert_iconset(ICON.read_bytes())
 
     @unittest.skipUnless(shutil.which("rsvg-convert"), "rsvg-convert (librsvg) is not installed")
-    def test_generator_renders_every_size_from_the_linux_icon_sources(self):
+    def test_generator_renders_every_size_from_the_about_mark(self):
         with tempfile.TemporaryDirectory() as scratch:
-            output = Path(scratch, "AppIcon.icns")
-            result = subprocess.run([sys.executable, str(ICON_SCRIPT), str(output)],
+            output = Path(scratch, ICON.name)
+            welcome = Path(scratch, "WelcomeIcon.png")
+            result = subprocess.run([sys.executable, str(ICON_SCRIPT), str(output), str(welcome)],
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assert_iconset(output.read_bytes())
+            self.assertEqual(icon.png_size(welcome.read_bytes()), (96, 96))
+            self.assertEqual(icon.png_size(ICON.with_name(welcome.name).read_bytes()), (96, 96))
 
 
 if __name__ == "__main__":

@@ -156,13 +156,15 @@ final class TrackControlsTests: XCTestCase {
         XCTAssertFalse(controls.audioButton.isEnabled || controls.subtitleButton.isEnabled)
     }
 
-    func testTheButtonsSitAtTheFrontOfTheTransportControlsTrailingGroup() {
+    func testTheTrackButtonsSitBetweenSpeedAndFullscreen() {
         let osc = TransportOverlay(hideTimer: ManualHideTimer())
         let root = NSView()
         controls.install(in: osc, over: root)
-        XCTAssertTrue(osc.trailingControls.arrangedSubviews.first === controls.audioButton)
-        XCTAssertTrue(osc.trailingControls.arrangedSubviews.dropFirst().first === controls.subtitleButton)
-        XCTAssertTrue(osc.trailingControls.arrangedSubviews.contains(osc.fullscreenButton))
+        let trailing = osc.trailingControls.arrangedSubviews
+        XCTAssertTrue(trailing.first === osc.trailingLabel)
+        XCTAssertEqual(trailing.suffix(4).map(ObjectIdentifier.init),
+                       [osc.speedLabel, controls.audioButton, controls.subtitleButton, osc.fullscreenButton]
+                           .map(ObjectIdentifier.init))
         XCTAssertTrue(controls.readout.superview === root)
         XCTAssertNil(controls.readout.hitTest(NSPoint(x: 1, y: 1)), "the readout takes no clicks")
     }

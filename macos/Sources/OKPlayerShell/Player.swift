@@ -1,91 +1,5 @@
 import AppKit
 
-extension PaletteRole {
-    /// The role as a colour resolved against the appearance it is drawn in, so the
-    /// chrome follows the system light/dark switch. `PaletteRole` and its values
-    /// are generated from brand/palette.json at build time.
-    var color: NSColor {
-        let value = srgb
-        return NSColor(name: nil) { appearance in
-            let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            return NSColor.fromSRGB(dark ? value.dark : value.light)
-        }
-    }
-}
-
-extension NSColor {
-    static func fromSRGB(_ value: UInt32) -> NSColor {
-        NSColor(srgbRed: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255,
-                blue: CGFloat(value & 0xFF) / 255, alpha: 1)
-    }
-}
-
-/// Paints its bounds with one palette role.
-final class PaletteSurface: NSView {
-    let fill: PaletteRole
-
-    init(fill: PaletteRole) {
-        self.fill = fill
-        super.init(frame: .zero)
-    }
-    required init?(coder: NSCoder) { fatalError("Use init(fill:)") }
-    override func draw(_ dirtyRect: NSRect) {
-        fill.color.setFill()
-        bounds.fill()
-    }
-}
-
-/// A push button filled with the palette accent and labelled in onAccent. It draws
-/// its own focus ring in the palette focus colour instead of the system ring.
-final class AccentButton: NSButton {
-    init(label: String, target: AnyObject?, action: Selector?) {
-        super.init(frame: .zero)
-        title = label
-        self.target = target
-        self.action = action
-        isBordered = false
-        focusRingType = .none
-        setButtonType(.momentaryPushIn)
-    }
-    required init?(coder: NSCoder) { fatalError("Use init(label:target:action:)") }
-    override var title: String { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
-    private var labelAttributes: [NSAttributedString.Key: Any] {
-        [.font: font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize), .foregroundColor: PaletteRole.onAccent.color]
-    }
-    override var intrinsicContentSize: NSSize {
-        let label = (title as NSString).size(withAttributes: labelAttributes)
-        return NSSize(width: ceil(label.width) + 32, height: 28)
-    }
-    override func draw(_ dirtyRect: NSRect) {
-        let body = NSBezierPath(roundedRect: bounds.insetBy(dx: 3, dy: 3), xRadius: 6, yRadius: 6)
-        PaletteRole.accent.color.setFill()
-        body.fill()
-        if isHighlighted {
-            NSColor.black.withAlphaComponent(0.18).setFill()
-            body.fill()
-        }
-        let label = title as NSString
-        let size = label.size(withAttributes: labelAttributes)
-        label.draw(at: NSPoint(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2), withAttributes: labelAttributes)
-        if window?.isKeyWindow == true, window?.firstResponder === self {
-            let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 8, yRadius: 8)
-            ring.lineWidth = 2
-            PaletteRole.focus.color.setStroke()
-            ring.stroke()
-        }
-    }
-    override func becomeFirstResponder() -> Bool {
-        let accepted = super.becomeFirstResponder()
-        needsDisplay = true
-        return accepted
-    }
-    override func resignFirstResponder() -> Bool {
-        let resigned = super.resignFirstResponder()
-        needsDisplay = true
-        return resigned
-    }
-}
-
 extension SessionConfig {
     /// The app's own session: per-user directories named after the bundle id, as
     /// the core's `AppIdentity::macos` does, the session's engine defaults, and the
@@ -179,9 +93,9 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         ])
         history.install(in: root, above: osc.panel)
         behaviour.install(in: root, videoArea: videoArea)
-        osc.addTrailingControl(upNext.button)
         upNext.install(in: root, above: osc.panel)
         tracks.install(in: osc, over: root)
+        osc.addTrailingControl(upNext.button)
         tracks.window = window
         // The status layer's toast goes on top of everything installed so far.
         statusLayer.install(in: root, above: videoArea)
@@ -339,28 +253,6 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         fputs("OK Player: \(message)\n", stderr)
         if smoke { shutdown(); exit(1) }
     }
-    /// Smoke evidence: renders the window content in the light and the dark appearance
-    /// to PNG files. Only this window's appearance is overridden, never the system's.
-    /// The OpenGL video layer is not part of an AppKit cache, so it stays empty.
-    func captureAppearances(to directory: String, prefix: String = "window") {
-        guard let view = window.contentView else { return }
-        for (name, appearanceName) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
-            guard let appearance = NSAppearance(named: appearanceName) else { continue }
-            window.appearance = appearance
-            view.layoutSubtreeIfNeeded()
-            guard let image = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
-            appearance.performAsCurrentDrawingAppearance { view.cacheDisplay(in: view.bounds, to: image) }
-            let file = URL(fileURLWithPath: directory).appendingPathComponent("\(prefix)-\(name).png")
-            do {
-                guard let png = image.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
-                try png.write(to: file)
-                print("OKP_SNAPSHOT \(name)=\(file.lastPathComponent)")
-            } catch {
-                fputs("OK Player: could not write \(file.lastPathComponent): \(error)\n", stderr)
-            }
-        }
-        window.appearance = nil
-    }
     /// Close, then destroy the render context, then free the session.
     func shutdown() {
         guard !shuttingDown else { return }; shuttingDown = true
@@ -497,8 +389,14 @@ final class SmokeRun {
         // Idle: the render context exists, nothing is loaded, nothing may be drawn.
         after(0.6) { [self] in
             guard renders == 0 else { fail("\(renders) render calls while idle"); return }
+            if let app, let directory = app.snapshotDirectory {
+                guard SmokeSnapshots.captureIcons(in: directory) else {
+                    fail("The relocated bundle did not provide its app icon and Welcome tile"); return
+                }
+            }
             // The Welcome view lists the seeded history while nothing plays.
-            if let problem = app?.history.smokeWelcomeFailure(fixture: fixture, snapshotDirectory: app?.snapshotDirectory) {
+            if let problem = app?.history.smokeWelcomeFailure(fixture: fixture, snapshotDirectory: app?.snapshotDirectory,
+                                                              playerWindow: app?.window) {
                 fail(problem); return
             }
             // A file in a folder that does not exist, so no folder listing follows.
@@ -542,7 +440,7 @@ final class SmokeRun {
     /// shows the loading indicator with its name.
     private func playFixture() {
         guard let app, let opened else { return }
-        if let directory = app.snapshotDirectory { app.captureAppearances(to: directory, prefix: "status") }
+        if let directory = app.snapshotDirectory { SmokeSnapshots.capture(app.window, in: directory, as: "status") }
         phase = .playing
         // Opened the way Finder's Open With opens a file.
         app.application(NSApplication.shared, open: [URL(fileURLWithPath: opened)])
@@ -568,7 +466,7 @@ final class SmokeRun {
         }
         phase = .finished
         print("OKP_SMOKE \(statusSummary) toast=\(text.replacingOccurrences(of: " ", with: "_"))")
-        if let directory = app.snapshotDirectory { app.captureAppearances(to: directory) }
+        if let directory = app.snapshotDirectory { SmokeSnapshots.capture(app.window, in: directory, as: "window") }
         // Closing the window during playback runs the real teardown path; the app
         // reports it once teardown has returned.
         app.window.close()
@@ -736,6 +634,9 @@ final class SmokeRun {
             guard presses >= 2 else {
                 self.fail("\(presses) of the F and Escape presses reached the transport controls"); return
             }
+            if let directory = app.snapshotDirectory {
+                SmokeSnapshots.capture(app.window, in: directory, as: "playing")
+            }
             // Up Next, opened through the menu bar's registry command, lists the
             // folder's two copies.
             guard app.commands.run(UpNextController.commandID) == .performed, app.upNext.isShown else {
@@ -786,6 +687,7 @@ public enum PlayerLauncher {
         if let status = DocumentTypeCheck.runIfRequested(CommandLine.arguments) { exit(status) }
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
+        if let icon = BrandIcon.application { application.applicationIconImage = icon }
         let delegate = PlayerApp()
         application.delegate = delegate
         withExtendedLifetime(delegate) { application.run() }

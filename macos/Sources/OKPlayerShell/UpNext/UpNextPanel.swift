@@ -5,7 +5,7 @@ import AppKit
 /// it (a playlist `jump`); Delete or the row's menu removes it (`remove`). Every
 /// row comes from `UpNextList`, and every edit is a session command (`dispatch`):
 /// the panel keeps no playlist of its own.
-final class UpNextPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
+final class UpNextPanel: PalettePanel, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
     /// Sends a playlist command to the session.
     var dispatch: ((Command) -> Void)?
     /// The close button was pressed.
@@ -28,7 +28,7 @@ final class UpNextPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
     private let scrollView = NSScrollView()
 
     init() {
-        super.init(frame: .zero)
+        super.init(radius: 12)
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityLabel("Up Next")
@@ -69,15 +69,6 @@ final class UpNextPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
             item.tag = row
         }
         return [play, remove]
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let body = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 12, yRadius: 12)
-        PaletteRole.surface.color.setFill()
-        body.fill()
-        PaletteRole.borderSubtle.color.setStroke()
-        body.lineWidth = 1
-        body.stroke()
     }
 
     // MARK: Rows
@@ -132,7 +123,7 @@ final class UpNextPanel: NSView, NSTableViewDataSource, NSTableViewDelegate, NSM
 
         nowPlayingIcon.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: "Now playing")?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
-        nowPlayingIcon.contentTintColor = PaletteRole.accent.color
+        nowPlayingIcon.contentTintColor = PaletteRole.link.color
         nowPlayingIcon.isHidden = true
         nowPlayingTitle.font = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
         nowPlayingTitle.textColor = PaletteRole.text.color
@@ -262,7 +253,7 @@ final class UpNextCellView: NSTableCellView {
         lane.alignment = .center
         playing.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: "Playing")?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
-        playing.contentTintColor = PaletteRole.accent.color
+        playing.contentTintColor = PaletteRole.link.color
         title.textColor = PaletteRole.text.color
         title.lineBreakMode = .byTruncatingMiddle
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -294,9 +285,17 @@ final class UpNextCellView: NSTableCellView {
     }
 }
 
-/// A row's background: the current item sits on the selected fill.
+/// The playing item and the keyboard selection use separate palette treatments.
 final class UpNextRowView: NSTableRowView {
     var isCurrent = false { didSet { if isCurrent != oldValue { needsDisplay = true } } }
+
+    override func drawSelection(in dirtyRect: NSRect) {
+        let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 4.5, dy: 0.5), xRadius: 6, yRadius: 6)
+        PaletteRole.selected.color.setFill()
+        shape.fill()
+        PaletteRole.focus.color.setStroke()
+        shape.stroke()
+    }
 
     override func drawBackground(in dirtyRect: NSRect) {
         guard isCurrent else { return }

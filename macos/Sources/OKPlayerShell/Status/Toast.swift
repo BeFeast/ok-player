@@ -48,17 +48,11 @@ final class Toast {
 /// Draws the toast: a rounded pill near the top of the video, under the title bar,
 /// so it stays clear of captions at the bottom. It never takes clicks.
 final class ToastView: NSView {
-    let pill = NSVisualEffectView()
+    let pill = PalettePanel(fill: .surfaceRaised, radius: 10)
     let label = NSTextField(labelWithString: "")
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        pill.material = .popover
-        pill.blendingMode = .withinWindow
-        pill.state = .active
-        pill.wantsLayer = true
-        pill.layer?.cornerRadius = 10
-        pill.layer?.masksToBounds = true
         pill.translatesAutoresizingMaskIntoConstraints = false
         addSubview(pill)
         label.font = NSFont.systemFont(ofSize: 13, weight: .medium)

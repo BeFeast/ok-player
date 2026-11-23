@@ -11,10 +11,10 @@ final class StatusOverlay: NSView {
     /// Takes keyboard focus back from the card: the video view.
     weak var focusReturn: NSView?
 
-    let progressPanel = NSVisualEffectView()
+    let progressPanel = PalettePanel(radius: 12)
     let spinner = NSProgressIndicator()
     let progressLabel = NSTextField(labelWithString: "")
-    let cardPanel = NSVisualEffectView()
+    let cardPanel = PalettePanel(radius: 14)
     let iconView = NSImageView()
     let titleLabel = NSTextField(labelWithString: "")
     let messageLabel = NSTextField(wrappingLabelWithString: "")
@@ -98,18 +98,8 @@ final class StatusOverlay: NSView {
 
     // MARK: Layout
 
-    private static func panel(_ view: NSVisualEffectView, radius: CGFloat) {
-        view.material = .popover
-        view.blendingMode = .withinWindow
-        view.state = .active
-        view.wantsLayer = true
-        view.layer?.cornerRadius = radius
-        view.layer?.masksToBounds = true
-        view.translatesAutoresizingMaskIntoConstraints = false
-    }
-
     private func buildProgress() {
-        Self.panel(progressPanel, radius: 12)
+        progressPanel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(progressPanel)
         spinner.style = .spinning
         spinner.controlSize = .small
@@ -137,7 +127,7 @@ final class StatusOverlay: NSView {
     }
 
     private func buildCard() {
-        Self.panel(cardPanel, radius: 14)
+        cardPanel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(cardPanel)
         iconView.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "Error")?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 26, weight: .regular))

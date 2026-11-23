@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 124 96">
+  <!-- The About frame ticks and play mark as rendered by GTK in its light theme.
+       Geometry: draw_about_illustration. Colour: palette.json light.accent and its
+       62% shade, as used by the GTK About pane. -->
+  <defs>
+    <linearGradient id="play" gradientUnits="userSpaceOnUse" x1="64" y1="22" x2="108" y2="74">
+      <stop offset="0" stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#173D92"/>
+    </linearGradient>
+  </defs>
+  <g fill="#2563EB">
+    <rect x="14" y="43.5" width="5.5" height="9" rx="2.75" opacity=".10"/>
+    <rect x="22" y="41" width="5.5" height="14" rx="2.75" opacity=".18"/>
+    <rect x="31" y="38" width="5.5" height="20" rx="2.75" opacity=".30"/>
+    <rect x="40.5" y="34" width="5.5" height="28" rx="2.75" opacity=".44"/>
+    <rect x="51" y="30" width="5.5" height="36" rx="2.75" opacity=".62"/>
+  </g>
+  <path d="M64 28 L108 54 L64 80 Z" fill="none" stroke="#2563EB" stroke-opacity=".09"
+        stroke-width="12" stroke-linejoin="round"/>
+  <path d="M64 22 L108 48 L64 74 Z" fill="url(#play)" stroke="url(#play)"
+        stroke-width="6" stroke-linejoin="round"/>
+</svg>

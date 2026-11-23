@@ -81,12 +81,12 @@ final class TrackControls: NSObject, NSPopoverDelegate {
         }
     }
 
-    /// Put the two buttons at the front of the transport controls' trailing group,
+    /// Put the two track buttons next to the other trailing transport controls,
     /// and the readout over the top of `root`.
     func install(in osc: TransportOverlay, over root: NSView) {
         self.osc = osc
-        osc.trailingControls.insertArrangedSubview(subtitleButton, at: 0)
-        osc.trailingControls.insertArrangedSubview(audioButton, at: 0)
+        osc.addTrailingControl(audioButton)
+        osc.addTrailingControl(subtitleButton)
         readout.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(readout)
         NSLayoutConstraint.activate([
@@ -380,7 +380,7 @@ final class TrackPopoverController: NSViewController {
         boxes = [:]
         let title = NSTextField(labelWithString: kind == .audio ? "Audio" : "Subtitles")
         title.font = .boldSystemFont(ofSize: NSFont.smallSystemFontSize)
-        title.textColor = .secondaryLabelColor
+        title.textColor = PaletteRole.text.color
         stack.addArrangedSubview(title)
         for item in TrackMenus.items(kind, tracks) { stack.addArrangedSubview(control(for: item)) }
         guard kind == .subtitle else { return }
@@ -394,7 +394,7 @@ final class TrackPopoverController: NSViewController {
             return separator()
         case .placeholder:
             let label = NSTextField(labelWithString: item.title)
-            label.textColor = .secondaryLabelColor
+            label.textColor = PaletteRole.textMuted.color
             return label
         case .choice:
             let button = NSButton(radioButtonWithTitle: item.title, target: self, action: #selector(choose(_:)))
@@ -414,6 +414,8 @@ final class TrackPopoverController: NSViewController {
     private func row(for adjustment: SubtitleAdjustment) -> NSView {
         let title = NSTextField(labelWithString: adjustment.title)
         let value = NSTextField(labelWithString: adjustment.value)
+        title.textColor = PaletteRole.textMuted.color
+        value.textColor = PaletteRole.text.color
         value.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         value.alignment = .right
         value.widthAnchor.constraint(greaterThanOrEqualToConstant: 64).isActive = true
@@ -430,6 +432,7 @@ final class TrackPopoverController: NSViewController {
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: help) ?? NSImage()
         let button = NSButton(image: image, target: self, action: #selector(adjust(_:)))
         button.bezelStyle = .inline
+        button.contentTintColor = PaletteRole.text.color
         button.toolTip = help
         button.isEnabled = enabled
         attach(action, to: button)
@@ -437,8 +440,8 @@ final class TrackPopoverController: NSViewController {
     }
 
     private func separator() -> NSView {
-        let line = NSBox()
-        line.boxType = .separator
+        let line = PaletteSurface(fill: .borderSubtle)
+        line.heightAnchor.constraint(equalToConstant: 1).isActive = true
         line.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
         return line
     }
@@ -475,6 +478,16 @@ final class TrackPopoverView: NSStackView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    override func draw(_ dirtyRect: NSRect) {
+        PaletteRole.surface.color.setFill()
+        dirtyRect.fill()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
     override func keyDown(with event: NSEvent) {
         if onKey?(event) != true { super.keyDown(with: event) }
     }
@@ -482,18 +495,13 @@ final class TrackPopoverView: NSStackView {
 
 /// The on-screen readout of the delay and size keys: the session's value for a
 /// moment over the top of the video. It takes no clicks.
-final class TrackReadoutView: NSVisualEffectView {
+final class TrackReadoutView: PalettePanel {
     private let label = NSTextField(labelWithString: "")
     private var hideWork: DispatchWorkItem?
 
     init() {
-        super.init(frame: .zero)
-        material = .hudWindow
-        blendingMode = .withinWindow
-        state = .active
-        wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.masksToBounds = true
+        super.init(fill: .surfaceRaised, radius: 8)
+        label.textColor = PaletteRole.text.color
         label.font = .monospacedDigitSystemFont(ofSize: 15, weight: .semibold)
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)

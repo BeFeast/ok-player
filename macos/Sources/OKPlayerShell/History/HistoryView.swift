@@ -21,12 +21,13 @@ struct HistoryView: View {
             if let notice = model.notice {
                 banner(notice, symbol: "exclamationmark.circle", role: .danger)
             }
-            Divider()
+            Rectangle().fill(PaletteRole.borderSubtle.swiftUI).frame(height: 1)
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 460, idealWidth: 640, maxWidth: .infinity, minHeight: 360, idealHeight: 560, maxHeight: .infinity)
         .background(PaletteRole.canvas.swiftUI)
+        .tint(PaletteRole.accent.swiftUI)
     }
 
     private var header: some View {
@@ -48,8 +49,17 @@ struct HistoryView: View {
                     .toggleStyle(.switch)
                     .help("While on, nothing new is recorded and nothing remembered is applied")
             }
-            TextField("Search history", text: Binding(get: { model.search }, set: { model.setSearch($0) }))
-                .textFieldStyle(.roundedBorder)
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(PaletteRole.textMuted.swiftUI)
+                    .accessibilityHidden(true)
+                TextField("Search history", text: Binding(get: { model.search }, set: { model.setSearch($0) }))
+                    .textFieldStyle(.plain)
+                    .foregroundStyle(PaletteRole.text.swiftUI)
+            }
+            .padding(8)
+            .background(PaletteRole.surface.swiftUI, in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(PaletteRole.border.swiftUI))
         }
         .padding(16)
     }
@@ -95,6 +105,7 @@ struct HistoryView: View {
                 Section(section.header) {
                     ForEach(section.entries) { entry in
                         HistoryRow(entry: entry, model: model)
+                            .listRowBackground(PaletteRole.surface.swiftUI)
                     }
                 }
             }
@@ -107,6 +118,7 @@ struct HistoryView: View {
             }
         }
         .listStyle(.inset)
+        .scrollContentBackground(.hidden)
     }
 }
 
@@ -151,6 +163,17 @@ struct HistoryRow: View {
         HStack(spacing: 10) {
             Button { model.open(entry, .resume) } label: {
                 HStack(spacing: 12) {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(PaletteRole.surfaceRaised.swiftUI)
+                        .overlay(Image(systemName: "play.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(PaletteRole.textMuted.swiftUI))
+                        .overlay(alignment: .bottom) {
+                            if entry.state == .progress { WatchedBar(fraction: entry.progress) }
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .frame(width: 64, height: 36)
+                        .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(entry.title)
                             .foregroundStyle(PaletteRole.text.swiftUI)
@@ -161,10 +184,6 @@ struct HistoryRow: View {
                             .foregroundStyle(PaletteRole.textMuted.swiftUI)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        if entry.state == .progress {
-                            WatchedBar(fraction: entry.progress)
-                                .frame(maxWidth: 180)
-                        }
                     }
                     Spacer(minLength: 8)
                     VStack(alignment: .trailing, spacing: 3) {

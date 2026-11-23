@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
-"""Generate the macOS app icon (.icns) from the app icon SVGs the Linux packages ship.
+"""Generate the macOS app icon and Welcome tile from the OK Player About mark.
 
-Usage: generate-macos-icon.py OUTPUT_ICNS
+Usage: generate-macos-icon.py OUTPUT_ICNS [WELCOME_PNG]
 
-The tile goes on Apple's macOS icon grid: an 824-unit body centred on a 1024-unit
-canvas, so the icon sits at the same visual size as other apps in the Dock and
-Finder. Canvases of 64 pixels and below take the size-tuned SVGs of the hicolor
-theme (branding.rs gives them a heavier mark, and only the play triangle at 16 px);
-larger canvases take the master SVG.
+The Dock and Finder icon uses an 824-unit squircle on a 1024-unit transparent
+canvas. The Welcome tile uses the same artwork without the inset, at 2x.
 
-Rasterising needs rsvg-convert (librsvg). The .icns is checked in at
-macos/Resources/AppIcon.icns, so the macOS build does not need librsvg: rerun this
-script after the icon source changes.
+Rasterising needs rsvg-convert (librsvg). The generated assets are checked in so the
+macOS build does not need librsvg. Regenerate them when the mark or palette changes.
 """
+import json
 import pathlib
 import shutil
 import struct
@@ -22,14 +19,11 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-LINUX_ICONS = ROOT / "rust" / "packaging" / "linux"
-MASTER_SVG = LINUX_ICONS / "com.befeast.okplayer.svg"
-SIZE_TUNED_SVG = {
-    size: LINUX_ICONS / "icons" / "hicolor" / f"{size}x{size}" / "apps" / "com.befeast.okplayer.svg"
-    for size in (16, 32, 64)
-}
+BRAND = ROOT / "brand"
+MARK = BRAND / "ok-player-mark.svg"
 SVG_NS = "http://www.w3.org/2000/svg"
 CANVAS, BODY = 1024, 824
+TILE = "M33 0H95C119 0 128 9 128 33V95C128 119 119 128 95 128H33C9 128 0 119 0 95V33C0 9 9 0 33 0Z"
 
 # (ICNS element type, pixel size): the ten images of a standard macOS iconset,
 # 16/32/128/256/512 points at 1x and 2x.
@@ -77,21 +71,28 @@ def png_size(data):
     return struct.unpack(">II", data[16:24])
 
 
-def on_macos_grid(source_svg, pixels):
-    """SVG text that draws `source_svg` as the body of a macOS icon of `pixels` px."""
+def icon_svg(pixels, *, dock):
+    """Compose the original mark on a pale squircle, with padding for the Dock."""
     ET.register_namespace("", SVG_NS)
-    source = ET.parse(source_svg).getroot()
-    view_box = source.get("viewBox")
-    if not view_box:
-        raise ValueError(f"{source_svg} has no viewBox")
-    canvas = ET.Element(f"{{{SVG_NS}}}svg", {
+    tag = f"{{{SVG_NS}}}"
+    light = json.loads((BRAND / "palette.json").read_text(encoding="utf-8"))["light"]
+    canvas = ET.Element(f"{tag}svg", {
         "width": str(pixels), "height": str(pixels), "viewBox": f"0 0 {CANVAS} {CANVAS}",
     })
-    inset = str((CANVAS - BODY) // 2)
-    body = ET.SubElement(canvas, f"{{{SVG_NS}}}svg", {
-        "x": inset, "y": inset, "width": str(BODY), "height": str(BODY), "viewBox": view_box,
+    size = BODY if dock else CANVAS
+    inset = str((CANVAS - size) // 2)
+    tile = ET.SubElement(canvas, f"{tag}svg", {
+        "x": inset, "y": inset, "width": str(size), "height": str(size), "viewBox": "0 0 128 128",
     })
-    body.extend(list(source))
+    ET.SubElement(tile, f"{tag}path", {"d": TILE, "fill": light["canvas"]})
+    # A subtle edge keeps the tile distinct against a light wallpaper.
+    ET.SubElement(tile, f"{tag}path", {
+        "d": TILE, "fill": "none", "stroke": light["borderSubtle"], "stroke-width": "2",
+        "transform": "translate(1 1) scale(0.984375)",
+    })
+    mark = ET.parse(MARK).getroot()
+    mark.attrib.update({"x": "8", "y": "20", "width": "112", "height": "88"})
+    tile.append(mark)
     return ET.tostring(canvas, encoding="unicode")
 
 
@@ -105,7 +106,7 @@ def rasterise(svg_text, pixels, scratch):
 
 
 def main(argv):
-    if len(argv) != 2:
+    if len(argv) not in (2, 3):
         print(__doc__.strip().splitlines()[2], file=sys.stderr)
         return 2
     if not shutil.which("rsvg-convert"):
@@ -115,8 +116,9 @@ def main(argv):
         images = {}
         for _, pixels in ICNS_ELEMENTS:
             if pixels not in images:
-                svg = SIZE_TUNED_SVG.get(pixels, MASTER_SVG)
-                images[pixels] = rasterise(on_macos_grid(svg, pixels), pixels, scratch)
+                images[pixels] = rasterise(icon_svg(pixels, dock=True), pixels, scratch)
+        if len(argv) == 3:
+            pathlib.Path(argv[2]).write_bytes(rasterise(icon_svg(96, dock=False), 96, scratch))
         data = pack_icns([(kind, images[pixels]) for kind, pixels in ICNS_ELEMENTS])
     pathlib.Path(argv[1]).write_bytes(data)
     return 0

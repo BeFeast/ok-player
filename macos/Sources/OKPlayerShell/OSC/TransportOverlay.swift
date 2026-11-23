@@ -31,7 +31,7 @@ final class TransportOverlay: NSView {
     weak var focusReturn: NSView?
 
     let autoHide: AutoHide
-    let panel = NSVisualEffectView()
+    let panel = PalettePanel(radius: 18, opacity: 0.88)
     let scrubber = ScrubberView()
     let elapsedLabel = NSTextField(labelWithString: "00:00")
     let trailingLabel = NSTextField(labelWithString: "-00:00")
@@ -44,7 +44,7 @@ final class TransportOverlay: NSView {
     let muteButton = TransportOverlay.iconButton("speaker.wave.2.fill", "Mute")
     let volumeSlider = VolumeSliderView()
     let fullscreenButton = TransportOverlay.iconButton("arrow.up.left.and.arrow.down.right", "Enter Full Screen")
-    /// The controls right of the time readout: speed, mute, volume and fullscreen;
+    /// The trailing time readout, volume, speed, and fullscreen;
     /// other surfaces put their buttons here (Tracks/, `addTrailingControl`).
     let trailingControls = NSStackView()
 
@@ -60,6 +60,11 @@ final class TransportOverlay: NSView {
     private var panelArea: NSTrackingArea?
     private var scrollMonitor: Any?
     private var windowObservers: [NSObjectProtocol] = []
+    private var inlineTimeline: [NSLayoutConstraint] = []
+    private var stackedTimeline: [NSLayoutConstraint] = []
+
+    // At narrow playback sizes, the timeline keeps its own row so it stays usable.
+    private static let inlineTimelineWidth: CGFloat = 620
 
     init(hideTimer: HideTimer = MainQueueHideTimer()) {
         autoHide = AutoHide(timer: hideTimer)
@@ -310,13 +315,17 @@ final class TransportOverlay: NSView {
 
     // MARK: Layout
 
+    override func setFrameSize(_ newSize: NSSize) {
+        let wasInline = frame.width >= Self.inlineTimelineWidth
+        super.setFrameSize(newSize)
+        let isInline = newSize.width >= Self.inlineTimelineWidth
+        guard wasInline != isInline else { return }
+        NSLayoutConstraint.deactivate(isInline ? stackedTimeline : inlineTimeline)
+        NSLayoutConstraint.activate(isInline ? inlineTimeline : stackedTimeline)
+    }
+
     private func buildPanel() {
-        panel.material = .popover
-        panel.blendingMode = .withinWindow
-        panel.state = .active
-        panel.wantsLayer = true
-        panel.layer?.cornerRadius = 12
-        panel.layer?.masksToBounds = true
+        panel.appearance = NSAppearance(named: .darkAqua)
         panel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(panel)
 
@@ -324,9 +333,9 @@ final class TransportOverlay: NSView {
             label.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
             label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         }
-        elapsedLabel.textColor = PaletteRole.text.color
-        speedLabel.textColor = PaletteRole.text.color
-        trailingLabel.textColor = PaletteRole.textMuted.color
+        elapsedLabel.textColor = PaletteRole.text.overVideo
+        speedLabel.textColor = PaletteRole.text.overVideo
+        trailingLabel.textColor = PaletteRole.textMuted.overVideo
         trailingLabel.toolTip = trailing.toolTip
         trailingLabel.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(toggleTrailing)))
 
@@ -346,10 +355,10 @@ final class TransportOverlay: NSView {
         scrubber.onScrub = { [weak self] phase, fraction in self?.scrubbed(phase, fraction) }
         volumeSlider.onFraction = { [weak self] fraction in self?.volumeDragged(to: fraction) }
 
-        let leading = NSStackView(views: [previousButton, playButton, nextButton, elapsedLabel, trailingLabel])
+        let leading = NSStackView(views: [playButton, previousButton, nextButton, elapsedLabel])
         leading.spacing = 6
         leading.setCustomSpacing(12, after: nextButton)
-        for control in [speedLabel, muteButton, volumeSlider, fullscreenButton] as [NSView] {
+        for control in [trailingLabel, muteButton, volumeSlider, speedLabel, fullscreenButton] as [NSView] {
             trailingControls.addArrangedSubview(control)
         }
         trailingControls.spacing = 6
@@ -373,16 +382,26 @@ final class TransportOverlay: NSView {
             panel.widthAnchor.constraint(lessThanOrEqualToConstant: 760),
             panel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 8),
             fill,
-            scrubber.topAnchor.constraint(equalTo: panel.topAnchor, constant: 8),
-            scrubber.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 8),
-            scrubber.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -8),
-            leading.topAnchor.constraint(equalTo: scrubber.bottomAnchor, constant: 2),
             leading.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 10),
             leading.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -8),
             trailingControls.centerYAnchor.constraint(equalTo: leading.centerYAnchor),
             trailingControls.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -10),
             trailingControls.leadingAnchor.constraint(greaterThanOrEqualTo: leading.trailingAnchor, constant: 8),
         ])
+        inlineTimeline = [
+            leading.topAnchor.constraint(equalTo: panel.topAnchor, constant: 8),
+            scrubber.centerYAnchor.constraint(equalTo: leading.centerYAnchor),
+            scrubber.leadingAnchor.constraint(equalTo: leading.trailingAnchor, constant: 10),
+            scrubber.trailingAnchor.constraint(equalTo: trailingControls.leadingAnchor, constant: -10),
+            scrubber.widthAnchor.constraint(greaterThanOrEqualToConstant: 64),
+        ]
+        stackedTimeline = [
+            scrubber.topAnchor.constraint(equalTo: panel.topAnchor, constant: 8),
+            scrubber.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 10),
+            scrubber.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -10),
+            leading.topAnchor.constraint(equalTo: scrubber.bottomAnchor, constant: 2),
+        ]
+        NSLayoutConstraint.activate(frame.width >= Self.inlineTimelineWidth ? inlineTimeline : stackedTimeline)
     }
 
     private static func symbol(_ name: String, _ label: String) -> NSImage? {
@@ -392,10 +411,11 @@ final class TransportOverlay: NSView {
 
     /// A borderless 26-point button showing the SF Symbol `name` in the text colour.
     static func iconButton(_ name: String, _ label: String) -> NSButton {
-        let button = NSButton(title: "", target: nil, action: nil)
+        let button = TransportIconButton()
+        button.title = ""
         button.isBordered = false
         button.imagePosition = .imageOnly
-        button.contentTintColor = PaletteRole.text.color
+        button.contentTintColor = PaletteRole.text.overVideo
         setSymbol(button, name, label)
         button.widthAnchor.constraint(equalToConstant: 26).isActive = true
         button.heightAnchor.constraint(equalToConstant: 26).isActive = true
@@ -408,5 +428,41 @@ final class TransportOverlay: NSView {
         if button.image == nil { button.title = label }
         button.toolTip = label
         button.setAccessibilityLabel(label)
+    }
+}
+
+/// Draws the transport button's highlighted state and keyboard focus.
+private final class TransportIconButton: NSButton {
+    init() {
+        super.init(frame: .zero)
+        focusRingType = .none
+    }
+
+    required init?(coder: NSCoder) { fatalError("Use init()") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 6, yRadius: 6)
+        if isHighlighted {
+            PaletteRole.selected.color.setFill()
+            shape.fill()
+        }
+        super.draw(dirtyRect)
+        if window?.isKeyWindow == true, window?.firstResponder === self {
+            PaletteRole.focus.color.setStroke()
+            shape.lineWidth = 2
+            shape.stroke()
+        }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        needsDisplay = true
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        needsDisplay = true
+        return resigned
     }
 }

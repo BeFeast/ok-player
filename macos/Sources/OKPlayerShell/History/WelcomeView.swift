@@ -5,16 +5,11 @@ import SwiftUI
 // or the Continue watching shelf. It is a SwiftUI island over the canvas, bound to a
 // `ContinueWatchingModel`; every colour is a palette role.
 
-extension PaletteRole {
-    /// The role for SwiftUI, following the appearance it is drawn in.
-    var swiftUI: Color { Color(nsColor: color) }
-}
-
 /// The palette's accent push button, as `AccentButton` draws it in AppKit.
 struct AccentButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: NSFont.systemFontSize))
+            .font(.system(size: NSFont.systemFontSize, weight: .semibold))
             .foregroundStyle(PaletteRole.onAccent.swiftUI)
             .padding(.horizontal, 16)
             .frame(height: 28)
@@ -54,11 +49,16 @@ struct WelcomeView: View {
         Group {
             if model.isFirstRun {
                 firstRun
+                    .padding(20)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 shelf
+                    .padding(.horizontal, 24)
+                    .padding(.top, 34)
+                    .frame(maxWidth: 744, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: .infinity)
             }
         }
-        .padding(20)
     }
 
     private var dropHint: some View {
@@ -69,8 +69,15 @@ struct WelcomeView: View {
 
     private var firstRun: some View {
         VStack(spacing: 10) {
-            Text("Welcome to OK Player")
-                .font(.title2.weight(.semibold))
+            if let tile = BrandIcon.welcome {
+                Image(nsImage: tile)
+                    .resizable()
+                    .frame(width: 48, height: 48)
+                    .accessibilityHidden(true)
+                    .padding(.bottom, 6)
+            }
+            (Text("OK").fontWeight(.bold) + Text(" Player").fontWeight(.regular))
+                .font(.system(size: 30))
                 .foregroundStyle(PaletteRole.text.swiftUI)
             Text("Open a file to start playing.")
                 .foregroundStyle(PaletteRole.textMuted.swiftUI)
@@ -92,7 +99,7 @@ struct WelcomeView: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Continue watching")
-                    .font(.title2.weight(.semibold))
+                    .font(.title2.weight(.bold))
                     .foregroundStyle(PaletteRole.text.swiftUI)
                 Text("Pick up where you left off — or open something new.")
                     .foregroundStyle(PaletteRole.textMuted.swiftUI)
@@ -103,10 +110,24 @@ struct WelcomeView: View {
                 cards(2)
                 cards(1)
             }
-            HStack(spacing: 12) {
-                Button("Open…") { model.openFile() }
-                    .buttonStyle(AccentButtonStyle())
-                dropHint
+            HStack(spacing: 14) {
+                Button { model.openFile() } label: {
+                    Label("Open File…", systemImage: "folder")
+                }
+                .buttonStyle(AccentButtonStyle())
+                VStack(spacing: 6) {
+                    Image(systemName: "tray.and.arrow.down")
+                        .font(.system(size: 18))
+                        .accessibilityHidden(true)
+                    Text("Drop a video or folder here")
+                        .font(.callout)
+                }
+                .foregroundStyle(PaletteRole.textMuted.swiftUI)
+                .frame(maxWidth: .infinity, minHeight: 58)
+                .background(PaletteRole.surface.swiftUI, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(PaletteRole.borderSubtle.swiftUI,
+                                                                          style: StrokeStyle(dash: [4, 3])))
+                .allowsHitTesting(false)
             }
             if model.privateSession {
                 Text("Private session: nothing new is recorded.")

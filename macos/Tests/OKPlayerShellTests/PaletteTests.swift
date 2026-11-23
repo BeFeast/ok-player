@@ -24,6 +24,17 @@ final class PaletteTests: XCTestCase {
         }
     }
 
+    func testTransportKeepsItsDarkForegroundOverVideoInBothAppearances() throws {
+        let transport = TransportOverlay()
+        let play = try XCTUnwrap(transport.playButton.contentTintColor)
+        let next = try XCTUnwrap(transport.nextButton.contentTintColor)
+        XCTAssertEqual(transport.panel.appearance?.name, .darkAqua)
+        XCTAssertEqual(try resolved(play, in: .aqua), PaletteRole.text.srgb.dark)
+        XCTAssertEqual(try resolved(play, in: .darkAqua), PaletteRole.text.srgb.dark)
+        XCTAssertEqual(try resolved(next, in: .aqua), PaletteRole.text.srgb.dark)
+        XCTAssertEqual(try resolved(next, in: .darkAqua), PaletteRole.text.srgb.dark)
+    }
+
     func testSRGBValueSplitsIntoRedGreenAndBlueChannels() throws {
         let color = try XCTUnwrap(NSColor.fromSRGB(0x15A89D).usingColorSpace(.sRGB))
         XCTAssertEqual(color.redComponent * 255, 0x15, accuracy: 0.001)

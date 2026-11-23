@@ -44,25 +44,25 @@ final class ScrubberView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        PaletteRole.borderSubtle.color.setFill()
+        PaletteRole.borderSubtle.overVideo.setFill()
         NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2).fill()
         guard isEnabled else { return }
-        PaletteRole.border.color.setFill()
+        PaletteRole.border.overVideo.setFill()
         NSBezierPath(roundedRect: span(buffered), xRadius: 2, yRadius: 2).fill()
-        PaletteRole.accent.color.setFill()
+        PaletteRole.focus.overVideo.setFill()
         NSBezierPath(roundedRect: span(progress), xRadius: 2, yRadius: 2).fill()
-        PaletteRole.text.color.setFill()
+        PaletteRole.text.overVideo.setFill()
         for tick in ticks where tick > 0 && tick < 1 {
             let x = track.minX + track.width * CGFloat(tick)
             NSRect(x: x - 0.75, y: track.minY - 2, width: 1.5, height: track.height + 4).fill()
         }
         let knob = NSRect(x: span(progress).maxX - 6, y: bounds.midY - 6, width: 12, height: 12)
-        PaletteRole.accent.color.setFill()
+        PaletteRole.focus.overVideo.setFill()
         NSBezierPath(ovalIn: knob).fill()
         if window?.isKeyWindow == true, window?.firstResponder === self {
             let ring = NSBezierPath(ovalIn: knob.insetBy(dx: -2.5, dy: -2.5))
             ring.lineWidth = 2
-            PaletteRole.focus.color.setStroke()
+            PaletteRole.focus.overVideo.setStroke()
             ring.stroke()
         }
     }
@@ -125,21 +125,21 @@ final class VolumeSliderView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let track = NSRect(x: Self.inset, y: bounds.midY - 2, width: Swift.max(0, bounds.width - 2 * Self.inset), height: 4)
-        PaletteRole.borderSubtle.color.setFill()
+        PaletteRole.borderSubtle.overVideo.setFill()
         NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2).fill()
         guard let volume else { return }
         let unityX = track.minX + track.width * CGFloat(volume.unityFraction)
         let levelX = track.minX + track.width * CGFloat(Swift.min(Swift.max(volume.fraction, 0), 1))
-        (volume.muted ? PaletteRole.textMuted : PaletteRole.accent).color.setFill()
+        (volume.muted ? PaletteRole.textMuted : PaletteRole.focus).overVideo.setFill()
         NSRect(x: track.minX, y: track.minY, width: Swift.min(levelX, unityX) - track.minX, height: track.height).fill()
         if levelX > unityX {
-            (volume.muted ? PaletteRole.textMuted : PaletteRole.warning).color.setFill()
+            (volume.muted ? PaletteRole.textMuted : PaletteRole.warning).overVideo.setFill()
             NSRect(x: unityX, y: track.minY, width: levelX - unityX, height: track.height).fill()
         }
-        PaletteRole.text.color.setFill()
+        PaletteRole.text.overVideo.setFill()
         NSRect(x: unityX - 0.5, y: track.minY - 3, width: 1, height: track.height + 6).fill()
         let knob = NSRect(x: levelX - 5, y: bounds.midY - 5, width: 10, height: 10)
-        (volume.muted ? PaletteRole.textMuted : PaletteRole.accent).color.setFill()
+        (volume.muted ? PaletteRole.textMuted : PaletteRole.focus).overVideo.setFill()
         NSBezierPath(ovalIn: knob).fill()
     }
 

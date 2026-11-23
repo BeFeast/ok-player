@@ -115,7 +115,7 @@ final class UpNextController: NSObject {
         isShown = shown
         if !shown { panel.returnFocus() }
         panel.isHidden = !shown
-        button.contentTintColor = (shown ? PaletteRole.accent : PaletteRole.text).color
+        button.contentTintColor = (shown ? PaletteRole.link : PaletteRole.text).overVideo
         let label = shown ? "Hide Up Next" : "Up Next"
         button.toolTip = label
         button.setAccessibilityLabel(label)

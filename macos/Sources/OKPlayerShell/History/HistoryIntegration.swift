@@ -27,9 +27,9 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
         var host: NSView?
         MainActor.assumeIsolated {
             let hosting = NSHostingView(rootView: WelcomeView(model: welcome))
-            // Only the content's natural size: the window's own size constraints decide
-            // how much room it gets, and a narrow window shows fewer cards.
-            hosting.sizingOptions = [.intrinsicContentSize]
+            // The player gives the shelf its size so it can show fewer cards at
+            // narrow widths and anchor populated history to the top.
+            hosting.sizingOptions = []
             host = hosting
         }
         let view = host ?? NSView()
@@ -46,25 +46,17 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
         snapshot.source == nil && !scanning && !errorShown
     }
 
-    /// Puts the Welcome view in the middle of the player window, between the title
-    /// strip and the transport controls.
+    /// The first-run view is centred and the populated shelf is top-aligned.
     func install(in root: NSView, above controls: NSView) {
         let host = welcomeView
         host.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(host)
-        // Centred when it fits; squeezed (fewer cards, clipped text) rather than over
-        // the title strip or the controls when it does not.
-        let centred = host.centerYAnchor.constraint(equalTo: root.centerYAnchor)
-        centred.priority = NSLayoutConstraint.Priority(240)
         NSLayoutConstraint.activate([
-            host.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            host.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 16),
-            host.topAnchor.constraint(greaterThanOrEqualTo: root.safeAreaLayoutGuide.topAnchor, constant: 8),
-            host.bottomAnchor.constraint(lessThanOrEqualTo: controls.topAnchor, constant: -8),
-            centred,
+            host.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            host.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            host.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor),
+            host.bottomAnchor.constraint(equalTo: controls.topAnchor),
         ])
-        host.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        host.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
     }
 
     /// Show or hide the Welcome view; a shelf that comes into view is read again.
@@ -120,7 +112,7 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
         showsHistory = false
     }
 
-    private func makeHistoryWindow() -> NSWindow {
+    private func makeHistoryWindow(rememberFrame: Bool = true) -> NSWindow {
         var made: NSWindow?
         let model = page
         MainActor.assumeIsolated {
@@ -130,11 +122,12 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
         }
         let window = made ?? NSWindow()
         window.title = "History"
+        window.backgroundColor = PaletteRole.canvas.color
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.isReleasedWhenClosed = false
         window.setContentSize(NSSize(width: 640, height: 560))
         window.delegate = self
-        _ = window.setFrameAutosaveName("OKPlayerHistory")
+        if rememberFrame { _ = window.setFrameAutosaveName("OKPlayerHistory") }
         return window
     }
 
@@ -145,7 +138,7 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
     /// written. The smoke then opens the fixture through the open router (Open/), so
     /// the card itself is not activated here; `HistoryModelTests` covers a card's
     /// open. Returns what failed.
-    func smokeWelcomeFailure(fixture: String, snapshotDirectory: String?) -> String? {
+    func smokeWelcomeFailure(fixture: String, snapshotDirectory: String?, playerWindow: NSWindow?) -> String? {
         guard showsWelcome, !welcomeView.isHidden else { return "The Welcome view is not shown while nothing plays" }
         let entries = welcome.entries
         guard entries.count == SmokeHistory.seededCount, let card = entries.first,
@@ -153,29 +146,35 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
             return "Continue watching lists \(entries.map(\.title)) instead of the seeded history"
                 + (welcome.problem.map { " (\($0))" } ?? "")
         }
-        if let snapshotDirectory { smokeCaptureWelcome(to: snapshotDirectory) }
+        if let snapshotDirectory {
+            smokeCaptureWelcome(to: snapshotDirectory)
+            let window = makeHistoryWindow(rememberFrame: false)
+            page.refresh()
+            window.center()
+            window.orderFront(nil)
+            SmokeSnapshots.capture(window, in: snapshotDirectory, as: "history")
+            window.close()
+            playerWindow?.makeKeyAndOrderFront(nil)
+        }
         print("OKP_SMOKE welcome=shown continue_watching=\(entries.count) first_card=\(card.state.rawValue)")
         fflush(stdout)
         return nil
     }
 
-    /// Smoke evidence: the Welcome view in the light and the dark appearance, as
-    /// `welcome-light.png` and `welcome-dark.png`.
+    /// Render both Welcome states at the player window's initial content size.
     private func smokeCaptureWelcome(to directory: String) {
-        for (name, appearanceName) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
+        let firstRun = ContinueWatchingModel(session: HistorySessionLink(query: { _ in nil },
+            dispatch: { _ in .rejected(reason: .noActiveMedia, message: "No playback session") }),
+            open: { _, _ in })
+        for (name, appearanceName) in SmokeSnapshots.appearances {
             guard let appearance = NSAppearance(named: appearanceName) else { continue }
-            let file = URL(fileURLWithPath: directory).appendingPathComponent("welcome-\(name).png")
-            var png: Data?
-            let model = welcome
             appearance.performAsCurrentDrawingAppearance {
-                png = MainActor.assumeIsolated { Self.renderWelcome(model, dark: name == "dark") }
-            }
-            do {
-                guard let png else { throw CocoaError(.fileWriteUnknown) }
-                try png.write(to: file)
-                print("OKP_SNAPSHOT welcome-\(name)=\(file.lastPathComponent)")
-            } catch {
-                fputs("OK Player: could not write \(file.lastPathComponent): \(error)\n", stderr)
+                MainActor.assumeIsolated {
+                    for (scene, model) in [("first-run", firstRun), ("welcome", welcome)] {
+                        let png = Self.renderWelcome(model, dark: name == "dark")
+                        SmokeSnapshots.write(png, in: directory, as: "\(scene)-\(name)")
+                    }
+                }
             }
         }
     }
@@ -183,6 +182,7 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
     @MainActor
     private static func renderWelcome(_ model: ContinueWatchingModel, dark: Bool) -> Data? {
         let renderer = ImageRenderer(content: WelcomeView(model: model)
+            .frame(width: 960, height: 580)
             .background(PaletteRole.canvas.swiftUI)
             .environment(\.colorScheme, dark ? .dark : .light))
         renderer.scale = 2
