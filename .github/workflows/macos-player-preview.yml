@@ -48,6 +48,8 @@ on:
       - 'scripts/macos-*.sh'
       - 'scripts/tests/macos-*.sh'
       - 'scripts/mac-ci-bridge.py'
+      - 'scripts/verify'
+      - 'scripts/verify-macos*'
       - 'brand/**'
       - 'rust/Cargo.toml'
       - 'rust/Cargo.lock'
@@ -175,6 +177,50 @@ jobs:
           printf '%s  %s\n' "$PROVENANCE_SHA256" "$prefix/provenance.json" | shasum -a 256 -c -
           echo "OKP_MPV_PREFIX=$prefix" >> "$GITHUB_ENV"
 
+      - name: Generate playback and subtitle fixtures with a pinned ffmpeg
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          inputs="$RUNNER_TEMP/inputs"
+          curl --fail --silent --show-error --location --retry 3 "$FFMPEG_WHEEL_URL" -o "$inputs/ffmpeg.whl"
+          printf '%s  %s\n' "$FFMPEG_WHEEL_SHA256" "$inputs/ffmpeg.whl" | shasum -a 256 -c -
+          mkdir -p "$inputs/ffmpeg"
+          unzip -q -j "$inputs/ffmpeg.whl" "$FFMPEG_WHEEL_MEMBER" -d "$inputs/ffmpeg"
+          ffmpeg="$inputs/ffmpeg/${FFMPEG_WHEEL_MEMBER##*/}"
+          chmod +x "$ffmpeg"
+          echo "OKP_VERIFY_FFMPEG=$ffmpeg" >> "$GITHUB_ENV"
+          "$ffmpeg" -hide_banner -version > "$inputs/ffmpeg-version.txt"
+          head -n 1 "$inputs/ffmpeg-version.txt" | tee -a "$OKP_MACOS_OUTPUT/toolchain.txt"
+          "$ffmpeg" -nostdin -hide_banner -loglevel error \
+            -f lavfi -i testsrc2=size=640x360:rate=30:duration=12 \
+            -f lavfi -i sine=frequency=440:sample_rate=48000:duration=12 \
+            -map 0:v -map 1:a -c:v libx264 -profile:v high -pix_fmt yuv420p -threads 1 \
+            -c:a aac -b:a 96k -ac 1 -map_metadata -1 -fflags +bitexact -flags +bitexact \
+            -movflags +faststart "$inputs/smoke.mp4"
+          # A flat gray frame lets the OpenGL test distinguish white glyphs from video.
+          # Both cues leave a blank lead-in, then stay visible long enough for CI.
+          cat > "$inputs/subtitle-sidecar.srt" <<'SRT'
+          1
+          00:00:02,000 --> 00:00:09,000
+          EXTERNAL SRT
+          SRT
+          cat > "$inputs/embedded-rus.srt" <<'SRT'
+          1
+          00:00:02,000 --> 00:00:09,000
+          ВСТРОЕННЫЕ СУБТИТРЫ
+          SRT
+          "$ffmpeg" -nostdin -hide_banner -loglevel error \
+            -f lavfi -i color=c=0x303030:s=640x360:r=24:d=10 \
+            -c:v libx264 -pix_fmt yuv420p -threads 1 -movflags +faststart "$inputs/subtitle-sidecar.mp4"
+          "$ffmpeg" -nostdin -hide_banner -loglevel error \
+            -i "$inputs/subtitle-sidecar.mp4" -i "$inputs/subtitle-sidecar.srt" -i "$inputs/embedded-rus.srt" \
+            -map 0:v -map 1:s -map 2:s -c:v copy -c:s srt \
+            -metadata:s:s:0 language=eng -disposition:s:0 default \
+            -metadata:s:s:1 language=rus -disposition:s:1 0 "$inputs/subtitle-embedded.mkv"
+          echo "OKP_MACOS_SUBTITLE_FIXTURES=$inputs" >> "$GITHUB_ENV"
+          (cd "$inputs" && shasum -a 256 smoke.mp4 subtitle-sidecar.{mp4,srt} subtitle-embedded.mkv) \
+            | tee "$OKP_MACOS_OUTPUT/fixture-sha256.txt"
+
       - name: Signing identity self-test (throwaway certificate)
         shell: bash
         run: bash scripts/tests/macos-signing-identity.Tests.sh
@@ -236,28 +282,6 @@ jobs:
           "$lsregister" -f "$app"
           env -u DYLD_LIBRARY_PATH "$app/Contents/MacOS/ok-player" --check-document-types | tee "$OKP_MACOS_OUTPUT/document-types.txt"
 
-      - name: Generate the H.264/AAC smoke fixture with a pinned ffmpeg
-        if: env.RUN_SMOKE == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          inputs="$RUNNER_TEMP/inputs"
-          curl --fail --silent --show-error --location --retry 3 "$FFMPEG_WHEEL_URL" -o "$inputs/ffmpeg.whl"
-          printf '%s  %s\n' "$FFMPEG_WHEEL_SHA256" "$inputs/ffmpeg.whl" | shasum -a 256 -c -
-          mkdir -p "$inputs/ffmpeg"
-          unzip -q -j "$inputs/ffmpeg.whl" "$FFMPEG_WHEEL_MEMBER" -d "$inputs/ffmpeg"
-          ffmpeg="$inputs/ffmpeg/${FFMPEG_WHEEL_MEMBER##*/}"
-          chmod +x "$ffmpeg"
-          "$ffmpeg" -hide_banner -version > "$inputs/ffmpeg-version.txt"
-          head -n 1 "$inputs/ffmpeg-version.txt" | tee -a "$OKP_MACOS_OUTPUT/toolchain.txt"
-          "$ffmpeg" -nostdin -hide_banner -loglevel error \
-            -f lavfi -i testsrc2=size=640x360:rate=30:duration=12 \
-            -f lavfi -i sine=frequency=440:sample_rate=48000:duration=12 \
-            -map 0:v -map 1:a -c:v libx264 -profile:v high -pix_fmt yuv420p -threads 1 \
-            -c:a aac -b:a 96k -ac 1 -map_metadata -1 -fflags +bitexact -flags +bitexact \
-            -movflags +faststart "$inputs/smoke.mp4"
-          (cd "$inputs" && shasum -a 256 smoke.mp4) | tee "$OKP_MACOS_OUTPUT/fixture-sha256.txt"
-
       - name: Bounded smoke from a relocated copy
         if: env.RUN_SMOKE == 'true'
         shell: bash
@@ -296,6 +320,21 @@ jobs:
           done
           exit "$status"
 
+      - name: Verify the relocated ZIP at 2×
+        if: env.RUN_SMOKE == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          scenario=subtitle-lift
+          set --
+          if [[ "$GITHUB_REF_NAME" == mac-ci/verify/* ]]; then
+            requested="${GITHUB_REF_NAME#mac-ci/verify/}"
+            scenario="${requested%%/*}"
+            if [[ "${requested#*/}" == negative-* ]]; then set -- --negative-control; fi
+          fi
+          scripts/verify "$scenario" --source-sha "$SOURCE_SHA" \
+            --zip "$OKP_MACOS_OUTPUT/ok-player-macos-arm64.zip" --output "$OKP_MACOS_OUTPUT/verify" "$@"
+
       - name: Record the app checksum, version and signing
         if: always()
         shell: bash
@@ -332,5 +371,6 @@ jobs:
             ${{ runner.temp }}/receipt/*.log
             ${{ runner.temp }}/receipt/*.txt
             ${{ runner.temp }}/receipt/snapshots/*.png
+            ${{ runner.temp }}/receipt/verify/**
           if-no-files-found: error
           retention-days: 30

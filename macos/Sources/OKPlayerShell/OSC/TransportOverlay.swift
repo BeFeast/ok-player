@@ -26,6 +26,8 @@ final class TransportOverlay: NSView {
     var playlistSteps = (previous: false, next: false) { didSet { updateStepButtons() } }
     /// Called whenever the controls show or hide.
     var onRevealChange: ((Bool) -> Void)?
+    /// The session owning subtitles for the video surface this overlay fills.
+    weak var subtitleSession: SessionClient?
     /// Where keyboard focus goes when the scrubber may no longer hold it (the
     /// controls hid, or the media cannot be sought): the video.
     weak var focusReturn: NSView?
@@ -60,6 +62,7 @@ final class TransportOverlay: NSView {
     private var trailing = TrailingTime.remaining
     private var scrollSteps = VolumeScrollAccumulator()
     private var surface: OscSurface?
+    private var subtitleClearance: (height: CGFloat, bottom: CGFloat)?
     private var panelArea: NSTrackingArea?
     private var scrollMonitor: Any?
     private var windowObservers: [NSObjectProtocol] = []
@@ -85,6 +88,25 @@ final class TransportOverlay: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("Use init(hideTimer:)") }
+
+    override func layout() {
+        super.layout()
+        updateSubtitleClearance()
+    }
+
+    private func updateSubtitleClearance() {
+        guard let subtitleSession, bounds.height > 0 else { return }
+        // Auto-hide leaves the panel laid out for pointer tracking at zero alpha.
+        let coversVideo = !panel.isHidden && panel.alphaValue > 0
+        guard !coversVideo || panel.frame.height > 0 else { return }
+        // Both the panel and the video use view points, including on Retina.
+        let bottom = coversVideo ? panel.frame.maxY - bounds.minY + 8 : 0
+        let height = bounds.height
+        if let previous = subtitleClearance, previous.height == height, previous.bottom == bottom { return }
+        if subtitleSession.setSubtitleClearance(surfaceHeight: height, obscuredBottom: bottom) {
+            subtitleClearance = (height, bottom)
+        }
+    }
 
     // MARK: Session
 
@@ -139,6 +161,7 @@ final class TransportOverlay: NSView {
         surface = next
         panel.isHidden = !next.visible
         panel.alphaValue = autoHide.revealed ? 1 : 0
+        updateSubtitleClearance()
         scrubber.allowsFocus = next.focusable
         if !next.focusable || !scrubber.isEnabled { returnFocus() }
     }

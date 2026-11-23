@@ -244,6 +244,23 @@ pub unsafe extern "C" fn okp_session_render_destroy(session: *const OkpSession) 
     }
 }
 
+/// Queue subtitle clearance for shell controls overlapping the video surface.
+/// Both heights use the same unit. Pass zero clearance to restore the baseline.
+/// # Safety
+/// `session` must be null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn okp_session_set_subtitle_clearance(
+    session: *const OkpSession,
+    surface_height: f64,
+    obscured_bottom: f64,
+) -> bool {
+    unsafe { session.as_ref() }.is_some_and(|session| {
+        session
+            .inner
+            .set_subtitle_clearance(surface_height, obscured_bottom)
+    })
+}
+
 /// Release a string returned by an `okp_session_*` function. Null is ignored.
 ///
 /// # Safety

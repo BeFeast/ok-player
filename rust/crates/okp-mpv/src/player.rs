@@ -2040,6 +2040,16 @@ impl Mpv {
         self.set_double("sub-pos", position.clamp(0.0, 100.0))
     }
 
+    /// The configured baseline, read by the session before it applies any lift.
+    pub fn subtitle_position(&self) -> Result<Option<f64>, MpvError> {
+        RawReader::new(self.handle).get_double("sub-pos")
+    }
+
+    /// Move subtitles without waiting for the core while the host lays out its controls.
+    pub fn set_subtitle_position_async(&self, position: f64) -> Result<(), MpvError> {
+        self.command_async(&["no-osd", "set", "sub-pos", &position.to_string()])
+    }
+
     /// Apply one curated subtitle appearance preset live. The shell supplies the trusted option
     /// map from `okp-core`; keeping this as a narrow batch avoids exposing an arbitrary property
     /// string setter across the engine boundary. mpv 0.39 added `sub-border-style`; Ubuntu 24.04

@@ -432,6 +432,14 @@ impl Session {
         self.shared.engine.render_destroy();
     }
 
+    /// Reserve the given bottom portion of the render surface for shell controls.
+    /// Use the same units for both measurements and zero clearance for hidden controls.
+    pub fn set_subtitle_clearance(&self, surface_height: f64, obscured_bottom: f64) -> bool {
+        self.shared
+            .engine
+            .set_subtitle_clearance(surface_height, obscured_bottom)
+    }
+
     /// [`Session::dispatch`] for a command document; returns a reply document.
     pub fn dispatch_json(&self, text: &str) -> String {
         let result = match parse_envelope::<CommandEnvelope>(text) {

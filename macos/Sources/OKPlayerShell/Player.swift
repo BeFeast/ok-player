@@ -37,6 +37,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let snapshotDirectory = CommandLine.arguments.first { $0.hasPrefix("--snapshot-dir=") }
         .map { String($0.dropFirst("--snapshot-dir=".count)) }
     var smokeRun: SmokeRun?
+    let verification = VerificationOptions(arguments: CommandLine.arguments)
     /// Now Playing, remote commands, display sleep, recent documents, Dock menu.
     lazy var system: SystemIntegration = SystemIntegration(
         session: { [weak self] command in
@@ -119,9 +120,15 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let client: SessionClient
         do {
             // The smoke runs on a seeded history of its own (`SmokeHistory`).
-            client = try SessionClient(config: smoke
-                ? SmokeHistory.config(fixture: smokePath, shellCommands: commands.shellCommands)
-                : .forApp(shellCommands: commands.shellCommands))
+            let config: SessionConfig
+            if let verification {
+                config = verification.config(shellCommands: commands.shellCommands)
+            } else if smoke {
+                config = try SmokeHistory.config(fixture: smokePath, shellCommands: commands.shellCommands)
+            } else {
+                config = .forApp(shellCommands: commands.shellCommands)
+            }
+            client = try SessionClient(config: config)
         } catch {
             fail("\(error)"); return
         }
@@ -129,13 +136,17 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         behaviour.connect(client) { [weak self] in self?.togglePause() }
         client.onBatch = { [weak self] batch in self?.sessionChanged(batch) }
         playlist.state = client.store.playlist
-        system.playlist = playlist
-        system.start()
+        if verification == nil {
+            system.playlist = playlist
+            system.start()
+        }
         statusLayer.query = { [weak client] in
             guard case .statusSurface(let surface)? = client?.query(.statusSurface) else { return nil }
             return surface
         }
         osc.dispatch = { [weak client] command in _ = client?.dispatch(command) }
+        // The negative control leaves the real panel in place and disconnects only its subtitle feedback.
+        osc.subtitleSession = verification?.controlDisablesClearance == true ? nil : client
         osc.query = { [weak client] at in
             guard case .transport(let view)? = client?.query(.transport(at: at)) else { return nil }
             return view
@@ -164,7 +175,12 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let handle = client.handle { video.videoLayer.attach(session: handle) }
         connectPlayerCommands(client)
         updateWelcome(client.store.snapshot)
-        if smoke {
+        if let verification {
+            connectOpenRouter(client)
+            Task { @MainActor in
+                await VerifyRun(app: self, options: verification).run()
+            }
+        } else if smoke {
             connectOpenRouter(client)
             smokeRun = SmokeRun(app: self, path: smokePath)
             smokeRun?.start()
@@ -206,8 +222,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         history.sessionChanged(batch)
         commands.invalidate()
         playlist.state = client.store.playlist
-        system.privateSession = client.store.privateSession
-        system.update(client.store.snapshot)
+        if verification == nil {
+            system.privateSession = client.store.privateSession
+            system.update(client.store.snapshot)
+        }
         // Up Next only renders the store, and its rows send playlist commands by
         // index into the session's playlist, so it follows every batch, also while
         // a failure card is up: a jump from it does not go through play().
@@ -251,13 +269,14 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         history.setWelcomeShown(false)
         prompt.isHidden = true
         fputs("OK Player: \(message)\n", stderr)
+        if let verification { verification.finish(status: "blocked_environment", error: message) }
         if smoke { shutdown(); exit(1) }
     }
     /// Close, then destroy the render context, then free the session.
     func shutdown() {
         guard !shuttingDown else { return }; shuttingDown = true
         smokeRun?.cancel()
-        system.shutdown()
+        if verification == nil { system.shutdown() }
         if let client {
             client.dispatch(.close)
             video?.shutdown()

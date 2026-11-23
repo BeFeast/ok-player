@@ -94,6 +94,7 @@ class BundleVersionTests(unittest.TestCase):
         self.assertEqual(info["CFBundleShortVersionString"], "0.11.0")
         self.assertEqual(info["CFBundleVersion"], "4.57")
         self.assertEqual(info["OKPSourceRevision"], f"v0.11.0-beta.1-2-g{head[:7]}")
+        self.assertEqual(info["OKPSourceSHA"], head)
 
     def test_a_later_commit_gets_a_higher_bundle_version(self):
         commit(self.repo, "one")
