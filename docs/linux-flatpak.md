@@ -1,5 +1,7 @@
 # Linux Flatpak beta lane
 
+> Historical lane. See [Linux AppImage delivery](linux-appimage.md) for current releases.
+
 OK Player's Flatpak is a beta packaging lane. It is not a claim of Flathub
 availability; that claim can be made only after the external Flathub submission
 is accepted.

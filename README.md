@@ -13,10 +13,10 @@ Each platform gets a **native shell** — WinUI 3 on Windows, GTK4/Relm4 on Linu
 | Platform | Shell / toolkit | Line | Latest | Maturity |
 |---|---|---|---|---|
 | Windows 11 | C# / .NET, WinUI 3 (Windows App SDK), Mica | `v*` | `v0.10.14` | Shipping, pre-1.0 |
-| Linux (X11 / Wayland) | Rust, GTK4 / Relm4 | `linux-v*` | `0.11.0-beta.1` (first beta) | Public beta |
+| Linux (X11 / Wayland) | Rust, GTK4 / Relm4 | Forgejo AppImage | Signed Beta and Stable channels | Public beta |
 
 - **Windows** installs and self-updates through Velopack; discovery uses a static HTTPS feed ([`docs/update-feed.md`](docs/update-feed.md)).
-- **Linux** ships as a `.deb` and as an AppImage (Velopack), both self-updating through a static HTTPS feed. See [Install on Linux](#install-on-linux).
+- **Linux** ships as an x86_64 AppImage. See [Install on Linux](#install-on-linux).
 - Every release is a **pre-1.0 build**: expect rapid iteration and occasional breaking changes until 1.0.
 
 ## The four pillars
@@ -42,135 +42,29 @@ Download the latest installer from [Releases](https://github.com/BeFeast/ok-play
 
 ### Install on Linux
 
-Linux builds are published on the [Releases](https://github.com/BeFeast/ok-player/releases) page under `linux-v*` tags. Two package lanes are supported:
-
-**Debian / Ubuntu (APT repository — recommended)**
-
-Add the signed repository once and OK Player updates with the rest of your system:
+Install the signed AppImage under your user account. The launcher registers media types and the
+`ok-player://` URI handler. Install Python 3, GnuPG, `flock`, and `xdg-mime` first.
 
 ```bash
-sudo install -d -m 0755 /usr/share/keyrings
-curl -fsSL https://befeast.github.io/ok-player/apt/ok-player-archive-keyring.gpg \
-  | sudo tee /usr/share/keyrings/ok-player-archive-keyring.gpg >/dev/null
-curl -fsSL https://befeast.github.io/ok-player/apt/ok-player.sources \
-  | sudo tee /etc/apt/sources.list.d/ok-player.sources >/dev/null
-sudo apt update
-sudo apt install ok-player
+git clone https://git.oklabs.uk/BeFeast/ok-player.git
+cd ok-player
+./scripts/install-linux-appimage.sh beta
+~/.local/bin/ok-player
 ```
 
-Updates then arrive through `apt upgrade` (and through your desktop's update notifier) like any
-other package. The archive is signed with the OK Player packaging key
-`77D0 FCDE B0D5 94E1 3E50  F43A 9337 815E B0F7 8C63`; apt refuses it if the signature does not
-match. See [the APT repository lane](docs/apt-repository.md) for what the archive contains and
-how it is produced.
-
-**Debian / Ubuntu (candidate channel — QA builds, not releases)**
-
-The repository also publishes a `candidate` suite carrying the rolling QA build. It is the same
-archive and the same signing key, but the builds in it are *not releases*: they are what the QA
-lane is currently testing, they change often, and they can regress. Use it only if you are
-helping test OK Player.
-
-```bash
-sudo install -d -m 0755 /usr/share/keyrings
-curl -fsSL https://befeast.github.io/ok-player/apt/ok-player-archive-keyring.gpg \
-  | sudo tee /usr/share/keyrings/ok-player-archive-keyring.gpg >/dev/null
-curl -fsSL https://befeast.github.io/ok-player/apt/ok-player-candidate.sources \
-  | sudo tee /etc/apt/sources.list.d/ok-player.sources >/dev/null
-sudo apt update
-sudo apt install ok-player
-```
-
-This is the whole sequence, not an addition to the one above: it writes the candidate stanza to
-the same `ok-player.sources` path, so following it replaces a `stable` subscription rather than
-sitting beside it. It is also exactly what the app hands you if it ever offers these commands —
-and the app takes the channel from the build you installed, so a candidate install is never
-shown the `stable` block.
-
-Install it *instead of* `ok-player.sources`, not beside it — with both files present apt sees
-both suites and will offer you the candidate anyway. To go back to releases, put
-`ok-player.sources` back and run `sudo apt install --allow-downgrades ok-player=<release
-version>` (`apt list -a ok-player` shows what the archive still carries).
-
-**Debian / Ubuntu (single `.deb`)**
-
-```bash
-# Download ok-player_<version>_amd64.deb and its SHA256SUMS from the release, then:
-sha256sum -c SHA256SUMS
-sudo apt install ./ok-player_<version>_amd64.deb
-```
-
-This is the same package the repository serves, and it **arrives with the repository already
-configured**: installing it writes the signing key to
-`/usr/share/keyrings/ok-player-archive-keyring.gpg` and the source to
-`/etc/apt/sources.list.d/ok-player.sources`, both from files carried inside the package, so no
-network access and no extra step are involved. The first `sudo apt update` afterwards sees OK
-Player, and `apt upgrade` carries it from then on. A `.deb` from a `linux-v*` release subscribes
-you to `stable`; one from the rolling candidate subscribes you to `candidate`, matching the
-build you installed.
-
-If you already have an OK Player source configured, installing a `.deb` leaves it alone — the
-suite you chose is yours, and a reinstall never moves you between channels. `sudo apt purge
-ok-player` removes the source and the keyring; `sudo apt remove ok-player` leaves them, so you
-can reinstall without adding the repository again.
-
-A `.deb` installed this way also self-updates through the static feed: it fetches the newest
-release's `.deb`, verifies it against the release's `SHA256SUMS`, and installs it via `pkexec`.
-
-**AppImage (distro-independent)**
-
-```bash
-# Download OK-Player-<version>-x86_64.AppImage from the release, then:
-chmod +x OK-Player-<version>-x86_64.AppImage
-./OK-Player-<version>-x86_64.AppImage
-```
-
-The AppImage self-updates in place through the same static HTTPS feed (Velopack).
-
-**Flatpak beta (test repository)**
-
-The source-pinned Flatpak lane exports a baseline repository and a two-commit
-`beta` update repository, so real machines can prove install, update, launch,
-rollback, and relaunch instead of testing a history-less single commit. It uses
-Flatpak-managed updates and the Freedesktop `codecs-extra` extension. See
-[Linux Flatpak beta lane](docs/linux-flatpak.md) for the artifact contract,
-codec-mask matrix, and live-desktop acceptance instructions.
-OK Player is not available on Flathub until an external submission is accepted.
-
-**Runtime requirements.** A GTK4 desktop; Debian and AppImage builds carry the pinned libmpv required by the embedded Wayland DMA-BUF path, while Fedora packages use the distro mpv libraries. Hardware video decode uses VA-API where present. OK Player runs under X11 and Wayland; some behaviors (drag/drop, portals, compositor fullscreen) are validated only on GNOME/Wayland — see [Supported environments](#supported-environments).
-
-**Update.** Packages installed from the APT repository update through `apt upgrade` — within the
-suite you subscribed to, so a `stable` machine moves between releases and a `candidate` machine
-moves between QA builds; a
-standalone `.deb` and the AppImage check the static feed and apply updates in place; Flatpak
-updates are owned by the configured Flatpak repository.
-
-**Rollback / uninstall.**
-
-```bash
-# APT repository: roll back to any version the archive still carries
-apt list -a ok-player
-sudo apt install --allow-downgrades ok-player=<older-version>
-
-# .deb: install a specific earlier version to roll back, or remove entirely
-sudo apt install ./ok-player_<older-version>_amd64.deb
-sudo apt remove ok-player
-
-# AppImage: delete the file you downloaded (and, if you added one, its .desktop entry)
-rm OK-Player-<version>-x86_64.AppImage
-```
-
-Per-user settings and playback history live in human-readable JSON under your config directory and are left in place by `apt remove`; delete them by hand if you want a clean slate.
+Use `~/.local/bin/ok-player --update beta` for later updates. Choose `stable` when a Stable build
+has been promoted. See [Linux AppImage delivery](docs/linux-appimage.md) for runtime requirements,
+signed manifests, and rollback.
 
 ### Supported environments
 
-The `.deb` targets current Debian/Ubuntu; the AppImage targets any glibc desktop new enough for GTK4. Linux acceptance is graded by evidence level (model-unit, headless Xvfb render, installed-package, and live GNOME/Wayland operator) — see [`docs/linux-release-acceptance.md`](docs/linux-release-acceptance.md). Rows that require a real desktop (file/folder chooser, drag/drop, clipboard, portals, compositor fullscreen, keyboard focus) are only ever marked passing by the live operator level; headless runs leave them unverified. The distro/session/package matrix for a given release is recorded in that release's notes.
+The AppImage uses the Debian 13 glibc baseline and runs on supported x86_64 GTK4 desktops. Linux acceptance is graded by evidence level (model-unit, headless Xvfb render, installed-package, and live GNOME/Wayland operator) — see [`docs/linux-release-acceptance.md`](docs/linux-release-acceptance.md). Rows that require a real desktop (file/folder chooser, drag/drop, clipboard, portals, compositor fullscreen, keyboard focus) are only ever marked passing by the live operator level; headless runs leave them unverified. The distro/session/package matrix for a given release is recorded in that release's notes.
 
 ## Docs
 
 - 📋 **[Product Requirements](docs/OK-Player-PRD.md)** — the full spec: pillars, information architecture, every screen and state, roadmap, open questions. (Authored as the Windows product spec; the Linux shell tracks the same behavior natively.)
 - 📦 **[Linux release acceptance](docs/linux-release-acceptance.md)** — how Linux release evidence is graded and what each level may claim.
-- 📦 **[Linux Flatpak beta lane](docs/linux-flatpak.md)** — source policy, permissions, codecs, local beta repository, and operator acceptance.
+- 📦 **[Linux AppImage delivery](docs/linux-appimage.md)** — install, verify, update, and roll back.
 - ✅ **[QA acceptance records](docs/qa-records/README.md)** — the required reviewable record for QA-only and acceptance-only pull requests.
 - 🔄 **[Update feeds](docs/update-feed.md)** — how installed Windows and Linux builds discover updates.
 - 📝 **[Release notes template — `0.11.0-beta.1`](docs/release-notes/0.11.0-beta.1.md)** — the presentation template for the first Linux public beta.

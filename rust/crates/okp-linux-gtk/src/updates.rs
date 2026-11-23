@@ -975,7 +975,13 @@ pub(crate) fn start_install_kind_probe(
 /// Whether this install kind has anything to check. A system tool that owns
 /// the payload outright is not polled, and a dev build has no feed at all.
 pub(crate) fn update_checks_are_possible(kind: InstallKind) -> bool {
-    kind.capability() != UpdateCapability::Unmanaged && kind.discovers_versions()
+    !managed_appimage()
+        && kind.capability() != UpdateCapability::Unmanaged
+        && kind.discovers_versions()
+}
+
+fn managed_appimage() -> bool {
+    env::var_os("OKP_MANAGED_APPIMAGE").is_some() && env::var_os("APPIMAGE").is_some()
 }
 
 /// Replaces the placeholder session with one for the detected install kind,
@@ -1300,6 +1306,14 @@ pub(crate) fn settings_updates_section(
 ) -> gtk::Box {
     let section = settings_section("Updates");
     section.append(&settings_value_row("Current version", APP_BUILD_VERSION));
+    if managed_appimage() {
+        section.append(&settings_value_row("Install", "AppImage"));
+        section.append(&settings_value_row(
+            "Update",
+            "Run ok-player --update beta or stable",
+        ));
+        return section;
+    }
     let channel = effective_update_channel(state.borrow().settings.update_channel());
     let (channel_label, feed_label) = match channel {
         UpdateChannel::Public => ("linux", "Static (GitHub Pages)"),
@@ -1564,6 +1578,12 @@ pub(crate) fn start_update_check_for_ui(
     status_toast: Rc<StatusToast>,
     show_toast: bool,
 ) {
+    if managed_appimage() {
+        if show_toast {
+            status_toast.show("Close OK Player and run ok-player --update beta or stable");
+        }
+        return;
+    }
     if state.borrow().linux_update.is_busy() {
         return;
     }

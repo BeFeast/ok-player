@@ -43,7 +43,7 @@ CARGO_SOURCES_CHECKER="$ROOT/scripts/flatpak_cargo_sources.py"
 MARKER_TEST="$ROOT/scripts/tests/flatpak-integration-markers.sh"
 REPIN_SCRIPT="$ROOT/scripts/flatpak-repin.sh"
 SOFTWARE_RENDER_SCRIPT="$ROOT/scripts/smoke-linux-software-renderer.sh"
-WORKFLOW="$ROOT/.github/workflows/flatpak.yml"
+WORKFLOW="$ROOT/.github/workflows/flatpak.yml.disabled"
 GITIGNORE="$ROOT/.gitignore"
 
 # How far the frozen pin may fall behind the default branch before it stops

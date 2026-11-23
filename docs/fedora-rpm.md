@@ -1,5 +1,7 @@
 # Fedora RPM and COPR beta lane
 
+> Historical lane. See [Linux AppImage delivery](linux-appimage.md) for current releases.
+
 OK Player's native Fedora package targets the currently supported Fedora 43
 and Fedora 44 x86_64 releases. It is a separate beta packaging lane from the
 Ubuntu candidate builder: the RPM is built from the same source commit, but it

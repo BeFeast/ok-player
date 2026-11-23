@@ -1,5 +1,7 @@
 # Linux candidate channel: rolling QA updates (issue #339)
 
+> Historical lane. See [Linux AppImage delivery](linux-appimage.md) for current releases.
+
 The candidate channel lets explicitly enrolled Linux QA installs update from frequent native Ubuntu builds without creating one permanent GitHub Release per checkpoint. Public beta/stable discovery remains unchanged.
 
 ## Isolation and enrollment

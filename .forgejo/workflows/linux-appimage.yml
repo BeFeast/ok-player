@@ -1,0 +1,132 @@
+name: Linux AppImage
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Build and publish Beta, archive an accepted build, or promote an archived build to Stable
+        type: choice
+        options: [beta, archive, stable]
+        default: beta
+        required: true
+      source:
+        description: Full first-parent main SHA for a Beta or archive build (defaults to the dispatched main SHA)
+        type: string
+      build:
+        description: Archived build number for a Stable promotion
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main' && inputs.operation != 'stable'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    container:
+      image: debian@sha256:9bb8a3626890e084ab54e888fdd7c4b6d2f119071cd4c5dc5fecb4d73062aa5f
+    env:
+      CC: /usr/bin/cc
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      DEBIAN_FRONTEND: noninteractive
+      OKP_PORTABLE_PACKAGE_MODE: native
+    steps:
+      - run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends ca-certificates git nodejs
+      - uses: https://code.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install the Debian 13 portable builder and smoke dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t packages < <(./scripts/linux-candidate-toolchain.sh --print-portable-debian-packages)
+          apt-get install -y --no-install-recommends "${packages[@]}" \
+            appstream appstream-compose curl dbus-x11 fonts-dejavu-core imagemagick \
+            libadwaita-1-dev libegl1-mesa-dev libgl1-mesa-dev libglx-dev libgtk-4-dev libmpv-dev \
+            squashfs-tools unzip xauth xdotool xvfb xz-utils
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.98.1
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          curl --proto '=https' --tlsv1.2 -fsSL https://dot.net/v1/dotnet-install.sh -o "$RUNNER_TEMP/dotnet.sh"
+          bash "$RUNNER_TEMP/dotnet.sh" --channel 9.0 --install-dir "$HOME/.dotnet"
+          DOTNET_ROOT="$HOME/.dotnet" "$HOME/.dotnet/dotnet" tool install -g vpk --version 1.2.0
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+      - name: Build exact Forgejo main source
+        shell: bash
+        env:
+          SOURCE: ${{ inputs.source || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          git rev-list --first-parent origin/main | grep -Fx "$SOURCE" >/dev/null
+          git worktree add --detach "$RUNNER_TEMP/source" "$SOURCE"
+          ./scripts/build-linux-appimage.sh "$RUNNER_TEMP/source" "$PWD/artifacts/appimage"
+      - name: Prove playback in the packaged AppImage
+        shell: bash
+        run: |
+          set -euo pipefail
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=1280x720:rate=24 \
+            -c:v libx264 -pix_fmt yuv420p -t 20 "$RUNNER_TEMP/playback.mp4"
+          xvfb-run -a -s '-screen 0 1280x800x24' dbus-run-session -- \
+            ./scripts/smoke-linux-appimage.sh artifacts/appimage/*.AppImage "$RUNNER_TEMP/playback.mp4" artifacts/appimage/smoke
+      - name: Hand off the verified AppImage and evidence
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: linux-appimage
+          path: artifacts/appimage/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish signed AppImage
+    needs: build
+    if: always() && github.ref == 'refs/heads/main' && (inputs.operation == 'stable' || needs.build.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: ok-player-linux-appimage-publication
+      cancel-in-progress: false
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e
+        if: inputs.operation != 'stable'
+        with:
+          name: linux-appimage
+          path: artifacts/appimage
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gnupg gpgv python3-boto3
+      - name: Sign, publish, and verify the bytes in R2
+        shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
+          PROMOTE_BUILD: ${{ inputs.build }}
+          EXPECTED_SOURCE: ${{ inputs.source || github.sha }}
+          OKP_GPG_PRIVATE_KEY: ${{ secrets.OKP_GPG_PRIVATE_KEY }}
+          OKP_GPG_PASSPHRASE: ${{ secrets.OKP_GPG_PASSPHRASE }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ "$OPERATION" == stable ]]; then
+            [[ "$PROMOTE_BUILD" =~ ^[1-9][0-9]*$ ]]
+            /usr/bin/python3 scripts/linux-appimage.py promote-stable --build "$PROMOTE_BUILD"
+          else
+            directory=artifacts/appimage
+            (cd "$directory" && sha256sum -c SHA256SUMS)
+            source="$(cat "$directory/source.txt")"
+            [[ "$source" == "$EXPECTED_SOURCE" ]]
+            options=()
+            if [[ "$OPERATION" == archive ]]; then options+=(--archive-only); fi
+            /usr/bin/python3 scripts/linux-appimage.py publish-beta --source "$source" \
+              --build "$(cat "$directory/build.txt")" --image "$directory"/*.AppImage "${options[@]}"
+          fi
