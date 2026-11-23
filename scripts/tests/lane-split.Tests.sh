@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # The two-lane split, asserted against the parsed workflows rather than their text.
 #
-# A pull request is gated by the three required checks only. The deep lanes - Fedora RPM,
-# Windows Installer, Offline Flatpak - run on pushes to main, nightly and on demand, so a
-# user-visible fix reaches a candidate in minutes instead of waiting on lanes it cannot break.
+# The AppImage release is manually dispatched and never gates a pull request.
+# Windows keeps its main and nightly installer builds.
 #
 # Parsed, not grepped: a comment mentioning a trigger, or a duplicated string, must not be able
 # to make this pass or fail. The previous form of this check counted occurrences of "- 'src/**'"
@@ -31,9 +30,7 @@ PY
 }
 
 DEEP_LANES=(
-  .github/workflows/rpm.yml
   .github/workflows/windows-package.yml
-  .github/workflows/flatpak.yml
 )
 
 for lane in "${DEEP_LANES[@]}"; do
@@ -54,6 +51,20 @@ for lane in "${DEEP_LANES[@]}"; do
     *,schedule,*) pass "$lane runs nightly" ;;
     *) fail "$lane must run nightly" "triggers: $triggers" ;;
   esac
+done
+
+if [[ "$(read_policy .forgejo/workflows/linux-appimage.yml)" == $'triggers=workflow_dispatch\npush_paths=' ]]; then
+  pass "the AppImage release runs only on manual dispatch"
+else
+  fail "the AppImage release must be dispatch-only" "it can build or publish without an operator"
+fi
+
+for retired in .github/workflows/{acceptance-gnome-wayland,flatpak,release-linux,release-linux-candidate,rpm}.yml .copr/Makefile; do
+  if [[ -e "$retired" ]]; then
+    fail "$retired must stay disabled" "found at an active entry point"
+  else
+    pass "$retired is inactive"
+  fi
 done
 
 # The Windows lane builds the installer, so its push filter must still reach everything the
@@ -77,28 +88,9 @@ for required in 'src/**' 'LICENSE' 'THIRD-PARTY-NOTICES.md'; do
   fi
 done
 
-# The Flatpak lane asserts its own gate sources are in its push filter; keep the
-# filter honest here too, so a stale assertion in the smoke cannot drift apart
-# from the workflow again (#755).
-policy="$(read_policy .github/workflows/flatpak.yml)"
-push_paths="${policy##*$'\n'}"
-push_paths="${push_paths#push_paths=}"
-for required in   'scripts/flatpak_cargo_sources.py'   'scripts/flatpak_integration_markers.py'   'scripts/tests/flatpak-integration-markers.sh'   'scripts/tests/flatpak-lifecycle-control.sh'   'scripts/smoke-linux-flatpak.sh'; do
-  found=no
-  IFS=$'\x1f' read -r -a entries <<<"$push_paths"
-  for entry in "${entries[@]}"; do
-    [[ "${entry%$'\n'}" == "$required" ]] && found=yes
-  done
-  if [[ "$found" == yes ]]; then
-    pass "the Flatpak push filter covers $required"
-  else
-    fail "the Flatpak push filter must list $required exactly" "paths: ${push_paths//$'\x1f'/, }"
-  fi
-done
-
 # The fast lane is the other half of the contract: the required checks report on every pull
 # request, so they must carry no path filter at all.
-for fast in .github/workflows/ci.yml .github/workflows/rust.yml; do
+for fast in .github/workflows/ci.yml .github/workflows/rust.yml .forgejo/workflows/rust.yml; do
   reason="$(python3 - "$fast" <<'PY'
 import sys, yaml
 d = yaml.safe_load(open(sys.argv[1]))

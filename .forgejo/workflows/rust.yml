@@ -159,9 +159,6 @@ jobs:
       - name: Linux window regression smoke runner policy tests
         run: ./scripts/tests/linux-window-regression-smokes.Tests.sh
 
-      - name: Installed-RPM launch gate policy tests
-        run: ./scripts/tests/rpm-installed-launch-gate.Tests.sh
-
       - name: Linux package version scheme tests
         run: ./scripts/tests/linux-package-version.Tests.sh
 
@@ -192,7 +189,7 @@ jobs:
       - name: Wayland aiming harness delivers or refuses
         run: ./scripts/tests/wayland-aim-harness.Tests.sh
 
-      # The five packaging lanes are the only place the licence obligation is
+      # The packaging recipes are the only place the licence obligation is
       # discharged, and none of them is built by a pull request. This pair is
       # cheap and static: the checker reads every lane, and the policy tests
       # take one document away from one lane at a time and require the checker

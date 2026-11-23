@@ -28,15 +28,6 @@ for tool in gpg dpkg-deb python3; do
   command -v "$tool" >/dev/null 2>&1 ||
     { printf 'Debian APT provisioning tests require %s, which is not on PATH\n' "$tool" >&2; exit 1; }
 done
-# The release-lane assertion parses the workflow rather than grepping it, which needs a YAML
-# parser. Named here with the other prerequisites so a runner without it says so, instead of
-# failing several assertions later with a traceback.
-python3 -c 'import yaml' 2>/dev/null || {
-  echo 'Debian APT provisioning tests require PyYAML (python3-yaml), which is not importable' >&2
-  echo 'It parses .github/workflows/release-linux.yml to check the suite the release lane declares.' >&2
-  exit 1
-}
-
 failures=0
 pass() { printf 'PASS %s\n' "$1"; }
 fail() { printf 'FAIL %s: %s\n' "$1" "$2" >&2; failures=$((failures + 1)); }
@@ -195,41 +186,7 @@ else
   fail 'default suite' 'an undeclared build did not provision the candidate suite'
 fi
 
-# ...which only holds because the release lane declares itself. A release that stopped saying
-# so would publish `linux-v*` packages subscribing every user to the QA channel. Two things
-# have to be true for that not to happen, and neither is a string appearing somewhere in a
-# file: the step that builds the Debian package must carry the variable in the environment it
-# runs with, and the script it runs must pass it on to the packaging.
-cat >"$WORK/release-lane.py" <<'PYTHON'
-import sys
-
-import yaml
-
-workflow = yaml.safe_load(open(sys.argv[1]))
-building = [
-    step
-    for job in workflow["jobs"].values()
-    for step in job.get("steps", [])
-    if "build-linux-portable-package.sh deb" in (step.get("run") or "")
-]
-if not building:
-    sys.exit("no step in release-linux.yml builds the Debian package lane")
-for step in building:
-    suite = (step.get("env") or {}).get("OKP_DEB_APT_SUITE")
-    if suite != "stable":
-        sys.exit(
-            "the step %r builds the release .deb with OKP_DEB_APT_SUITE=%r, so it would "
-            "subscribe every user to the QA channel" % (step.get("name"), suite)
-        )
-PYTHON
-if python3 "$WORK/release-lane.py" "$ROOT/.github/workflows/release-linux.yml"; then
-  pass 'the step that builds the release .deb runs with the stable suite in its environment'
-else
-  fail 'release lane' 'see above'
-fi
-
-# The other half: the script that step runs has to carry the variable through to the
-# packaging. Asked by running it, with the packaging replaced by something that reports the
+# The portable wrapper has to carry the variable through to the packaging. Asked by running it, with the packaging replaced by something that reports the
 # environment it was handed.
 LANE_FIXTURE="$WORK/lane"
 mkdir -p "$LANE_FIXTURE/scripts"

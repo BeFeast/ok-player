@@ -277,8 +277,8 @@ CODE_SUFFIXES = {
     ".html",
 }
 # Shipped files with no suffix at all: `Path.suffix` is empty for these, so a
-# suffix set alone can never reach them. `.copr/Makefile` drives COPR
-# packaging. Their recipe lines are shell, so they mask single quotes too.
+# suffix set alone can never reach them. Their recipe lines are shell, so
+# they mask single quotes too.
 CODE_FILENAMES = {"Makefile", "makefile", "GNUmakefile"}
 SKIP_DIRS = {".git", "target", "node_modules"}
 # `bin` and `obj` are .NET build output, but only where a project file puts

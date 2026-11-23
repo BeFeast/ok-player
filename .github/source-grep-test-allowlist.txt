@@ -53,7 +53,6 @@
 # grep-only test by habit, not a defence against an author who wants one merged.
 #
 # Format: <path relative to the repository root>::<test function name>
-rust/crates/okp-core/tests/candidate_toolchain.rs::portability_failure_evidence_is_bound_to_both_workflow_artifacts
 rust/crates/okp-core/tests/isolated_xvfb_session.rs::main_window_fit_session_has_one_multiscreen_manager_and_two_supervisors
 rust/crates/okp-core/tests/isolated_xvfb_session.rs::player_window_drag_smoke_covers_survival_cancel_and_recovery
 rust/crates/okp-core/tests/isolated_xvfb_session.rs::window_regression_runner_dispatches_drag_and_fit_with_bound_evidence
@@ -123,5 +122,4 @@ rust/crates/okp-linux-gtk/src/css.rs::playback_chrome_keeps_the_canonical_redlin
 #     asserts on a PowerShell script and the Windows packaging workflow, neither
 #     of which runs on Linux.
 rust/crates/okp-linux-gtk/src/tests.rs::native_wayland_screenshots_use_libmpv_advanced_control
-rust/crates/okp-linux-gtk/src/tests.rs::fedora_launch_closure_keeps_its_dlopen_requires_and_weak_dependency_exclusions
 rust/crates/okp-linux-gtk/src/tests.rs::windows_installed_tree_assertion_keeps_a_size_floor_under_every_required_file

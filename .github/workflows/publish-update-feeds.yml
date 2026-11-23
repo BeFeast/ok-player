@@ -4,8 +4,8 @@ name: Update Feeds
 # the signed APT repository (issues #683, #689).
 # Installed builds read their channel manifest from https://befeast.github.io/ok-player/:
 #   - Windows (Velopack SimpleWebSource):   updates/win/releases.win.json
-#   - Linux AppImage (Velopack HttpSource): updates/linux/releases.linux.json
-#   - Linux .deb self-updater:              updates/linux/deb.linux.json
+#   - Legacy Linux AppImage (Velopack):     updates/linux/releases.linux.json
+#   - Legacy Linux .deb self-updater:       updates/linux/deb.linux.json
 #   - Debian/Ubuntu system updater:         apt/ (dists/stable + dists/candidate over a shared
 #                                           pool, signed; scripts/build-apt-repo.sh)
 # This workflow is the ONLY writer of that site. It rebuilds the whole site from docs/site plus
@@ -19,12 +19,9 @@ name: Update Feeds
 # Triggers:
 #   - release published: `vpk upload github` (installer/build-velopack.ps1 -Publish) publishes the
 #     Windows v* release with the operator's token, so this event fires and the feed update rides
-#     the Windows release pipeline. Linux releases are created by release-linux.yml with
-#     GITHUB_TOKEN, which never fires this event — release-linux.yml instead calls this workflow
-#     directly via workflow_call once it has published a linux-v* release.
+#     the Windows release pipeline.
 #   - push to main touching the site or a generator: content redeploy.
 #   - workflow_dispatch: manual redeploy, first-time bootstrap, belt-and-braces re-runs.
-#   - workflow_call: invoked by release-linux.yml after publishing a linux-v* release.
 # Every run rebuilds both feeds AND the APT archive from the current source of truth, so
 # overlapping or repeated triggers are harmless; the concurrency group serializes deploys so the
 # last one wins. The APT archive is regenerated the same way for the same reason: it is derived
@@ -56,7 +53,6 @@ on:
       - 'scripts/linux-package-version.sh'
       - '.github/workflows/publish-update-feeds.yml'
   workflow_dispatch:
-  workflow_call:
 
 permissions:
   contents: read

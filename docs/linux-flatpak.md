@@ -50,7 +50,7 @@ It does not prove the code it names is reachable, compiled, or correct - a
 string literal or dead-but-uncommented code would satisfy it. The "and it
 builds" half of the contract is the offline Flatpak build, and the "and it
 behaves" half is the lifecycle and renderer lanes.
-`scripts/tests/flatpak-integration-markers.sh` is the self-test for the checker
+`scripts/tests/flatpak-integration-markers.sh.disabled` is the self-test for the checker
 itself: it drives it against synthetic trees and requires line-commented,
 block-commented, and HTML-commented markers to be rejected while a Markdown
 heading is not mistaken for a comment.
@@ -131,7 +131,7 @@ controlled step's own assertion is what failed; a missing tool exits 127, a
 missing artifact manifest or an unknown control id exits 2, and any other
 lifecycle assertion exits 1. The workflow requires exactly 3 plus the
 assertion's own message, so a control cannot report success because the lane
-died before reaching it. `scripts/tests/flatpak-lifecycle-control.sh` drives
+died before reaching it. `scripts/tests/flatpak-lifecycle-control.sh.disabled` drives
 that wiring against scripted stand-ins for Flatpak and the launch probe and is
 run by the workflow before the offline build. It checks both sides of the
 status-3 contract: a controlled step must produce 3, and a failure at any other

@@ -9,7 +9,7 @@
 # mesa-libEGL-devel/mesa-libGL-devel pull libglvnd-devel, which pulls
 # libglvnd-gles - so libGLESv2.so.2 is present there no matter what the package
 # declares. Run this script in a clean root that carries only the headless
-# harness (see the "Fedora <n> installed-RPM launch" job in .github/workflows/rpm.yml).
+# harness (see the "Fedora <n> installed-RPM launch" job in .github/workflows/rpm.yml.disabled).
 #
 # There is deliberately no environment variable that changes what this gate does
 # when it is executed. Everything the tests need to redirect - the installed
@@ -82,7 +82,7 @@ run_gate() {
   # run_gate <rpm-or-directory> <evidence-dir> <installed-binary> <launch-harness>
   #
   # The last two are parameters rather than constants so that
-  # scripts/tests/rpm-installed-launch-gate.Tests.sh can drive the whole gate -
+  # scripts/tests/rpm-installed-launch-gate.Tests.sh.disabled can drive the whole gate -
   # including everything after `dnf install` - against a synthetic root. main()
   # below pins them to the real installed location and the real harness, and
   # main() is what running this file executes.
@@ -152,7 +152,7 @@ main() {
 
 # Executed as a program -> run the gate against the real installed path and the
 # real launch harness. Sourced -> define the functions and let the caller drive
-# run_gate; only scripts/tests/rpm-installed-launch-gate.Tests.sh does that.
+# run_gate; only scripts/tests/rpm-installed-launch-gate.Tests.sh.disabled does that.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   main "$@"
 fi

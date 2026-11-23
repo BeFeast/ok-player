@@ -23,15 +23,11 @@ TRACKED=(
   LICENSE.LGPL-3.0
   THIRD-PARTY-NOTICES.md
   rust/packaging/linux/copyright
-  rust/packaging/fedora/ok-player.spec
-  rust/packaging/flatpak/com.befeast.okplayer.json
   installer/build-velopack.ps1
   scripts/stage-license-documents.sh
   scripts/package-linux-deb.sh
   scripts/package-linux-velopack.sh
   scripts/smoke-linux-install-upgrade.sh
-  scripts/smoke-linux-rpm-install-upgrade.sh
-  scripts/smoke-linux-flatpak.sh
   scripts/assert-windows-installed-tree.ps1
 )
 
@@ -135,56 +131,7 @@ drop_line "$tree" scripts/package-linux-velopack.sh 'squashfs-root/usr/bin/usr/s
 expect_red "an AppImage lane that stops looking inside the image it built is caught" \
   "$tree" appimage "no longer asserts the documents inside the extracted AppImage"
 
-# --- 4: rpm ------------------------------------------------------------------
-tree="$(make_tree rpm-no-lgpl-install)"
-drop_line "$tree" rust/packaging/fedora/ok-player.spec 'LICENSE.LGPL-3.0'
-expect_red "an rpm spec that stops installing the LGPL text is caught" \
-  "$tree" rpm "%install no longer puts LICENSE.LGPL-3.0"
-
-tree="$(make_tree rpm-no-license-marker)"
-drop_line "$tree" rust/packaging/fedora/ok-player.spec '^%license'
-expect_red "an rpm spec that stops marking the texts %license is caught" \
-  "$tree" rpm "%files no longer marks LICENSE"
-
-# --- 5: flatpak --------------------------------------------------------------
-tree="$(make_tree flatpak-no-lgpl)"
-drop_line "$tree" rust/packaging/flatpak/com.befeast.okplayer.json \
-  'install -Dm644 LICENSE.LGPL-3.0'
-expect_red "a Flatpak manifest that stops installing the LGPL text is caught" \
-  "$tree" flatpak "no longer installs LICENSE.LGPL-3.0"
-
-tree="$(make_tree flatpak-no-notices)"
-drop_line "$tree" rust/packaging/flatpak/com.befeast.okplayer.json 'THIRD-PARTY-NOTICES.md /app/share'
-expect_red "a Flatpak manifest that stops installing the notices is caught" \
-  "$tree" flatpak "no longer installs THIRD-PARTY-NOTICES.md"
-
-# The Flatpak builds a pinned commit, so an install command for a file that
-# postdates the pin is a build failure, not a shipped document. Removing the
-# declared source has to be caught even though the install command survives.
-tree="$(make_tree flatpak-source-undeclared)"
-python3 - "$tree/rust/packaging/flatpak/com.befeast.okplayer.json" <<'PY'
-import json
-import sys
-
-path = sys.argv[1]
-manifest = json.load(open(path))
-app = manifest["modules"][0]
-app["sources"] = [
-    source
-    for source in app["sources"]
-    if not (isinstance(source, dict) and source.get("type") == "file")
-]
-json.dump(manifest, open(path, "w"), indent=4)
-PY
-expect_red "a Flatpak that installs the LGPL text without declaring a source is caught" \
-  "$tree" flatpak "without declaring a source for it"
-
-tree="$(make_tree flatpak-smoke-gutted)"
-drop_line "$tree" scripts/smoke-linux-flatpak.sh '/app/share/licenses/'
-expect_red "a Flatpak smoke that stops resolving the documents is caught" \
-  "$tree" flatpak "no longer resolves the installed documents"
-
-# --- 6: windows --------------------------------------------------------------
+# --- 4: windows --------------------------------------------------------------
 tree="$(make_tree windows-no-lgpl)"
 drop_line "$tree" installer/build-velopack.ps1 'LICENSE.LGPL-3.0'
 expect_red "a Windows installer that stops staging the LGPL text is caught" \

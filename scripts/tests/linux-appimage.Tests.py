@@ -4,6 +4,7 @@
 import fcntl
 import importlib.util
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 
@@ -48,6 +49,55 @@ def fixture(seed):
     image[8:11] = b"AI\x02"
     image[18:20] = b"\x3e\x00"
     return bytes(image)
+
+
+class AppImageBuildTests(unittest.TestCase):
+    def test_build_handoff_binds_image_to_first_parent_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            source = work / "source"
+            source.mkdir()
+            output = work / "output"
+
+            def git(*arguments):
+                return subprocess.check_output(
+                    ["git", "-C", source, *arguments], text=True
+                ).strip()
+
+            git("init", "--quiet", "--initial-branch=main")
+            git("config", "user.name", "AppImage test")
+            git("config", "user.email", "appimage@example.invalid")
+            git("commit", "--quiet", "--allow-empty", "-m", "Root")
+            git("switch", "--quiet", "-c", "side")
+            git("commit", "--quiet", "--allow-empty", "-m", "Side")
+            git("switch", "--quiet", "main")
+            git("merge", "--quiet", "--no-ff", "-m", "Merge side", "side")
+
+            scripts = source / "scripts"
+            scripts.mkdir()
+            builder = scripts / "build-linux-portable-package.sh"
+            builder.write_text(
+                '#!/usr/bin/env bash\n'
+                'set -eu\n'
+                '[[ "$#" == 2 && "$1" == appimage ]]\n'
+                'cd "$(dirname "$0")/.."\n'
+                'mkdir -p artifacts/linux/velopack\n'
+                'printf "%s" "$2" >"artifacts/linux/velopack/OK-Player-$2-x86_64.AppImage"\n'
+            )
+            builder.chmod(0o755)
+            subprocess.run(
+                [SCRIPT.with_name("build-linux-appimage.sh"), source, output], check=True
+            )
+            version = "0.11.0-beta.0.2"
+            image = output / f"OK-Player-{version}-x86_64.AppImage"
+            self.assertEqual(image.read_text(), version)
+            self.assertTrue(image.stat().st_mode & 0o100)
+            self.assertEqual((output / "source.txt").read_text().strip(), git("rev-parse", "HEAD"))
+            self.assertEqual((output / "build.txt").read_text().strip(), "2")
+            self.assertEqual(
+                (output / "SHA256SUMS").read_text().split(),
+                [appimage.digest(image.read_bytes()), image.name],
+            )
 
 
 class AppImageTests(unittest.TestCase):

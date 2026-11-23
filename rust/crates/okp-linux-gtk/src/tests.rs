@@ -6763,71 +6763,9 @@ fn candidate_appimage_source_uses_the_manifest_bound_full_package() {
 fn linux_packages_stamp_their_update_install_lane() {
     let deb = include_str!("../../../../scripts/package-linux-deb.sh");
     let appimage = include_str!("../../../../scripts/package-linux-velopack.sh");
-    let rpm = include_str!("../../../packaging/fedora/ok-player.spec");
 
     assert!(deb.contains("OKP_PACKAGE_KIND=deb"));
     assert!(appimage.contains("OKP_PACKAGE_KIND=appimage"));
-    assert_eq!(rpm.matches("OKP_PACKAGE_KIND=rpm").count(), 2);
-    assert!(rpm.contains("BuildRequires:  procps-ng"));
-}
-
-/// The Fedora package aborts at startup without an explicit `Requires` for a
-/// soname nothing links against, and the job that proves this end to end is
-/// advisory. These are the two lines whose silent removal re-opens that defect,
-/// pinned in a required check.
-#[test]
-fn fedora_launch_closure_keeps_its_dlopen_requires_and_weak_dependency_exclusions() {
-    let spec = include_str!("../../../packaging/fedora/ok-player.spec");
-    // GTK4 reaches OpenGL ES through libepoxy's dlopen, so the binary carries no
-    // DT_NEEDED entry and rpm's automatic dependency extraction cannot find it.
-    // Only this line pulls a provider in with the package.
-    assert!(
-        spec.contains("Requires:       libGLESv2.so.2()(64bit)"),
-        "the Fedora spec must declare the dlopen'ed GLES soname; without it the \
-         installed package aborts with \"Couldn't open libGLESv2.so.2\""
-    );
-
-    // The launch root must carry nothing the package is supposed to bring with
-    // it. On Fedora 44 ffmpeg-free *recommends* libcamera, which requires
-    // libGLESv2.so.2, so weak dependencies drag libglvnd-gles into the harness
-    // root and blind the gate.
-    let rpm_workflow = include_str!("../../../../.github/workflows/rpm.yml");
-    let harness = rpm_workflow
-        .find("xorg-x11-server-Xvfb")
-        .expect("the installed-RPM launch job must install a headless harness");
-    let harness_install = &rpm_workflow[harness.saturating_sub(200)..harness];
-    assert!(
-        harness_install.contains("--setopt=install_weak_deps=False"),
-        "the headless launch harness must be installed without weak dependencies"
-    );
-
-    // The same flag on the package install itself, for the mirror-image reason:
-    // with weak dependencies enabled a `Recommends` would satisfy the gate's
-    // post-install soname assertion, and it would pass a package whose hard
-    // `Requires` are still incomplete.
-    let gate = include_str!("../../../../scripts/smoke-linux-rpm-installed-launch.sh");
-    assert!(
-        gate.contains("dnf install -y --setopt=install_weak_deps=False \"$rpm_path\""),
-        "the launch gate must install the package without weak dependencies"
-    );
-
-    // The gate takes the installed-binary path and the launch harness as
-    // parameters of run_gate so its tests can drive the post-install half, and
-    // pins them to the real ones whenever it is executed. Nothing in the
-    // executed path reads the environment, so no `env:` key in a workflow can
-    // shorten it.
-    assert!(
-        gate.contains("if [[ \"${BASH_SOURCE[0]}\" == \"${0}\" ]]; then"),
-        "the launch gate must run main() whenever it is executed as a program"
-    );
-    assert!(
-        gate.contains("    /usr/bin/ok-player \"$ROOT/scripts/smoke-linux-main-window.sh\""),
-        "main() must pin the real installed binary and the real launch harness"
-    );
-    assert!(
-        !gate.contains("OKP_RPM_LAUNCH_GATE_SELFTEST"),
-        "the launch gate must not carry an environment switch that skips the install"
-    );
 }
 
 /// The Windows installed-tree assertion runs in an advisory lane and its own
@@ -6915,13 +6853,10 @@ fn candidate_builder_defaults_below_beta_one_until_the_base_is_overridden() {
 
 #[test]
 fn candidate_workflow_holds_one_close_on_exec_build_publish_section() {
-    let workflow = include_str!("../../../../.github/workflows/release-linux-candidate.yml");
     let runner = include_str!("../../../../scripts/run-linux-candidate-workflow.sh");
     let builder = include_str!("../../../../scripts/build-linux-candidate.sh");
     let publisher = include_str!("../../../../scripts/publish-linux-candidate.sh");
 
-    assert!(workflow.contains("--phase build-and-publish"));
-    assert!(workflow.contains("-- ./scripts/run-linux-candidate-workflow.sh"));
     assert!(runner.contains("\"$ROOT/scripts/build-linux-candidate.sh\""));
     assert!(runner.contains("\"$STATE_DIR/checkout/scripts/publish-linux-candidate.sh\""));
     assert!(runner.contains("BUNDLE=\"$(cat \"$STATE_DIR/last-bundle.path\")\""));

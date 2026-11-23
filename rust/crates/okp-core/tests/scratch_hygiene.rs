@@ -90,25 +90,13 @@ fn session_reclaimer_removes_only_the_named_sessions_scratch() {
 }
 
 #[test]
-fn candidate_workflow_wires_exit_retention_and_session_reclaim() {
+fn candidate_builder_wires_exit_retention() {
     let root = repository_root();
     let builder = fs::read_to_string(root.join("scripts/build-linux-candidate.sh"))
         .expect("candidate builder");
     assert!(builder.contains("trap prune_candidate_out EXIT"));
     assert!(builder.contains("prune-out"));
     assert!(builder.contains("--last-bundle-path \"$LAST_BUNDLE\""));
-
-    let workflow = fs::read_to_string(root.join(".github/workflows/release-linux-candidate.yml"))
-        .expect("candidate workflow");
-    assert!(
-        workflow.contains(
-            "OKP_SCRATCH_SESSION: candidate-${{ github.run_id }}-${{ github.run_attempt }}"
-        )
-    );
-    assert!(workflow.contains(
-        "if: always() && steps.supersession.outputs.should_run != 'false'\n        env:\n          OKP_SCRATCH_SESSION:"
-    ));
-    assert!(workflow.contains("run: ./scripts/reclaim-ok-player-scratch.sh"));
 }
 
 fn numeric_generations(out: &Path) -> Vec<u64> {

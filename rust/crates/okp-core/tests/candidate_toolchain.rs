@@ -255,39 +255,8 @@ fn debian_preflight_skips_dotnet_tools_but_other_lanes_require_them() {
 }
 
 #[test]
-fn workflow_and_operator_guide_consume_the_canonical_manifest() {
+fn operator_guide_and_build_scripts_consume_the_canonical_manifest() {
     let root = repository_root();
-    let workflow = fs::read_to_string(root.join(".github/workflows/release-linux-candidate.yml"))
-        .expect("candidate workflow");
-    let preflight = workflow
-        .find("Preflight bundled-mpv toolchain")
-        .expect("preflight step");
-    let lock = workflow
-        .find("Build lock coordinator")
-        .expect("build lock step");
-    assert!(
-        preflight < lock,
-        "preflight must run before lock acquisition"
-    );
-    assert!(workflow.contains("./scripts/linux-candidate-toolchain.sh"));
-    assert!(workflow.contains("timeout-minutes: 45"));
-    assert!(!workflow.contains("timeout-minutes: 90"));
-
-    let release_workflow = fs::read_to_string(root.join(".github/workflows/release-linux.yml"))
-        .expect("release workflow");
-    assert!(release_workflow.contains("OKP_PORTABLE_PACKAGE_MODE: container"));
-    assert!(
-        release_workflow
-            .contains("OKP_PORTABLE_BUILDER_IMAGE: ok-player-linux-builder:debian-13-v1")
-    );
-    assert!(release_workflow.contains("OKP_PORTABILITY_CONTAINER_MODE: required"));
-    assert!(release_workflow.contains("OKP_PORTABILITY_REQUIRED_MODE=foreign-container"));
-
-    let rpm_workflow =
-        fs::read_to_string(root.join(".github/workflows/rpm.yml")).expect("Fedora RPM workflow");
-    assert!(rpm_workflow.contains("CARGO_HTTP_MULTIPLEXING: 'false'"));
-    assert!(rpm_workflow.contains("CARGO_NET_RETRY: '10'"));
-
     let docs = fs::read_to_string(root.join("docs/linux-candidate-builder.md"))
         .expect("candidate builder guide");
     assert!(docs.contains("scripts/linux-candidate-toolchain.manifest"));
@@ -835,25 +804,6 @@ fn foreign_portability_report_requires_fullscreen_and_compact_media_checks() {
         "{}",
         String::from_utf8_lossy(&accepted.stderr)
     );
-}
-
-#[test]
-fn portability_failure_evidence_is_bound_to_both_workflow_artifacts() {
-    let verifier = include_str!("../../../../scripts/verify-linux-package-portability.sh");
-    assert!(verifier.contains("dst=/evidence"));
-    assert!(verifier.contains("PORTABILITY_EVIDENCE_DIR=\"/evidence/$target_slug\""));
-
-    let release = include_str!("../../../../.github/workflows/release-linux.yml");
-    assert!(release.contains("Upload portability smoke failure evidence"));
-    assert!(release.contains("artifacts/linux/portability-smoke-evidence/**"));
-    assert!(release.contains("if-no-files-found: ignore"));
-
-    let candidate = include_str!("../../../../.github/workflows/release-linux-candidate.yml");
-    assert!(candidate.contains("Upload portability smoke failure evidence"));
-    assert!(candidate.contains("artifacts/linux/portability-smoke-evidence/**"));
-
-    let candidate_runner = include_str!("../../../../scripts/run-linux-candidate-workflow.sh");
-    assert!(candidate_runner.contains("OKP_PORTABILITY_EVIDENCE_DIR"));
 }
 
 fn repository_root() -> PathBuf {

@@ -37,10 +37,10 @@ APP_PATCH="$ROOT/rust/packaging/flatpak/ok-player-flatpak.patch"
 PATCHED_PATHS="$ROOT/rust/packaging/flatpak/patched-paths.txt"
 BUILD_SCRIPT="$ROOT/scripts/build-flatpak-beta.sh"
 LIFECYCLE_SCRIPT="$ROOT/scripts/smoke-linux-flatpak-lifecycle.sh"
-LIFECYCLE_CONTROL_TEST="$ROOT/scripts/tests/flatpak-lifecycle-control.sh"
+LIFECYCLE_CONTROL_TEST="$ROOT/scripts/tests/flatpak-lifecycle-control.sh.disabled"
 MARKER_CHECKER="$ROOT/scripts/flatpak_integration_markers.py"
 CARGO_SOURCES_CHECKER="$ROOT/scripts/flatpak_cargo_sources.py"
-MARKER_TEST="$ROOT/scripts/tests/flatpak-integration-markers.sh"
+MARKER_TEST="$ROOT/scripts/tests/flatpak-integration-markers.sh.disabled"
 REPIN_SCRIPT="$ROOT/scripts/flatpak-repin.sh"
 SOFTWARE_RENDER_SCRIPT="$ROOT/scripts/smoke-linux-software-renderer.sh"
 WORKFLOW="$ROOT/.github/workflows/flatpak.yml.disabled"
@@ -101,8 +101,8 @@ assert "Packaged no-DRI software renderer smoke" in workflow
 assert "flatpak run --user --nodevice=dri" in workflow
 assert 'xdg-user-dirs-update --set PICTURES "$HOME/Pictures"' in workflow
 assert "./scripts/smoke-linux-flatpak-lifecycle.sh" in workflow
-assert "./scripts/tests/flatpak-lifecycle-control.sh" in workflow
-assert "./scripts/tests/flatpak-integration-markers.sh" in workflow
+assert "./scripts/tests/flatpak-lifecycle-control.sh.disabled" in workflow
+assert "./scripts/tests/flatpak-integration-markers.sh.disabled" in workflow
 assert "OKP_FLATPAK_LIFECYCLE_NEGATIVE_CONTROL: update-current" in workflow
 # The negative control must assert the reason it failed, not merely that it
 # failed: a preflight abort, a missing artifact manifest, or a renamed control

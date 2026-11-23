@@ -4,10 +4,8 @@
 OK Player is GPL-3.0-or-later and its shipped chrome icons are Adwaita artwork
 taken under the LGPL-3 option, so every artifact handed to a user must be
 accompanied by both licence documents (GPLv3 §4, LGPLv3 §4(b)) plus the notices
-for what it bundles. That obligation is spread over five recipes in four
-languages, none of which is exercised by the three checks that gate a pull
-request - so dropping a document from a lane is invisible until a user asks for
-the licence and it is not there.
+for what it bundles. These checks cover AppImage, Windows, and the retained
+Debian packaging code.
 
 This check reads each lane's recipe and asserts, per lane, that the documents
 are installed at the path that ecosystem looks for them at:
@@ -16,15 +14,12 @@ are installed at the path that ecosystem looks for them at:
             THIRD-PARTY-NOTICES.md}   (Debian policy §12.5)
   appimage  usr/bin/usr/share/doc/ok-player/ inside the extracted AppDir -
             Velopack maps the pack directory onto the AppDir's usr/bin
-  rpm       %license / %doc under %{_licensedir}/%{_docdir}
-  flatpak   /app/share/licenses/com.befeast.okplayer/
   windows   next to the app in the Velopack publish directory
 
 The two archive lanes route through `scripts/stage-license-documents.sh`, so
 for those the check *runs* the staging code into a scratch directory and looks
-at what actually landed, rather than trusting the script's text. The other
-three lanes are declarative recipes - an rpm spec, a Flatpak manifest and a
-PowerShell staging script - so there the declaration is the thing to read.
+at what actually landed, rather than trusting the script's text. The Windows
+check reads the PowerShell staging declaration.
 
 The runtime smokes that assert the installed paths are checked too: a lane can
 also fall out of compliance by keeping the install and gutting the gate.
@@ -35,7 +30,6 @@ Usage: check-packaging-licenses.py [--root .]
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import subprocess
 import sys
@@ -182,110 +176,6 @@ def check_appimage(root: Path) -> LaneResult:
     return result
 
 
-def check_rpm(root: Path) -> LaneResult:
-    recipe = "rust/packaging/fedora/ok-player.spec"
-    result = LaneResult("rpm", recipe)
-    text = (root / recipe).read_text(encoding="utf-8")
-    installs = "\n".join(
-        line for line in text.splitlines() if line.strip().startswith(("install ", "install\t"))
-        or "%{buildroot}" in line
-    )
-    files_section = section_of(text, "%files")
-    for name in ("LICENSE", "LICENSE.LGPL-3.0"):
-        result.require(
-            f"_licensedir}}/%{{name}}/{name}" in installs,
-            f"{recipe} %install no longer puts {name} in %{{_licensedir}}",
-        )
-        result.require(
-            re.search(rf"^%license .*{re.escape(name)}$", files_section, re.M) is not None,
-            f"{recipe} %files no longer marks {name} as %license",
-        )
-    result.require(
-        "_docdir}/%{name}/THIRD-PARTY-NOTICES.md" in installs,
-        f"{recipe} %install no longer puts THIRD-PARTY-NOTICES.md in %{{_docdir}}",
-    )
-    result.require(
-        re.search(r"^%doc .*THIRD-PARTY-NOTICES\.md$", files_section, re.M) is not None,
-        f"{recipe} %files no longer marks THIRD-PARTY-NOTICES.md as %doc",
-    )
-    smoke = "scripts/smoke-linux-rpm-install-upgrade.sh"
-    smoke_text = (root / smoke).read_text(encoding="utf-8")
-    for path in (
-        "/usr/share/licenses/ok-player/LICENSE",
-        "/usr/share/licenses/ok-player/LICENSE.LGPL-3.0",
-        "/usr/share/doc/ok-player/THIRD-PARTY-NOTICES.md",
-    ):
-        result.require(
-            path in smoke_text,
-            f"{smoke} does not assert {path} after install",
-        )
-    result.shipped = list(SHARED_DOCUMENTS)
-    return result
-
-
-def section_of(text: str, header: str) -> str:
-    """Return one rpm spec section body, up to the next section header."""
-    lines = text.splitlines()
-    try:
-        start = next(i for i, line in enumerate(lines) if line.strip() == header)
-    except StopIteration:
-        return ""
-    body: list[str] = []
-    for line in lines[start + 1 :]:
-        if re.match(r"^%[a-z]+\b", line) and not line.startswith(("%license", "%doc", "%{", "%dir")):
-            break
-        body.append(line)
-    return "\n".join(body)
-
-
-def check_flatpak(root: Path) -> LaneResult:
-    recipe = "rust/packaging/flatpak/com.befeast.okplayer.json"
-    result = LaneResult("flatpak", recipe)
-    try:
-        manifest = json.loads((root / recipe).read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        result.require(False, f"{recipe} is not parseable JSON: {error}")
-        return result
-    app_id = manifest.get("app-id", "com.befeast.okplayer")
-    commands: list[str] = []
-    for module in manifest.get("modules", []):
-        if isinstance(module, dict):
-            commands.extend(str(c) for c in module.get("build-commands", []))
-    joined = "\n".join(commands)
-    for name in SHARED_DOCUMENTS:
-        result.require(
-            re.search(
-                rf"install\b.*\b{re.escape(name)}\s+/app/share/licenses/{re.escape(app_id)}/{re.escape(name)}",
-                joined,
-            )
-            is not None,
-            f"{recipe} no longer installs {name} into /app/share/licenses/{app_id}/",
-        )
-    # The application source is a pinned commit that predates LICENSE.LGPL-3.0,
-    # so an install command alone breaks the offline build. It has to arrive as
-    # a declared source.
-    provided = set()
-    for module in manifest.get("modules", []):
-        if not isinstance(module, dict):
-            continue
-        for source in module.get("sources", []):
-            if isinstance(source, dict) and source.get("type") in {"file", "inline"}:
-                provided.add(source.get("dest-filename") or Path(source["path"]).name)
-    result.require(
-        "LICENSE.LGPL-3.0" in provided,
-        f"{recipe} installs LICENSE.LGPL-3.0 without declaring a source for it; "
-        "the pinned application commit predates the file",
-    )
-    smoke = "scripts/smoke-linux-flatpak.sh"
-    smoke_text = (root / smoke).read_text(encoding="utf-8")
-    result.require(
-        "/app/share/licenses/" in smoke_text and "pinned" in smoke_text,
-        f"{smoke} no longer resolves the installed documents against the tree it builds",
-    )
-    result.shipped = list(SHARED_DOCUMENTS)
-    return result
-
-
 def check_windows(root: Path) -> LaneResult:
     recipe = "installer/build-velopack.ps1"
     result = LaneResult("windows", recipe)
@@ -325,8 +215,6 @@ def main() -> int:
         check_root_documents,
         check_deb,
         check_appimage,
-        check_rpm,
-        check_flatpak,
         check_windows,
     )
     results = []
