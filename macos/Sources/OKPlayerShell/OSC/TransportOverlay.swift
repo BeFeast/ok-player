@@ -31,7 +31,10 @@ final class TransportOverlay: NSView {
     weak var focusReturn: NSView?
 
     let autoHide: AutoHide
-    let panel = PalettePanel(radius: 18, opacity: 0.88)
+    // The neutral scrim matches the Main Player handoff and stays dark over
+    // video in either appearance. The timeline and focus use the brand roles.
+    let panel = PalettePanel(fill: NSColor.fromSRGB(0x161619).withAlphaComponent(0.50),
+                             border: PaletteRole.text.overVideo.withAlphaComponent(0.14), radius: 18)
     let scrubber = ScrubberView()
     let elapsedLabel = NSTextField(labelWithString: "00:00")
     let trailingLabel = NSTextField(labelWithString: "-00:00")
@@ -62,9 +65,10 @@ final class TransportOverlay: NSView {
     private var windowObservers: [NSObjectProtocol] = []
     private var inlineTimeline: [NSLayoutConstraint] = []
     private var stackedTimeline: [NSLayoutConstraint] = []
+    private var isTimelineInline = false
 
     // At narrow playback sizes, the timeline keeps its own row so it stays usable.
-    private static let inlineTimelineWidth: CGFloat = 620
+    private static let inlineTimelineWidth: CGFloat = 700
 
     init(hideTimer: HideTimer = MainQueueHideTimer()) {
         autoHide = AutoHide(timer: hideTimer)
@@ -316,12 +320,20 @@ final class TransportOverlay: NSView {
     // MARK: Layout
 
     override func setFrameSize(_ newSize: NSSize) {
-        let wasInline = frame.width >= Self.inlineTimelineWidth
         super.setFrameSize(newSize)
-        let isInline = newSize.width >= Self.inlineTimelineWidth
-        guard wasInline != isInline else { return }
-        NSLayoutConstraint.deactivate(isInline ? stackedTimeline : inlineTimeline)
-        NSLayoutConstraint.activate(isInline ? inlineTimeline : stackedTimeline)
+        if isTimelineInline != (newSize.width >= Self.inlineTimelineWidth) {
+            needsUpdateConstraints = true
+        }
+    }
+
+    override func updateConstraints() {
+        let inline = bounds.width >= Self.inlineTimelineWidth
+        if isTimelineInline != inline {
+            NSLayoutConstraint.deactivate(inline ? stackedTimeline : inlineTimeline)
+            NSLayoutConstraint.activate(inline ? inlineTimeline : stackedTimeline)
+            isTimelineInline = inline
+        }
+        super.updateConstraints()
     }
 
     private func buildPanel() {
@@ -372,24 +384,23 @@ final class TransportOverlay: NSView {
         panel.addSubview(scrubber)
 
         // Below the priority a window keeps the size it was given at (a drag, a fit,
-        // setFrame): stronger, the bar's preferred width would hold every window to
-        // 760 + 32 points.
+        // setFrame): the bar uses the available width without sizing the window.
         let fill = panel.widthAnchor.constraint(equalTo: widthAnchor, constant: -32)
         fill.priority = NSLayoutConstraint.Priority(NSLayoutConstraint.Priority.windowSizeStayPut.rawValue - 10)
         NSLayoutConstraint.activate([
             panel.centerXAnchor.constraint(equalTo: centerXAnchor),
             panel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
-            panel.widthAnchor.constraint(lessThanOrEqualToConstant: 760),
+            panel.widthAnchor.constraint(lessThanOrEqualToConstant: 1280),
             panel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 8),
             fill,
             leading.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 10),
-            leading.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -8),
+            leading.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -10),
             trailingControls.centerYAnchor.constraint(equalTo: leading.centerYAnchor),
             trailingControls.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -10),
             trailingControls.leadingAnchor.constraint(greaterThanOrEqualTo: leading.trailingAnchor, constant: 8),
         ])
         inlineTimeline = [
-            leading.topAnchor.constraint(equalTo: panel.topAnchor, constant: 8),
+            leading.topAnchor.constraint(equalTo: panel.topAnchor, constant: 10),
             scrubber.centerYAnchor.constraint(equalTo: leading.centerYAnchor),
             scrubber.leadingAnchor.constraint(equalTo: leading.trailingAnchor, constant: 10),
             scrubber.trailingAnchor.constraint(equalTo: trailingControls.leadingAnchor, constant: -10),
@@ -401,7 +412,7 @@ final class TransportOverlay: NSView {
             scrubber.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -10),
             leading.topAnchor.constraint(equalTo: scrubber.bottomAnchor, constant: 2),
         ]
-        NSLayoutConstraint.activate(frame.width >= Self.inlineTimelineWidth ? inlineTimeline : stackedTimeline)
+        NSLayoutConstraint.activate(stackedTimeline)
     }
 
     private static func symbol(_ name: String, _ label: String) -> NSImage? {

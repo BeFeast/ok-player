@@ -49,7 +49,7 @@ final class ScrubberView: NSView {
         guard isEnabled else { return }
         PaletteRole.border.overVideo.setFill()
         NSBezierPath(roundedRect: span(buffered), xRadius: 2, yRadius: 2).fill()
-        PaletteRole.focus.overVideo.setFill()
+        PaletteRole.accent.overVideo.setFill()
         NSBezierPath(roundedRect: span(progress), xRadius: 2, yRadius: 2).fill()
         PaletteRole.text.overVideo.setFill()
         for tick in ticks where tick > 0 && tick < 1 {
@@ -57,7 +57,7 @@ final class ScrubberView: NSView {
             NSRect(x: x - 0.75, y: track.minY - 2, width: 1.5, height: track.height + 4).fill()
         }
         let knob = NSRect(x: span(progress).maxX - 6, y: bounds.midY - 6, width: 12, height: 12)
-        PaletteRole.focus.overVideo.setFill()
+        PaletteRole.onAccent.overVideo.setFill()
         NSBezierPath(ovalIn: knob).fill()
         if window?.isKeyWindow == true, window?.firstResponder === self {
             let ring = NSBezierPath(ovalIn: knob.insetBy(dx: -2.5, dy: -2.5))
@@ -130,7 +130,7 @@ final class VolumeSliderView: NSView {
         guard let volume else { return }
         let unityX = track.minX + track.width * CGFloat(volume.unityFraction)
         let levelX = track.minX + track.width * CGFloat(Swift.min(Swift.max(volume.fraction, 0), 1))
-        (volume.muted ? PaletteRole.textMuted : PaletteRole.focus).overVideo.setFill()
+        (volume.muted ? PaletteRole.textMuted : PaletteRole.accent).overVideo.setFill()
         NSRect(x: track.minX, y: track.minY, width: Swift.min(levelX, unityX) - track.minX, height: track.height).fill()
         if levelX > unityX {
             (volume.muted ? PaletteRole.textMuted : PaletteRole.warning).overVideo.setFill()
@@ -139,7 +139,7 @@ final class VolumeSliderView: NSView {
         PaletteRole.text.overVideo.setFill()
         NSRect(x: unityX - 0.5, y: track.minY - 3, width: 1, height: track.height + 6).fill()
         let knob = NSRect(x: levelX - 5, y: bounds.midY - 5, width: 10, height: 10)
-        (volume.muted ? PaletteRole.textMuted : PaletteRole.focus).overVideo.setFill()
+        (volume.muted ? PaletteRole.textMuted : PaletteRole.accent).overVideo.setFill()
         NSBezierPath(ovalIn: knob).fill()
     }
 

@@ -41,26 +41,26 @@ final class PaletteSurface: NSView {
 
 /// A rounded chrome surface with a palette fill and a one-point separator.
 class PalettePanel: NSView {
-    private let fill: PaletteRole
+    private let fill: NSColor
+    private let border: NSColor
     private let radius: CGFloat
-    private let opacity: CGFloat
 
-    init(fill: PaletteRole = .surface, radius: CGFloat, opacity: CGFloat = 1) {
+    init(fill: NSColor = PaletteRole.surface.color, border: NSColor = PaletteRole.borderSubtle.color, radius: CGFloat) {
         self.fill = fill
+        self.border = border
         self.radius = radius
-        self.opacity = opacity
         super.init(frame: .zero)
     }
 
-    required init?(coder: NSCoder) { fatalError("Use init(fill:radius:opacity:)") }
+    required init?(coder: NSCoder) { fatalError("Use init(fill:border:radius:)") }
 
     override func draw(_ dirtyRect: NSRect) {
         let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
         let body = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            fill.color.withAlphaComponent(opacity).setFill()
+            fill.setFill()
             body.fill()
-            PaletteRole.borderSubtle.color.setStroke()
+            border.setStroke()
             body.lineWidth = 1
             body.stroke()
         }

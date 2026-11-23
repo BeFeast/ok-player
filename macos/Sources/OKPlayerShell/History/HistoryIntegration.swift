@@ -147,22 +147,26 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
                 + (welcome.problem.map { " (\($0))" } ?? "")
         }
         if let snapshotDirectory {
-            smokeCaptureWelcome(to: snapshotDirectory)
+            guard let playerWindow else { return "No player window to capture" }
+            playerWindow.contentView?.layoutSubtreeIfNeeded()
+            guard !welcomeView.bounds.isEmpty else { return "The live Welcome view has no bounds" }
+            SmokeSnapshots.capture(playerWindow, in: snapshotDirectory, as: "welcome")
+            smokeCaptureFirstRun(to: snapshotDirectory)
             let window = makeHistoryWindow(rememberFrame: false)
             page.refresh()
             window.center()
             window.orderFront(nil)
             SmokeSnapshots.capture(window, in: snapshotDirectory, as: "history")
             window.close()
-            playerWindow?.makeKeyAndOrderFront(nil)
+            playerWindow.makeKeyAndOrderFront(nil)
         }
         print("OKP_SMOKE welcome=shown continue_watching=\(entries.count) first_card=\(card.state.rawValue)")
         fflush(stdout)
         return nil
     }
 
-    /// Render both Welcome states at the player window's initial content size.
-    private func smokeCaptureWelcome(to directory: String) {
+    /// Render the unseeded Welcome state at the player window's initial content size.
+    private func smokeCaptureFirstRun(to directory: String) {
         let firstRun = ContinueWatchingModel(session: HistorySessionLink(query: { _ in nil },
             dispatch: { _ in .rejected(reason: .noActiveMedia, message: "No playback session") }),
             open: { _, _ in })
@@ -170,10 +174,8 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
             guard let appearance = NSAppearance(named: appearanceName) else { continue }
             appearance.performAsCurrentDrawingAppearance {
                 MainActor.assumeIsolated {
-                    for (scene, model) in [("first-run", firstRun), ("welcome", welcome)] {
-                        let png = Self.renderWelcome(model, dark: name == "dark")
-                        SmokeSnapshots.write(png, in: directory, as: "\(scene)-\(name)")
-                    }
+                    let png = Self.renderWelcome(firstRun, dark: name == "dark")
+                    SmokeSnapshots.write(png, in: directory, as: "first-run-\(name)")
                 }
             }
         }

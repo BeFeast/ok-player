@@ -62,7 +62,7 @@ struct WelcomeView: View {
     }
 
     private var dropHint: some View {
-        Text("or drop a video on this window")
+        Text("or drop a video or folder")
             .font(.callout)
             .foregroundStyle(PaletteRole.textMuted.swiftUI)
     }
@@ -81,10 +81,18 @@ struct WelcomeView: View {
                 .foregroundStyle(PaletteRole.text.swiftUI)
             Text("Open a file to start playing.")
                 .foregroundStyle(PaletteRole.textMuted.swiftUI)
-            Button("Open…") { model.openFile() }
-                .buttonStyle(AccentButtonStyle())
-                .padding(.top, 4)
-            dropHint
+            VStack(spacing: 4) {
+                Button("Open File…") { model.openFile() }
+                    .buttonStyle(.link)
+                    .tint(PaletteRole.link.swiftUI)
+                    .font(.system(size: 13, weight: .semibold))
+                dropHint
+            }
+            .frame(width: 300, height: 78)
+            .background(PaletteRole.surface.swiftUI, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(PaletteRole.border.swiftUI,
+                                                                      style: StrokeStyle(dash: [4, 3])))
+            .padding(.top, 4)
             if let problem = model.problem {
                 Text(problem)
                     .font(.caption)

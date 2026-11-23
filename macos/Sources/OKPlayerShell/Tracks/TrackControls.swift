@@ -500,7 +500,7 @@ final class TrackReadoutView: PalettePanel {
     private var hideWork: DispatchWorkItem?
 
     init() {
-        super.init(fill: .surfaceRaised, radius: 8)
+        super.init(fill: PaletteRole.surfaceRaised.color, radius: 8)
         label.textColor = PaletteRole.text.color
         label.font = .monospacedDigitSystemFont(ofSize: 15, weight: .semibold)
         label.translatesAutoresizingMaskIntoConstraints = false

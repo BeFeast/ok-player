@@ -266,6 +266,8 @@ jobs:
           relocated="$(mktemp -d "$RUNNER_TEMP/okp-relocated.XXXXXX")"
           mkdir -p "$OKP_MACOS_OUTPUT/snapshots"
           ditto "$OKP_MACOS_OUTPUT/OK Player.app" "$relocated/OK Player.app"
+          lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+          "$lsregister" -f "$relocated/OK Player.app"
           status=0
           python3 -I - "$relocated/OK Player.app/Contents/MacOS/ok-player" "$RUNNER_TEMP/inputs/smoke.mp4" "$OKP_MACOS_OUTPUT/smoke.log" "$OKP_MACOS_OUTPUT/snapshots" <<'PYTHON' || status=$?
           import os, subprocess, sys

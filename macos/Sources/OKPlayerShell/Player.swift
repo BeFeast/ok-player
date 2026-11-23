@@ -687,7 +687,6 @@ public enum PlayerLauncher {
         if let status = DocumentTypeCheck.runIfRequested(CommandLine.arguments) { exit(status) }
         let application = NSApplication.shared
         application.setActivationPolicy(.regular)
-        if let icon = BrandIcon.application { application.applicationIconImage = icon }
         let delegate = PlayerApp()
         application.delegate = delegate
         withExtendedLifetime(delegate) { application.run() }

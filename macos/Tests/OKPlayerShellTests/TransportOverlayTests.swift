@@ -167,7 +167,7 @@ final class TransportOverlayTests: XCTestCase {
         for view in [content, controls] { view.translatesAutoresizingMaskIntoConstraints = false }
         container.addSubview(content)
         content.addSubview(controls)
-        let width = content.widthAnchor.constraint(equalToConstant: 1200)
+        let width = content.widthAnchor.constraint(equalToConstant: 1500)
         let height = content.heightAnchor.constraint(equalToConstant: 600)
         for size in [width, height] { size.priority = .windowSizeStayPut }
         NSLayoutConstraint.activate([
@@ -180,13 +180,31 @@ final class TransportOverlayTests: XCTestCase {
             controls.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
         container.layoutSubtreeIfNeeded()
-        XCTAssertEqual(content.frame.width, 1200, accuracy: 0.5, "the window keeps the width it was given")
-        XCTAssertEqual(controls.panel.frame.width, 760, accuracy: 0.5, "the bar stops at its widest")
+        XCTAssertEqual(content.frame.width, 1500, accuracy: 0.5, "the window keeps the width it was given")
+        XCTAssertEqual(controls.panel.frame.width, 1280, accuracy: 0.5, "the bar stops at its widest")
 
         width.constant = 700
         container.layoutSubtreeIfNeeded()
         XCTAssertEqual(content.frame.width, 700, accuracy: 0.5)
         XCTAssertEqual(controls.panel.frame.width, 668, accuracy: 0.5, "a narrower window keeps 16 points each side")
+    }
+
+    func testTheTimelineStacksAtNarrowWidthsAndReturnsBetweenTheTimeLabels() {
+        let widths: [CGFloat] = [900, 520, 900]
+        for width in widths {
+            overlay.setFrameSize(NSSize(width: width, height: 360))
+            overlay.layoutSubtreeIfNeeded()
+            let elapsed = overlay.panel.convert(overlay.elapsedLabel.bounds, from: overlay.elapsedLabel)
+            let trailing = overlay.panel.convert(overlay.trailingLabel.bounds, from: overlay.trailingLabel)
+            let scrubber = overlay.scrubber.frame
+            if width == 520 {
+                XCTAssertGreaterThan(scrubber.minY, elapsed.maxY)
+            } else {
+                XCTAssertEqual(scrubber.midY, elapsed.midY, accuracy: 0.5)
+                XCTAssertGreaterThan(scrubber.minX, elapsed.maxX)
+                XCTAssertLessThan(scrubber.maxX, trailing.minX)
+            }
+        }
     }
 
     func testTheMuteButtonAsksTheSessionToToggleMute() {

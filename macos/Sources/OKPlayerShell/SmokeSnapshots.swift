@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 /// Visual evidence from the relocated preview bundle, using its own AppKit views.
 enum SmokeSnapshots {
@@ -22,12 +23,18 @@ enum SmokeSnapshots {
 
     /// Finder resolves the icon by bundle path. The Dock takes the app's own icon.
     static func captureIcons(in directory: String) -> Bool {
-        let runningIcon: NSImage? = NSApp.applicationIconImage
+        let workspace = NSWorkspace.shared
         guard BrandIcon.application != nil, BrandIcon.welcome != nil,
-              let dockIcon = runningIcon, dockIcon.isValid else { return false }
-        let finderIcon = NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
-        return write(iconPNG(dockIcon), in: directory, as: "dock-icon-512")
-            && write(iconPNG(finderIcon), in: directory, as: "finder-icon-512")
+              let dockIcon = NSImage(named: NSImage.applicationIconName),
+              let dock = iconPNG(dockIcon),
+              let finder = iconPNG(workspace.icon(forFile: Bundle.main.bundlePath)),
+              let generic = iconPNG(workspace.icon(for: .applicationBundle)) else { return false }
+        guard dock != generic, finder != generic else {
+            fputs("OK Player: macOS resolved a generic app icon for the relocated bundle\n", stderr)
+            return false
+        }
+        return write(dock, in: directory, as: "dock-icon-512")
+            && write(finder, in: directory, as: "finder-icon-512")
     }
 
     private static func iconPNG(_ image: NSImage) -> Data? {

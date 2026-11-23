@@ -260,7 +260,8 @@ root, the palette all three shells share. Before compiling, the build script run
 `scripts/generate-macos-palette.py`, which turns each semantic role into a case of a
 generated Swift `PaletteRole` with its light and dark sRGB value; `Player.swift` keeps
 no colour values of its own. Each role becomes a dynamic `NSColor`, so the window
-follows the system light/dark switch while it is open:
+follows the system light/dark switch while it is open. Over video, the neutral
+translucent OSC uses dark-appearance foreground roles in either theme:
 
 | Element | Role |
 |---|---|
@@ -271,15 +272,15 @@ follows the system light/dark switch while it is open:
 | Loading and buffering line, toast, failure card title | `text` |
 | Failure card message, icon | `textMuted`, `danger` |
 | Failure card Retry button | `accent` fill, `onAccent` label |
-| Transport icons, elapsed time, speed, chapter ticks | `text` |
+| Transport icons, elapsed time, speed, chapter ticks | Dark `text` |
 | Trailing time label | `textMuted` |
-| Scrubber track, buffered range, progress and knob | `borderSubtle`, `border`, `accent` |
+| Scrubber track, buffered range, progress and knob | `borderSubtle`, `border`, `accent`, `onAccent` |
 | Volume track, level up to 100 %, boost above it, 100 % mark | `borderSubtle`, `accent`, `warning`, `text` |
 | Volume level while muted | `textMuted` |
 | Up Next panel and its border | `surface`, `borderSubtle` |
 | Up Next title, item titles; item numbers, heading, NOW PLAYING | `text`; `textMuted` |
 | Now Playing card and the current item's row | `selected` |
-| Play mark of the current item; Up Next button while the panel is open | `accent` |
+| Play mark of the current item; Up Next button while the panel is open | `link` |
 
 The video surface gets no tint. A malformed palette or a role missing from one
 appearance fails the build. `scripts/tests/macos-palette.Tests.py` checks that the
@@ -353,8 +354,8 @@ creates another GL context. Nothing draws on the main thread.
 ## Transport controls
 
 The transport controls (`Sources/OKPlayerShell/OSC/`) float at the bottom of the
-video on a dark translucent surface from the brand palette in both appearances: the scrubber, previous and next item,
-play/pause, the time readout, the speed menu, mute, the volume slider and the
+video on the same dark neutral scrim in both appearances: play/pause, previous and next item,
+the scrubber and time labels, the time readout, the speed menu, mute, the volume slider and the
 fullscreen button. Every string, fraction and rule they show comes from the
 session's `transport` query (`docs/session-abi.md`, "Transport controls"), which
 applies the core's time, buffered-range, chapter, volume and visibility rules; the
