@@ -162,7 +162,7 @@ extension VerifyRun {
             let oscVisible = viewVisible(app.osc.panel)
             if !onscreen || !sameFrame(videoRect, root.bounds) || !window.titlebarAppearsTransparent ||
                 !window.styleMask.contains(.fullSizeContentView) || lights.count != 3 ||
-                title.hasMedia != playback || title.title != (playback ? mediaTitle : "OK Player") ||
+                title.overVideo != playback || title.title != (playback ? mediaTitle : "OK Player") ||
                 (playback ? (!hasVideo || oscVisible != expectsChrome) : !app.history.showsWelcome) {
                 failures.append("window_chrome:\(name)")
             }

@@ -235,10 +235,14 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
         } else if chrome.hasMedia {
             titleChrome.title = "OK Player"
         }
+        let overVideo = snapshot.video != nil
+        if titleChrome.overVideo != overVideo {
+            titleChrome.overVideo = overVideo
+            updatePin()
+        }
         let hasMedia = snapshot.source != nil
         if chrome.hasMedia != hasMedia {
             chrome.hasMedia = hasMedia
-            titleChrome.hasMedia = hasMedia
             if !hasMedia { lastFit = nil }
             applyChrome(animated: false)
         }
@@ -281,8 +285,8 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
         pinButton.setAccessibilityLabel(label)
         pinButton.image = NSImage(systemSymbolName: isPinned ? "pin.fill" : "pin", accessibilityDescription: label)
         pinButton.contentTintColor = isPinned
-            ? (chrome.hasMedia ? PaletteRole.link.overVideo : PaletteRole.link.color)
-            : (chrome.hasMedia ? PaletteRole.onAccent.overVideo : PaletteRole.text.color)
+            ? (titleChrome.overVideo ? PaletteRole.link.overVideo : PaletteRole.link.color)
+            : (titleChrome.overVideo ? PaletteRole.onAccent.overVideo : PaletteRole.text.color)
     }
 
     /// The frame size a resize towards `frameSize` settles on: while video

@@ -16,10 +16,11 @@ final class TitleChrome: NSView {
         }
     }
 
-    var hasMedia = false {
+    var overVideo = false {
         didSet {
-            label.textColor = hasMedia ? PaletteRole.onAccent.overVideo : PaletteRole.text.color
-            if hasMedia {
+            guard oldValue != overVideo else { return }
+            label.textColor = overVideo ? PaletteRole.onAccent.overVideo : PaletteRole.text.color
+            if overVideo {
                 let shadow = NSShadow()
                 shadow.shadowColor = NSColor.black
                 shadow.shadowOffset = NSSize(width: 0, height: -1)
