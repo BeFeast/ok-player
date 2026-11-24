@@ -238,7 +238,8 @@ extension VerifyRun {
         }
 
         try pressKey("k", code: 40, modifiers: [.command, .shift])
-        try await wait("the chapter shortcut opened Up Next") { self.app.upNext.isShown }
+        try await wait("the chapter shortcut opened the side panel") { self.app.upNext.isShown }
+        app.upNext.panel.upNextButton.performClick(nil)
         let table = app.upNext.panel.tableView
         guard app.window.makeFirstResponder(table), table.numberOfRows > 1 else {
             throw VerifyError("The queue could not take focus with two rows")

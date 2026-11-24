@@ -168,9 +168,8 @@ final class UpNextPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         return true
     }
 
-    func dismissRowMenu(outside event: NSEvent) -> Bool {
-        guard [.leftMouseDown, .rightMouseDown].contains(event.type),
-              let rowMenu, !rowMenu.bounds.contains(rowMenu.convert(event.locationInWindow, from: nil)) else {
+    func dismissRowMenu(outside windowPoint: NSPoint) -> Bool {
+        guard let rowMenu, !rowMenu.bounds.contains(rowMenu.convert(windowPoint, from: nil)) else {
             return false
         }
         return dismissRowMenu()

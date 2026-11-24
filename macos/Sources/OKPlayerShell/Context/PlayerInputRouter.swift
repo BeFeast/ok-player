@@ -7,6 +7,7 @@ final class PlayerInputRouter {
     let commands: PlayerCommands
     let context: CommandPopover
     var dismissTransient: (() -> Bool)?
+    var dismissQueueMenu: ((NSPoint) -> Bool)?
     var canOpenContext: ((NSEvent, NSPoint) -> Bool)?
     var protectsTextInput = true
     private var consumedMouseButton: NSEvent.EventType?
@@ -85,6 +86,12 @@ final class PlayerInputRouter {
         if context.isShown {
             guard !context.contains(windowPoint: point) else { return false }
             context.dismiss()
+            dismissedByLeftClick = event.type == .leftMouseDown
+            consumedMouseButton = mouseUp
+            return true
+        }
+
+        if dismissQueueMenu?(point) == true {
             dismissedByLeftClick = event.type == .leftMouseDown
             consumedMouseButton = mouseUp
             return true

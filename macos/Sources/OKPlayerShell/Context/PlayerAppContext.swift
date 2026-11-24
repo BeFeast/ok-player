@@ -22,6 +22,9 @@ extension PlayerApp {
         }
         inputRouter.protectsTextInput = verification?.control != "text_priority_disabled"
         inputRouter.dismissTransient = { [weak behaviour] in behaviour?.dismissTransient?() == true }
+        inputRouter.dismissQueueMenu = { [weak self] point in
+            self?.upNext.panel.dismissRowMenu(outside: point) == true
+        }
         inputRouter.canOpenContext = { [weak self, weak behaviour, weak root] event, point in
             guard let self, let behaviour, let root, let parent = root.superview else { return false }
             let local = root.convert(point, from: nil)
