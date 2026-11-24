@@ -68,6 +68,7 @@ final class ContinueWatchingModel {
     private(set) var privateSession = false
     /// Why the shelf could not be read; the first-run card shows meanwhile.
     private(set) var problem: String?
+    var dragActive = false
 
     private let session: HistorySessionLink
     private let opener: (MediaSource, Double?) -> Void

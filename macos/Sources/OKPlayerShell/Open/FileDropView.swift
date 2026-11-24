@@ -5,14 +5,21 @@ import AppKit
 /// AppKit hands a drag to the nearest view up the hierarchy that registered for
 /// its type, and none of the content views does.
 ///
-/// While a drag the router accepts is over the window, a highlight frames the
-/// content. What a drop does is the router's: `accepts` and `perform` are its
-/// `accepts(_:)` and the app's open.
+/// Accepted drags accent the Welcome target while idle and frame the video
+/// during playback. Both presentations use the same router decision.
 final class FileDropView: NSView {
     /// Whether dropping these files would do anything.
     var accepts: ([URL]) -> Bool = { _ in false }
     /// Opens dropped files; returns whether anything was opened.
     var perform: ([URL]) -> Bool = { _ in false }
+    var onRejection: () -> Void = {}
+    var onInlineHighlight: (Bool) -> Void = { _ in }
+    var usesInlineHighlight = false {
+        didSet { if usesInlineHighlight != oldValue { updateHighlight() } }
+    }
+    private var payloadAccepted = false
+    private var sourceAllowsCopy = false
+    private var accepted: Bool { payloadAccepted && sourceAllowsCopy }
     let highlight = DropHighlightView()
 
     init(content: NSView) {
@@ -33,16 +40,24 @@ final class FileDropView: NSView {
 
     // AppKit's drag messages; each hands the dragged files to the methods below.
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        enter(DropPayload.urls(from: sender.draggingPasteboard))
+        enter(DropPayload.urls(from: sender.draggingPasteboard),
+              sourceAllowsCopy: sender.draggingSourceOperationMask.contains(.copy))
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        highlight.isHidden ? [] : .copy
+        let allowsCopy = sender.draggingSourceOperationMask.contains(.copy)
+        if allowsCopy != sourceAllowsCopy {
+            sourceAllowsCopy = allowsCopy
+            updateHighlight()
+        }
+        return accepted ? .copy : []
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) { leave() }
 
-    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { !highlight.isHidden }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        !draggingUpdated(sender).isEmpty
+    }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         drop(DropPayload.urls(from: sender.draggingPasteboard))
@@ -52,21 +67,30 @@ final class FileDropView: NSView {
 
     /// Files entered the window: copy them and show the highlight if a drop would
     /// do anything, else refuse them.
-    func enter(_ urls: [URL]) -> NSDragOperation {
-        let accepted = accepts(urls)
-        highlight.isHidden = !accepted
+    func enter(_ urls: [URL], sourceAllowsCopy: Bool = true) -> NSDragOperation {
+        payloadAccepted = accepts(urls)
+        self.sourceAllowsCopy = sourceAllowsCopy
+        updateHighlight()
+        // AppKit won't call performDragOperation for a refused payload.
+        if !payloadAccepted && !urls.isEmpty { onRejection() }
         return accepted ? .copy : []
     }
 
     /// The drag left the window or ended.
     func leave() {
-        highlight.isHidden = true
+        payloadAccepted = false
+        updateHighlight()
     }
 
     /// Files were dropped: open them.
     func drop(_ urls: [URL]) -> Bool {
         leave()
         return perform(urls)
+    }
+
+    private func updateHighlight() {
+        highlight.isHidden = !accepted || usesInlineHighlight
+        onInlineHighlight(accepted && usesInlineHighlight)
     }
 }
 

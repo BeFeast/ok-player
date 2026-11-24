@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "id": "open-drag-drop",
+  "fixture": "open-preview.mp4",
+  "appearances": [
+    "light",
+    "dark"
+  ],
+  "steps": [
+    {
+      "action": "size_window"
+    },
+    {
+      "action": "drag_enter"
+    },
+    {
+      "action": "capture",
+      "name": "welcome-accent",
+      "expect": "open_evidence"
+    },
+    {
+      "action": "drag_exit"
+    },
+    {
+      "action": "capture",
+      "name": "drag-exit",
+      "expect": "open_evidence"
+    },
+    {
+      "action": "bad_drop"
+    },
+    {
+      "action": "capture",
+      "name": "subtitle-refused-idle",
+      "expect": "open_evidence"
+    },
+    {
+      "action": "drop_mixed"
+    },
+    {
+      "action": "capture",
+      "name": "mixed-queue",
+      "expect": "open_evidence"
+    },
+    {
+      "action": "drop_subtitle"
+    },
+    {
+      "action": "capture",
+      "name": "subtitle-attached",
+      "expect": "open_evidence"
+    },
+    {
+      "action": "bad_drop"
+    },
+    {
+      "action": "capture",
+      "name": "unsupported-drop",
+      "expect": "open_evidence"
+    }
+  ]
+}

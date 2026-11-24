@@ -1,9 +1,7 @@
 import AppKit
 import SwiftUI
 
-// The Welcome view the player window shows while nothing is loaded: a first-run card,
-// or the Continue watching shelf. It is a SwiftUI island over the canvas, bound to a
-// `ContinueWatchingModel`; every colour is a palette role.
+// The populated Welcome view is bound to the session's Continue watching shelf.
 
 /// The palette's accent push button, as `AccentButton` draws it in AppKit.
 struct AccentButtonStyle: ButtonStyle {
@@ -43,73 +41,25 @@ func historyStateText(_ entry: HistoryEntry) -> String {
 struct WelcomeView: View {
     let model: ContinueWatchingModel
 
-    static let cardWidth: CGFloat = 176
+    static let cardWidth: CGFloat = 194
 
     var body: some View {
-        Group {
-            if model.isFirstRun {
-                firstRun
-                    .padding(20)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                shelf
-                    .padding(.horizontal, 24)
-                    .padding(.top, 34)
-                    .frame(maxWidth: 744, maxHeight: .infinity, alignment: .topLeading)
-                    .frame(maxWidth: .infinity)
-            }
+        ScrollView {
+            shelf
+                .frame(maxWidth: 680, alignment: .leading)
+                .padding(.horizontal, 24)
+                .padding(.top, 27)
+                .padding(.bottom, 12)
+                .frame(maxWidth: .infinity)
         }
-    }
-
-    private var dropHint: some View {
-        Text("or drop a video or folder")
-            .font(.callout)
-            .foregroundStyle(PaletteRole.textMuted.swiftUI)
-    }
-
-    private var firstRun: some View {
-        VStack(spacing: 10) {
-            if let tile = BrandIcon.welcome {
-                Image(nsImage: tile)
-                    .resizable()
-                    .frame(width: 48, height: 48)
-                    .accessibilityHidden(true)
-                    .padding(.bottom, 6)
-            }
-            (Text("OK").fontWeight(.bold) + Text(" Player").fontWeight(.regular))
-                .font(.system(size: 30))
-                .foregroundStyle(PaletteRole.text.swiftUI)
-            Text("Open a file to start playing.")
-                .foregroundStyle(PaletteRole.textMuted.swiftUI)
-            VStack(spacing: 4) {
-                Button { model.openFile() } label: {
-                    Text("Open File…")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(PaletteRole.link.swiftUI)
-                }
-                .buttonStyle(.plain)
-                dropHint
-            }
-            .frame(width: 300, height: 78)
-            .background(PaletteRole.surface.swiftUI, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(PaletteRole.border.swiftUI,
-                                                                      style: StrokeStyle(dash: [4, 3])))
-            .padding(.top, 4)
-            if let problem = model.problem {
-                Text(problem)
-                    .font(.caption)
-                    .foregroundStyle(PaletteRole.danger.swiftUI)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 360)
-            }
-        }
+        .safeAreaInset(edge: .bottom, spacing: 0) { footer }
     }
 
     private var shelf: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Continue watching")
-                    .font(.title2.weight(.bold))
+                    .font(.system(size: 30, weight: .semibold))
                     .foregroundStyle(PaletteRole.text.swiftUI)
                 Text("Pick up where you left off — or open something new.")
                     .foregroundStyle(PaletteRole.textMuted.swiftUI)
@@ -133,18 +83,35 @@ struct WelcomeView: View {
                         .font(.callout)
                 }
                 .foregroundStyle(PaletteRole.textMuted.swiftUI)
-                .frame(maxWidth: .infinity, minHeight: 58)
-                .background(PaletteRole.surface.swiftUI, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(PaletteRole.borderSubtle.swiftUI,
-                                                                          style: StrokeStyle(dash: [4, 3])))
+                .frame(maxWidth: .infinity, minHeight: 72)
+                .background((model.dragActive ? PaletteRole.selected : PaletteRole.surface).swiftUI.opacity(0.55),
+                            in: RoundedRectangle(cornerRadius: 10))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder((model.dragActive ? PaletteRole.link : PaletteRole.border).swiftUI,
+                                      style: StrokeStyle(lineWidth: model.dragActive ? 2 : 1,
+                                                         dash: model.dragActive ? [] : [3, 2]))
+                }
                 .allowsHitTesting(false)
             }
-            if model.privateSession {
-                Text("Private session: nothing new is recorded.")
-                    .font(.caption)
+        }
+    }
+
+    private var footer: some View {
+        ZStack(alignment: .leading) {
+            Text(model.privateSession ? "Private session" : "Recording history")
+                .font(.caption)
+                .foregroundStyle((model.privateSession ? PaletteRole.textMuted : PaletteRole.link).swiftUI)
+                .frame(maxWidth: .infinity)
+            Button { model.showHistory() } label: {
+                Label("History", systemImage: "clock.arrow.circlepath")
                     .foregroundStyle(PaletteRole.textMuted.swiftUI)
             }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 24)
         }
+        .frame(height: 42)
+        .overlay(alignment: .top) { Rectangle().fill(PaletteRole.borderSubtle.swiftUI).frame(height: 1) }
     }
 
     private func cards(_ count: Int) -> some View {
@@ -162,6 +129,7 @@ struct WelcomeView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("History")
             .help("History")
         }
     }

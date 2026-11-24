@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "welcome-first-run",
+  "fixture": "open-preview.mp4",
+  "appearances": [
+    "light",
+    "dark"
+  ],
+  "steps": [
+    {
+      "action": "size_window"
+    },
+    {
+      "action": "capture",
+      "name": "first-run",
+      "expect": "open_evidence"
+    },
+    {
+      "action": "tab_welcome"
+    },
+    {
+      "action": "capture",
+      "name": "keyboard-focus",
+      "expect": "open_evidence"
+    },
+    {
+      "action": "cancel_welcome_open"
+    },
+    {
+      "action": "capture",
+      "name": "after-cancel",
+      "expect": "open_evidence"
+    }
+  ]
+}

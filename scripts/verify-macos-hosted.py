@@ -30,6 +30,9 @@ CONTROLS = {
     "settings-shell-appearance": "appearance_persistence_disabled",
     "audio-switcher": "track_pin_disabled",
     "subtitle-switcher": "track_pin_disabled",
+    "welcome-first-run": "welcome_focus_disabled",
+    "open-files-folders": "folder_picker_files_enabled",
+    "open-drag-drop": "welcome_drop_highlight_disabled",
 }
 
 

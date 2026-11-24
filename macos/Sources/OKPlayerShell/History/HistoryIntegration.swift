@@ -10,7 +10,9 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
     let welcome: ContinueWatchingModel
     let page: HistoryPageModel
     /// The Welcome view's hosting view, hidden until `setWelcomeShown(true)`.
-    let welcomeView: NSView
+    let welcomeView = NSView()
+    let firstRun = WelcomeFirstRun()
+    private let shelfView: NSView
     private(set) var showsWelcome = false
     /// The History window is open.
     private(set) var showsHistory = false
@@ -32,11 +34,21 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
             hosting.sizingOptions = []
             host = hosting
         }
-        let view = host ?? NSView()
-        view.isHidden = true
-        welcomeView = view
+        shelfView = host ?? NSView()
         super.init()
+        welcomeView.isHidden = true
+        for view in [firstRun, shelfView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            welcomeView.addSubview(view)
+            NSLayoutConstraint.activate([
+                view.leadingAnchor.constraint(equalTo: welcomeView.leadingAnchor),
+                view.trailingAnchor.constraint(equalTo: welcomeView.trailingAnchor),
+                view.topAnchor.constraint(equalTo: welcomeView.topAnchor),
+                view.bottomAnchor.constraint(equalTo: welcomeView.bottomAnchor),
+            ])
+        }
         welcome.onOpenFile = openFile
+        firstRun.openButton.onOpen = { [weak welcome] in welcome?.openFile() }
         welcome.onShowHistory = { [weak self] in self?.showHistory() }
     }
 
@@ -47,7 +59,7 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
     }
 
     /// The first-run view is centred and the populated shelf is top-aligned.
-    func install(in root: NSView, below strip: NSView, above controls: NSView) {
+    func install(in root: NSView, below strip: NSView) {
         let host = welcomeView
         host.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(host, positioned: .below, relativeTo: strip)
@@ -55,7 +67,7 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
             host.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             host.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             host.topAnchor.constraint(equalTo: strip.bottomAnchor),
-            host.bottomAnchor.constraint(equalTo: controls.topAnchor),
+            host.bottomAnchor.constraint(equalTo: root.bottomAnchor),
         ])
     }
 
@@ -64,7 +76,23 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
         guard shown != showsWelcome else { return }
         showsWelcome = shown
         welcomeView.isHidden = !shown
-        if shown { welcome.refresh() }
+        if shown { refreshWelcome() }
+    }
+
+    func setDropActive(_ active: Bool) {
+        firstRun.openButton.dragActive = active
+        welcome.dragActive = active
+    }
+
+    private func refreshWelcome() {
+        welcome.refresh()
+        displayWelcome()
+    }
+
+    private func displayWelcome() {
+        firstRun.isHidden = !welcome.isFirstRun
+        firstRun.showProblem(welcome.problem)
+        shelfView.isHidden = welcome.isFirstRun
     }
 
     /// A drained batch: a history change refreshes what is on screen.
@@ -76,7 +104,7 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
             }
         }
         guard changed else { return }
-        if showsWelcome { welcome.refresh() }
+        if showsWelcome { refreshWelcome() }
         if showsHistory { page.refresh() }
     }
 
@@ -151,10 +179,7 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
             playerWindow.contentView?.layoutSubtreeIfNeeded()
             guard !welcomeView.bounds.isEmpty else { return "The live Welcome view has no bounds" }
             SmokeSnapshots.capture(playerWindow, in: snapshotDirectory, as: "welcome")
-            let capturedFirstRun = MainActor.assumeIsolated {
-                smokeCaptureFirstRun(in: playerWindow, to: snapshotDirectory)
-            }
-            guard capturedFirstRun else { return "No live Welcome host to capture at first run" }
+            smokeCaptureFirstRun(playerWindow, directory: snapshotDirectory)
             let window = makeHistoryWindow(rememberFrame: false)
             page.refresh()
             window.center()
@@ -168,18 +193,11 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
         return nil
     }
 
-    /// Capture the unseeded state with the same host and constraints as the live shelf.
-    @MainActor
-    private func smokeCaptureFirstRun(in window: NSWindow, to directory: String) -> Bool {
-        guard let host = welcomeView as? NSHostingView<WelcomeView> else { return false }
-        let firstRun = ContinueWatchingModel(session: HistorySessionLink(query: { _ in nil },
-            dispatch: { _ in .rejected(reason: .noActiveMedia, message: "No playback session") }),
-            open: { _, _ in })
-        let shelf = host.rootView
-        defer { host.rootView = shelf }
-        host.rootView = WelcomeView(model: firstRun)
+    private func smokeCaptureFirstRun(_ window: NSWindow, directory: String) {
+        firstRun.isHidden = false
+        shelfView.isHidden = true
+        defer { displayWelcome() }
         SmokeSnapshots.capture(window, in: directory, as: "first-run")
-        return true
     }
 }
 
@@ -203,6 +221,7 @@ extension PlayerApp {
     func updateWelcome(_ snapshot: SessionSnapshot) {
         let scanning = client?.store.playlist.scanning ?? false
         history.setWelcomeShown(HistoryIntegration.welcomeDue(snapshot, scanning: scanning, errorShown: errorShown))
+        dropTarget?.usesInlineHighlight = history.showsWelcome
         if history.showsWelcome { prompt.isHidden = true }
     }
 }

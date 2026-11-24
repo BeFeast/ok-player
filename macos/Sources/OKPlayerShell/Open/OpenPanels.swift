@@ -44,7 +44,13 @@ struct OpenPanelConfiguration: Equatable {
         let panel = NSOpenPanel()
         apply(to: panel)
         panel.beginSheetModal(for: window) { response in
-            if response == .OK, !panel.urls.isEmpty { open(panel.urls) }
+            Self.submit(response, urls: panel.urls, open: open)
         }
+    }
+
+    static func submit(_ response: NSApplication.ModalResponse, urls: @autoclosure () -> [URL], open: ([URL]) -> Void) {
+        guard response == .OK else { return }
+        let selected = urls()
+        if !selected.isEmpty { open(selected) }
     }
 }

@@ -40,13 +40,20 @@ LEGACY_SETTINGS = {
     "playback": {"volume": 67.0, "resume": False},
     "profile_extension": {"keep": True},
 }
+OPEN_CONTROLS = {
+    "welcome-first-run": ("welcome_focus_disabled", {"welcome_first_run:focus"}),
+    "open-files-folders": ("folder_picker_files_enabled", {"open_files_folders:folder-filter"}),
+    "open-drag-drop": ("welcome_drop_highlight_disabled", {"open_drag_drop:welcome-accent"}),
+}
+ACTION_CONTROLS = {**TRANSPORT_CONTROLS, **OPEN_CONTROLS}
 CONTROLS = {
     **TRACK_CONTROLS,
     "subtitle-lift": "subtitle_clearance_disabled",
     SETTINGS: "appearance_persistence_disabled",
     **WINDOW_CONTROLS,
-    **{scenario: entry[0] for scenario, entry in TRANSPORT_CONTROLS.items()},
+    **{scenario: entry[0] for scenario, entry in ACTION_CONTROLS.items()},
 }
+OPEN_FIXTURE = "open-preview.mp4"
 FIXTURE_SUBTITLES = {
     "subtitle-lift.mp4": (".srt",),
     "A Serious Man (2009) {tmdb-12573}.mp4": (".en.hi.srt", ".he.srt", ".ru.hi.srt"),
@@ -81,7 +88,10 @@ def read_scenario(path):
                "size_osc", "check_more", "check_seek", "check_idle", "check_pins", "show_volume",
                "check_wheel", "check_speed_mute", "set_unity", "open_stall", "release_stall", "open_failure",
                "check_failure_actions", "check_stale", "open_buffer", "release_buffer",
-               "check_audio_switcher", "check_subtitle_switcher", "check_track_pin"}
+               "check_audio_switcher", "check_subtitle_switcher", "check_track_pin",
+               "tab_welcome", "cancel_welcome_open", "picker_files", "picker_folder", "picker_playlist",
+               "finder_open", "cancel_playback_open", "bad_drop", "drag_enter", "drag_exit",
+               "drop_mixed", "drop_subtitle"}
     if path.stem == SETTINGS:
         actions.update({"settings_shortcut", "settings_context", "settings_legacy", "settings_search",
                         "settings_resize", "settings_system", "settings_light", "settings_auto", "settings_player_input"})
@@ -102,7 +112,7 @@ def read_scenario(path):
                                            "fullscreen", "restored", "landscape", "portrait", "idle",
                                            "floating", "normal", "repinned", "osc_row", "osc_hidden", "osc_pinned",
                                            "volume", "speed", "loading", "buffering", "failure", "recovered",
-                                           "settings_light", "settings_auto", "track_panel"}
+                                           "settings_light", "settings_auto", "track_panel", "open_evidence"}
                     or not step.get("name", "").replace("-", "").isalnum()):
                 raise ValueError("Invalid capture checkpoint")
         if step["action"] == "check_subtitle_menu":
@@ -110,7 +120,8 @@ def read_scenario(path):
             if (not isinstance(labels, list) or not all(isinstance(label, str) for label in labels)
                     or step["selected_subtitle"] not in labels):
                 raise ValueError("Subtitle menu check needs labels and an expected selected item")
-    if spec["fixture"] not in {*FIXTURE_SUBTITLES, "01-h264-1080p24-tone.mp4", "landscape-4k.mp4", "04-mkv-2audio-2subs.mkv"}:
+    if spec["fixture"] not in {*FIXTURE_SUBTITLES, "01-h264-1080p24-tone.mp4", "landscape-4k.mp4",
+                               "04-mkv-2audio-2subs.mkv", OPEN_FIXTURE}:
         raise ValueError("Unknown scenario fixture")
     return spec
 
@@ -121,6 +132,24 @@ def fixture(ffmpeg, temporary, spec, receipt):
     receipt["fixture"] = {"ffmpeg_version": version, "ffmpeg_sha256": digest(Path(ffmpeg))}
     if video.name == "04-mkv-2audio-2subs.mkv":
         track_fixtures(ffmpeg, video, receipt["fixture"])
+    elif video.name == OPEN_FIXTURE:
+        command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc2=s=640x360:r=24:d=18", "-c:v", "libx264",
+                "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-threads", "1",
+                "-map_metadata", "-1", "-fflags", "+bitexact", "-flags", "+bitexact",
+                "-movflags", "+faststart", str(video))
+        receipt["fixture"][video.name] = digest(video)
+        if spec["id"] != "welcome-first-run":
+            folder = temporary / "Episodes"
+            folder.mkdir()
+            for clip in [temporary / "second.mp4", folder / "Episode 10.mp4", folder / "Episode 2.mp4"]:
+                os.link(video, clip)
+                receipt["fixture"][str(clip.relative_to(temporary))] = digest(clip)
+            for name, contents in {"ordered.m3u": "#EXTM3U\nsecond.mp4\nopen-preview.mp4\n",
+                                   "external.he.srt": SIDECAR, "notes.txt": "Unsupported fixture\n"}.items():
+                path = temporary / name
+                path.write_text(contents, encoding="utf-8")
+                receipt["fixture"][name] = digest(path)
     elif video.name in FIXTURE_SUBTITLES:
         for suffix in FIXTURE_SUBTITLES[video.name]:
             subtitle = video.with_suffix(suffix)
@@ -428,6 +457,9 @@ def main():
             temporary = Path(work)
             executable = prepare_app(args, temporary, receipt)
             video = fixture(args.ffmpeg, temporary, spec, receipt)
+            if spec["id"] == "open-files-folders":
+                command("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework"
+                        "/Support/lsregister", "-f", executable.parents[2])
             for appearance in spec["appearances"]:
                 result = run_appearance(executable, scenario, video, temporary, output, appearance, args.negative_control)
                 if result["status"] in {"passed", "failed"}:
@@ -446,8 +478,8 @@ def main():
                     }
                 elif spec["id"] in TRACK_CONTROLS:
                     expected_failures = {"track_switcher:pin"}
-                elif spec["id"] in TRANSPORT_CONTROLS:
-                    expected_failures = TRANSPORT_CONTROLS[spec["id"]][1]
+                elif spec["id"] in ACTION_CONTROLS:
+                    expected_failures = ACTION_CONTROLS[spec["id"]][1]
                 elif spec["id"] == SETTINGS:
                     expected_failures = {"settings_shell_appearance:light-relaunch"}
                 else:

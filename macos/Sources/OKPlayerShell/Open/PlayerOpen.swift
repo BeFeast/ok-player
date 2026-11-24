@@ -7,6 +7,9 @@ extension PlayerApp {
     /// drop on the Dock icon and files the app is launched with. Events from the
     /// launch arrive before the session exists; the router holds them until then.
     @objc func application(_ application: NSApplication, open urls: [URL]) {
+        if verification?.scenarioID == "open-files-folders" {
+            print("OKP_VERIFY received native Open Documents with \(urls.count) URL(s)")
+        }
         open(urls)
     }
 
@@ -26,7 +29,9 @@ extension PlayerApp {
 
     /// File > Open Folder: one or more folders, played as one playlist.
     @objc func openFolder() {
-        OpenPanelConfiguration.folders.present(on: window) { [weak self] urls in self?.open(urls) }
+        var configuration = OpenPanelConfiguration.folders
+        if verification?.control == "folder_picker_files_enabled" { configuration.canChooseFiles = true }
+        configuration.present(on: window) { [weak self] urls in self?.open(urls) }
     }
 
     /// The window's content inside the drop target, which asks the router.
@@ -34,6 +39,10 @@ extension PlayerApp {
         let drop = FileDropView(content: content)
         drop.accepts = { [weak self] urls in self?.openRouter.accepts(urls) ?? false }
         drop.perform = { [weak self] urls in self?.dropped(urls) ?? false }
+        drop.onRejection = { [weak self] in self?.showNotice(.nothingToOpen) }
+        if verification?.control != "welcome_drop_highlight_disabled" {
+            drop.onInlineHighlight = { [weak self] active in self?.history.setDropActive(active) }
+        }
         return drop
     }
 

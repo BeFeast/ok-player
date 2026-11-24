@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "id": "open-files-folders",
+  "fixture": "open-preview.mp4",
+  "appearances": [
+    "light",
+    "dark"
+  ],
+  "steps": [
+    {
+      "action": "size_window"
+    },
+    {
+      "action": "picker_files"
+    },
+    {
+      "action": "capture",
+      "name": "files",
+      "expect": "open_evidence"
+    },
+    {
+      "action": "picker_folder"
+    },
+    {
+      "action": "capture",
+      "name": "folder",
+      "expect": "open_evidence"
+    },
+    {
+      "action": "picker_playlist"
+    },
+    {
+      "action": "capture",
+      "name": "playlist",
+      "expect": "open_evidence"
+    },
+    {
+      "action": "finder_open"
+    },
+    {
+      "action": "cancel_playback_open"
+    },
+    {
+      "action": "capture",
+      "name": "after-cancel",
+      "expect": "open_evidence"
+    }
+  ]
+}

@@ -25,6 +25,9 @@ struct VerificationOptions {
         case "osc-status": "copy_details_disabled"
         case "settings-shell-appearance": "appearance_persistence_disabled"
         case "audio-switcher", "subtitle-switcher": "track_pin_disabled"
+        case "welcome-first-run": "welcome_focus_disabled"
+        case "open-files-folders": "folder_picker_files_enabled"
+        case "open-drag-drop": "welcome_drop_highlight_disabled"
         default: "unsupported_control"
         }
     }
@@ -113,6 +116,11 @@ struct VerificationScenario: Decodable {
         case settingsPlayerInput = "settings_player_input"
         case checkAudioSwitcher = "check_audio_switcher", checkSubtitleSwitcher = "check_subtitle_switcher"
         case checkTrackPin = "check_track_pin"
+        case tabWelcome = "tab_welcome", cancelWelcomeOpen = "cancel_welcome_open"
+        case pickerFiles = "picker_files", pickerFolder = "picker_folder", pickerPlaylist = "picker_playlist"
+        case finderOpen = "finder_open", cancelPlaybackOpen = "cancel_playback_open"
+        case badDrop = "bad_drop", dragEnter = "drag_enter", dragExit = "drag_exit"
+        case dropMixed = "drop_mixed", dropSubtitle = "drop_subtitle"
     }
     enum Expectation: String, Decodable {
         case noCue = "no_cue", clearance, baseMargin = "base_margin"
@@ -121,6 +129,7 @@ struct VerificationScenario: Decodable {
         case volume, speed, loading, buffering, failure, recovered
         case settingsLight = "settings_light", settingsAuto = "settings_auto"
         case trackPanel = "track_panel"
+        case openEvidence = "open_evidence"
     }
     let schemaVersion: Int
     let id: String
@@ -203,7 +212,9 @@ final class VerifyRun {
                 else if scenario.id.hasPrefix("osc-") { try await performTransportStep(step) }
                 else if scenario.id == "settings-shell-appearance" { try await performSettingsStep(step) }
                 else if scenario.id.hasSuffix("-switcher") { try await performTrackStep(step) }
-                else { try await perform(step) }
+                else if scenario.id.hasPrefix("open-") || scenario.id == "welcome-first-run" {
+                    try await performOpenStep(step)
+                } else { try await perform(step) }
             }
             result["status"] = failures.isEmpty ? "passed" : "failed"
             code = failures.isEmpty ? 0 : 1

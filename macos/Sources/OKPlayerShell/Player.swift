@@ -105,7 +105,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         for view in [videoArea, osc] {
             view.topAnchor.constraint(equalTo: behaviour.titleStrip.bottomAnchor).isActive = true
         }
-        history.install(in: root, below: behaviour.titleStrip, above: osc.panel)
+        history.install(in: root, below: behaviour.titleStrip)
+        history.firstRun.openButton.allowsKeyFocus = verification?.control != "welcome_focus_disabled"
         upNext.install(in: root, below: behaviour.titleStrip, above: osc.panel)
         upNext.onVisibilityChange = { [weak self] visible in
             guard let self, self.verification?.control != "panel_pin_disabled" else { return }
@@ -255,6 +256,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func showOpening(_ name: String) {
         window.title = "\(name) — OK Player"
         history.setWelcomeShown(false)
+        dropTarget?.usesInlineHighlight = false
         prompt.isHidden = true
     }
     @objc func togglePause() { client?.dispatch(.togglePause) }
@@ -319,6 +321,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func fail(_ message: String, clearsOnOpen: Bool = false) {
         guard !shuttingDown, statusLayer.showShellFailure(message, clearsOnOpen: clearsOnOpen) else { return }
         history.setWelcomeShown(false)
+        dropTarget?.usesInlineHighlight = false
         prompt.isHidden = true
         fputs("OK Player: \(message)\n", stderr)
         if let verification { verification.finish(status: "blocked_environment", error: message) }
