@@ -274,7 +274,7 @@ impl Outbox {
         }
     }
 
-    fn lock(&self) -> Result<File, &'static str> {
+    fn lock(&self) -> Result<OutboxLock, &'static str> {
         let directory = self.path.parent().ok_or(LOCAL_ERROR)?;
         fs::create_dir_all(directory).map_err(|_| LOCAL_ERROR)?;
         let file = File::options()
@@ -285,7 +285,7 @@ impl Outbox {
             .open(self.path.with_extension("lock"))
             .map_err(|_| LOCAL_ERROR)?;
         file.try_lock().map_err(|_| BUSY)?;
-        Ok(file)
+        Ok(OutboxLock(file))
     }
 
     fn save(&self, state: &State) -> Result<(), &'static str> {
@@ -343,6 +343,16 @@ impl Outbox {
             503 => Err("The feedback service is temporarily unavailable. Your report was saved."),
             _ => Err(UNCERTAIN),
         }
+    }
+}
+
+struct OutboxLock(File);
+
+impl Drop for OutboxLock {
+    fn drop(&mut self) {
+        // A subprocess between fork and exec can briefly share the file
+        // description. Unlock now instead of waiting for its final close.
+        let _ = self.0.unlock();
     }
 }
 
