@@ -130,6 +130,8 @@ struct VerificationScenario: Decodable {
         case finderOpen = "finder_open", cancelPlaybackOpen = "cancel_playback_open"
         case badDrop = "bad_drop", dragEnter = "drag_enter", dragExit = "drag_exit"
         case dropMixed = "drop_mixed", dropSubtitle = "drop_subtitle"
+        case waitForEOF = "wait_for_eof", closeMediaShortcut = "close_media_shortcut"
+        case openAnother = "open_another"
         case checkContextIdle = "check_context_idle", checkContextSearch = "check_context_search"
         case checkContextEmpty = "check_context_empty"
         case checkContextPages = "check_context_pages", checkContextCorners = "check_context_corners"
@@ -184,6 +186,7 @@ final class VerifyRun {
     var trackChecks: [String: Any] = [:]
     var copiedAboutDiagnostics: String?
     var failures: [String] = []
+    var welcomeReturnFrame: CGImage?
     var initialFrame: CGRect?
     var preFullscreenFrame: CGRect?
     var preFullscreenTime: Double?
@@ -246,6 +249,7 @@ final class VerifyRun {
                 else if scenario.id.hasPrefix("about-") { try await performAboutStep(step) }
                 else if scenario.id.hasPrefix("queue-") { try await performQueueStep(step) }
                 else if scenario.id.hasSuffix("-switcher") { try await performTrackStep(step) }
+                else if scenario.id == "welcome-return" { try await performWelcomeReturnStep(step) }
                 else if scenario.id.hasPrefix("open-") || scenario.id == "welcome-first-run" {
                     try await performOpenStep(step)
                 }

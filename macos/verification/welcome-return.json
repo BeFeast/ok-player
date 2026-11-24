@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "welcome-return",
+  "fixture": "welcome-return.mp4",
+  "appearances": ["light", "dark"],
+  "steps": [
+    {"action": "size_window"},
+    {"action": "capture", "name": "welcome-before-playback", "expect": "welcome"},
+    {"action": "open"},
+    {"action": "wait_for_eof"},
+    {"action": "capture", "name": "after-eof", "expect": "welcome"},
+    {"action": "open"},
+    {"action": "close_media"},
+    {"action": "capture", "name": "after-close-menu", "expect": "welcome"},
+    {"action": "open"},
+    {"action": "open_another"},
+    {"action": "close_media"},
+    {"action": "capture", "name": "after-open-another", "expect": "welcome"}
+  ]
+}
