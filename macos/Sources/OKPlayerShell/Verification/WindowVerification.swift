@@ -184,6 +184,8 @@ extension VerifyRun {
             let fitted = controller.lastFit != nil && area.contains(window.frame) && videoFitsAspect(video, controller: controller)
             if !fitted || !fixtureMatches || !chromeVisible { failures.append("window_fit:\(name)") }
             facts["work_area_points"] = dimensions(area)
+            facts["minimum_frame_points"] = [window.minSize.width, window.minSize.height]
+            if let requested = controller.lastFit { facts["fitted_content_points"] = dimensions(requested) }
             facts["source_video_pixels"] = [geometry.width, geometry.height]
         case .idle:
             if !app.history.showsWelcome || !(initialFrame.map { sameFrame(window.frame, $0) } ?? false) ||

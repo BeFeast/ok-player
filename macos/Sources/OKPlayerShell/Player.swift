@@ -74,7 +74,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         behaviour.applyInitialFit = verification?.control != "initial_fit_disabled"
         behaviour.applyFloatingLevel = verification?.control != "floating_level_disabled"
         window.title = "OK Player"; window.delegate = self; window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 420, height: 280)
+        // Leave the stacked transport row room for its native controls at minimum width.
+        window.minSize = NSSize(width: 440, height: 280)
         window.backgroundColor = PaletteRole.canvas.color
         let root = PlayerCanvas(); window.contentView = makeDropTarget(content: root)
         // The video area keeps its place in the layout even when no renderer exists.
