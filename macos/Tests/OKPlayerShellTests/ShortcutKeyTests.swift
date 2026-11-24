@@ -92,6 +92,7 @@ final class ShortcutKeyTests: XCTestCase {
         let keys = try MenuFixtures.keys()
         let expected: [(KeyPress, String)] = [
             (press("space"), "play-pause"),
+            (press("k"), "play-pause"),
             (press("Left"), "seek-back"),
             (press("Right"), "seek-forward"),
             (press("Up"), "volume-up"),
@@ -113,6 +114,17 @@ final class ShortcutKeyTests: XCTestCase {
         for (key, command) in expected {
             XCTAssertEqual(keys.match(key), .run(command), "\(key)")
         }
+    }
+
+    func testTheRouterCanMatchNativeMenuChordsAndSuppressHeldCommands() throws {
+        let keys = try MenuFixtures.keys()
+        XCTAssertEqual(keys.match(press("o", ShortcutModifiers(cmd: true)), includeCommand: true), .run("open-file"))
+        XCTAssertEqual(keys.match(press("o", ShortcutModifiers(cmd: true), repeat: true), includeCommand: true),
+                       .heldRepeat("open-file"))
+        XCTAssertEqual(keys.match(press("k", ShortcutModifiers(shift: true, cmd: true)), includeCommand: true),
+                       .run("chapters-up-next"))
+        XCTAssertEqual(keys.match(press("p", ShortcutModifiers(shift: true, cmd: true)), includeCommand: true),
+                       .run("show-commands"))
     }
 
     func testCommandChordsAndUnboundKeysAreNotWindowKeys() throws {

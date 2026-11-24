@@ -148,8 +148,13 @@ final class CommandPopover: PalettePanel, NSSearchFieldDelegate {
     /// The field editor retains text input and IME composition. Up/Down selects
     /// an enabled row without taking focus away from search.
     func handleKey(_ press: KeyPress) -> Bool {
-        guard isShown, press.modifiers == ShortcutModifiers(),
+        guard isShown,
               (search.currentEditor() as? NSTextView)?.hasMarkedText() != true else { return false }
+        if press.key == "Tab", press.modifiers == ShortcutModifiers(shift: press.modifiers.shift) {
+            moveSelection(by: press.modifiers.shift ? -1 : 1)
+            return true
+        }
+        guard press.modifiers == ShortcutModifiers() else { return false }
         switch press.key {
         case "Escape":
             return press.isRepeat || escape()

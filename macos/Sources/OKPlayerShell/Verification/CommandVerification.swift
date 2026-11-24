@@ -104,7 +104,7 @@ extension VerifyRun {
         if !context.isShown || context.currentPage != .topLevel { failures.append("context:escape_to_root") }
         try pressKey("\u{1b}", code: 53, focusVideo: false)
         if context.isShown { failures.append("context:escape_dismiss") }
-        try pressKey("p", code: 35, modifiers: [.shift, .command])
+        try pressKey("p", code: 35, modifiers: [.shift, .command], throughApplication: true)
         if !context.isShown || !context.isSearching { failures.append("context:keyboard_invocation") }
         try pressKey("p", code: 35, focusVideo: false, modifiers: [.shift, .command], repeat: true)
         if !context.isShown { failures.append("context:held_invocation") }
@@ -241,7 +241,7 @@ extension VerifyRun {
         try pressKey("\u{1b}", code: 53, focusVideo: false)
         if app.upNext.isShown { failures.append("keyboard:queue_escape") }
 
-        try pressKey("o", code: 31, modifiers: .command)
+        try pressKey("o", code: 31, modifiers: .command, throughApplication: true)
         try await wait("Cmd+O opened the native file panel") { self.app.window.attachedSheet is NSOpenPanel }
         try pressKey("o", code: 31, focusVideo: false, modifiers: .command, repeat: true)
         if app.commands.performedCounts["open-file"] != 1 { failures.append("keyboard:held_open") }
