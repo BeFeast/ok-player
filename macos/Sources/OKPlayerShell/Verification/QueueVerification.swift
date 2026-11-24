@@ -184,6 +184,10 @@ extension VerifyRun {
             self.queueNames.count == 3 && self.queuePanel.list.row(at: 1)?.source == next
         }
 
+        try pressKey(" ", code: 49)
+        try await wait("the current file is playing before stepping through the queue") {
+            self.snapshot.source == current && self.snapshot.status == .playing
+        }
         let beforeMenu = swaps
         guard app.commands.run("next-item") == .performed else { throw VerifyError("Next Item menu command did not run") }
         try await wait("Next Item started the next entry in the edited queue") {
