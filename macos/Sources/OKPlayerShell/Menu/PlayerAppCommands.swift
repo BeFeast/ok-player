@@ -6,6 +6,9 @@ import AppKit
 extension PlayerApp: PlayerCommandResponder, NSMenuItemValidation {
     /// A registry item of the menu bar, reached through the responder chain.
     @objc func performPlayerCommand(_ sender: Any?) {
+        // AppKit can still offer application key equivalents while the player
+        // owns a modal sheet. That sheet owns its interaction until it closes.
+        guard window?.attachedSheet == nil else { return }
         if let id = (sender as? NSMenuItem)?.playerCommandID, let event = NSApp.currentEvent,
            let press = KeyPress(event: event),
            commands.keys.match(press, includeCommand: true) == .heldRepeat(id) { return }
@@ -15,6 +18,7 @@ extension PlayerApp: PlayerCommandResponder, NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem === closeMediaItem { return client?.store.snapshot.source != nil }
         if menuItem === pinItem { return windowBehaviour?.canTogglePin == true }
+        if menuItem.playerCommandID != nil, window?.attachedSheet != nil { return false }
         if let id = menuItem.playerCommandID, let chord = commands.row(id)?.shortcut,
            chord.modifiers.cmd, PlayerInputRouter.reservesForEditing(chord.key),
            PlayerInputRouter.isTextInput(NSApp.keyWindow?.firstResponder) { return false }

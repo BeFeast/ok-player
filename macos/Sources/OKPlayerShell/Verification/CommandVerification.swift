@@ -254,13 +254,22 @@ extension VerifyRun {
         try pressKey("\u{1b}", code: 53, focusVideo: false)
         if app.upNext.isShown { failures.append("keyboard:queue_escape") }
 
+        let opensBefore = app.commands.performedCounts["open-file", default: 0]
         try pressKey("o", code: 31, modifiers: .command, throughApplication: true)
         try await wait("Cmd+O opened the native file panel") { self.app.window.attachedSheet is NSOpenPanel }
-        try pressKey("o", code: 31, focusVideo: false, modifiers: .command, repeat: true)
-        if app.commands.performedCounts["open-file"] != 1 { failures.append("keyboard:held_open") }
+        let opensAfterPress = app.commands.performedCounts["open-file", default: 0]
+        if opensAfterPress != opensBefore + 1 { failures.append("keyboard:open_dispatch") }
+        try pressKey("o", code: 31, focusVideo: false, modifiers: .command, repeat: true, throughApplication: true)
+        if app.commands.performedCounts["open-file", default: 0] != opensAfterPress {
+            failures.append("keyboard:held_open_sheet")
+        }
         (app.window.attachedSheet as? NSOpenPanel)?.cancel(nil)
         try await wait("Open panel cancelled without changing media") {
             self.app.window.attachedSheet == nil && client.store.playlist.currentIndex == 0
+        }
+        try pressKey("o", code: 31, modifiers: .command, repeat: true, throughApplication: true)
+        if app.window.attachedSheet != nil || app.commands.performedCounts["open-file", default: 0] != opensAfterPress {
+            failures.append("keyboard:held_open")
         }
     }
 
