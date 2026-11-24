@@ -66,6 +66,7 @@ int main(void) {
         self.target = self.work / "OK-Player.AppImage"
         self.pubkey = self.work / "fixture.gpg"
         self.pubkey.write_bytes(self.key)
+        (self.work / "builds").mkdir(mode=0o700)
         self.previous = Path(f"builds/{OLD_BUILD}/{name(OLD_BUILD)}")
         self.image(OLD_BUILD, self.work / self.previous)
         self.target.symlink_to(self.previous)
@@ -84,6 +85,7 @@ int main(void) {
         subprocess.run(["cc", f"-DBUILD={build}", f'-DSOURCE="{SOURCE}"',
                         f"-DPUBLISH_RECEIPT={int(publish_startup)}", self.player, "-o", path],
                        check=True, capture_output=True)
+        path.chmod(0o755)
         with path.open("r+b") as exe:
             exe.seek(8)
             exe.write(b"AI\x02")

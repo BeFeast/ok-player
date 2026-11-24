@@ -1,7 +1,7 @@
 use super::*;
 use std::io::Read;
 use std::os::fd::{FromRawFd, OwnedFd};
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt, symlink};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
@@ -122,7 +122,7 @@ impl Installation {
             }
         } else {
             let directory = stage.join("build");
-            fs::create_dir(&directory)?;
+            fs::DirBuilder::new().mode(0o700).create(&directory)?;
             fs::rename(payload, directory.join(&release.filename))?;
             let mut provenance = File::create_new(directory.join("release.json"))?;
             serde_json::to_writer(&mut provenance, release)?;
