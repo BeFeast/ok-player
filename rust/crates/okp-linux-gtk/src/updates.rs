@@ -1304,6 +1304,9 @@ pub(crate) fn settings_updates_section(
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) -> gtk::Box {
+    if let Some(updates) = state.borrow().signed_appimage.as_ref() {
+        return updates.section(&state);
+    }
     let section = settings_section("Updates");
     section.append(&settings_value_row("Current version", APP_BUILD_VERSION));
     if managed_appimage() {

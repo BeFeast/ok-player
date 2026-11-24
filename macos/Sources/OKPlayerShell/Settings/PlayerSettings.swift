@@ -8,6 +8,7 @@ final class PlayerSettings {
     private var theme: AppearanceTheme = .auto
     var autoAppearance: NSAppearance? { didSet { applyAppearance() } }
     var writeTheme: ((AppearanceSelection) -> Result<AppearanceTheme, SessionClientError>)?
+    let updates = PlayerUpdates()
 
     func connect(_ client: SessionClient) {
         self.client = client
@@ -20,6 +21,8 @@ final class PlayerSettings {
         guard let client, case .settings(let state)? = client.query(.settings) else { return }
         if window == nil {
             let made = SettingsWindow(state: state)
+            made.updates = updates
+            updates.changed = { [weak made] in made?.refreshUpdates() }
             made.search = { [weak self] text in
                 guard case .settingsSearch(let hits)? = self?.client?.query(.settingsSearch(text: text)) else { return [] }
                 return hits

@@ -24,6 +24,7 @@ struct VerificationOptions {
         case "osc-volume-speed": "volume_wheel_disabled"
         case "osc-status": "copy_details_disabled"
         case "settings-shell-appearance": "appearance_persistence_disabled"
+        case "updates-status": "bad_manifest_signature"
         case "audio-switcher", "subtitle-switcher": "track_pin_disabled"
         case "welcome-first-run": "welcome_focus_disabled"
         case "welcome-return": "inactive_video_visible"
@@ -124,6 +125,7 @@ struct VerificationScenario: Decodable {
         case settingsLegacy = "settings_legacy", settingsSearch = "settings_search", settingsResize = "settings_resize"
         case settingsSystem = "settings_system", settingsLight = "settings_light", settingsAuto = "settings_auto"
         case settingsPlayerInput = "settings_player_input"
+        case checkUpdate = "check_update"
         case checkAudioSwitcher = "check_audio_switcher", checkSubtitleSwitcher = "check_subtitle_switcher"
         case checkTrackPin = "check_track_pin"
         case tabWelcome = "tab_welcome", cancelWelcomeOpen = "cancel_welcome_open"
@@ -232,7 +234,7 @@ final class VerifyRun {
             }
             guard let window = app.window else { throw VerifyError("The mapped player window disappeared", blocked: true) }
             let appearance: NSAppearance.Name = options.appearance == "dark" ? .darkAqua : .aqua
-            if scenario.id == "settings-shell-appearance" || scenario.id.hasPrefix("about-") {
+            if scenario.id == "settings-shell-appearance" || scenario.id == "updates-status" || scenario.id.hasPrefix("about-") {
                 app.settings.autoAppearance = NSAppearance(named: appearance)
             } else {
                 window.appearance = NSAppearance(named: appearance)
@@ -251,6 +253,7 @@ final class VerifyRun {
                 if scenario.id.hasPrefix("window-") { try await performWindowStep(step) }
                 else if scenario.id.hasPrefix("osc-") { try await performTransportStep(step) }
                 else if scenario.id == "settings-shell-appearance" { try await performSettingsStep(step) }
+                else if scenario.id == "updates-status" { try await performUpdateStep(step) }
                 else if scenario.id.hasPrefix("about-") { try await performAboutStep(step) }
                 else if scenario.id.hasPrefix("queue-") { try await performQueueStep(step) }
                 else if scenario.id.hasSuffix("-switcher") { try await performTrackStep(step) }

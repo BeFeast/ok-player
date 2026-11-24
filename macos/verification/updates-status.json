@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "id": "updates-status",
+  "fixture": "open-preview.mp4",
+  "appearances": ["light", "dark"],
+  "steps": [{"action": "check_update", "name": "updates-status"}]
+}

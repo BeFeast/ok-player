@@ -248,7 +248,7 @@ jobs:
           set -Eeuo pipefail
           app="$OKP_MACOS_OUTPUT/OK Player.app"
           status=0
-          for binary in "$app/Contents/MacOS/ok-player" "$app/Contents/Frameworks/"*.dylib; do
+          for binary in "$app/Contents/MacOS/"* "$app/Contents/Frameworks/"*.dylib; do
             test "$(lipo -archs "$binary")" = arm64 || { echo "::error::${binary##*/} is not arm64-only"; status=1; }
             while IFS= read -r dep; do
               case "$dep" in
@@ -320,6 +320,10 @@ jobs:
           done
           exit "$status"
 
+      - name: Make GnuPG available to the isolated update fixture
+        if: env.RUN_SMOKE == 'true'
+        run: command -v gpg >/dev/null || brew install gnupg
+
       - name: Verify the relocated ZIP at 2×
         if: env.RUN_SMOKE == 'true'
         shell: bash
@@ -360,6 +364,8 @@ jobs:
                 status=1
               fi
             done
+            verify updates-status "$OKP_MACOS_OUTPUT/verify/updates-status" || status=1
+            verify updates-status "$OKP_MACOS_OUTPUT/verify/updates-status-negative" --negative-control || status=1
             exit "$status"
           fi
 

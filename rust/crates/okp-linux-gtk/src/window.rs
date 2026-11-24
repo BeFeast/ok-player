@@ -157,6 +157,7 @@ pub(crate) fn build_window(app: &gtk::Application, launch: CommandLineLaunch) ->
 
     let identity = AppIdentity::linux();
     let state = Rc::new(RefCell::new(PlayerState::default()));
+    state.borrow_mut().signed_appimage = crate::signed_appimage::AppImageUpdates::detect();
     let retention = state.borrow().settings.history_retention();
     match state
         .borrow_mut()
@@ -730,8 +731,12 @@ pub(crate) fn build_window(app: &gtk::Application, launch: CommandLineLaunch) ->
     start_install_kind_probe(
         Rc::clone(&state),
         Rc::clone(&status_toast),
-        auto_check_updates,
+        auto_check_updates && state.borrow().signed_appimage.is_none(),
     );
+    if let Some(updates) = state.borrow().signed_appimage.as_ref() {
+        updates.attach(&window, &state, &status_toast);
+        updates.confirm_startup();
+    }
     AppRuntime {
         window,
         state,

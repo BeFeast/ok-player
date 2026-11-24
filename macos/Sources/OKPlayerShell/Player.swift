@@ -9,6 +9,12 @@ extension SessionConfig {
         let bundleID = "uk.oklabs.ok-player"
         let support = files.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(bundleID)
         let caches = files.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(bundleID)
+        if let fixture = PlayerUpdates.restartedFixture {
+            return SessionConfig(app: AppIdentity(name: "OK Player", platform: .macos),
+                                 dataDir: fixture.appendingPathComponent("data").path,
+                                 configDir: fixture.appendingPathComponent("config").path,
+                                 cacheDir: fixture.appendingPathComponent("cache").path, shellCommands: shellCommands)
+        }
         return SessionConfig(app: AppIdentity(name: "OK Player", platform: .macos),
                              dataDir: support.path, configDir: support.path, cacheDir: caches.path,
                              shellCommands: shellCommands)
@@ -235,6 +241,16 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let handle = client.handle { video.videoLayer.attach(session: handle) }
         connectPlayerCommands(client)
         updateWelcome(client.store.snapshot)
+        PlayerUpdates.confirmStartup()
+        if let error = ProcessInfo.processInfo.environment["OKP_UPDATE_RESTART_ERROR"] {
+            statusLayer.show(toast: error)
+        }
+        if verification == nil && !smoke && PlayerUpdates.restartedFixture == nil {
+            settings.updates.available = { [weak self] offer in
+                self?.statusLayer.show(toast: "OK Player build \(offer.build) is available in Settings → Updates.")
+            }
+            settings.updates.start()
+        }
         if let verification {
             connectOpenRouter(client)
             Task { @MainActor in
@@ -414,6 +430,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.terminate(nil)
     }
     func applicationWillTerminate(_ notification: Notification) { shutdown() }
+    func applicationDidBecomeActive(_ notification: Notification) { settings.updates.automaticallyCheck() }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // Let the geometry verifier inspect the windows after the real close path.
         verification?.scenarioID == "about-geometry" ? .terminateCancel : .terminateNow

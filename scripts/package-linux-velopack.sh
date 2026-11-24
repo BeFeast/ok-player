@@ -34,17 +34,21 @@ export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
 source "$ROOT/scripts/linux-bundled-mpv-env.sh"
 okp_use_linux_bundled_mpv package
 
-OKP_BUILD_VERSION="$VERSION" OKP_PACKAGE_KIND=appimage cargo build \
+OKP_BUILD_VERSION="$VERSION" OKP_PACKAGE_KIND=appimage \
+  OKP_BUILD_SHA="${OKP_BUILD_SHA:-$(git -C "$ROOT" rev-parse HEAD)}" cargo build \
   --manifest-path "$ROOT/rust/Cargo.toml" \
   --release \
   -p okp-linux-gtk \
   -p okp-core \
+  --features okp-core/signed-updates \
   --bin okp-linux-gtk \
+  --bin okp-updater \
   --bin okp-candidate
 
 rm -rf "$PACK_DIR" "$OUTPUT_DIR"
 mkdir -p "$PACK_DIR" "$OUTPUT_DIR"
 install -Dm755 "$TARGET_DIR/release/okp-linux-gtk" "$PACK_DIR/ok-player"
+install -Dm755 "$TARGET_DIR/release/okp-updater" "$PACK_DIR/okp-updater"
 cp -a "$OKP_BUNDLED_MPV_RUNTIME_DIR/." "$PACK_DIR/"
 install -Dm644 "$ICON" "$PACK_DIR/com.befeast.okplayer.svg"
 install -Dm644 "$ICON" "$PACK_DIR/usr/share/icons/hicolor/scalable/apps/com.befeast.okplayer.svg"

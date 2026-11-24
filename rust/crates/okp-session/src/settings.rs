@@ -47,7 +47,7 @@ impl From<SettingsPage> for SettingsDestination {
         Self {
             id: page,
             title: page.title().to_owned(),
-            available: matches!(page, SettingsPage::Appearance | SettingsPage::About),
+            available: matches!(page, SettingsPage::Appearance | SettingsPage::Updates | SettingsPage::About),
         }
     }
 }

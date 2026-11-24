@@ -85,7 +85,6 @@ pub fn run() -> Result<()> {
     }
     wait_for_exit(parent)?;
     if let Err(error) = old.apply(prepared, &release, staging.path()) {
-        eprintln!("{error}");
         old.reopen_after_failure(&error.to_string(), staging.path())?;
         return Err(error);
     }

@@ -11,7 +11,7 @@ async-io.workspace = true
 futures-lite.workspace = true
 gtk.workspace = true
 libc.workspace = true
-okp-core = { path = "../okp-core" }
+okp-core = { path = "../okp-core", features = ["signed-updates"] }
 okp-mpv = { path = "../okp-mpv" }
 okp-session = { path = "../okp-session" }
 relm4.workspace = true

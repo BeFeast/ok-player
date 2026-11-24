@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from email import policy
 from email.parser import BytesParser
 import hashlib
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
@@ -14,6 +14,7 @@ import plistlib
 import subprocess
 import sys
 import tempfile
+import time
 from threading import Event, Thread
 from uuid import UUID
 
@@ -42,6 +43,7 @@ QUEUE_CONTROLS = {
     "queue-single": ("queue_add_disabled", {"queue_single:add"}),
 }
 SETTINGS = "settings-shell-appearance"
+UPDATES = "updates-status"
 ABOUT_CONTROLS = {
     "about-identity": ("about_copy_disabled", {"about-identity:copy_diagnostics"}),
     "about-geometry": ("about_owner_cleanup_disabled", {"about-geometry:owner_close"}),
@@ -76,6 +78,7 @@ CONTROLS = {
     **TRACK_CONTROLS,
     "subtitle-lift": "subtitle_clearance_disabled",
     SETTINGS: "appearance_persistence_disabled",
+    UPDATES: "bad_manifest_signature",
     **WINDOW_CONTROLS,
     **{scenario: entry[0] for scenario, entry in ACTION_CONTROLS.items()},
 }
@@ -130,6 +133,8 @@ def read_scenario(path):
         actions.update({"settings_shortcut", "settings_context", "settings_legacy", "settings_search",
                         "settings_resize", "settings_system", "settings_light", "settings_auto",
                         "settings_player_input"})
+    if path.stem == UPDATES:
+        actions.add("check_update")
     if path.stem in ABOUT_CONTROLS:
         actions.update({"about_playback", "about_menu", "about_rail", "about_copy",
                         "about_resize", "about_footer", "about_close"})
@@ -560,9 +565,11 @@ def feedback_fixture(folder, appearance):
             (folder / "feedback-loopback.json").write_text(json.dumps(requests, indent=2))
 
 
-def run_process(executable, scenario, video, profile, output, folder, appearance, negative_control, phase=None):
+def run_process(executable, scenario, video, profile, output, folder, appearance, negative_control, phase=None,
+                extra_env=None):
     env = {key: value for key, value in os.environ.items() if not key.startswith("DYLD_")}
     env.update({"TZ": "UTC", "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"})
+    env.update(extra_env or {})
     argv = [executable, f"--verify-scenario={scenario}", f"--verify-fixture={video}",
             f"--verify-output={folder}", f"--verify-profile={profile}",
             f"--verify-appearance={appearance}"]
@@ -591,7 +598,7 @@ def run_process(executable, scenario, video, profile, output, folder, appearance
     status = result.get("status")
     if (run.returncode, status) in {(0, "passed"), (1, "failed")}:
         expected = [step["name"] for step in read_scenario(scenario)["steps"]
-                    if step["action"] == "capture" and step.get("phase") == phase]
+                    if step["action"] in {"capture", "check_update"} and step.get("phase") == phase]
         if [point["name"] for point in result["checkpoints"]] != expected:
             return {**result, "status": "error", "error": "App did not return every checkpoint"}
         if scenario.stem == "feedback-dialog":
@@ -609,6 +616,155 @@ def run_process(executable, scenario, video, profile, output, folder, appearance
     return result
 
 
+@contextmanager
+def update_signing_identity(work):
+    script = ROOT / "scripts/macos-signing-identity.sh"
+    if os.environ.get("OKP_SIGNING_MODE") == "self-signed":
+        yield os.environ.copy()
+        return
+    config = work / "test-signing.cnf"
+    config.write_text("""[req]
+distinguished_name = dn
+x509_extensions = extension
+prompt = no
+[dn]
+CN = OK Player updater verification
+[extension]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,codeSigning
+subjectKeyIdentifier = hash
+""")
+    cert = work / "cert.pem"
+    secret = work / "key.pem"
+    identity = work / "identity.p12"
+    password = os.urandom(20).hex()
+    command("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+            "-config", config, "-keyout", secret, "-out", cert, capture_output=True)
+    command("openssl", "pkcs12", "-export", "-inkey", secret, "-in", cert, "-out", identity,
+            "-passout", f"pass:{password}", "-keypbe", "PBE-SHA1-3DES",
+            "-certpbe", "PBE-SHA1-3DES", "-macalg", "sha1", capture_output=True)
+    import base64
+    result = command("bash", script, "import", work / "signing", capture_output=True, text=True,
+                     env={**os.environ,
+                          "OKP_MACOS_SIGNING_P12_BASE64": base64.b64encode(identity.read_bytes()).decode(),
+                          "OKP_MACOS_SIGNING_P12_PASSWORD": password})
+    exported = dict(line.split("=", 1) for line in result.stdout.splitlines() if line.startswith("OKP_"))
+    try:
+        yield {**os.environ, **exported}
+    finally:
+        command("bash", script, "cleanup", exported["OKP_CODESIGN_KEYCHAIN"])
+
+
+def run_update_appearance(executable, scenario, video, profile, output, folder, appearance, negative_control):
+    work = profile / "update"
+    work.mkdir(mode=0o700)
+    app = work / "OK Player.app"
+    candidate = work / "next" / app.name
+    candidate.parent.mkdir(mode=0o700)
+    for copy in (app, candidate):
+        command("ditto", executable.parents[2], copy)
+    info = candidate / "Contents/Info.plist"
+    metadata = plistlib.loads(info.read_bytes())
+    prior = metadata["CFBundleVersion"]
+    first, second = map(int, prior.split("."))
+    build = f"{first}.{second + 1}"
+    metadata["CFBundleVersion"] = build
+    info.write_bytes(plistlib.dumps(metadata))
+    source = metadata["OKPSourceSHA"]
+
+    with update_signing_identity(work) as env:
+        for copy in (app, candidate):
+            binaries = sorted((copy / "Contents/MacOS").iterdir()) + sorted((copy / "Contents/Frameworks").glob("*.dylib"))
+            command("bash", ROOT / "scripts/macos-signing-identity.sh", "sign", *binaries, copy, env=env, timeout=120)
+            command("codesign", "--verify", "--deep", "--strict", copy)
+
+    feed = work / "feed"
+    latest = feed / "ok-player/macos/beta/latest.json"
+    latest.parent.mkdir(parents=True)
+    key = f"ok-player/macos/builds/{build}/{ARCHIVE}"
+    package = feed / key
+    package.parent.mkdir(parents=True)
+    command("ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", candidate, package, timeout=120)
+    content = {"source": source, "build": build, "version": metadata["CFBundleShortVersionString"],
+               "filename": ARCHIVE, "sha256": digest(package), "size": package.stat().st_size}
+    provenance = package.with_name("provenance.json")
+    provenance.write_text(json.dumps(content, sort_keys=True, separators=(",", ":")) + "\n")
+    gnupg = work / "gnupg"
+    gnupg.mkdir(mode=0o700)
+    gpg = ("gpg", "--homedir", gnupg, "--batch", "--pinentry-mode", "loopback", "--passphrase", "")
+    command(*gpg, "--quick-generate-key", "OK Player fixture <test@example.invalid>", "ed25519", "sign", "1d")
+    fingerprints = command(*gpg, "--with-colons", "--fingerprint", capture_output=True, text=True).stdout
+    fingerprint = next(line.split(":")[9] for line in fingerprints.splitlines() if line.startswith("fpr:"))
+    pubkey = work / "fixture.asc"
+    command(*gpg, "--armor", "--output", pubkey, "--export", fingerprint)
+    release = {**content, "schema": 1, "platform": "macos-arm64", "channel": "beta", "key": key,
+               "fingerprint": fingerprint, "provenance_sha256": digest(provenance)}
+    latest.write_text(json.dumps(release, sort_keys=True, separators=(",", ":")) + "\n")
+    manifest_sig = latest.parent / "manifests" / (digest(latest) + ".sig")
+    manifest_sig.parent.mkdir()
+    command(*gpg, "--output", manifest_sig, "--detach-sign", latest)
+    command(*gpg, "--output", package.with_suffix(".zip.sig"), "--detach-sign", package, timeout=120)
+    command("gpgconf", "--homedir", gnupg, "--kill", "all")
+
+    if negative_control:
+        corrupt = bytearray(manifest_sig.read_bytes())
+        corrupt[-1] ^= 1
+        manifest_sig.write_bytes(corrupt)
+
+    requests = []
+    class Handler(SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=feed, **kwargs)
+
+        def log_message(self, *_):
+            pass
+
+        def do_GET(self):
+            requests.append(self.path)
+            super().do_GET()
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            result = run_process(app / "Contents/MacOS/ok-player", scenario, video, profile, output, folder,
+                                 appearance, negative_control, extra_env={
+                                     "OKP_VERIFY_UPDATE_PORT": str(server.server_port),
+                                     "OKP_VERIFY_UPDATE_KEY": str(pubkey),
+                                     "OKP_VERIFY_UPDATE_RESTART_PROFILE": str(profile),
+                                 })
+            if result["status"] != "passed":
+                return result
+            result.update(old_build=prior, offered_build=build, offered_zip_sha256=content["sha256"],
+                          manifest_sha256=digest(latest), manifest_signature_sha256=digest(manifest_sig))
+            restarted = profile / "restarted.json"
+            if negative_control:
+                observed = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+                if (observed["CFBundleVersion"] != prior or restarted.exists()
+                        or any(path.startswith("/ok-player/macos/builds/") for path in requests)):
+                    raise ValueError("Bad manifest reached download or changed the installed app")
+                result["refused_before_download"] = True
+            else:
+                deadline = time.monotonic() + 80
+                while time.monotonic() < deadline and (not restarted.is_file() or list(work.glob(".okp-update-*"))):
+                    time.sleep(0.1)
+                running = json.loads(restarted.read_text())
+                observed = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+                if (running["pid"] == result["pid"] or running["build"] != build
+                        or observed["CFBundleVersion"] != build or running["source_sha"] != source
+                        or result["staged_sha256"] != content["sha256"]
+                        or f"/{key}" not in requests or f"/{key}.sig" not in requests
+                        or list(work.glob(".okp-update-*"))):
+                    raise ValueError("The verified bundle did not replace or relaunch the installed app")
+                result["restarted"] = running
+            (folder / "requests.json").write_text(json.dumps(requests, indent=2) + "\n")
+            return result
+        finally:
+            server.shutdown()
+            thread.join()
+
+
 def run_appearance(executable, scenario, video, temporary, output, appearance, negative_control):
     folder = output / appearance
     folder.mkdir()
@@ -624,6 +780,8 @@ def run_appearance(executable, scenario, video, temporary, output, appearance, n
                 },
             },
         }), encoding="utf-8")
+    if scenario.stem == UPDATES:
+        return run_update_appearance(executable, scenario, video, profile, output, folder, appearance, negative_control)
     if scenario.stem != SETTINGS:
         return run_process(executable, scenario, video, profile, output, folder, appearance, negative_control)
 
@@ -724,7 +882,7 @@ def main():
                 receipt["appearances"].append(result)
             states = {result["status"] for result in receipt["appearances"]}
             receipt["status"] = next((state for state in ("error", "blocked_environment", "failed") if state in states), "passed")
-            if args.negative_control and receipt["status"] in {"passed", "failed"}:
+            if args.negative_control and spec["id"] != UPDATES and receipt["status"] in {"passed", "failed"}:
                 if spec["id"] == "subtitle-lift":
                     expected_failures = {
                         f"subtitle_clearance:{step['name']}" for step in spec["steps"]

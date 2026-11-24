@@ -29,7 +29,10 @@ DYLD_LIBRARY_PATH="$OKP_MPV_PREFIX/lib" cargo test --manifest-path "$root/rust/C
 # The session's own tests drive the pinned libmpv through the session and its C ABI.
 DYLD_LIBRARY_PATH="$OKP_MPV_PREFIX/lib" cargo test --manifest-path "$root/rust/Cargo.toml" --locked -p okp-session --target aarch64-apple-darwin 2>&1 | tee -a "$output/tests.log"
 # The core's macOS-only tests (Platform::current) and the document-type generator's.
-cargo test --manifest-path "$root/rust/Cargo.toml" --locked --lib -p okp-core --target aarch64-apple-darwin 2>&1 | tee -a "$output/tests.log"
+cargo test --manifest-path "$root/rust/Cargo.toml" --locked --features signed-updates --lib -p okp-core --target aarch64-apple-darwin 2>&1 | tee -a "$output/tests.log"
+cargo build --manifest-path "$root/rust/Cargo.toml" --locked --release -p okp-core --features signed-updates \
+  --bin okp-updater --target aarch64-apple-darwin 2>&1 | tee "$output/updater-build.log"
+cp "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/okp-updater" "$app/Contents/MacOS/"
 # CFBundleDocumentTypes and UTImportedTypeDeclarations, generated from okp-core's
 # media_formats; the Info.plist stamp below replaces both keys with them.
 cargo run --manifest-path "$root/rust/Cargo.toml" --locked -p okp-core --bin okp-macos-document-types \
@@ -87,7 +90,7 @@ cp "$OKP_MPV_PREFIX/provenance.json" "$app/Contents/Resources/runtime-provenance
 
 # Every nested binary first, then the bundle, with one identity.
 signing="$root/scripts/macos-signing-identity.sh"
-for binary in "$app/Contents/Frameworks/"*.dylib "$app/Contents/MacOS/ok-player"; do
+for binary in "$app/Contents/Frameworks/"*.dylib "$app/Contents/MacOS/"*; do
   bash "$signing" sign "$binary"
 done
 bash "$signing" sign "$app"

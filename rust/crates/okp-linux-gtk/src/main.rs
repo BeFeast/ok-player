@@ -103,6 +103,7 @@ mod settings;
 mod settings_pages;
 mod settings_switch;
 mod settings_window;
+mod signed_appimage;
 mod thumbnails;
 mod toast_text;
 mod track_popovers;
@@ -312,6 +313,7 @@ struct PlayerState {
     screenshot_jobs: screenshots::ScreenshotJobs,
     feedback_window: glib::WeakRef<gtk::Window>,
     linux_update: LinuxUpdateSession,
+    signed_appimage: Option<Rc<signed_appimage::AppImageUpdates>>,
     linux_update_views: Vec<LinuxUpdateView>,
     /// About's copy of the update status. Refreshed from the same projection
     /// as the Updates page, because a cached About page that kept its first

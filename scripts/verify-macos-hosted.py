@@ -28,6 +28,7 @@ CONTROLS = {
     "osc-volume-speed": "volume_wheel_disabled",
     "osc-status": "copy_details_disabled",
     "settings-shell-appearance": "appearance_persistence_disabled",
+    "updates-status": "bad_manifest_signature",
     "audio-switcher": "track_pin_disabled",
     "queue-show": "queue_pin_disabled",
     "queue-edit": "queue_move_disabled",

@@ -5,7 +5,8 @@ mod unix;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() {
     if let Err(error) = unix::run() {
-        eprintln!("{error}");
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr(), "{error}");
         std::process::exit(1);
     }
 }

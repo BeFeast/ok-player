@@ -18,6 +18,7 @@ final class SettingsWindow: NSWindow, NSSearchFieldDelegate {
     var search: (String) -> [SettingsSearchHit] = { _ in [] }
     var onSelectTheme: ((AppearanceSelection) -> Void)?
     var aboutDiagnostics: () -> AboutDiagnostics = { AboutDiagnostics(runtime: nil) }
+    var updates: PlayerUpdates?
 
     init(state: SettingsState) {
         shownTheme = state.theme
@@ -154,6 +155,8 @@ final class SettingsWindow: NSWindow, NSSearchFieldDelegate {
         aboutPane = nil
         if destination.available && selectedPage == .appearance {
             content.setRows([appearanceCard()])
+        } else if destination.available && selectedPage == .updates, let updates {
+            content.setRows([updatesCard(updates)])
         } else if destination.available && selectedPage == .about {
             let pane = AboutPane(diagnostics: aboutDiagnostics())
             aboutPane = pane
@@ -164,6 +167,68 @@ final class SettingsWindow: NSWindow, NSSearchFieldDelegate {
                 label("This section is unavailable in this version of OK Player.", muted: true)
             ])])
         }
+    }
+
+    func refreshUpdates() {
+        if selectedPage == .updates && searchField.stringValue.isEmpty { showPage() }
+    }
+
+    private func updatesCard(_ updates: PlayerUpdates) -> NSView {
+        let channel = NSSegmentedControl(labels: ["Beta", "Stable"], trackingMode: .selectOne,
+                                         target: self, action: #selector(selectUpdateChannel(_:)))
+        channel.setAccessibilityLabel("Release channel")
+        channel.selectedSegment = updates.channel == .beta ? 0 : 1
+        channel.isEnabled = updates.canCheck && !updates.checking && !updates.installing
+        let check = NSButton(title: "Check for Updates", target: self, action: #selector(checkForUpdates))
+        check.isEnabled = updates.canCheck && !updates.checking && !updates.installing
+        var views: [NSView] = [
+            label("Updates", weight: .semibold),
+            label("Installed version \(updates.version) · Build \(updates.build)"),
+            label("Release channel", muted: true),
+            channel,
+            label("Last checked \(updates.lastCheck?.formatted(date: .abbreviated, time: .shortened) ?? "Never")", muted: true)
+        ]
+        if let offer = updates.offer {
+            views.append(label("Available version \(offer.version) · Build \(offer.build)"))
+        }
+        let status: String
+        if updates.installing { status = "Downloading and verifying update…" }
+        else if updates.checking { status = "Checking for updates…" }
+        else if let error = updates.problem { status = error }
+        else if updates.skipped { status = "You skipped this build." }
+        else if !updates.canCheck { status = "Updates are unavailable for this build." }
+        else if updates.offer != nil && !updates.canInstall { status = "Move OK Player.app to ~/Applications to install in-app updates." }
+        else if updates.offer == nil && updates.lastCheck != nil { status = "You’re up to date." }
+        else { status = "" }
+        if !status.isEmpty { views.append(label(status, muted: updates.problem == nil)) }
+        var actions = [check]
+        if updates.offer != nil {
+            let install = NSButton(title: updates.skipped ? "Install Anyway" : "Install & Relaunch",
+                                   target: self, action: #selector(installUpdate))
+            install.isEnabled = updates.canInstall && !updates.checking && !updates.installing
+            let release = NSButton(title: "Open Download", target: self, action: #selector(openUpdateDownload))
+            let skip = NSButton(title: "Skip This Build", target: self, action: #selector(skipUpdate))
+            skip.isEnabled = !updates.skipped && !updates.checking && !updates.installing
+            actions += [install, skip, release]
+        }
+        let buttons = NSStackView(views: actions)
+        buttons.orientation = .vertical
+        buttons.alignment = .leading
+        views.append(buttons)
+        return card(views)
+    }
+
+    @objc private func selectUpdateChannel(_ sender: NSSegmentedControl) {
+        updates?.choose(sender.selectedSegment == 0 ? .beta : .stable)
+    }
+
+    @objc private func checkForUpdates() { updates?.check() }
+    @objc private func installUpdate() { updates?.install() }
+    @objc private func skipUpdate() { updates?.skip() }
+
+    @objc private func openUpdateDownload() {
+        guard let key = updates?.offer?.key else { return }
+        NSWorkspace.shared.open(URL(string: "https://updates.befeast.com")!.appendingPathComponent(key))
     }
 
     func showTheme(_ theme: AppearanceTheme, problem: String?) {
