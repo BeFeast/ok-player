@@ -22,7 +22,7 @@ final class MusicView: NSView {
 
     private let material = NSVisualEffectView()
     private let header = MusicTitleBar()
-    private let controls = NSView()
+    private let controls = MusicControlsPlane()
     private let elapsed = NSTextField(labelWithString: "00:00")
     private let remaining = NSTextField(labelWithString: "--:--")
 
@@ -53,8 +53,8 @@ final class MusicView: NSView {
         material.material = .windowBackground
         material.blendingMode = .behindWindow
         material.state = .followsWindowActiveState
-        [material, header, artwork, title, detail, controls, queueHost].forEach(addSubview)
-        [play, previous, next, queue, more, mute, seek, elapsed, remaining, volume, switchToVideo]
+        ([material, header, artwork, title, detail, controls, queueHost] as [NSView]).forEach(addSubview)
+        ([play, previous, next, queue, more, mute, seek, elapsed, remaining, volume, switchToVideo] as [NSView])
             .forEach(controls.addSubview)
         queue.setButtonType(.onOff)
         play.isBordered = true
@@ -92,7 +92,7 @@ final class MusicView: NSView {
         let width = bounds.width - 2 * inset
         material.frame = bounds
         header.frame = NSRect(x: 0, y: 0, width: bounds.width, height: 36)
-        header.label.frame = NSRect(x: 82, y: 3, width: max(0, bounds.width - 130), height: 17)
+        header.label.frame = NSRect(x: 82, y: 8, width: max(0, bounds.width - 130), height: 17)
 
         let side = queueShown ? 72 : max(80, min(width, bounds.height - 224))
         artwork.frame = NSRect(x: queueShown ? inset : bounds.midX - side / 2,
@@ -122,10 +122,13 @@ final class MusicView: NSView {
     }
 
     func show(title name: String, detail subtitle: String, hasVideo: Bool) {
-        title.stringValue = name
-        title.font = .systemFont(ofSize: artwork.hasImage ? 20 : 23, weight: .semibold)
-        detail.stringValue = subtitle
-        header.label.stringValue = name
+        if title.stringValue != name {
+            title.stringValue = name
+            header.label.stringValue = name
+        }
+        let titleSize: CGFloat = artwork.hasImage ? 20 : 23
+        if title.font?.pointSize != titleSize { title.font = .systemFont(ofSize: titleSize, weight: .semibold) }
+        if detail.stringValue != subtitle { detail.stringValue = subtitle }
         if switchToVideo.isHidden == hasVideo {
             switchToVideo.isHidden = !hasVideo
             needsLayout = true
@@ -170,7 +173,11 @@ final class MusicView: NSView {
     }
 }
 
-private final class MusicTitleBar: NSView {
+private class MusicControlsPlane: NSView {
+    override var isFlipped: Bool { true }
+}
+
+private final class MusicTitleBar: MusicControlsPlane {
     let label = NSTextField(labelWithString: "")
 
     override init(frame: NSRect) {
@@ -184,5 +191,5 @@ private final class MusicTitleBar: NSView {
 
     required init?(coder: NSCoder) { fatalError("Use init()") }
 
-    override var mouseDownCanMoveWindow: Bool { true }
+    override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
 }

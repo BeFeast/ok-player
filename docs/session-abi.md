@@ -364,6 +364,14 @@ a test can tell when a change has reached libmpv. The snapshot's
 
 The documents are pinned by `rust/crates/okp-session/fixtures/tracks/`.
 
+## Audio presentation
+
+A loaded source with audio and no video tracks other than attached pictures has
+an `audio_metadata` snapshot field, containing optional `title`, `artist`, and
+`album` tags. An untagged audio file still has this field. Other sources omit
+it, and the field clears on open and close. An attached picture by itself
+does not produce `video` geometry for the shell.
+
 ## Events
 
 A batch holds at most one `snapshot_changed` event, first, and then at most one

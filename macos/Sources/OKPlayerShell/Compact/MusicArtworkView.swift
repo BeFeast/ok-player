@@ -4,18 +4,18 @@ import ImageIO
 import QuartzCore
 
 final class MusicArtworkView: NSView {
-    private let art = CALayer()
+    private let art = MusicCover()
     private let placeholder = NSImageView()
     private var drifts = false
-    var hasImage: Bool { art.contents != nil }
+    var hasImage: Bool { art.image != nil }
 
     init() {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 10
         layer?.masksToBounds = true
-        layer?.addSublayer(art)
-        art.contentsGravity = .resizeAspectFill
+        art.wantsLayer = true
+        addSubview(art)
         placeholder.image = NSImage(systemSymbolName: "music.note", accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 48, weight: .light))
         placeholder.contentTintColor = .white
@@ -29,11 +29,7 @@ final class MusicArtworkView: NSView {
 
     override func layout() {
         super.layout()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        art.bounds = bounds
-        art.position = CGPoint(x: bounds.midX, y: bounds.midY)
-        CATransaction.commit()
+        art.frame = bounds
         let side = min(64, bounds.width * 0.55)
         placeholder.frame = NSRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2,
                                    width: side, height: side)
@@ -47,14 +43,15 @@ final class MusicArtworkView: NSView {
 
     func show(_ image: CGImage?) {
         resetMotion()
-        art.contents = image
+        art.image = image
+        art.isHidden = image == nil
         placeholder.isHidden = image != nil
         setAccessibilityLabel(image == nil ? "Artwork unavailable" : "Embedded artwork")
         needsDisplay = true
     }
 
     func updateMotion(playing: Bool, reduceMotion: Bool) {
-        guard hasImage && !reduceMotion else { resetMotion(); return }
+        guard hasImage, !reduceMotion, let art = art.layer else { resetMotion(); return }
         guard playing != drifts else { return }
         drifts = playing
         let now = CACurrentMediaTime()
@@ -80,12 +77,24 @@ final class MusicArtworkView: NSView {
     }
 
     private func resetMotion() {
-        guard art.animation(forKey: "artwork-drift") != nil else { return }
+        guard let art = art.layer, art.animation(forKey: "artwork-drift") != nil else { return }
         art.removeAnimation(forKey: "artwork-drift")
         art.speed = 1
         art.timeOffset = 0
         art.beginTime = 0
         drifts = false
+    }
+}
+
+private final class MusicCover: NSView {
+    var image: CGImage? { didSet { needsDisplay = true } }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let image, let context = NSGraphicsContext.current?.cgContext else { return }
+        let scale = max(bounds.width / CGFloat(image.width), bounds.height / CGFloat(image.height))
+        let size = CGSize(width: CGFloat(image.width) * scale, height: CGFloat(image.height) * scale)
+        context.draw(image, in: CGRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2,
+                                       width: size.width, height: size.height))
     }
 }
 

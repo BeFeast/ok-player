@@ -34,6 +34,7 @@ extension VerifyRun {
             }
         case .musicIdle:
             controls.play.performClick(nil)
+            try revealMusicControls(in: window)
             try await wait("the compact transport hid during playback") {
                 self.snapshot.status == .playing && !controls.controlsShown
             }
@@ -68,6 +69,8 @@ extension VerifyRun {
             }
             if !controls.next.isEnabled { failures.append("compact_music:transport_next") }
         case .musicNext:
+            controls.play.performClick(nil)
+            try await wait("playing before the queue advances") { self.snapshot.status == .playing }
             controls.next.performClick(nil)
             try await wait("the compact Next button played the queued audio fixture") {
                 self.snapshot.source?.location == plain.path && self.snapshot.audioMetadata != nil &&
@@ -76,7 +79,7 @@ extension VerifyRun {
             if !music.isActive {
                 // Continue after recording the deliberately disabled auto-entry.
                 try toggleMusicFromMenu()
-                if options.control.isEmpty { failures.append("compact_music:queue_kept_music") }
+                if options.control == "none" { failures.append("compact_music:queue_kept_music") }
             }
             if controls.artwork.hasImage || controls.title.stringValue == "Blue Hour" {
                 failures.append("compact_music:stale_artwork")
@@ -86,7 +89,7 @@ extension VerifyRun {
             try await wait("queued audio paused") { self.snapshot.status == .paused }
         case .musicRoundTrip, .musicVideoRoundTrip:
             let hasVideo = step.action == .musicVideoRoundTrip
-            if hasVideo {
+            if hasVideo && snapshot.status == .playing {
                 try pressKey(" ", code: 49)
                 try await wait("video paused before manual Music entry") { self.snapshot.status == .paused }
             }

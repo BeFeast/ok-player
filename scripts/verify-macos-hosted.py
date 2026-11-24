@@ -44,6 +44,7 @@ CONTROLS = {
     "about-geometry": "about_owner_cleanup_disabled",
     "welcome-resume-shelf": "history_poster_disabled",
     "history-page": "history_pagination_disabled",
+    "compact-music": "music_auto_entry_disabled",
 }
 
 
