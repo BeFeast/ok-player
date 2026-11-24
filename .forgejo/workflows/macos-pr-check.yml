@@ -32,6 +32,10 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      beta_source:
+        description: Full first-parent Forgejo main SHA to publish to macOS Beta. Leave empty for a regular preview.
+        type: string
 
 # A newer push to a pull request cancels its superseded run. Runs on main queue instead,
 # as in the Rust workflow, so every main commit that needs a build gets one.
@@ -48,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     env:
-      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.beta_source || github.sha }}
       # Empty for a manual run, which builds without the path check.
       BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
       EVENT_NAME: ${{ github.event_name }}
@@ -62,6 +66,17 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Select the exact main revision for Beta publication
+        if: inputs.beta_source != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$EVENT_NAME" = workflow_dispatch
+          test "$BRANCH" = main
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git rev-list --first-parent HEAD | grep -Fx "$HEAD_SHA" >/dev/null
+          git checkout --detach "$HEAD_SHA"
 
       - name: Does the change touch the macOS build?
         id: scope
@@ -82,7 +97,7 @@ jobs:
             --download-dir mac-ci-artifact --without-token skip
 
       - name: Publish the signed macOS Beta update
-        if: steps.scope.outputs.relevant == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.beta_source != ''
         shell: bash
         env:
           OKP_GPG_PRIVATE_KEY: ${{ secrets.OKP_GPG_PRIVATE_KEY }}
@@ -102,7 +117,7 @@ jobs:
         if: always() && steps.scope.outputs.relevant == 'true'
         uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
         with:
-          name: macos-player-${{ github.event.pull_request.head.sha || github.sha }}
+          name: macos-player-${{ env.HEAD_SHA }}
           path: mac-ci-artifact/
           if-no-files-found: ignore
           retention-days: 30

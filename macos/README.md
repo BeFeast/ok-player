@@ -788,8 +788,10 @@ download for manual installation. A build signed with the existing persistent
 certificate keeps bundle identity `uk.oklabs.ok-player` and the designated
 requirement covered by existing macOS access grants.
 
-The Forgejo bridge publishes the verified GitHub-hosted ZIP for the exact
-canonical main SHA. The files live under the macOS prefix in R2.
+To publish Beta, dispatch **macOS PR check** on Forgejo main with
+`beta_source` set to the exact first-parent main SHA. The bridge publishes the
+verified GitHub-hosted ZIP for that revision. Routine preview builds leave the
+feed unchanged. The files live under the macOS prefix in R2.
 
 - `https://updates.befeast.com/ok-player/macos/beta/latest.json`
 - `https://updates.befeast.com/ok-player/macos/stable/latest.json`
