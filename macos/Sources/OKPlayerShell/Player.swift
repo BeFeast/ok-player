@@ -125,7 +125,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         osc.moreActions = { [weak self] in self?.oscMenuActions() ?? [] }
         osc.collapsesSlots = verification?.control != "slot_collapse_disabled"
         osc.acceptsVolumeWheel = verification?.control != "volume_wheel_disabled"
-        video?.contextMenu = { [weak self] in self?.osc.contextMenu() }
+        video?.contextMenu = { [weak self] in
+            guard let self, let menu = self.osc.contextMenu() else { return nil }
+            return self.makeSettingsContextMenu(in: menu)
+        }
         tracks.window = window
         // The status layer's toast goes on top of everything installed so far.
         statusLayer.install(in: root, below: behaviour.titleStrip, above: osc)

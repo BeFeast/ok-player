@@ -20,11 +20,8 @@ extension VerifyRun {
             app.window.makeKeyAndOrderFront(nil)
             let welcome = app.history.welcomeView
             let background = welcome.convert(NSPoint(x: 12, y: welcome.bounds.midY), to: nil)
+            let click = try settingsContextClick(at: background)
             guard !welcome.isHidden, let player = app.windowBehaviour?.window,
-                  let click = NSEvent.mouseEvent(with: .rightMouseDown, location: background, modifierFlags: [],
-                                                 timestamp: ProcessInfo.processInfo.systemUptime,
-                                                 windowNumber: app.window.windowNumber, context: nil,
-                                                 eventNumber: 0, clickCount: 1, pressure: 1),
                   let menu = player.settingsMenu(for: click),
                   let item = menu.items.firstIndex(where: { $0.playerCommandID == "open-settings" }) else {
                 throw VerifyError("The player context menu has no Settings action")
@@ -129,6 +126,16 @@ extension VerifyRun {
             self.snapshot.source?.location == self.options.fixture.path &&
             self.snapshot.status == .playing && self.swaps > before
         }
+        guard let video = app.video else { throw VerifyError("Playback has no video view") }
+        let click = try settingsContextClick(at: video.convert(NSPoint(x: video.bounds.midX, y: video.bounds.midY), to: nil))
+        guard let menu = video.menu(for: click),
+              let item = menu.items.firstIndex(where: { $0.playerCommandID == "open-settings" }) else {
+            throw VerifyError("The playback context menu has no Settings action")
+        }
+        menu.performActionForItem(at: item)
+        checkSettings(app.settings.window === settings && settings.isVisible, "playback_context")
+        settings.close()
+        app.window.makeKeyAndOrderFront(nil)
         try pressKey(" ", code: 49)
         try await wait("Space reaches the native player responder after Settings") {
             self.snapshot.status == .paused
@@ -136,6 +143,16 @@ extension VerifyRun {
         checkSettings(settingsAppearance(app.window) == settingsAppearance(settings)
                       && app.osc.panel.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua,
                       "fixed_over_video_appearance")
+    }
+
+    private func settingsContextClick(at point: NSPoint) throws -> NSEvent {
+        guard let click = NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [],
+                                             timestamp: ProcessInfo.processInfo.systemUptime,
+                                             windowNumber: app.window.windowNumber, context: nil,
+                                             eventNumber: 0, clickCount: 1, pressure: 1) else {
+            throw VerifyError("Could not make a native context click")
+        }
+        return click
     }
 
     private func captureSettings(_ name: String, expected: VerificationScenario.Expectation) async throws {

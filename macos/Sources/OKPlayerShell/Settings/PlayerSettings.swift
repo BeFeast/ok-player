@@ -65,8 +65,8 @@ extension PlayerApp {
         settings.show(rememberFrame: verification == nil && !smoke)
     }
 
-    func makeSettingsContextMenu() -> NSMenu {
-        let menu = NSMenu()
+    func makeSettingsContextMenu(in menu: NSMenu = NSMenu()) -> NSMenu {
+        if menu.numberOfItems > 0 { menu.addItem(.separator()) }
         let item = NSMenuItem.playerCommand("open-settings", title: "Settings…", keyEquivalent: nil)
         item.target = self
         menu.addItem(item)
