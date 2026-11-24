@@ -181,11 +181,14 @@ final class SettingsWindow: NSWindow, NSSearchFieldDelegate {
         channel.isEnabled = updates.canCheck && !updates.checking && !updates.installing
         let check = NSButton(title: "Check for Updates", target: self, action: #selector(checkForUpdates))
         check.isEnabled = updates.canCheck && !updates.checking && !updates.installing
+        let automatic = NSButton(checkboxWithTitle: "Automatic checks", target: self, action: #selector(changeAutomaticChecks(_:)))
+        automatic.state = updates.automatic ? .on : .off
+        automatic.isEnabled = updates.canCheck
         var views: [NSView] = [
             label("Updates", weight: .semibold),
             label("Installed version \(updates.version) · Build \(updates.build)"),
             label("Release channel", muted: true),
-            channel,
+            channel, automatic,
             label("Last checked \(updates.lastCheck?.formatted(date: .abbreviated, time: .shortened) ?? "Never")", muted: true)
         ]
         if let offer = updates.offer {
@@ -197,7 +200,7 @@ final class SettingsWindow: NSWindow, NSSearchFieldDelegate {
         else if let error = updates.problem { status = error }
         else if updates.skipped { status = "You skipped this build." }
         else if !updates.canCheck { status = "Updates are unavailable for this build." }
-        else if updates.offer != nil && !updates.canInstall { status = "Move OK Player.app to ~/Applications to install in-app updates." }
+        else if updates.offer != nil && !updates.canInstall { status = updates.installExplanation }
         else if updates.offer == nil && updates.lastCheck != nil { status = "You’re up to date." }
         else { status = "" }
         if !status.isEmpty { views.append(label(status, muted: updates.problem == nil)) }
@@ -223,6 +226,7 @@ final class SettingsWindow: NSWindow, NSSearchFieldDelegate {
     }
 
     @objc private func checkForUpdates() { updates?.check() }
+    @objc private func changeAutomaticChecks(_ sender: NSButton) { updates?.setAutomatic(sender.state == .on) }
     @objc private func installUpdate() { updates?.install() }
     @objc private func skipUpdate() { updates?.skip() }
 

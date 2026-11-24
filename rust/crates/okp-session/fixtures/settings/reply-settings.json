@@ -10,7 +10,7 @@
       {"id":"audio","title":"Audio","available":false},
       {"id":"shortcuts","title":"Shortcuts","available":false},
       {"id":"integration","title":"Integration","available":false},
-      {"id":"updates","title":"Updates","available":false},
+      {"id":"updates","title":"Updates","available":true},
       {"id":"advanced","title":"Advanced","available":false}
     ],
     "about":{"id":"about","title":"About","available":true}

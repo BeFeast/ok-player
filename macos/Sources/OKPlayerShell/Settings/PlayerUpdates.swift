@@ -23,12 +23,14 @@ final class PlayerUpdates: NSObject {
     private let source: String
     private let bundle: URL
     private let helper: URL
-    var fixture: Fixture?
+    private let defaults: UserDefaults
+    private let persistentIdentity: Bool
+    var fixture: Fixture? { didSet { if fixture != nil { channel = .beta } } }
     var changed: (() -> Void)?
     var available: ((Offer) -> Void)?
     var willRelaunch: (() -> Void)?
     private var timer: Timer?
-    private var automatic = false
+    private var started = false
     private var lastAutomatic: Date?
     private var operation: Process?
     private(set) var lastCheck: Date?
@@ -38,28 +40,37 @@ final class PlayerUpdates: NSObject {
     private(set) var installing = false
     private(set) var skipped = false
     private(set) var channel: Channel
+    private(set) var automatic: Bool
 
     init(bundle: Bundle = .main, defaults: UserDefaults = .standard) {
         let info = bundle.infoDictionary ?? [:]
+        self.defaults = defaults
         self.bundle = bundle.bundleURL
         helper = bundle.bundleURL.appendingPathComponent("Contents/MacOS/okp-updater")
         version = info["CFBundleShortVersionString"] as? String ?? "Unavailable"
         build = info["CFBundleVersion"] as? String ?? "Unavailable"
         source = info["OKPSourceSHA"] as? String ?? ""
+        persistentIdentity = info["OKPUpdateSigningMode"] as? String == "self-signed"
         channel = defaults.string(forKey: "signedUpdateChannel").flatMap(Channel.init(rawValue:)) ?? .beta
+        automatic = defaults.object(forKey: "signedUpdateAutoCheck") as? Bool ?? true
         super.init()
     }
 
     var canCheck: Bool { FileManager.default.isExecutableFile(atPath: helper.path) }
     var canInstall: Bool {
-        fixture != nil || bundle.resolvingSymlinksInPath().path ==
+        fixture != nil || (persistentIdentity && bundle.resolvingSymlinksInPath().path ==
             FileManager.default.homeDirectoryForCurrentUser.resolvingSymlinksInPath()
-                .appendingPathComponent("Applications/OK Player.app").path
+                .appendingPathComponent("Applications/OK Player.app").path)
+    }
+
+    var installExplanation: String {
+        persistentIdentity ? "Move OK Player.app to ~/Applications to install in-app updates."
+            : "This build needs a signed OK Player ZIP before it can update in the app."
     }
 
     func start() {
         guard canCheck else { return }
-        automatic = true
+        started = true
         automaticallyCheck()
         schedule()
     }
@@ -73,16 +84,23 @@ final class PlayerUpdates: NSObject {
     }
 
     func automaticallyCheck() {
-        guard automatic, !checking, !installing,
+        guard started, automatic, !checking, !installing,
               lastAutomatic.map({ Date().timeIntervalSince($0) >= 5 * 60 }) ?? true else { return }
         lastAutomatic = Date()
         check(automatic: true)
     }
 
+    func setAutomatic(_ enabled: Bool) {
+        automatic = enabled
+        if fixture == nil { defaults.set(enabled, forKey: "signedUpdateAutoCheck") }
+        if automatic { automaticallyCheck() }
+        changed?()
+    }
+
     func choose(_ selected: Channel) {
         guard selected != channel, !checking, !installing else { return }
         channel = selected
-        if fixture == nil { UserDefaults.standard.set(channel.rawValue, forKey: "signedUpdateChannel") }
+        if fixture == nil { defaults.set(channel.rawValue, forKey: "signedUpdateChannel") }
         lastCheck = nil
         offer = nil
         skipped = false
@@ -91,7 +109,7 @@ final class PlayerUpdates: NSObject {
 
     func skip() {
         guard let offer, !checking, !installing else { return }
-        if fixture == nil { UserDefaults.standard.set(offer.build, forKey: skipKey) }
+        if fixture == nil { defaults.set(offer.build, forKey: skipKey) }
         skipped = true
         changed?()
     }
@@ -111,7 +129,8 @@ final class PlayerUpdates: NSObject {
                 let previous = self.offer
                 let bytes = try result.get()
                 self.offer = try JSONDecoder().decode(Offer?.self, from: bytes)
-                self.skipped = self.offer.map { $0.build == UserDefaults.standard.string(forKey: self.skipKey) } ?? false
+                self.skipped = self.fixture == nil
+                    && (self.offer.map { $0.build == self.defaults.string(forKey: self.skipKey) } ?? false)
                 if automatic, !self.skipped, let offer = self.offer, offer != previous {
                     self.available?(offer)
                 }

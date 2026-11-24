@@ -81,6 +81,23 @@ jobs:
           python3 scripts/mac-ci-bridge.py run --sha "$HEAD_SHA" --ref "$ref" \
             --download-dir mac-ci-artifact --without-token skip
 
+      - name: Publish the signed macOS Beta update
+        if: steps.scope.outputs.relevant == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          OKP_GPG_PRIVATE_KEY: ${{ secrets.OKP_GPG_PRIVATE_KEY }}
+          OKP_GPG_PASSPHRASE: ${{ secrets.OKP_GPG_PASSPHRASE }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test -s mac-ci-artifact/ok-player-macos-arm64.zip
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gnupg gpgv python3-boto3
+          /usr/bin/python3 scripts/publish-macos-beta.py --artifact mac-ci-artifact --source "$HEAD_SHA"
+
       - name: Publish the Mac build
         if: always() && steps.scope.outputs.relevant == 'true'
         uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4

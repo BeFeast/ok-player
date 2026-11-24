@@ -81,6 +81,7 @@ cp "$frameworks/"*.dylib "$app/Contents/Frameworks/"
 python3 "$root/scripts/generate-macos-info-plist.py" "$package/Info.plist" "$app/Contents/Info.plist" \
   --repo "$root" --build-number "${OKP_MACOS_BUILD_NUMBER:-0}" \
   --document-types "$work/document-types.plist" | tee "$output/version.txt"
+plutil -insert OKPUpdateSigningMode -string "${OKP_SIGNING_MODE:-ad-hoc}" "$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist" | tee -a "$output/tests.log"
 icon_file="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIconFile' "$app/Contents/Info.plist")"
 cp "$package/Resources/$icon_file" "$package/Resources/WelcomeIcon.png" "$app/Contents/Resources/"

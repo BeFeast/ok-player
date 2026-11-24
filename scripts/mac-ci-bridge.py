@@ -47,6 +47,8 @@ from pathlib import Path
 MACOS_PATHS = (
     "macos/**",
     "scripts/build-macos-preview.sh",
+    "scripts/publish-macos-beta.py",
+    "scripts/linux-appimage.py",
     "scripts/generate-macos-*.py",
     "scripts/macos-*.sh",
     "scripts/tests/macos-*.sh",
