@@ -516,6 +516,18 @@ final class VerifyRun {
         print("OKP_VERIFY captured \(name) via \(captureMode)")
     }
 
+    /// A live swap can precede the picture appearing in the verification FBO.
+    func captureVideoFrame(_ video: VideoView, width: Int, height: Int,
+                           matching: (VideoEvidence) -> Bool = { $0.hasPicture }) async throws -> VideoEvidence? {
+        for attempt in 0..<8 {
+            if let frame = video.videoLayer.verificationFrame(width: width, height: height), matching(frame) {
+                return frame
+            }
+            if attempt < 7 { try await Task.sleep(nanoseconds: 130_000_000) }
+        }
+        return nil
+    }
+
     func captureCompositor(width: Int, height: Int, window: NSWindow? = nil) async -> CGImage? {
         let target = window ?? app.window!
         guard compositorStatus == "available" || compositorStatus == "captured" else { return nil }

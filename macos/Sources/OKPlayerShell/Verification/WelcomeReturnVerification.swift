@@ -58,10 +58,12 @@ extension VerifyRun {
             self.snapshot.status == .playing && self.snapshot.source?.location == self.options.fixture.path
                 && self.snapshot.video != nil && self.swaps > before
         }
-        guard let video = app.video,
-              let frame = video.videoLayer.verificationFrame(width: 640, height: 288),
-              let pixel = NSBitmapImageRep(cgImage: frame.image).colorAt(x: 320, y: 144),
-              isFixtureColor(pixel) else {
+        guard let video = app.video else { throw VerifyError("The fixture has no video view") }
+        let frame = try await captureVideoFrame(video, width: 640, height: 288) { frame in
+            let bitmap = NSBitmapImageRep(cgImage: frame.image)
+            return bitmap.colorAt(x: 320, y: 144).map(self.isFixtureColor) ?? false
+        }
+        guard let frame else {
             throw VerifyError("The live GL renderer did not produce the magenta fixture", blocked: true)
         }
         welcomeReturnFrame = frame.image

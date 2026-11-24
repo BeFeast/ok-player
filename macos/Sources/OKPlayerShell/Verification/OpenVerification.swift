@@ -238,12 +238,8 @@ extension VerifyRun {
         if snapshot.video != nil {
             let width = Int((video.bounds.width * 2).rounded())
             let height = Int((video.bounds.height * 2).rounded())
-            for attempt in 0..<8 {
-                frame = video.videoLayer.verificationFrame(width: width, height: height)
-                if frame?.hasPicture == true { break }
-                if attempt < 7 { try await Task.sleep(nanoseconds: 130_000_000) }
-            }
-            guard frame?.hasPicture == true else {
+            frame = try await captureVideoFrame(video, width: width, height: height)
+            guard frame != nil else {
                 throw VerifyError("Open scenario did not render playback", blocked: true)
             }
         }

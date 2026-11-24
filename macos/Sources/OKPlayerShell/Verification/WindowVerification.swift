@@ -231,9 +231,9 @@ extension VerifyRun {
         } else {
             var frame: CGImage?
             if hasVideo {
-                let drawn = video.videoLayer.verificationFrame(width: Int((videoRect.width * 2).rounded()),
-                                                               height: Int((videoRect.height * 2).rounded()))
-                guard let drawn, drawn.hasPicture else {
+                let width = Int((videoRect.width * 2).rounded())
+                let height = Int((videoRect.height * 2).rounded())
+                guard let drawn = try await captureVideoFrame(video, width: width, height: height) else {
                     throw VerifyError("No live 2× libmpv frame at \(name)", blocked: true)
                 }
                 frame = drawn.image
