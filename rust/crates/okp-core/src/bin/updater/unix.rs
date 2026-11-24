@@ -105,6 +105,7 @@ fn install_lock(path: &Path) -> Result<File> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(path)?;

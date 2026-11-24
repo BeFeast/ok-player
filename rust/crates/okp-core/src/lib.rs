@@ -62,6 +62,8 @@ pub mod settings_navigation;
 pub mod settings_store;
 pub mod sha256sums;
 pub mod shortcuts;
+#[cfg(feature = "signed-updates")]
+pub mod signed_updates;
 pub mod srt;
 pub mod subtitle_delay;
 pub mod subtitle_format;
@@ -78,8 +80,6 @@ pub mod track_label;
 pub mod track_tags;
 pub mod update_lifecycle;
 pub mod update_selection;
-#[cfg(feature = "signed-updates")]
-pub mod signed_updates;
 pub mod velopack_artifacts;
 pub mod video_click;
 pub mod video_geometry;
