@@ -334,7 +334,9 @@ def run_appearance(executable, scenario, video, temporary, output, appearance, n
         failures.append("settings_shell_appearance:unrelated_profile_fields")
     return {
         **last, "status": "failed" if failures else "passed",
-        "processes": [{"pid": case["pid"], "phase": case["phase"], "status": case["status"]} for case in phases],
+        "exit_code": int(bool(failures)),
+        "processes": [{"pid": case["pid"], "phase": case["phase"], "status": case["status"],
+                       "exit_code": case["exit_code"]} for case in phases],
         "profile_preserved": preserved,
         "assertion_failures": failures,
         "checkpoints": [checkpoint for case in phases for checkpoint in case["checkpoints"]],

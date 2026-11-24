@@ -13,12 +13,15 @@ final class SettingsBackdrop: NSView {
     required init?(coder: NSCoder) { fatalError("Use init(_:shaded:)") }
 
     override func draw(_ dirtyRect: NSRect) {
+        // AppKit can supply a rect that extends beyond the view's bounds.
+        // A narrow divider must never paint over the neighboring rail.
+        let paint = dirtyRect.intersection(bounds)
         effectiveAppearance.performAsCurrentDrawingAppearance {
             role.color.setFill()
-            dirtyRect.fill()
+            paint.fill()
             if shaded {
                 PaletteRole.text.color.withAlphaComponent(0.04).setFill()
-                dirtyRect.fill()
+                paint.fill()
             }
         }
     }
