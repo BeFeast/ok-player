@@ -181,7 +181,10 @@ impl AppImageUpdates {
             } else {
                 Channel::Stable
             };
-            if updates.view.borrow().channel != selection {
+            let view = updates.view.borrow();
+            let can_change = view.channel != selection && view.work.is_none();
+            drop(view);
+            if can_change {
                 match updates.save_preference("update-channel", selection.name()) {
                     Ok(()) => {
                         let mut view = updates.view.borrow_mut();

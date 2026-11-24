@@ -132,22 +132,30 @@ impl Installation {
             File::open(builds)?.sync_all()?;
         }
         let relative = image.strip_prefix(&self.directory)?;
+        let next_inode = image_identity(&image)?;
+        let previous_image = self.directory.join(&self.previous);
         if fs::read_link(&self.target)? != self.previous
-            || image_identity(&self.directory.join(&self.previous))? != self.inode
+            || image_identity(&previous_image)? != self.inode
         {
             return Err("The managed AppImage changed during the update.".into());
         }
         self.set_current(relative, stage)?;
+        let synchronized = File::open(&self.directory).and_then(|directory| directory.sync_all());
         drop(lock);
 
         let receipt = stage.join("started");
-        let entered = self
-            .launch(Some(&receipt), None)
+        let entered = synchronized
+            .map_err(Into::into)
+            .and_then(|()| self.launch(&image, Some(&receipt), None))
             .and_then(|child| await_startup(child, &receipt, release));
         if let Err(error) = entered {
             let _lock = install_lock(&self.directory.join(".appimage.lock"))?;
-            if fs::read_link(&self.target)? == relative {
+            if fs::read_link(&self.target)? == relative
+                && image_identity(&image)? == next_inode
+                && image_identity(&previous_image)? == self.inode
+            {
                 self.set_current(&self.previous, stage)?;
+                File::open(&self.directory)?.sync_all()?;
             }
             return Err(error);
         }
@@ -158,25 +166,27 @@ impl Installation {
         let link = stage.join("current");
         symlink(relative, &link)?;
         fs::rename(link, &self.target)?;
-        File::open(&self.directory)?.sync_all()?;
         Ok(())
     }
 
     pub fn reopen_after_failure(&self, error: &str) -> Result<()> {
-        if fs::read_link(&self.target)? == self.previous {
-            self.launch(None, Some(error))?;
+        let previous_image = self.directory.join(&self.previous);
+        if fs::read_link(&self.target)? == self.previous
+            && image_identity(&previous_image)? == self.inode
+        {
+            self.launch(&previous_image, None, Some(error))?;
         }
         Ok(())
     }
 
-    fn launch(&self, receipt: Option<&Path>, failure: Option<&str>) -> Result<Child> {
+    fn launch(&self, image: &Path, receipt: Option<&Path>, failure: Option<&str>) -> Result<Child> {
         let lock = self.directory.join(".appimage.lock");
         let mut command = Command::new("/usr/bin/flock");
         command
             .process_group(0)
             .args(["--close", "--shared"])
             .arg(lock)
-            .arg(&self.target)
+            .arg(image)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());

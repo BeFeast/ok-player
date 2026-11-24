@@ -3,7 +3,7 @@ use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{self, Child};
 use std::time::{Duration, Instant};
@@ -80,6 +80,7 @@ pub fn run() -> Result<()> {
     let old = adapter::installation(&target, &build, &source, fixture)?;
     let staging = tempfile::Builder::new()
         .prefix(".okp-update-")
+        .permissions(fs::Permissions::from_mode(0o700))
         .tempdir_in(old.directory())?;
     let payload = feed.stage(&release, staging.path())?;
     let prepared = old.prepare(&payload, &release)?;
