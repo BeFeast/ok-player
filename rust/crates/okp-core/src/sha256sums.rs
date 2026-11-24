@@ -9,6 +9,7 @@
 
 use std::fmt;
 use std::fmt::Write as _;
+use std::io::{self, Read};
 
 use sha2::{Digest, Sha256};
 
@@ -131,6 +132,26 @@ pub fn sha256_hex(payload: &[u8]) -> String {
         let _ = write!(hex, "{byte:02x}");
     }
     hex
+}
+
+pub(crate) fn hash_reader(reader: &mut impl Read) -> io::Result<(String, u64)> {
+    let mut hasher = Sha256::new();
+    let mut size = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        size += read as u64;
+    }
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut hex, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    Ok((hex, size))
 }
 
 /// Verify `payload` named `file_name` against a raw `SHA256SUMS` manifest.

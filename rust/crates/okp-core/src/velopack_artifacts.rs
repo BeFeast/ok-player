@@ -4,14 +4,14 @@
 //! therefore trust the generated feed and package bytes instead of guessing
 //! public-channel file names in a shell script.
 
-use std::fmt::Write as FmtWrite;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use zip::ZipArchive;
+
+use crate::sha256sums::hash_reader;
 
 pub const LINUX_VELOPACK_PACKAGE_ID: &str = "com.befeast.okplayer";
 
@@ -311,26 +311,6 @@ fn atomic_copy_verified(
 fn hash_file(path: &Path) -> Result<(String, u64), String> {
     let mut file = File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
     hash_reader(&mut file).map_err(|error| format!("{}: {error}", path.display()))
-}
-
-fn hash_reader(reader: &mut impl Read) -> io::Result<(String, u64)> {
-    let mut hasher = Sha256::new();
-    let mut size = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = reader.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        size += read as u64;
-    }
-    let digest = hasher.finalize();
-    let mut hex = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        write!(&mut hex, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    Ok((hex, size))
 }
 
 fn safe_channel(channel: &str) -> Result<&str, String> {

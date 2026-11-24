@@ -1,7 +1,7 @@
 //! The authenticated release protocol shared by the macOS ZIP and Linux AppImage.
+use crate::sha256sums::{hash_reader, sha256_hex as digest};
 use sequoia_openpgp as pgp;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -184,10 +184,6 @@ fn is_hex(value: &str, length: usize) -> bool {
             .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
 
-fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
-
 struct Verify(pgp::Cert);
 
 impl pgp::parse::stream::VerificationHelper for Verify {
@@ -341,9 +337,8 @@ impl Feed {
 }
 
 pub fn matches_payload(release: &Release, path: &Path) -> Result<bool> {
-    let mut file = File::open(path).map_err(|e| e.to_string())?;
-    let mut hash = Sha256::new();
-    let bytes =
-        io::copy(&mut (&mut file).take(release.size + 1), &mut hash).map_err(|e| e.to_string())?;
-    Ok(bytes == release.size && format!("{:x}", hash.finalize()) == release.sha256)
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    let (hash, bytes) =
+        hash_reader(&mut file.take(release.size + 1)).map_err(|error| error.to_string())?;
+    Ok(bytes == release.size && hash == release.sha256)
 }
