@@ -270,9 +270,10 @@ final class PlayerAppCommandsTests: XCTestCase {
         let app = PlayerApp()
         app.registerPlayerCommands()
         XCTAssertEqual(app.commands.shellCommands,
-                       ["add-subtitle", "add-to-queue", "audio-track", "chapters-up-next", "escape-fullscreen", "fullscreen",
-                        "mini-player", "next-item", "open-file", "open-folder", "open-settings", "play-next",
-                        "playback-speed", "previous-item", "send-feedback", "show-commands", "subtitles"])
+                       ["add-subtitle", "add-to-queue", "audio-track", "chapters-up-next", "compact-music",
+                        "escape-fullscreen", "fullscreen", "mini-player", "next-item", "open-file", "open-folder",
+                        "open-settings", "play-next", "playback-speed", "previous-item", "send-feedback",
+                        "show-commands", "subtitles"])
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("okp-menu-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let client = try SessionClient(config: SessionConfig(
