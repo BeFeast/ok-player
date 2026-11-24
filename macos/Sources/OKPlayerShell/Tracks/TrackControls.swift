@@ -87,8 +87,12 @@ final class TrackControls: NSObject, NSPopoverDelegate {
     /// and the readout over the top of `root`.
     func install(in osc: TransportOverlay, over root: NSView) {
         self.osc = osc
-        osc.addTrailingControl(audioButton)
-        osc.addTrailingControl(subtitleButton)
+        osc.addTrailingControl(subtitleButton, id: "subtitles", collapse: 2) { [weak self] in
+            Self.trackMenuItem("Subtitles", items: self?.menuItems(.subtitle) ?? [])
+        }
+        osc.addTrailingControl(audioButton, id: "audio", collapse: 3) { [weak self] in
+            Self.trackMenuItem("Audio", items: self?.menuItems(.audio) ?? [])
+        }
         readout.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(readout)
         NSLayoutConstraint.activate([
@@ -285,6 +289,25 @@ final class TrackControls: NSObject, NSPopoverDelegate {
         let holder = window.firstResponder
         guard holder == nil || holder === window || holder === audioButton || holder === subtitleButton else { return }
         _ = window.makeFirstResponder(video)
+    }
+
+    private static func trackMenuItem(_ title: String, items: [NSMenuItem]) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        items.forEach { menu.addItem($0) }
+        item.submenu = menu
+        item.isEnabled = items.contains { !$0.isSeparatorItem && $0.isEnabled }
+        return item
+    }
+
+    var isPopoverShown: Bool { popover.isShown }
+
+    @discardableResult
+    func dismissPopover() -> Bool {
+        guard popover.isShown else { return false }
+        popover.performClose(nil)
+        return true
     }
 
     /// The Audio or Subtitles items for the menu bar, for the session's state now.

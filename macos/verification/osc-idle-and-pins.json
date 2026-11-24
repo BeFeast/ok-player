@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "id": "osc-idle-and-pins",
+  "fixture": "01-h264-1080p24-tone.mp4",
+  "appearances": [
+    "light",
+    "dark"
+  ],
+  "steps": [
+    {
+      "action": "open"
+    },
+    {
+      "action": "size_osc",
+      "width": 1120
+    },
+    {
+      "action": "pointer_reveal"
+    },
+    {
+      "action": "check_idle"
+    },
+    {
+      "action": "capture",
+      "name": "hidden",
+      "expect": "osc_hidden"
+    },
+    {
+      "action": "check_pins"
+    },
+    {
+      "action": "capture",
+      "name": "revealed",
+      "expect": "osc_pinned"
+    }
+  ]
+}

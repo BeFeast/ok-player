@@ -8,6 +8,7 @@ struct VerificationOptions {
     let profile: URL
     let appearance: String
     let negativeControl: Bool
+    let httpFixture: URL?
     var scenarioID: String { scenario.deletingPathExtension().lastPathComponent }
     var control: String {
         guard negativeControl else { return "none" }
@@ -17,6 +18,10 @@ struct VerificationOptions {
         case "window-fullscreen": "video_fullscreen_disabled"
         case "window-fit": "initial_fit_disabled"
         case "window-float": "floating_level_disabled"
+        case "osc-layout": "slot_collapse_disabled"
+        case "osc-idle-and-pins": "panel_pin_disabled"
+        case "osc-volume-speed": "volume_wheel_disabled"
+        case "osc-status": "copy_details_disabled"
         default: "unsupported_control"
         }
     }
@@ -34,6 +39,7 @@ struct VerificationOptions {
         self.output = URL(fileURLWithPath: output, isDirectory: true)
         self.profile = URL(fileURLWithPath: profile, isDirectory: true)
         self.appearance = appearance
+        httpFixture = value("--verify-http-fixture").flatMap { URL(string: $0) }
         negativeControl = arguments.contains("--verify-negative-control")
     }
 
@@ -42,6 +48,9 @@ struct VerificationOptions {
         config.dataDir = profile.appendingPathComponent("data").path
         config.configDir = profile.appendingPathComponent("config").path
         config.cacheDir = profile.appendingPathComponent("cache").path
+        if scenarioID == "osc-status" {
+            config.mpvOptions.append(MpvOption(name: "network-timeout", value: "5"))
+        }
         if let spec = try? readScenario(), let languages = spec.preferredSubtitleLanguages {
             config.mpvOptions.append(MpvOption(name: "slang", value: languages))
         }
@@ -72,6 +81,7 @@ struct VerificationScenario: Decodable {
         let expect: Expectation?
         let subtitleLabels: [String]?
         let selectedSubtitle: String?
+        let width: Double?
     }
     enum Action: String, Decodable {
         case open, pause, seek, capture
@@ -81,10 +91,17 @@ struct VerificationScenario: Decodable {
         case sizeWindow = "size_window", closeMedia = "close_media", doubleClick = "double_click"
         case smallWorkArea = "small_work_area", openPortrait = "open_portrait", resizeEdges = "resize_edges"
         case pin, unpin, overlapWindow = "overlap_window"
+        case sizeOSC = "size_osc", checkMore = "check_more", checkSeek = "check_seek"
+        case checkIdle = "check_idle", checkPins = "check_pins"
+        case showVolume = "show_volume", checkWheel = "check_wheel", checkSpeedMute = "check_speed_mute"
+        case openStall = "open_stall", releaseStall = "release_stall", openFailure = "open_failure"
+        case checkFailureActions = "check_failure_actions", checkStale = "check_stale"
     }
     enum Expectation: String, Decodable {
         case noCue = "no_cue", clearance, baseMargin = "base_margin"
         case welcome, playing, fullscreen, restored, landscape, portrait, idle, floating, normal, repinned
+        case oscRow = "osc_row", oscHidden = "osc_hidden", oscPinned = "osc_pinned"
+        case volume, speed, loading, failure, recovered
     }
     let schemaVersion: Int
     let id: String
@@ -156,6 +173,7 @@ final class VerifyRun {
             compositorStatus = CGPreflightScreenCaptureAccess() ? "available" : "permission_unavailable"
             for step in scenario.steps {
                 if scenario.id.hasPrefix("window-") { try await performWindowStep(step) }
+                else if scenario.id.hasPrefix("osc-") { try await performTransportStep(step) }
                 else { try await perform(step) }
             }
             result["status"] = failures.isEmpty ? "passed" : "failed"
@@ -281,7 +299,7 @@ final class VerifyRun {
         window.sendEvent(event)
     }
 
-    private func seek(_ timestamp: Double) throws {
+    func seek(_ timestamp: Double) throws {
         guard let window = app.window else { throw VerifyError("The seek window disappeared", blocked: true) }
         window.contentView?.layoutSubtreeIfNeeded()
         let slider = app.osc.scrubber

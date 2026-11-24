@@ -106,10 +106,13 @@ final class ScrubberView: NSView {
 /// accent colour, boost above it in the warning colour, and a mark at 100 %.
 /// A click or drag reports the fraction of the track under the pointer.
 final class VolumeSliderView: NSView {
-    static let inset: CGFloat = 5
+    static let inset: CGFloat = 7
 
     var volume: VolumeView? { didSet { if volume != oldValue { needsDisplay = true } } }
     var onFraction: ((Double) -> Void)?
+    var onRelease: ((NSEvent) -> Void)?
+    var onNudge: ((Double) -> Void)?
+    private(set) var isPressed = false
 
     init() {
         super.init(frame: .zero)
@@ -120,11 +123,11 @@ final class VolumeSliderView: NSView {
 
     required init?(coder: NSCoder) { fatalError("Use init()") }
 
-    override var intrinsicContentSize: NSSize { NSSize(width: 72, height: 18) }
+    override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
-        let track = NSRect(x: Self.inset, y: bounds.midY - 2, width: Swift.max(0, bounds.width - 2 * Self.inset), height: 4)
+        let track = NSRect(x: Self.inset, y: bounds.midY - 3, width: Swift.max(0, bounds.width - 2 * Self.inset), height: 6)
         PaletteRole.borderSubtle.overVideo.setFill()
         NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2).fill()
         guard let volume else { return }
@@ -138,8 +141,8 @@ final class VolumeSliderView: NSView {
         }
         PaletteRole.text.overVideo.setFill()
         NSRect(x: unityX - 0.5, y: track.minY - 3, width: 1, height: track.height + 6).fill()
-        let knob = NSRect(x: levelX - 5, y: bounds.midY - 5, width: 10, height: 10)
-        (volume.muted ? PaletteRole.textMuted : PaletteRole.accent).overVideo.setFill()
+        let knob = NSRect(x: levelX - 7, y: bounds.midY - 7, width: 14, height: 14)
+        (volume.muted ? PaletteRole.textMuted : PaletteRole.text).overVideo.setFill()
         NSBezierPath(ovalIn: knob).fill()
     }
 
@@ -148,8 +151,42 @@ final class VolumeSliderView: NSView {
         onFraction?(TrackGeometry.fraction(atX: Double(x), width: Double(bounds.width), inset: Double(Self.inset)))
     }
 
-    override func mouseDown(with event: NSEvent) { report(event) }
-    override func mouseDragged(with event: NSEvent) { report(event) }
+    override func mouseDown(with event: NSEvent) {
+        isPressed = true
+        window?.makeFirstResponder(self)
+        report(event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        if isPressed { report(event) }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isPressed else { return }
+        isPressed = false
+        onRelease?(event)
+    }
+
+    func cancelPress() { isPressed = false }
+
+    override func keyDown(with event: NSEvent) {
+        let delta = event.modifierFlags.contains(.shift) ? 0.1 : 1
+        switch KeyPress(event: event)?.key {
+        case "Left", "Down": onNudge?(-delta)
+        case "Right", "Up": onNudge?(delta)
+        default: super.keyDown(with: event)
+        }
+    }
+
+    override func accessibilityPerformIncrement() -> Bool {
+        onNudge?(1)
+        return onNudge != nil
+    }
+
+    override func accessibilityPerformDecrement() -> Bool {
+        onNudge?(-1)
+        return onNudge != nil
+    }
 }
 
 extension ScrollInput {
@@ -174,5 +211,62 @@ extension ScrollInput.Phase {
         } else {
             self = .changed
         }
+    }
+}
+
+/// A contrast layer between video and the single transport row.
+final class TransportScrim: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let gradient = NSGradient(colors: [.black.withAlphaComponent(0.78), .clear])
+        gradient?.draw(in: bounds, angle: 90)
+    }
+}
+
+/// The resting speaker slot shows gain without changing the width of the row.
+final class VolumeWick: NSView {
+    var volume: VolumeView? { didSet { if volume != oldValue { needsDisplay = true } } }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        PaletteRole.border.overVideo.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 1.5, yRadius: 1.5).fill()
+        guard let volume else { return }
+        var fill = bounds
+        fill.size.width *= volume.muted ? 0 : volume.fraction
+        (volume.boosted ? PaletteRole.warning : PaletteRole.accent).overVideo.setFill()
+        NSBezierPath(roundedRect: fill, xRadius: 1.5, yRadius: 1.5).fill()
+    }
+}
+
+final class TransportTextButton: NSButton {
+    var value: String {
+        didSet {
+            if value != oldValue {
+                title = value + "  ⌄"
+                setAccessibilityValue(value)
+            }
+        }
+    }
+
+    init(title value: String, label: String) {
+        self.value = value
+        super.init(frame: .zero)
+        self.title = value + "  ⌄"
+        font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+        isBordered = false
+        toolTip = label
+        setAccessibilityLabel(label)
+        setAccessibilityValue(value)
+    }
+
+    required init?(coder: NSCoder) { fatalError("Use init(title:label:)") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        PaletteRole.text.overVideo.withAlphaComponent(isHighlighted ? 0.24 : 0.12).setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 0, dy: 3), xRadius: 7, yRadius: 7).fill()
+        super.draw(dirtyRect)
     }
 }

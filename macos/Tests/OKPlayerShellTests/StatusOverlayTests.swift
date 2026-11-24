@@ -98,7 +98,8 @@ final class StatusOverlayTests: XCTestCase {
         XCTAssertEqual(openedAnother, 1)
         try XCTUnwrap(overlay.button(for: .copyDetails)).performClick(nil)
         XCTAssertEqual(copied, [StatusTests.card.detail])
-        XCTAssertEqual(toasted, ["Copied details"])
+        XCTAssertEqual(overlay.button(for: .copyDetails)?.title, "Copied")
+        XCTAssertTrue(layer.toastView.isHidden)
     }
 
     func testLoadingAndBufferingShowASpinnerThatClicksPassThrough() {

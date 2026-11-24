@@ -189,20 +189,19 @@ final class TransportOverlayTests: XCTestCase {
         XCTAssertEqual(controls.panel.frame.width, 668, accuracy: 0.5, "a narrower window keeps 16 points each side")
     }
 
-    func testTheTimelineStacksAtNarrowWidthsAndReturnsBetweenTheTimeLabels() {
-        let widths: [CGFloat] = [900, 520, 900]
-        for width in widths {
+    func testTheTimelineStaysInlineAsSecondarySlotsFoldIntoMore() {
+        for width in [CGFloat(900), 440, 900] {
             overlay.setFrameSize(NSSize(width: width, height: 360))
             overlay.layoutSubtreeIfNeeded()
-            let elapsed = overlay.panel.convert(overlay.elapsedLabel.bounds, from: overlay.elapsedLabel)
-            let trailing = overlay.panel.convert(overlay.trailingLabel.bounds, from: overlay.trailingLabel)
+            let elapsed = overlay.elapsedLabel.frame
             let scrubber = overlay.scrubber.frame
-            if width == 520 {
-                XCTAssertGreaterThan(scrubber.minY, elapsed.maxY)
+            XCTAssertEqual(scrubber.midY, elapsed.midY, accuracy: 0.5)
+            XCTAssertGreaterThan(scrubber.minX, elapsed.maxX)
+            if width == 440 {
+                XCTAssertEqual(overlay.collapsed.map(\.id), ["speed", "fullscreen"])
             } else {
-                XCTAssertEqual(scrubber.midY, elapsed.midY, accuracy: 0.5)
-                XCTAssertGreaterThan(scrubber.minX, elapsed.maxX)
-                XCTAssertLessThan(scrubber.maxX, trailing.minX)
+                XCTAssertLessThan(scrubber.maxX, overlay.trailingLabel.frame.minX)
+                XCTAssertTrue(overlay.collapsed.isEmpty)
             }
         }
     }

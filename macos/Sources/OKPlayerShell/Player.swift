@@ -74,7 +74,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         behaviour.applyInitialFit = verification?.control != "initial_fit_disabled"
         behaviour.applyFloatingLevel = verification?.control != "floating_level_disabled"
         window.title = "OK Player"; window.delegate = self; window.isReleasedWhenClosed = false
-        // Leave the stacked transport row room for its native controls at minimum width.
+        // Keep the video and essential playback controls usable at the window floor.
         window.minSize = NSSize(width: 440, height: 280)
         window.backgroundColor = PaletteRole.canvas.color
         let root = PlayerCanvas(); window.contentView = makeDropTarget(content: root)
@@ -106,16 +106,23 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         history.install(in: root, below: behaviour.titleStrip, above: osc.panel)
         upNext.install(in: root, below: behaviour.titleStrip, above: osc.panel)
         upNext.onVisibilityChange = { [weak self] visible in
-            if visible { self?.osc.autoHide.pin() } else { self?.osc.autoHide.unpin() }
+            guard let self, self.verification?.control != "panel_pin_disabled" else { return }
+            self.osc.setPinned(visible, by: .panel)
         }
         behaviour.dismissTransient = { [weak self] in
-            guard let self, self.upNext.isShown else { return false }
+            guard let self else { return false }
+            if self.osc.dismissVolume() || self.tracks.dismissPopover() { return true }
+            guard self.upNext.isShown else { return false }
             self.upNext.hide()
             return true
         }
         behaviour.onPinChanged = { [weak self] pinned in self?.pinItem.state = pinned ? .on : .off }
         tracks.install(in: osc, over: root)
-        osc.addTrailingControl(upNext.button)
+        osc.addTrailingControl(upNext.button, id: "up-next", collapse: 7)
+        osc.moreActions = { [weak self] in self?.oscMenuActions() ?? [] }
+        osc.collapsesSlots = verification?.control != "slot_collapse_disabled"
+        osc.acceptsVolumeWheel = verification?.control != "volume_wheel_disabled"
+        video?.contextMenu = { [weak self] in self?.osc.contextMenu() }
         tracks.window = window
         // The status layer's toast goes on top of everything installed so far.
         statusLayer.install(in: root, below: behaviour.titleStrip, above: videoArea)
@@ -129,6 +136,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // pointer movement.
         osc.onRevealChange = { [weak self] revealed in self?.oscRevealChanged(revealed) }
         behaviour.oscVisibilityChanged(osc.isRevealed, animated: false)
+        behaviour.window.onPlayerInput = { [weak self] event in self?.osc.handleWindowInput(event) ?? false }
         behaviour.window.onKeyDown = { [weak self] in self?.keyPressed() }
         behaviour.titleStrip.onPointerActivity = { [weak self] in self?.osc.noteActivity() }
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
@@ -160,6 +168,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             system.playlist = playlist
             system.start()
         }
+        statusLayer.copyFailureDetails = verification?.control != "copy_details_disabled"
         statusLayer.query = { [weak client] in
             guard case .statusSurface(let surface)? = client?.query(.statusSurface) else { return nil }
             return surface
@@ -179,7 +188,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return view
         }
         tracks.holdControls = { [weak self] hold in
-            if hold { self?.osc.autoHide.pin() } else { self?.osc.autoHide.unpin() }
+            self?.osc.setPinned(hold, by: .tracks)
         }
         osc.onPrevious = { [weak self] in _ = self?.playlist.step(.previous) }
         osc.onNext = { [weak self] in _ = self?.playlist.step(.next) }
@@ -208,6 +217,14 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self.open([URL(fileURLWithPath: path)])
         }
     }
+    private func oscMenuActions() -> [NSMenuItem] {
+        let pin = NSMenuItem(title: "Always on Top", action: #selector(togglePlayerPin), keyEquivalent: "")
+        pin.state = pinItem.state
+        let close = NSMenuItem(title: "Close Media", action: #selector(closeMedia), keyEquivalent: "")
+        for item in [pin, close] { item.target = self }
+        return [pin, close]
+    }
+
     func play(_ path: String) {
         play(MediaSource(kind: .local, location: path))
     }
@@ -217,6 +234,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let client else { return }
         let result = client.dispatch(.open(source: source, resumeFrom: resumeFrom))
         statusLayer.opened(result)
+        if case .rejected = result { return }
         showOpening((source.location as NSString).lastPathComponent)
     }
     /// A file or folder named `name` is opening: the status layer shows it loading,
@@ -661,7 +679,7 @@ final class SmokeRun {
         guard lights.allSatisfy({ !$0.isHidden }) else {
             fail("The traffic lights did not come back with the transport controls"); return
         }
-        let elapsed = app.osc.elapsedLabel.stringValue, trailing = app.osc.trailingLabel.stringValue
+        let elapsed = app.osc.elapsedLabel.stringValue, trailing = app.osc.trailingLabel.title
         guard app.osc.isRevealed, !app.osc.panel.isHidden, elapsed.contains(":"), elapsed != "00:00" else {
             fail("The transport controls did not come back with the time (\(elapsed))"); return
         }

@@ -23,6 +23,10 @@ CONTROLS = {
     "window-fullscreen": "video_fullscreen_disabled",
     "window-fit": "initial_fit_disabled",
     "window-float": "floating_level_disabled",
+    "osc-layout": "slot_collapse_disabled",
+    "osc-idle-and-pins": "panel_pin_disabled",
+    "osc-volume-speed": "volume_wheel_disabled",
+    "osc-status": "copy_details_disabled",
 }
 
 

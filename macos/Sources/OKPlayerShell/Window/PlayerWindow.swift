@@ -12,6 +12,7 @@ class PlayerWindow: NSWindow {
     /// Called for every key press the window receives, before anything handles it:
     /// the transport controls count it as activity.
     var onKeyDown: (() -> Void)?
+    var onPlayerInput: ((NSEvent) -> Bool)?
 
     /// The single-key shortcuts (`PlayerCommands.handle`), offered every key press
     /// no view took; returns whether it ran a command.
@@ -22,7 +23,7 @@ class PlayerWindow: NSWindow {
 
     override func sendEvent(_ event: NSEvent) {
         if event.type == .keyDown { onKeyDown?() }
-        super.sendEvent(event)
+        if onPlayerInput?(event) != true { super.sendEvent(event) }
     }
 
     override func keyDown(with event: NSEvent) {

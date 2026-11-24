@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "id": "osc-layout",
+  "fixture": "01-h264-1080p24-tone.mp4",
+  "appearances": [
+    "light",
+    "dark"
+  ],
+  "steps": [
+    {
+      "action": "open"
+    },
+    {
+      "action": "pause"
+    },
+    {
+      "action": "size_osc",
+      "width": 1120
+    },
+    {
+      "action": "pointer_reveal"
+    },
+    {
+      "action": "check_seek"
+    },
+    {
+      "action": "capture",
+      "name": "default",
+      "expect": "osc_row"
+    },
+    {
+      "action": "size_osc",
+      "width": 580
+    },
+    {
+      "action": "check_more"
+    },
+    {
+      "action": "capture",
+      "name": "narrow",
+      "expect": "osc_row"
+    },
+    {
+      "action": "size_osc",
+      "width": 440
+    },
+    {
+      "action": "check_more"
+    },
+    {
+      "action": "capture",
+      "name": "floor",
+      "expect": "osc_row"
+    }
+  ]
+}

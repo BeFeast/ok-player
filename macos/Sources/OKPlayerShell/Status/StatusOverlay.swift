@@ -17,6 +17,7 @@ final class StatusOverlay: NSView {
     let cardPanel = PalettePanel(radius: 14)
     let iconView = NSImageView()
     let titleLabel = NSTextField(labelWithString: "")
+    let sourceLabel = NSTextField(labelWithString: "")
     let messageLabel = NSTextField(wrappingLabelWithString: "")
     let buttonRow = NSStackView()
     private(set) var display = StatusDisplay.clear
@@ -53,9 +54,9 @@ final class StatusOverlay: NSView {
             progressPanel.isHidden = false
             cardPanel.isHidden = true
         case .failure(let card):
-            showCard(title: card.title, message: card.message, actions: card.actions)
+            showCard(title: card.title, message: card.message, detail: card.detail, actions: card.actions)
         case .shellFailure(let message):
-            showCard(title: StatusRules.shellFailureTitle, message: message, actions: [])
+            showCard(title: StatusRules.shellFailureTitle, message: message, detail: nil, actions: [])
         }
         if progressPanel.isHidden { spinner.stopAnimation(nil) } else { spinner.startAnimation(nil) }
     }
@@ -66,9 +67,12 @@ final class StatusOverlay: NSView {
         return hit === self ? nil : hit
     }
 
-    private func showCard(title: String, message: String, actions: [FailureActionView]) {
+    private func showCard(title: String, message: String, detail: String?, actions: [FailureActionView]) {
         titleLabel.stringValue = title
         messageLabel.stringValue = message
+        sourceLabel.stringValue = detail?.components(separatedBy: .newlines).dropFirst().first ?? ""
+        sourceLabel.toolTip = detail
+        sourceLabel.isHidden = detail == nil
         for (_, button) in buttons { button.removeFromSuperview() }
         buttons = actions.enumerated().map { index, view -> (action: FailureAction, button: NSButton) in
             // The first action is the card's primary one (Retry).
@@ -139,9 +143,14 @@ final class StatusOverlay: NSView {
         messageLabel.textColor = PaletteRole.textMuted.color
         messageLabel.alignment = .center
         messageLabel.preferredMaxLayoutWidth = 360
+        sourceLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        sourceLabel.textColor = PaletteRole.textMuted.color
+        sourceLabel.lineBreakMode = .byTruncatingMiddle
+        sourceLabel.maximumNumberOfLines = 1
+        sourceLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
-        let column = NSStackView(views: [iconView, titleLabel, messageLabel, buttonRow])
+        let column = NSStackView(views: [iconView, titleLabel, messageLabel, sourceLabel, buttonRow])
         column.orientation = .vertical
         column.alignment = .centerX
         column.spacing = 8
@@ -158,6 +167,7 @@ final class StatusOverlay: NSView {
             column.leadingAnchor.constraint(equalTo: cardPanel.leadingAnchor, constant: 20),
             column.trailingAnchor.constraint(equalTo: cardPanel.trailingAnchor, constant: -20),
             messageLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
+            sourceLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
         ])
     }
 }

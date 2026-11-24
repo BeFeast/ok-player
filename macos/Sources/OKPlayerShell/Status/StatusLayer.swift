@@ -16,6 +16,7 @@ final class StatusLayer {
     /// Open another: let the user choose a source.
     var onOpenAnother: (() -> Void)?
     /// Copy details: put the card's detail on the pasteboard.
+    var copyFailureDetails = true
     var copy: (String) -> Void = { text in
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
@@ -32,7 +33,7 @@ final class StatusLayer {
     init(timer: HideTimer = MainQueueHideTimer()) {
         toast = Toast(timer: timer)
         toast.onChange = { [weak self] text in
-            self?.toastView.show(text)
+            self?.toastView.show(self?.display.isClear == true ? text : nil)
             if let text { self?.onToast?(text) }
         }
         overlay.onAction = { [weak self] action, card in self?.perform(action, card) }
@@ -65,7 +66,14 @@ final class StatusLayer {
     /// Ask the session for the surface again and show it.
     func refresh() {
         if let surface = query?() { self.surface = surface }
-        overlay.show(StatusRules.display(surface, shellFailure: shellFailure))
+        showStatus(StatusRules.display(surface, shellFailure: shellFailure))
+    }
+
+    // Progress or a failure takes the status slot. Dismiss any previous readout
+    // immediately so it cannot reappear when the persistent state clears.
+    private func showStatus(_ next: StatusDisplay) {
+        if !next.isClear { toast.dismiss() }
+        overlay.show(next)
     }
 
     /// The shell itself failed. A failure that `clearsOnOpen` (a frame that did not
@@ -78,7 +86,7 @@ final class StatusLayer {
         if shellFailure != nil, !shellFailureClearsOnOpen { return false }
         shellFailure = message
         shellFailureClearsOnOpen = clearsOnOpen
-        overlay.show(StatusRules.display(surface, shellFailure: message))
+        showStatus(StatusRules.display(surface, shellFailure: message))
         return true
     }
 
@@ -87,12 +95,16 @@ final class StatusLayer {
     /// clears, so the session's surface for the new source shows.
     func opened(_ result: DispatchResult) {
         if case .rejected(_, let message) = result {
+            refresh()
             toast.show(message)
-        } else if shellFailureClearsOnOpen {
-            shellFailure = nil
-            shellFailureClearsOnOpen = false
+        } else {
+            toast.dismiss()
+            if shellFailureClearsOnOpen {
+                shellFailure = nil
+                shellFailureClearsOnOpen = false
+            }
+            refresh()
         }
-        refresh()
     }
 
     /// Show a short notice. The one way for any part of the shell to toast.
@@ -105,8 +117,10 @@ final class StatusLayer {
         case .retry: onRetry?(card.source)
         case .openAnother: onOpenAnother?()
         case .copyDetails:
-            copy(card.detail)
-            toast.show("Copied details")
+            if copyFailureDetails {
+                copy(card.detail)
+                overlay.button(for: .copyDetails)?.title = "Copied"
+            }
         }
     }
 }

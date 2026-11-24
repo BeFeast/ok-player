@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "id": "osc-status",
+  "fixture": "01-h264-1080p24-tone.mp4",
+  "appearances": [
+    "light",
+    "dark"
+  ],
+  "steps": [
+    {
+      "action": "size_osc",
+      "width": 1120
+    },
+    {
+      "action": "open_stall"
+    },
+    {
+      "action": "capture",
+      "name": "loading",
+      "expect": "loading"
+    },
+    {
+      "action": "release_stall"
+    },
+    {
+      "action": "capture",
+      "name": "recovered",
+      "expect": "recovered"
+    },
+    {
+      "action": "open_failure"
+    },
+    {
+      "action": "capture",
+      "name": "failure",
+      "expect": "failure"
+    },
+    {
+      "action": "check_failure_actions"
+    },
+    {
+      "action": "check_stale"
+    },
+    {
+      "action": "capture",
+      "name": "replacement",
+      "expect": "recovered"
+    }
+  ]
+}

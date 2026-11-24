@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Exercise the relocated macOS preview and save a verdict even when AppKit fails."""
 import argparse
+from contextlib import contextmanager
 import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
@@ -9,6 +11,7 @@ import platform
 import plistlib
 import subprocess
 import tempfile
+from threading import Event, Thread
 
 ROOT = Path(__file__).resolve().parent.parent
 SCENARIOS = ROOT / "macos" / "verification"
@@ -19,7 +22,14 @@ WINDOW_CONTROLS = {
     "window-fit": "initial_fit_disabled",
     "window-float": "floating_level_disabled",
 }
-CONTROLS = {"subtitle-lift": "subtitle_clearance_disabled", **WINDOW_CONTROLS}
+TRANSPORT_CONTROLS = {
+    "osc-layout": ("slot_collapse_disabled", {"osc_layout:narrow", "osc_layout:floor", "osc_layout:more"}),
+    "osc-idle-and-pins": ("panel_pin_disabled", {"osc_idle_and_pins:panel"}),
+    "osc-volume-speed": ("volume_wheel_disabled", {"osc_volume_speed:wheel"}),
+    "osc-status": ("copy_details_disabled", {"osc_status:copy_details"}),
+}
+CONTROLS = {"subtitle-lift": "subtitle_clearance_disabled", **WINDOW_CONTROLS,
+            **{scenario: entry[0] for scenario, entry in TRANSPORT_CONTROLS.items()}}
 FIXTURE_SUBTITLES = {
     "subtitle-lift.mp4": (".srt",),
     "A Serious Man (2009) {tmdb-12573}.mp4": (".en.hi.srt", ".he.srt", ".ru.hi.srt"),
@@ -50,7 +60,10 @@ def read_scenario(path):
     actions = {"open", "pause", "seek", "capture", "play_to", "play_until_hidden", "pointer_reveal",
                "enter_fullscreen", "leave_fullscreen", "check_subtitle_menu",
                "size_window", "close_media", "double_click",
-               "small_work_area", "open_portrait", "resize_edges", "pin", "unpin", "overlap_window"}
+               "small_work_area", "open_portrait", "resize_edges", "pin", "unpin", "overlap_window",
+               "size_osc", "check_more", "check_seek", "check_idle", "check_pins", "show_volume",
+               "check_wheel", "check_speed_mute", "open_stall", "release_stall", "open_failure",
+               "check_failure_actions", "check_stale"}
     if (spec["schema_version"] != 1 or spec["id"] != path.stem
             or spec["appearances"] != ["light", "dark"] or not spec["steps"]):
         raise ValueError("Unsupported scenario ID, schema or appearances")
@@ -59,10 +72,13 @@ def read_scenario(path):
             raise ValueError(f"Unsupported action {step['action']!r}")
         if step["action"] in {"seek", "play_to"} and not isinstance(step.get("seconds"), (float, int)):
             raise ValueError("Seek and playback targets require numeric seconds")
+        if step["action"] == "size_osc" and not isinstance(step.get("width"), (float, int)):
+            raise ValueError("OSC resize requires a numeric width")
         if step["action"] == "capture":
             if (step.get("expect") not in {"no_cue", "clearance", "base_margin", "welcome", "playing",
                                            "fullscreen", "restored", "landscape", "portrait", "idle",
-                                           "floating", "normal", "repinned"}
+                                           "floating", "normal", "repinned", "osc_row", "osc_hidden", "osc_pinned",
+                                           "volume", "speed", "loading", "failure", "recovered"}
                     or not step.get("name", "").replace("-", "").isalnum()):
                 raise ValueError("Invalid capture checkpoint")
         if step["action"] == "check_subtitle_menu":
@@ -146,6 +162,72 @@ def prepare_app(args, temporary, receipt):
     return executable
 
 
+@contextmanager
+def http_fixture(video, enabled):
+    if not enabled:
+        yield None
+        return
+
+    body = video.read_bytes()
+    release = {name: Event() for name in ("release-stall", "release-stale", "allow-retry")}
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_GET(self):
+            path = self.path.removeprefix("/")
+            if path in release:
+                release[path].set()
+                self.send_response(204)
+                self.end_headers()
+                return
+            if path == "stall.mp4":
+                if not release["release-stall"].wait(20):
+                    return
+            elif path == "stale.mp4":
+                release["release-stale"].wait(20)
+                self.send_error(404)
+                return
+            elif path != "failure.mp4" or not release["allow-retry"].is_set():
+                self.send_error(404)
+                return
+
+            start = 0
+            end = len(body) - 1
+            range_header = self.headers.get("Range")
+            if range_header:
+                first, _, last = range_header.removeprefix("bytes=").partition("-")
+                start = int(first) if first else 0
+                end = min(int(last), end) if last else end
+                if start > end:
+                    self.send_error(416)
+                    return
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{end}/{len(body)}")
+            else:
+                self.send_response(200)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(end - start + 1))
+            self.end_headers()
+            try:
+                self.wfile.write(body[start:end + 1])
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_port}/"
+        finally:
+            for event in release.values():
+                event.set()
+            server.shutdown()
+            thread.join()
+
+
 def run_appearance(executable, scenario, video, temporary, output, appearance, negative_control):
     folder = output / appearance
     folder.mkdir()
@@ -159,7 +241,9 @@ def run_appearance(executable, scenario, video, temporary, output, appearance, n
             f"--verify-appearance={appearance}"]
     if negative_control:
         argv.append("--verify-negative-control")
-    with (folder / "app.log").open("w") as log:
+    with http_fixture(video, scenario.stem == "osc-status") as url, (folder / "app.log").open("w") as log:
+        if url:
+            argv.append(f"--verify-http-fixture={url}")
         try:
             run = subprocess.run(
                 argv,
@@ -247,6 +331,8 @@ def main():
                         f"subtitle_clearance:{step['name']}" for step in spec["steps"]
                         if step.get("expect") == "clearance"
                     }
+                elif spec["id"] in TRANSPORT_CONTROLS:
+                    expected_failures = TRANSPORT_CONTROLS[spec["id"]][1]
                 else:
                     checkpoints = {
                         "window-chrome": ["welcome", "playing"],

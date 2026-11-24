@@ -160,10 +160,10 @@ final class TrackControlsTests: XCTestCase {
         let osc = TransportOverlay(hideTimer: ManualHideTimer())
         let root = NSView()
         controls.install(in: osc, over: root)
-        let trailing = osc.trailingControls.arrangedSubviews
-        XCTAssertTrue(trailing.first === osc.trailingLabel)
-        let expected: [NSView] = [osc.speedLabel, controls.audioButton, controls.subtitleButton, osc.fullscreenButton]
-        XCTAssertEqual(trailing.suffix(4).map(ObjectIdentifier.init), expected.map(ObjectIdentifier.init))
+        let trailing = osc.slots.suffix(5).map(\.view)
+        let expected: [NSView] = [osc.speedButton, controls.subtitleButton, controls.audioButton,
+                                  osc.fullscreenButton, osc.moreButton]
+        XCTAssertEqual(trailing.map(ObjectIdentifier.init), expected.map(ObjectIdentifier.init))
         XCTAssertTrue(controls.readout.superview === root)
         XCTAssertNil(controls.readout.hitTest(NSPoint(x: 1, y: 1)), "the readout takes no clicks")
     }

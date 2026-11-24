@@ -1,18 +1,18 @@
 import AppKit
 
-/// The floating transport controls (OSC) over the video: a rounded bar on a
-/// visual-effect material at the bottom of the window with the scrubber, previous,
-/// play/pause and next, the time readout, speed, mute, volume and fullscreen.
-///
-/// The overlay covers the whole video so it sees every pointer movement, but only
-/// the bar takes clicks; everything else falls through to the video. Scrolling
-/// anywhere over it changes the volume. Each session batch is turned into the
-/// session's transport view (`query`), and every control sends a session command
-/// (`dispatch`); nothing here changes playback state itself. The controls hide
-/// with the cursor after the session's idle timeout while media plays (`AutoHide`).
-/// The scrubber gives keyboard focus back to `focusReturn` whenever it may no
-/// longer hold it.
-final class TransportOverlay: NSView {
+/// The bottom transport surface and the input that reveals it over video.
+final class TransportOverlay: NSView, NSMenuDelegate {
+    enum Pin: Hashable { case pointer, scrub, volume, menu, panel, tracks }
+
+    struct Slot {
+        let id: String
+        let view: NSView
+        let width: CGFloat
+        // A higher priority folds into More earlier, following the core's OSC order.
+        let collapse: Int
+        let menuItem: (() -> NSMenuItem)?
+    }
+
     /// Sends a command to the session.
     var dispatch: ((Command) -> Void)?
     /// The session's transport view, at a drag position when one is given.
@@ -33,45 +33,46 @@ final class TransportOverlay: NSView {
     weak var focusReturn: NSView?
 
     let autoHide: AutoHide
-    // The neutral scrim matches the Main Player handoff and stays dark over
-    // video in either appearance. The timeline and focus use the brand roles.
+    let scrim = TransportScrim()
     let panel = PalettePanel(fill: NSColor.fromSRGB(0x161619).withAlphaComponent(0.50),
-                             border: PaletteRole.text.overVideo.withAlphaComponent(0.14), radius: 18)
+                             border: PaletteRole.text.overVideo.withAlphaComponent(0.14), radius: 14)
     let scrubber = ScrubberView()
     let elapsedLabel = NSTextField(labelWithString: "00:00")
-    let trailingLabel = NSTextField(labelWithString: "-00:00")
+    let trailingLabel = NSButton(title: "-00:00", target: nil, action: nil)
     let previousButton = TransportOverlay.iconButton("backward.end.fill", "Previous item")
     let playButton = TransportOverlay.iconButton("play.fill", "Play")
     let nextButton = TransportOverlay.iconButton("forward.end.fill", "Next item")
-    /// A label rather than a button: a button keeps the colour of its attributed
-    /// title from when it was set, so it would not follow the appearance.
-    let speedLabel = NSTextField(labelWithString: "1.00×")
+    let speedButton = TransportTextButton(title: "1.00×", label: "Playback speed")
     let muteButton = TransportOverlay.iconButton("speaker.wave.2.fill", "Mute")
+    let volumeWick = VolumeWick()
     let volumeSlider = VolumeSliderView()
+    let volumeReadout = NSTextField(labelWithString: "")
+    let volumeCapsule = PalettePanel(fill: NSColor.fromSRGB(0x1c1c20).withAlphaComponent(0.76),
+                                     border: PaletteRole.borderSubtle.overVideo, radius: 13)
     let fullscreenButton = TransportOverlay.iconButton("arrow.up.left.and.arrow.down.right", "Enter Full Screen")
-    /// The trailing time readout, volume, speed, and fullscreen;
-    /// other surfaces put their buttons here (Tracks/, `addTrailingControl`).
-    let trailingControls = NSStackView()
+    let moreButton = TransportOverlay.iconButton("ellipsis", "More")
+    private(set) var slots: [Slot] = []
+    private(set) var collapsed: [Slot] = []
+    private var pins: Set<Pin> = []
+    private var openMenus: Set<ObjectIdentifier> = []
+    private let volumeClose = MainQueueHideTimer()
+    private var volumeSuppressed = false
+    private var pointerInside = false
+    private(set) var cursorHidden = false
+    var onMenuOpen: ((NSMenu) -> Void)?
+    var moreActions: (() -> [NSMenuItem])?
+    var acceptsVolumeWheel = true
+    var collapsesSlots = true
 
     /// The last transport view the session gave.
     private(set) var transport: TransportView?
     private var snapshot = SessionSnapshot()
     private var scrub = ScrubState()
-    /// A scrubber drag holds the controls up.
-    private var scrubPinned = false
     private var trailing = TrailingTime.remaining
     private var scrollSteps = VolumeScrollAccumulator()
     private var surface: OscSurface?
     private var subtitleClearance: (height: CGFloat, bottom: CGFloat)?
-    private var panelArea: NSTrackingArea?
-    private var scrollMonitor: Any?
     private var windowObservers: [NSObjectProtocol] = []
-    private var inlineTimeline: [NSLayoutConstraint] = []
-    private var stackedTimeline: [NSLayoutConstraint] = []
-    private var isTimelineInline = false
-
-    // At narrow playback sizes, the timeline keeps its own row so it stays usable.
-    private static let inlineTimelineWidth: CGFloat = 700
 
     init(hideTimer: HideTimer = MainQueueHideTimer()) {
         autoHide = AutoHide(timer: hideTimer)
@@ -80,27 +81,24 @@ final class TransportOverlay: NSView {
         buildPanel()
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
                                        owner: self, userInfo: nil))
-        let panelArea = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect, .enabledDuringMouseDrag],
-                                       owner: self, userInfo: nil)
-        panel.addTrackingArea(panelArea)
-        self.panelArea = panelArea
-        panel.isHidden = true
+        for view in [scrim, panel, volumeCapsule] { view.isHidden = true }
     }
 
     required init?(coder: NSCoder) { fatalError("Use init(hideTimer:)") }
 
     override func layout() {
         super.layout()
+        layoutSlots()
         updateSubtitleClearance()
     }
 
     private func updateSubtitleClearance() {
         guard let subtitleSession, bounds.height > 0 else { return }
-        // Auto-hide leaves the panel laid out for pointer tracking at zero alpha.
-        let coversVideo = !panel.isHidden && panel.alphaValue > 0
+        let coversVideo = surface?.hitTestable == true && !panel.isHidden
+        let top = volumeCapsule.isHidden ? panel.frame.maxY : volumeCapsule.frame.maxY
         guard !coversVideo || panel.frame.height > 0 else { return }
         // Both the panel and the video use view points, including on Retina.
-        let bottom = coversVideo ? panel.frame.maxY - bounds.minY + 8 : 0
+        let bottom = coversVideo ? top - bounds.minY + 8 : 0
         let height = bounds.height
         if let previous = subtitleClearance, previous.height == height, previous.bottom == bottom { return }
         if subtitleSession.setSubtitleClearance(surfaceHeight: height, obscuredBottom: bottom) {
@@ -112,6 +110,11 @@ final class TransportOverlay: NSView {
 
     /// The session reported a batch; `snapshot` is the store's state after it.
     func sessionChanged(_ snapshot: SessionSnapshot) {
+        if self.snapshot.source != snapshot.source || (snapshot.status == .opening && self.snapshot.status != .opening) {
+            endScrub()
+            closeVolume()
+            volumeSuppressed = false
+        }
         self.snapshot = snapshot
         refresh()
     }
@@ -120,7 +123,18 @@ final class TransportOverlay: NSView {
     var isRevealed: Bool { autoHide.revealed }
 
     /// Show the controls as pointer movement would.
-    func noteActivity() { autoHide.activity() }
+    func noteActivity() {
+        autoHide.activity()
+        showCursor()
+    }
+
+    func setPinned(_ pinned: Bool, by owner: Pin) {
+        if pinned {
+            if pins.insert(owner).inserted { autoHide.pin() }
+        } else if pins.remove(owner) != nil {
+            autoHide.unpin()
+        }
+    }
 
     private func refresh() {
         let at = scrub.dragPosition(duration: snapshot.duration)
@@ -133,19 +147,24 @@ final class TransportOverlay: NSView {
         }
         transport = view
         elapsedLabel.stringValue = view.elapsed
-        trailingLabel.stringValue = trailing.text(in: view)
+        updateTrailingTitle(view)
         scrubber.isEnabled = view.seekable
         scrubber.progress = view.progress
         scrubber.buffered = view.buffered
         scrubber.ticks = view.chapterTicks
         volumeSlider.volume = view.volume
         volumeSlider.toolTip = view.volume.readout
+        volumeSlider.setAccessibilityValue(view.volume.readout)
+        volumeReadout.stringValue = view.volume.readout
+        volumeReadout.textColor = (view.volume.boosted ? PaletteRole.warning : PaletteRole.text).overVideo
+        volumeWick.volume = view.volume
         Self.setSymbol(muteButton, view.volume.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
                        view.volume.muted ? "Unmute" : "Mute")
-        setSpeedTitle(view.speed)
+        speedButton.value = view.speed
         let playing = snapshot.status == .playing
         Self.setSymbol(playButton, playing ? "pause.fill" : "play.fill", playing ? "Pause" : "Play")
         playButton.isEnabled = snapshot.source != nil
+        speedButton.isEnabled = playing || snapshot.status == .paused
         updateFullscreenButton()
         autoHide.update(allowed: view.osc.autoHide, hideAfter: view.osc.hideAfter)
         applySurface()
@@ -154,37 +173,52 @@ final class TransportOverlay: NSView {
     private func applySurface() {
         guard let view = transport else { return }
         let next = view.osc.surface(revealed: autoHide.revealed)
-        if !next.visible && surface?.visible == true {
-            endScrub()
-            autoHide.unpinAll()
-        }
+        let previous = surface
         surface = next
-        panel.isHidden = !next.visible
-        panel.alphaValue = autoHide.revealed ? 1 : 0
+        if !next.mapped {
+            endScrub()
+            closeVolume()
+            setPinned(false, by: .pointer)
+        }
+        if next.hitTestable != previous?.hitTestable || next.mapped != previous?.mapped {
+            for view in [scrim, panel] { present(view, visible: next.hitTestable, mapped: next.mapped) }
+        }
         updateSubtitleClearance()
         scrubber.allowsFocus = next.focusable
-        if !next.focusable || !scrubber.isEnabled { returnFocus() }
+        if !next.focusable || !scrubber.isEnabled { returnFocus(onlyScrubber: next.focusable) }
     }
 
-    /// Hidden or disabled, the scrubber lets go of keyboard focus, which goes
-    /// back to the video.
-    private func returnFocus() {
-        guard let window, window.firstResponder === scrubber else { return }
+    private func present(_ view: NSView, visible: Bool, mapped: Bool) {
+        let fade = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = fade ? (visible ? 0.15 : 0.12) : 0
+            view.animator().alphaValue = visible ? 1 : 0
+        }
+        view.isHidden = !mapped
+    }
+
+    private func returnFocus(onlyScrubber: Bool = false) {
+        guard let window, let focused = window.firstResponder as? NSView,
+              onlyScrubber ? focused === scrubber : focused.isDescendant(of: self) else { return }
         _ = window.makeFirstResponder(focusReturn)
     }
 
     private func revealChanged(_ revealed: Bool) {
         applySurface()
-        if !revealed { hideCursorIfOver() }
+        if revealed { showCursor() } else { hideCursorIfOver() }
         onRevealChange?(revealed)
     }
 
-    /// The cursor hides with the controls while it is over the video; moving it
-    /// brings both back.
     private func hideCursorIfOver() {
-        guard let window, NSApp.isActive else { return }
-        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
-        if bounds.contains(point) { NSCursor.setHiddenUntilMouseMoves(true) }
+        guard !cursorHidden, pointerInside, window?.isKeyWindow == true, NSApp.isActive else { return }
+        NSCursor.hide()
+        cursorHidden = true
+    }
+
+    private func showCursor() {
+        guard cursorHidden else { return }
+        NSCursor.unhide()
+        cursorHidden = false
     }
 
     // MARK: Pointer and scrolling
@@ -195,45 +229,110 @@ final class TransportOverlay: NSView {
         return hit === self ? nil : hit
     }
 
-    override func mouseMoved(with event: NSEvent) { autoHide.activity() }
+    override func mouseMoved(with event: NSEvent) {
+        pointerMoved(to: event.locationInWindow)
+    }
 
     override func mouseEntered(with event: NSEvent) {
-        if event.trackingArea === panelArea { autoHide.pin() } else { autoHide.activity() }
+        pointerMoved(to: event.locationInWindow)
     }
 
     override func mouseExited(with event: NSEvent) {
-        if event.trackingArea === panelArea { autoHide.unpin() }
+        pointerLeft()
+    }
+
+    private func pointerMoved(to point: NSPoint) {
+        let local = convert(point, from: nil)
+        guard bounds.contains(local) else { pointerLeft(); return }
+        pointerInside = true
+        noteActivity()
+        guard surface?.hitTestable == true else { return }
+        let overPanel = panel.frame.contains(local)
+        setPinned(overPanel, by: .pointer)
+        let overSpeaker = overPanel && muteButton.frame.contains(panel.convert(local, from: self))
+        if !overSpeaker { volumeSuppressed = false }
+        if overSpeaker && !volumeSuppressed {
+            openVolume()
+        } else if !volumeCapsule.isHidden {
+            if volumeCapsule.frame.insetBy(dx: 0, dy: -10).contains(local) {
+                volumeClose.cancel()
+            } else if !volumeSlider.isPressed {
+                scheduleVolumeClose()
+            }
+        }
+    }
+
+    private func pointerLeft() {
+        pointerInside = false
+        volumeSuppressed = false
+        showCursor()
+        setPinned(false, by: .pointer)
+        if !volumeSlider.isPressed { scheduleVolumeClose() }
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         super.viewWillMove(toWindow: newWindow)
-        if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
-        scrollMonitor = nil
         for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
         windowObservers = []
+        scrollSteps = VolumeScrollAccumulator()
+        pointerLeft()
+        closeVolume()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard let window else { return }
-        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-            guard let self, self.scrolled(event) else { return event }
-            return nil
-        }
+        let center = NotificationCenter.default
         windowObservers = [NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification].map { name in
-            NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
-                self?.updateFullscreenButton()
-            }
+            center.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in self?.updateFullscreenButton() }
         }
+        windowObservers.append(center.addObserver(forName: NSWindow.didResignKeyNotification,
+                                                  object: window, queue: .main) { [weak self] _ in
+            self?.pointerLeft()
+            self?.closeVolume()
+        })
     }
 
-    /// A scroll over the video changes the volume. True when it was used.
-    private func scrolled(_ event: NSEvent) -> Bool {
-        guard event.window === window, surface?.visible == true else { return false }
-        guard takesScroll(at: event.locationInWindow) else { return false }
-        autoHide.activity()
-        if let command = VolumeScrollAccumulator.command(steps: scrollSteps.steps(for: ScrollInput(event: event))) {
-            dispatch?(command)
+    func handleWindowInput(_ event: NSEvent) -> Bool {
+        let point: NSPoint
+        if let eventWindow = event.window {
+            guard eventWindow === window else { return false }
+            point = event.locationInWindow
+        } else if let window {
+            // Windowless CGEvents are positioned in screen coordinates.
+            point = window.convertPoint(fromScreen: event.locationInWindow)
+        } else {
+            return false
+        }
+        switch event.type {
+        case .scrollWheel:
+            return scrolled(event, at: point)
+        case .leftMouseDown, .rightMouseDown:
+            if takesScroll(at: point) { noteActivity() }
+            if !volumeCapsule.isHidden {
+                let local = convert(point, from: nil)
+                if !volumeCapsule.frame.contains(local) &&
+                    !muteButton.frame.contains(panel.convert(local, from: self)) {
+                    closeVolume()
+                }
+            }
+        default:
+            break
+        }
+        return false
+    }
+
+    /// A scroll over video or the OSC adjusts the session's gain, even with the OSC hidden.
+    private func scrolled(_ event: NSEvent, at point: NSPoint) -> Bool {
+        guard surface?.mapped == true, takesScroll(at: point) else { return false }
+        let input = ScrollInput(event: event)
+        if input.deltaY != 0 && !input.momentum { noteActivity() }
+        if acceptsVolumeWheel, let command = VolumeScrollAccumulator.command(steps: scrollSteps.steps(for: input)) {
+            if event.modifierFlags.contains(.shift), case .nudgeVolume(let delta) = command {
+                dispatch?(.nudgeVolume(delta: delta / 10))
+            } else {
+                dispatch?(command)
+            }
         }
         return true
     }
@@ -248,9 +347,17 @@ final class TransportOverlay: NSView {
         return hit === focusReturn || hit.isDescendant(of: self)
     }
 
-    /// Add a control to the bar's trailing group, before the fullscreen button.
-    func addTrailingControl(_ control: NSView) {
-        trailingControls.insertArrangedSubview(control, at: Swift.max(0, trailingControls.arrangedSubviews.count - 1))
+    /// Register an existing player action before Full Screen, in canonical order.
+    func addTrailingControl(_ control: NSButton, id: String, collapse: Int,
+                            menuItem: (() -> NSMenuItem)? = nil) {
+        let slot = Slot(id: id, view: control, width: 34, collapse: collapse,
+                        menuItem: menuItem ?? { [weak self, weak control] in
+            guard let self, let control else { return NSMenuItem() }
+            return self.buttonItem(control)
+        })
+        slots.insert(slot, at: slots.count - 2)
+        panel.addSubview(control)
+        needsLayout = true
     }
 
     // MARK: Controls
@@ -263,28 +370,98 @@ final class TransportOverlay: NSView {
         previousButton.isEnabled = onPrevious != nil && playlistSteps.previous
         nextButton.isEnabled = onNext != nil && playlistSteps.next
     }
-    @objc private func toggleMute() { dispatch?(.toggleMute) }
+    @objc private func toggleMute() {
+        dispatch?(.toggleMute)
+        if surface?.hitTestable == true { openVolume() }
+    }
+
     @objc private func toggleFullscreen() { window?.toggleFullScreen(nil) }
 
     @objc private func toggleTrailing() {
         trailing = trailing.toggled
+        if let transport { updateTrailingTitle(transport) }
+    }
+
+    private func updateTrailingTitle(_ view: TransportView) {
+        trailingLabel.title = trailing.text(in: view)
         trailingLabel.toolTip = trailing.toolTip
-        if let transport { trailingLabel.stringValue = trailing.text(in: transport) }
+        trailingLabel.setAccessibilityLabel(trailing.toolTip)
+        trailingLabel.setAccessibilityValue(trailingLabel.title)
     }
 
     @objc private func showSpeedMenu() {
-        guard let transport else { return }
+        popUp(speedMenu(), from: speedButton)
+    }
+
+    func speedMenu() -> NSMenu {
         let menu = NSMenu()
-        for choice in transport.speeds {
+        for choice in transport?.speeds ?? [] {
             let item = NSMenuItem(title: choice.label, action: #selector(chooseSpeed(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = choice.speed
             item.state = choice.selected ? .on : .off
             menu.addItem(item)
         }
-        autoHide.pin()
-        _ = menu.popUp(positioning: nil, at: NSPoint(x: 0, y: speedLabel.bounds.height + 4), in: speedLabel)
-        autoHide.unpin()
+        return menu
+    }
+
+    private func buttonItem(_ button: NSButton) -> NSMenuItem {
+        let item = NSMenuItem(title: button.toolTip ?? button.title, action: button.action, keyEquivalent: "")
+        item.target = button.target
+        item.isEnabled = button.isEnabled
+        return item
+    }
+
+    private func popUp(_ menu: NSMenu, from button: NSView) {
+        closeVolume()
+        menu.delegate = self
+        menu.autoenablesItems = false
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
+    }
+
+    @objc private func showMore() {
+        popUp(moreMenu(), from: moreButton)
+    }
+
+    func moreMenu() -> NSMenu {
+        let menu = NSMenu()
+        for slot in collapsed {
+            guard let item = slot.menuItem?() else { continue }
+            item.representedObject = slot.id
+            menu.addItem(item)
+        }
+        let actions = moreActions?() ?? []
+        if menu.numberOfItems > 0 && !actions.isEmpty { menu.addItem(.separator()) }
+        actions.forEach { menu.addItem($0) }
+        return menu
+    }
+
+    /// The video context menu uses existing commands and stays pinned during tracking.
+    func contextMenu() -> NSMenu? {
+        guard surface?.mapped == true else { return nil }
+        closeVolume()
+        noteActivity()
+        let menu = NSMenu()
+        menu.delegate = self
+        menu.autoenablesItems = false
+        for item in [buttonItem(playButton), buttonItem(muteButton), buttonItem(fullscreenButton)] {
+            menu.addItem(item)
+        }
+        for item in moreActions?() ?? [] { menu.addItem(item) }
+        return menu
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        openMenus.insert(ObjectIdentifier(menu))
+        noteActivity()
+        setPinned(true, by: .menu)
+        onMenuOpen?(menu)
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        openMenus.remove(ObjectIdentifier(menu))
+        setPinned(!openMenus.isEmpty, by: .menu)
+        if let window { pointerMoved(to: window.mouseLocationOutsideOfEventStream) }
     }
 
     @objc private func chooseSpeed(_ item: NSMenuItem) {
@@ -298,15 +475,12 @@ final class TransportOverlay: NSView {
         switch phase {
         case .began:
             command = scrub.begin(at: fraction, duration: duration)
-            if scrub.isDragging && !scrubPinned {
-                scrubPinned = true
-                autoHide.pin()
-            }
+            setPinned(scrub.isDragging, by: .scrub)
         case .moved:
             command = scrub.move(to: fraction, duration: duration)
         case .ended:
             command = scrub.end(at: fraction, duration: duration)
-            releaseScrubPin()
+            setPinned(false, by: .scrub)
         }
         if let command { dispatch?(command) }
         refresh()
@@ -315,13 +489,7 @@ final class TransportOverlay: NSView {
     /// The drag ended without a release.
     private func endScrub() {
         scrub.cancel()
-        releaseScrubPin()
-    }
-
-    private func releaseScrubPin() {
-        guard scrubPinned else { return }
-        scrubPinned = false
-        autoHide.unpin()
+        setPinned(false, by: .scrub)
     }
 
     private func volumeDragged(to fraction: Double) {
@@ -336,52 +504,75 @@ final class TransportOverlay: NSView {
                        fullscreen ? "Exit Full Screen" : "Enter Full Screen")
     }
 
-    private func setSpeedTitle(_ title: String) {
-        if speedLabel.stringValue != title { speedLabel.stringValue = title }
+    func openVolume() {
+        guard surface?.hitTestable == true else { return }
+        volumeClose.cancel()
+        guard volumeCapsule.isHidden else { return }
+        volumeCapsule.isHidden = false
+        positionVolume()
+        setPinned(true, by: .volume)
+        updateSubtitleClearance()
+    }
+
+    private func scheduleVolumeClose() {
+        guard !volumeCapsule.isHidden else { return }
+        volumeClose.schedule(after: 0.22) { [weak self] in self?.closeVolume() }
+    }
+
+    @discardableResult
+    func dismissVolume() -> Bool {
+        guard !volumeCapsule.isHidden else { return false }
+        volumeSuppressed = true
+        closeVolume()
+        return true
+    }
+
+    private func closeVolume() {
+        volumeClose.cancel()
+        volumeCapsule.isHidden = true
+        volumeSlider.cancelPress()
+        if let focused = window?.firstResponder as? NSView, focused.isDescendant(of: volumeCapsule) {
+            returnFocus()
+        }
+        setPinned(false, by: .volume)
+        updateSubtitleClearance()
     }
 
     // MARK: Layout
 
-    override func setFrameSize(_ newSize: NSSize) {
-        super.setFrameSize(newSize)
-        if isTimelineInline != (newSize.width >= Self.inlineTimelineWidth) {
-            needsUpdateConstraints = true
-        }
-    }
-
-    override func updateConstraints() {
-        let inline = bounds.width >= Self.inlineTimelineWidth
-        if isTimelineInline != inline {
-            NSLayoutConstraint.deactivate(inline ? stackedTimeline : inlineTimeline)
-            NSLayoutConstraint.activate(inline ? inlineTimeline : stackedTimeline)
-            isTimelineInline = inline
-        }
-        super.updateConstraints()
-    }
-
     private func buildPanel() {
-        panel.appearance = NSAppearance(named: .darkAqua)
-        panel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(panel)
-
-        for label in [elapsedLabel, trailingLabel, speedLabel] {
-            label.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        for view in [scrim, panel, volumeCapsule] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
         }
-        elapsedLabel.textColor = PaletteRole.text.overVideo
-        speedLabel.textColor = PaletteRole.text.overVideo
-        trailingLabel.textColor = PaletteRole.textMuted.overVideo
+        for view in [panel, volumeCapsule] { view.appearance = NSAppearance(named: .darkAqua) }
+        let fill = panel.widthAnchor.constraint(equalTo: widthAnchor, constant: -32)
+        fill.priority = NSLayoutConstraint.Priority(NSLayoutConstraint.Priority.windowSizeStayPut.rawValue - 10)
+        NSLayoutConstraint.activate([
+            scrim.bottomAnchor.constraint(equalTo: bottomAnchor),
+            scrim.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrim.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scrim.heightAnchor.constraint(equalToConstant: 190),
+            panel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            panel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
+            panel.widthAnchor.constraint(lessThanOrEqualToConstant: 1280),
+            panel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 8),
+            panel.heightAnchor.constraint(equalToConstant: 52),
+            fill,
+        ])
+        for label in [elapsedLabel, volumeReadout] {
+            label.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+            label.textColor = PaletteRole.text.overVideo
+            label.alignment = .center
+        }
+        trailingLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        trailingLabel.isBordered = false
+        trailingLabel.refusesFirstResponder = true
         trailingLabel.toolTip = trailing.toolTip
-        trailingLabel.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(toggleTrailing)))
-
-        speedLabel.toolTip = "Playback speed"
-        speedLabel.setAccessibilityRole(.popUpButton)
-        speedLabel.setAccessibilityLabel("Playback speed")
-        speedLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
-        speedLabel.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(showSpeedMenu)))
         for (button, action) in [(previousButton, #selector(previousItem)), (playButton, #selector(togglePause)),
                                  (nextButton, #selector(nextItem)), (muteButton, #selector(toggleMute)),
-                                 (fullscreenButton, #selector(toggleFullscreen))] {
+                                 (fullscreenButton, #selector(toggleFullscreen)), (moreButton, #selector(showMore)),
+                                 (speedButton, #selector(showSpeedMenu)), (trailingLabel, #selector(toggleTrailing))] {
             button.target = self
             button.action = action
         }
@@ -389,53 +580,71 @@ final class TransportOverlay: NSView {
         nextButton.isEnabled = false
         scrubber.onScrub = { [weak self] phase, fraction in self?.scrubbed(phase, fraction) }
         volumeSlider.onFraction = { [weak self] fraction in self?.volumeDragged(to: fraction) }
+        volumeSlider.onRelease = { [weak self] event in self?.pointerMoved(to: event.locationInWindow) }
+        volumeSlider.onNudge = { [weak self] delta in self?.dispatch?(.nudgeVolume(delta: delta)) }
+        volumeCapsule.addSubview(volumeSlider)
+        volumeCapsule.addSubview(volumeReadout)
 
-        let leading = NSStackView(views: [playButton, previousButton, nextButton, elapsedLabel])
-        leading.spacing = 6
-        leading.setCustomSpacing(12, after: nextButton)
-        for control in [trailingLabel, muteButton, volumeSlider, speedLabel, fullscreenButton] as [NSView] {
-            trailingControls.addArrangedSubview(control)
+        func slot(_ id: String, _ view: NSView, width: CGFloat = 34, collapse: Int = 0,
+                  menuItem: (() -> NSMenuItem)? = nil) -> Slot {
+            Slot(id: id, view: view, width: width, collapse: collapse, menuItem: menuItem)
         }
-        trailingControls.spacing = 6
-        for stack in [leading, trailingControls] {
-            stack.orientation = .horizontal
-            stack.alignment = .centerY
-            stack.translatesAutoresizingMaskIntoConstraints = false
-            panel.addSubview(stack)
-        }
-        scrubber.translatesAutoresizingMaskIntoConstraints = false
-        panel.addSubview(scrubber)
+        slots = [
+            slot("play", playButton), slot("previous", previousButton), slot("next", nextButton),
+            slot("elapsed", elapsedLabel, width: 54),
+            slot("seek", scrubber, width: 156),
+            slot("duration", trailingLabel, width: 62),
+            slot("volume", muteButton),
+            slot("speed", speedButton, width: 68, collapse: 5) { [unowned self] in
+                let item = NSMenuItem(title: "Playback Speed  " + speedButton.value, action: nil, keyEquivalent: "")
+                item.submenu = speedMenu()
+                item.isEnabled = speedButton.isEnabled
+                return item
+            },
+            slot("fullscreen", fullscreenButton, collapse: 4) { [unowned self] in buttonItem(fullscreenButton) },
+            slot("more", moreButton),
+        ]
+        for slot in slots { panel.addSubview(slot.view) }
+        muteButton.addSubview(volumeWick)
+    }
 
-        // Below the priority a window keeps the size it was given at (a drag, a fit,
-        // setFrame): the bar uses the available width without sizing the window.
-        let fill = panel.widthAnchor.constraint(equalTo: widthAnchor, constant: -32)
-        fill.priority = NSLayoutConstraint.Priority(NSLayoutConstraint.Priority.windowSizeStayPut.rawValue - 10)
-        NSLayoutConstraint.activate([
-            panel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            panel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
-            panel.widthAnchor.constraint(lessThanOrEqualToConstant: 1280),
-            panel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 8),
-            fill,
-            leading.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 10),
-            leading.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -10),
-            trailingControls.centerYAnchor.constraint(equalTo: leading.centerYAnchor),
-            trailingControls.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -10),
-            trailingControls.leadingAnchor.constraint(greaterThanOrEqualTo: leading.trailingAnchor, constant: 8),
-        ])
-        inlineTimeline = [
-            leading.topAnchor.constraint(equalTo: panel.topAnchor, constant: 10),
-            scrubber.centerYAnchor.constraint(equalTo: leading.centerYAnchor),
-            scrubber.leadingAnchor.constraint(equalTo: leading.trailingAnchor, constant: 10),
-            scrubber.trailingAnchor.constraint(equalTo: trailingControls.leadingAnchor, constant: -10),
-            scrubber.widthAnchor.constraint(greaterThanOrEqualToConstant: 64),
-        ]
-        stackedTimeline = [
-            scrubber.topAnchor.constraint(equalTo: panel.topAnchor, constant: 8),
-            scrubber.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 10),
-            scrubber.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -10),
-            leading.topAnchor.constraint(equalTo: scrubber.bottomAnchor, constant: 2),
-        ]
-        NSLayoutConstraint.activate(stackedTimeline)
+    private func layoutSlots() {
+        let gap: CGFloat = 6
+        let padding: CGFloat = 10
+        let available = Swift.max(0, panel.bounds.width - 2 * padding)
+        var rowWidth = slots.reduce(-gap) { $0 + $1.width + gap }
+        var folded: Set<String> = []
+        if collapsesSlots {
+            for slot in slots.filter({ $0.collapse > 0 }).sorted(by: { $0.collapse > $1.collapse }) {
+                guard rowWidth > available else { break }
+                folded.insert(slot.id)
+                rowWidth -= slot.width + gap
+            }
+        }
+        collapsed = slots.filter { folded.contains($0.id) }
+        var x = padding
+        for slot in slots {
+            slot.view.isHidden = folded.contains(slot.id)
+            if slot.view.isHidden {
+                if let focused = window?.firstResponder as? NSView, focused === slot.view { returnFocus() }
+                continue
+            }
+            let width = slot.id == "seek" ? Swift.max(14, slot.width + available - rowWidth) : slot.width
+            let height: CGFloat = slot.id == "elapsed" ? 16 : 34
+            slot.view.frame = NSRect(x: x, y: (panel.bounds.height - height) / 2, width: width, height: height)
+            x += width + gap
+        }
+        volumeWick.frame = NSRect(x: 8, y: 3, width: 18, height: 3)
+        if !volumeCapsule.isHidden { positionVolume() }
+    }
+
+    private func positionVolume() {
+        let width: CGFloat = 198
+        let speaker = muteButton.convert(muteButton.bounds, to: self)
+        let x = Swift.min(Swift.max(8, speaker.midX - width / 2), bounds.width - width - 8)
+        volumeCapsule.frame = NSRect(x: x, y: panel.frame.maxY + 10, width: width, height: 36)
+        volumeSlider.frame = NSRect(x: 10, y: 3, width: 132, height: 30)
+        volumeReadout.frame = NSRect(x: 145, y: 10, width: 47, height: 16)
     }
 
     private static func symbol(_ name: String, _ label: String) -> NSImage? {
@@ -448,11 +657,11 @@ final class TransportOverlay: NSView {
         let button = TransportIconButton()
         button.title = ""
         button.isBordered = false
+        button.refusesFirstResponder = true
         button.imagePosition = .imageOnly
         button.contentTintColor = PaletteRole.text.overVideo
         setSymbol(button, name, label)
-        button.widthAnchor.constraint(equalToConstant: 26).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        button.frame.size = NSSize(width: 34, height: 34)
         return button
     }
 

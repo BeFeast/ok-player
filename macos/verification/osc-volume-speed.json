@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "id": "osc-volume-speed",
+  "fixture": "01-h264-1080p24-tone.mp4",
+  "appearances": [
+    "light",
+    "dark"
+  ],
+  "steps": [
+    {
+      "action": "open"
+    },
+    {
+      "action": "size_osc",
+      "width": 1120
+    },
+    {
+      "action": "show_volume"
+    },
+    {
+      "action": "capture",
+      "name": "unity",
+      "expect": "volume"
+    },
+    {
+      "action": "check_wheel"
+    },
+    {
+      "action": "show_volume"
+    },
+    {
+      "action": "capture",
+      "name": "boost",
+      "expect": "volume"
+    },
+    {
+      "action": "check_speed_mute"
+    },
+    {
+      "action": "capture",
+      "name": "speed",
+      "expect": "speed"
+    }
+  ]
+}
