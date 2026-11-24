@@ -156,7 +156,10 @@ final class SessionProtocolTests: XCTestCase {
         guard case .commandRegistry(let commands) = reply.result else {
             return XCTFail("not a registry reply: \(reply.result)")
         }
-        XCTAssertEqual(commands.count, 66)
+        XCTAssertEqual(commands.count, 67)
+        XCTAssertEqual(commands.first { $0.id == "send-feedback" }, RegistryCommand(
+            id: "send-feedback", group: .settings, menu: .topLevel, label: "Send Feedback…",
+            available: false, enabled: true, checked: false, shortcut: nil))
         let none = ShortcutModifiers()
         XCTAssertEqual(commands.first, RegistryCommand(
             id: "play-pause", group: .playbackNavigation, menu: .topLevel, label: "Play / Pause",
