@@ -313,25 +313,8 @@ impl AppImageUpdates {
         self.work(
             "Downloading and verifying update…",
             move || {
-                // A child from the AppImage itself could lose its image when
-                // the old runtime unmounts. Execute a private copy from the
-                // managed filesystem before handing off the existing process.
-                let detached = tempfile::Builder::new()
-                    .permissions(std::fs::Permissions::from_mode(0o700))
-                    .tempdir_in(root)
-                    .map_err(|error| error.to_string())?;
-                let executable = detached.path().join("okp-updater");
-                std::fs::copy(command.get_program(), &executable)
-                    .map_err(|error| error.to_string())?;
-                let mut child = Command::new(executable)
-                    .args(command.get_args())
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .map_err(|error| error.to_string())?;
-                // spawn returns after exec, so Linux retains the open inode.
-                drop(detached);
+                let mut child =
+                    spawn_detached(&command, &root).map_err(|error| error.to_string())?;
                 let mut line = String::new();
                 BufReader::new(child.stdout.take().expect("piped stdout"))
                     .read_line(&mut line)
@@ -476,5 +459,52 @@ impl AppImageUpdates {
         if let Ok(mut receipt) = std::fs::File::create_new(path) {
             let _ = writeln!(receipt, "{}\n{}", self.build, UPDATE_SOURCE);
         }
+    }
+}
+
+fn spawn_detached(command: &Command, root: &Path) -> std::io::Result<Child> {
+    // The old runtime can finish unmounting as soon as the player exits.
+    // Execute from the managed filesystem, separate from the AppImage mount.
+    let detached = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in(root)?;
+    let executable = detached.path().join("okp-updater");
+    std::fs::copy(command.get_program(), &executable)?;
+    let child = Command::new(executable)
+        .args(command.get_args())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    // spawn returns after exec, so Linux retains the open inode.
+    drop(detached);
+    Ok(child)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restart_helper_executes_outside_the_original_appimage_directory() {
+        let original = tempfile::tempdir().unwrap();
+        let managed = tempfile::tempdir().unwrap();
+        let helper = original.path().join("okp-updater");
+        std::fs::copy("/bin/sh", &helper).unwrap();
+        let mut command = Command::new(helper);
+        command.args(["-c", r#"read -r message; printf '%s' "$message""#]);
+        let mut child = spawn_detached(&command, managed.path()).unwrap();
+        let executable = std::fs::read_link(format!("/proc/{}/exe", child.id())).unwrap();
+        assert!(executable.starts_with(managed.path()), "{executable:?}");
+        original.close().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"verified\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"verified");
     }
 }
