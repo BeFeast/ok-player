@@ -48,8 +48,8 @@ extension VerifyRun {
             if snapshot.status != .playing || (snapshot.timePos ?? -1) < position {
                 failures.append("compact_mini:drag_playback")
             }
-            observations.append(["name": "corner-snap", "frame_points": dimensions(frame),
-                                 "work_area_points": dimensions(area)])
+            miniChecks.append(["name": "corner-snap", "frame_points": dimensions(frame),
+                               "work_area_points": dimensions(area)])
         case .resizeMini:
             let origin = window.frame.origin
             let start = window.convertPoint(fromScreen: CGPoint(x: origin.x + 3, y: origin.y + window.frame.height * 0.62))
@@ -127,8 +127,8 @@ extension VerifyRun {
                 (snapshot.timePos ?? 0) < previousPosition {
                 failures.append("compact_mini:restore")
             }
-            observations.append(["name": "restored", "frame_points": dimensions(window.frame),
-                                 "original_frame_points": dimensions(original.frame), "window_id": window.windowNumber])
+            miniChecks.append(["name": "restored", "frame_points": dimensions(window.frame),
+                               "original_frame_points": dimensions(original.frame), "window_id": window.windowNumber])
         case .enterFullscreen:
             if snapshot.status == .paused { try pressKey(" ", code: 49) }
             try await perform(step)
@@ -136,8 +136,8 @@ extension VerifyRun {
                 snapshot.source != miniOriginal?.media || app.client !== miniOriginal?.client {
                 failures.append("compact_mini_floor:fullscreen_exclusivity")
             }
-            observations.append(["name": "fullscreen-exclusivity", "fullscreen": window.isInFullscreen,
-                                 "mini_active": mini.isActive, "window_id": window.windowNumber])
+            miniChecks.append(["name": "fullscreen-exclusivity", "fullscreen": window.isInFullscreen,
+                               "mini_active": mini.isActive, "window_id": window.windowNumber])
         case .leaveFullscreen:
             try await perform(step)
             if mini.isActive || window.isInFullscreen || window.frame != miniOriginal?.frame {

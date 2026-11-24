@@ -190,6 +190,7 @@ final class VerifyRun {
     var fullscreenEntries = 0
     var testWindow: NSWindow?
     var miniOriginal: (frame: CGRect, level: NSWindow.Level, id: Int, media: MediaSource?, client: SessionClient)?
+    var miniChecks: [[String: Any]] = []
     private var visibleCueBottom: CGFloat?
     private var hiddenCueBottom: CGFloat?
     private var compositorStatus = "not_probed"
@@ -266,6 +267,7 @@ final class VerifyRun {
         result["compositor"] = compositorStatus
         result["subtitle_menu"] = subtitleMenu
         result["track_checks"] = trackChecks.isEmpty ? nil : trackChecks
+        result["mini_checks"] = miniChecks.isEmpty ? nil : miniChecks
         result["copied_about_diagnostics"] = copiedAboutDiagnostics
         do {
             try options.write(result)
