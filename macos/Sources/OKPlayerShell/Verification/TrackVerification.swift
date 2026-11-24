@@ -91,20 +91,17 @@ extension VerifyRun {
     }
 
     private func checkNoAudio() async throws {
-        if snapshot.status == .paused {
-            try pressKey(" ", code: 49)
-            try await wait("the previous fixture resumed before opening the video-only clip") {
-                self.snapshot.status == .playing
-            }
-        }
+        guard let client = app.client else { throw VerifyError("The video-only fixture needs a session") }
         let fixture = options.fixture.deletingLastPathComponent().appendingPathComponent("video-only.mp4")
         let before = swaps
         app.application(NSApp, open: [fixture])
-        try await wait("video-only fixture playing") {
-            self.snapshot.source?.location == fixture.path && self.snapshot.status == .playing &&
+        try await wait("video-only fixture loaded and rendered") {
+            self.snapshot.source?.location == fixture.path &&
+                [.playing, .paused].contains(self.snapshot.status) &&
                 self.snapshot.video != nil && self.swaps > before
         }
-        try pressKey(" ", code: 49)
+        // Loading can preserve the previous clip's pause state.
+        _ = client.dispatch(.setPaused(paused: true))
         try await wait("video-only fixture paused") { self.snapshot.status == .paused }
         try openTracks(.audio)
         if snapshot.tracks.contains(where: { $0.kind == .audio }) ||
