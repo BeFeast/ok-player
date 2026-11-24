@@ -1,4 +1,3 @@
-pub mod feedback;
 pub mod acceptance_evidence;
 pub mod app;
 pub mod apt_policy;
@@ -13,6 +12,7 @@ pub mod chapter_math;
 pub mod clip_export;
 pub mod companion_window;
 pub mod fedora_acceptance;
+pub mod feedback;
 pub mod focus_trace;
 pub mod fullscreen_toggle;
 pub mod gapless;

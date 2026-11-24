@@ -21,6 +21,7 @@ extension PlayerApp {
             let panel = FeedbackPanel(app: self, client: client, form: try client.form())
             feedback = panel
             window.beginSheet(panel.window) { [weak self] _ in self?.feedback = nil }
+            panel.window.makeFirstResponder(panel.descriptionView)
         } catch {
             let alert = NSAlert()
             alert.messageText = "Feedback is unavailable"
@@ -58,7 +59,7 @@ final class FeedbackPanel: NSObject, NSWindowDelegate {
     private(set) var screenshot: Data?
     private(set) var issue: FeedbackIssue?
 
-    private let reportKind = NSPopUpButton()
+    private let reportKind = NSPopUpButton(frame: .zero, pullsDown: false)
     private let name = NSTextField()
     private let includeDiagnostics = NSButton(checkboxWithTitle: "Include private diagnostics", target: nil, action: nil)
     private let remove = NSButton(title: "Remove Screenshot", target: nil, action: nil)
@@ -263,7 +264,7 @@ final class FeedbackPanel: NSObject, NSWindowDelegate {
 
     private func setControls(enabled: Bool) {
         descriptionView.isEditable = enabled
-        [reportKind, name, includeDiagnostics, captureButton, remove, discard, cancel, sendButton]
-            .forEach { $0.isEnabled = enabled }
+        let controls: [NSControl] = [reportKind, name, includeDiagnostics, captureButton, remove, discard, cancel, sendButton]
+        for control in controls { control.isEnabled = enabled }
     }
 }

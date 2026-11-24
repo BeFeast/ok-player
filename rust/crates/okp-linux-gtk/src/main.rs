@@ -66,7 +66,6 @@ use velopack::{
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 mod about;
-mod feedback;
 mod branding;
 mod chrome_icons;
 mod compact_mode;
@@ -74,6 +73,7 @@ mod companion_window;
 mod controls;
 mod css;
 mod dialogs;
+mod feedback;
 mod file_reveal;
 mod geometry_diagnostics;
 mod history;
