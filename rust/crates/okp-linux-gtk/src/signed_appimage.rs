@@ -58,6 +58,13 @@ impl AppImageUpdates {
         let channel = std::fs::read_to_string(root.join("update-channel"))
             .ok()
             .and_then(|value| value.trim().parse().ok())
+            .or_else(|| {
+                let bytes =
+                    std::fs::read(root.join("builds").join(build).join("release.json")).ok()?;
+                let installed = serde_json::from_slice::<Release>(&bytes).ok()?;
+                (installed.build.to_string() == build && installed.source == UPDATE_SOURCE)
+                    .then_some(installed.channel)
+            })
             .unwrap_or(Channel::Beta);
         Some(Rc::new(Self {
             root,

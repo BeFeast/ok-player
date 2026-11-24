@@ -144,6 +144,7 @@ int main(void) {
         self.assertEqual((status, phase), (0, "ready\n"), error)
         self.assertEqual(self.target.readlink(), Path(f"builds/{NEW_BUILD}/{name(NEW_BUILD)}"))
         self.assertEqual(sha(self.target.read_bytes()), release["sha256"])
+        self.assertEqual(json.loads((self.target.resolve().parent / "release.json").read_text()), release)
         self.assertTrue((self.work / self.previous).is_file())
 
     def test_invalid_manifest_stops_check(self):

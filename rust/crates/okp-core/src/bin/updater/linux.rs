@@ -124,6 +124,9 @@ impl Installation {
             let directory = stage.join("build");
             fs::create_dir(&directory)?;
             fs::rename(payload, directory.join(&release.filename))?;
+            let mut provenance = File::create_new(directory.join("release.json"))?;
+            serde_json::to_writer(&mut provenance, release)?;
+            provenance.sync_all()?;
             File::open(&directory)?.sync_all()?;
             fs::rename(directory, &archived)?;
             File::open(builds)?.sync_all()?;
