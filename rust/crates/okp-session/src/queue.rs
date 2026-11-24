@@ -69,10 +69,23 @@ impl QueueView {
                 }
             })
             .collect();
+        let heading = (items.len() > 1).then(|| {
+            let current_folder = current_index.and_then(|index| match &items[index] {
+                PlaylistItem::Local(path) => path.parent(),
+                PlaylistItem::Url(_) => None,
+            });
+            let from_folder = current_folder.is_some_and(|folder| {
+                items.iter().all(
+                    |item| matches!(item, PlaylistItem::Local(path) if path.parent() == Some(folder)),
+                )
+            });
+            let label = if from_folder { "FROM THIS FOLDER" } else { "QUEUE" };
+            format!("{label} · {}", items.len())
+        });
         Self {
             rows,
             current_index,
-            heading: (items.len() > 1).then(|| format!("FROM THIS FOLDER · {}", items.len())),
+            heading,
             scanning,
         }
     }
@@ -102,6 +115,17 @@ mod tests {
         assert!(!view.rows[1].can_play_next);
         assert!(!view.rows[2].can_play_next);
         assert_eq!(view.rows[0].index, 0);
+    }
+
+    #[test]
+    fn a_stream_with_local_additions_has_a_queue_heading() {
+        let items = [
+            PlaylistItem::Url("http://example.com/stream.mp4".into()),
+            PlaylistItem::Local("extra.mp4".into()),
+        ];
+        let view = QueueView::project(&items, Some(0), Some(1), None, false);
+        assert_eq!(view.heading.as_deref(), Some("QUEUE · 2"));
+        assert_eq!(view.rows[1].state, QueueRowState::Next);
     }
 
     #[test]

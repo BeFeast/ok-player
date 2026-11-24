@@ -233,6 +233,7 @@ extension VerifyRun {
         if snapshot.source != current || snapshot.status != .paused ||
             abs((snapshot.timePos ?? -1) - currentTime) > 0.06 ||
             queuePanel.list.row(at: 1)?.location != extra.path ||
+            queuePanel.headingLabel.stringValue != "QUEUE · 2" ||
             queuePanel.list.activation(ofRow: 1) != .playlist(action: .jump(index: 1)) {
             failures.append("queue_single:add")
         }

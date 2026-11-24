@@ -482,7 +482,7 @@ The query `{"schema_version":1,"query":{"playlist":{}}}` answers
 `repeat`, `shuffle`, and `scanning` (a folder or playlist file is being read).
 
 `queue_view {}` projects the same playlist for the Up Next panel. It returns
-`rows` in playlist identity order, `current_index` for the pinned card, a folder
+`rows` in playlist identity order, `current_index` for the pinned card, a
 `heading` for multiple items, and `scanning`. A row carries its playlist
 `index`, `source`, display `title`, `state` (`current`, `next`, `behind`,
 or `upcoming`) and `can_play_next`. The next badge follows the next distinct

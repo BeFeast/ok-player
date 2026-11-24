@@ -20,7 +20,7 @@ final class UpNextPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     let nowPlayingState = UpNextMaterial.label("NOW PLAYING", size: 10.5, weight: .semibold, color: UpNextMaterial.accent)
     let headingLabel = UpNextMaterial.label(size: 11, weight: .semibold, color: UpNextMaterial.muted)
     let emptyLabel = UpNextMaterial.label("Just this file", size: 13, weight: .semibold)
-    let addFilesButton = NSButton(title: "Add files…", target: nil, action: nil)
+    let addFilesButton = AccentButton(label: "Add files…", target: nil, action: nil)
     let tableView = UpNextTableView()
     let insertionLine = NSView()
 
@@ -289,8 +289,7 @@ final class UpNextPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         nowPlayingIcon.contentTintColor = NSColor.black.withAlphaComponent(0.58)
         emptyDetail.textColor = UpNextMaterial.muted
         emptyDetail.font = .systemFont(ofSize: 12)
-        addFilesButton.bezelStyle = .rounded
-        addFilesButton.contentTintColor = UpNextMaterial.link
+        addFilesButton.font = .systemFont(ofSize: 12, weight: .semibold)
         addFilesButton.target = self
         addFilesButton.action = #selector(addFilesChosen)
 
