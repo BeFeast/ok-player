@@ -110,8 +110,13 @@ extension VerifyRun {
             }
             try await clickHistory(first.id, shelf: true)
             try await wait("clicking the card resumes the original source at its stored position") {
-                self.snapshot.source == first.source && self.snapshot.status == .playing
+                self.snapshot.source == first.source && self.snapshot.video != nil
+                    && (self.snapshot.status == .playing || self.snapshot.status == .paused)
                     && abs((self.snapshot.timePos ?? 0) - position) < 0.7
+            }
+            _ = app.client?.dispatch(.setPaused(paused: false))
+            try await wait("the resumed source plays forward from its saved position") {
+                self.snapshot.status == .playing && (self.snapshot.timePos ?? 0) > position + 0.4
             }
             try await closeHistoryMedia()
         case .capture:
@@ -136,15 +141,19 @@ extension VerifyRun {
             let (title, seconds) = record
             let path = options.historyFile(title).path
             app.play(path)
-            try await wait("\(title) plays the fixture in libmpv") {
-                self.snapshot.source?.location == path && self.snapshot.status == .playing && self.snapshot.video != nil
+            try await wait("\(title) is loaded in libmpv") {
+                self.snapshot.source?.location == path && self.snapshot.video != nil
+                    && (self.snapshot.status == .playing || self.snapshot.status == .paused)
             }
-            if title != "Finished" {
-                _ = app.client?.dispatch(.setPaused(paused: true))
+            let finishes = title == "Finished"
+            _ = app.client?.dispatch(.setPaused(paused: !finishes))
+            if finishes {
+                try await wait("\(title) is playing") { self.snapshot.status == .playing }
+            } else {
                 try await wait("\(title) is paused") { self.snapshot.status == .paused }
             }
             _ = app.client?.dispatch(.seek(seconds: seconds, mode: .absolute, precision: .exact))
-            if title == "Finished" {
+            if finishes {
                 try await wait("fixture reaches actual EOF") {
                     self.snapshot.status == .ended && self.snapshot.endReason == .eof
                 }
