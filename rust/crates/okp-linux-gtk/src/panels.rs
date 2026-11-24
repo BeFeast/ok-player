@@ -55,6 +55,13 @@ pub(crate) fn update_up_next_panel(
             .map(|path| state.history.bookmarks(path))
             .unwrap_or_default();
 
+        let queue_current = state.playlist.current_index().filter(|_| {
+            state.playlist.current().is_some_and(|item| {
+                item.is_current(state.current_file.as_deref(), state.current_url.as_deref())
+            })
+        });
+        let queue_next = queue_current.and_then(|_| state.playlist.auto_advance_target_index());
+
         SidePanelSnapshot {
             has_media,
             current_file: state.current_file.clone(),
@@ -63,6 +70,8 @@ pub(crate) fn update_up_next_panel(
                 .then(|| current_media_title(&state))
                 .filter(|title| !title.is_empty()),
             playlist: state.playlist.items().to_vec(),
+            queue_current,
+            queue_next,
             chapters,
             current_chapter,
             duration,
@@ -145,13 +154,6 @@ pub(crate) fn update_up_next_panel(
         media_duration,
     );
 
-    let current_index = snapshot.playlist.iter().position(|item| {
-        item.is_current(
-            snapshot.current_file.as_deref(),
-            snapshot.current_url.as_deref(),
-        )
-    });
-
     let mode = controls.side_panel_mode.get();
     update_side_panel_tab_state(&controls.chapters_tab, &controls.up_next_tab, mode);
     clear_list_box(&controls.up_next_list);
@@ -159,9 +161,7 @@ pub(crate) fn update_up_next_panel(
 
     match mode {
         SidePanelMode::Chapters => render_chapters_panel(controls, state, &snapshot, &mut actions),
-        SidePanelMode::UpNext => {
-            render_playlist_panel(controls, state, &snapshot, current_index, &mut actions)
-        }
+        SidePanelMode::UpNext => render_playlist_panel(controls, state, &snapshot, &mut actions),
     }
 
     controls.side_panel_actions.replace(actions);
@@ -417,19 +417,24 @@ pub(crate) fn current_chapter_index(chapters: &[Chapter], position: Option<f64>)
     chapter_math::current_index(&times, position, chapter_math::DEFAULT_EPSILON)
 }
 
-pub(crate) fn render_playlist_panel(
+fn render_playlist_panel(
     controls: &Controls,
     state: &Rc<RefCell<PlayerState>>,
     snapshot: &SidePanelSnapshot,
-    current_index: Option<usize>,
     actions: &mut Vec<SidePanelAction>,
 ) {
-    // GTK's queue lane identifies the next row in folder order. Playback modes
-    // and auto-advance continue to be handled by the existing GTK commands.
+    let current_index = snapshot.queue_current.or_else(|| {
+        snapshot.playlist.iter().position(|item| {
+            item.is_current(
+                snapshot.current_file.as_deref(),
+                snapshot.current_url.as_deref(),
+            )
+        })
+    });
     let queue = QueueView::project(
         &snapshot.playlist,
         current_index,
-        current_index.map(|index| index + 1),
+        snapshot.queue_next,
         snapshot.current_title.as_deref(),
         false,
     );
@@ -1223,6 +1228,8 @@ pub(crate) fn side_panel_preview_sample() -> SidePanelSnapshot {
         current_url: None,
         current_title: None,
         playlist,
+        queue_current: Some(1),
+        queue_next: Some(2),
         chapters,
         current_chapter: Some(2),
         duration: Some(2705.0),
@@ -1250,6 +1257,8 @@ pub(crate) fn side_panel_empty_chapters_sample() -> SidePanelSnapshot {
         current_url: None,
         current_title: None,
         playlist: vec![PlaylistItem::Local(current_file)],
+        queue_current: Some(0),
+        queue_next: None,
         chapters: Vec::new(),
         current_chapter: None,
         duration: None,
@@ -1274,6 +1283,8 @@ pub(crate) fn side_panel_empty_up_next_sample() -> SidePanelSnapshot {
         current_url: Some(url.clone()),
         current_title: None,
         playlist: vec![PlaylistItem::Url(url)],
+        queue_current: Some(0),
+        queue_next: None,
         chapters: Vec::new(),
         current_chapter: None,
         duration: None,
@@ -1293,6 +1304,8 @@ pub(crate) fn side_panel_interval_preview_sample() -> SidePanelSnapshot {
         current_url: None,
         current_title: None,
         playlist: vec![PlaylistItem::Local(current_file)],
+        queue_current: Some(0),
+        queue_next: None,
         chapters: Vec::new(),
         current_chapter: None,
         duration: Some(3600.0),
@@ -1334,15 +1347,7 @@ pub(crate) fn open_side_panel_preview(
     let mut actions = Vec::new();
     match mode {
         SidePanelMode::Chapters => render_chapters_panel(controls, state, &snapshot, &mut actions),
-        SidePanelMode::UpNext => {
-            let current_index = snapshot.playlist.iter().position(|item| {
-                item.is_current(
-                    snapshot.current_file.as_deref(),
-                    snapshot.current_url.as_deref(),
-                )
-            });
-            render_playlist_panel(controls, state, &snapshot, current_index, &mut actions);
-        }
+        SidePanelMode::UpNext => render_playlist_panel(controls, state, &snapshot, &mut actions),
     }
     controls.side_panel_actions.replace(actions);
     let duration = snapshot.duration.unwrap_or(0.0);

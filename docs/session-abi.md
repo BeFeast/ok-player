@@ -485,8 +485,8 @@ The query `{"schema_version":1,"query":{"playlist":{}}}` answers
 `rows` in playlist identity order, `current_index` for the pinned card, a folder
 `heading` for multiple items, and `scanning`. A row carries its playlist
 `index`, `source`, display `title`, `state` (`current`, `next`, `behind`,
-or `upcoming`) and `can_play_next`. On the session-backed shell, the next
-badge follows the next distinct item at EOF. A single item has no heading
+or `upcoming`) and `can_play_next`. The next badge follows the next distinct
+item at EOF. A single item has no heading
 and is still available to the pinned card.
 
 ## Opening files

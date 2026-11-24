@@ -70,6 +70,21 @@ final class UpNextPanelTests: XCTestCase {
         XCTAssertEqual(panel.menuItems(forRow: 3), [], "no menu below the last row")
     }
 
+    func testAQueueChangeCancelsTheDragAndClearsItsInsertionLine() {
+        var invalidations = 0
+        panel.onDragInvalidated = { invalidations += 1 }
+        panel.drag = (2, panel.list)
+        XCTAssertTrue(panel.previewReorder(before: 0))
+        XCTAssertFalse(panel.insertionLine.isHidden)
+
+        panel.show(upNextView(upNextPlaylist(["a.mkv", "b.mkv", "d.mkv"], current: 1)))
+
+        XCTAssertEqual(invalidations, 1)
+        XCTAssertTrue(panel.insertionLine.isHidden)
+        XCTAssertFalse(panel.completeReorder(before: 0))
+        XCTAssertEqual(dispatched, [])
+    }
+
     func testKeysTheListDoesNotHandleGoToTheVideo() throws {
         try press(49, " ", onRow: 0)
         try press(3, "f", onRow: 0)

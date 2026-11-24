@@ -52,7 +52,10 @@ extension UpNextPanel {
 
     @discardableResult
     func completeReorder(before boundary: Int) -> Bool {
-        defer { showInsertion(before: nil) }
+        defer {
+            drag = nil
+            showInsertion(before: nil)
+        }
         guard let command = reorderCommand(before: boundary) else { return false }
         dispatch?(command)
         return true

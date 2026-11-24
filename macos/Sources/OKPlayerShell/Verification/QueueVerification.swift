@@ -126,7 +126,6 @@ extension VerifyRun {
 
     private func checkQueueEdit() async throws {
         if !queuePanel.completeReorder(before: 1) { failures.append("queue_edit:commit") }
-        queuePanel.drag = nil
         if options.control == "queue_move_disabled" {
             try await Task.sleep(nanoseconds: 300_000_000)
         } else {
@@ -213,6 +212,7 @@ extension VerifyRun {
 
     private func checkQueueAdd() async throws {
         let current = snapshot.source
+        let currentTime = snapshot.timePos ?? 0
         let extra = extraQueueFile
         app.upNext.chooseFiles = { _, choose in choose([extra]) }
         defer { app.upNext.chooseFiles = nil }
@@ -225,6 +225,7 @@ extension VerifyRun {
             }
         }
         if snapshot.source != current || snapshot.status != .paused ||
+            abs((snapshot.timePos ?? -1) - currentTime) > 0.06 ||
             queuePanel.list.row(at: 1)?.location != extra.path ||
             queuePanel.list.activation(ofRow: 1) != .playlist(action: .jump(index: 1)) {
             failures.append("queue_single:add")
@@ -268,4 +269,3 @@ extension VerifyRun {
         ])
     }
 }
-

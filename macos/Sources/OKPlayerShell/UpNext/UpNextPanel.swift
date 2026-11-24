@@ -7,6 +7,7 @@ final class UpNextPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     var dispatch: ((Command) -> Void)?
     var onClose: (() -> Void)?
     var onAddFiles: (() -> Void)?
+    var onDragInvalidated: (() -> Void)?
     weak var focusReturn: NSView?
 
     private(set) var list = UpNextList()
@@ -59,6 +60,10 @@ final class UpNextPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     func show(_ list: UpNextList) {
         guard list != self.list else { return }
         dismissRowMenu()
+        if drag != nil {
+            drag = nil
+            onDragInvalidated?()
+        }
         let selection = self.list.row(at: tableView.selectedRow)
         self.list = list
         refreshQueue()

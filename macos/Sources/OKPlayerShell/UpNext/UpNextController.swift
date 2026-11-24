@@ -41,6 +41,7 @@ final class UpNextController: NSObject {
             self.send(command)
         }
         panel.onAddFiles = { [weak self] in self?.presentAddFiles(mode: .append) }
+        panel.onDragInvalidated = { [weak self] in self?.onQueueError?("Queue changed. Drag the item again.") }
         panel.onClose = { [weak self] in self?.hide() }
         button.target = self
         button.action = #selector(toggleUpNext(_:))

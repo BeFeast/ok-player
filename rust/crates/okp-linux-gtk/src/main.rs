@@ -2018,6 +2018,8 @@ struct SidePanelSnapshot {
     current_url: Option<String>,
     current_title: Option<String>,
     playlist: Vec<PlaylistItem>,
+    queue_current: Option<usize>,
+    queue_next: Option<usize>,
     chapters: Vec<Chapter>,
     // Index of the chapter the playhead currently sits in (via
     // `chapter_math::current_index`). Kept as the resolved index rather than the
