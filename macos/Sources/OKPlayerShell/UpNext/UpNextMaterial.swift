@@ -24,6 +24,24 @@ enum UpNextMaterial {
         NSImage(systemSymbolName: name, accessibilityDescription: nil)?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: size, weight: .semibold))
     }
+
+    static func dots(columns: Int) -> NSImage {
+        let size = NSSize(width: 12, height: 15)
+        let image = NSImage(size: size, flipped: false) { bounds in
+            NSColor.black.setFill()
+            for column in 0..<columns {
+                let offset = CGFloat(column) - CGFloat(columns - 1) / 2
+                let x = bounds.midX + offset * 4
+                for row in -1...1 {
+                    let y = bounds.midY + CGFloat(row) * 5
+                    NSBezierPath(ovalIn: NSRect(x: x - 1, y: y - 1, width: 2, height: 2)).fill()
+                }
+            }
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }
 }
 
 final class UpNextCardView: NSView {

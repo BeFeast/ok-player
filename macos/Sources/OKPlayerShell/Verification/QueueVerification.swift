@@ -184,8 +184,11 @@ extension VerifyRun {
             self.queueNames.count == 3 && self.queuePanel.list.row(at: 1)?.source == next
         }
 
-        guard app.commands.run("next-item") != .disabled else { throw VerifyError("Next Item menu command is disabled") }
-        try await wait("Next Item used the edited queue") { self.snapshot.source == next }
+        let beforeMenu = swaps
+        guard app.commands.run("next-item") == .performed else { throw VerifyError("Next Item menu command did not run") }
+        try await wait("Next Item started the next entry in the edited queue") {
+            self.snapshot.source == next && self.snapshot.status == .playing && self.swaps > beforeMenu
+        }
         let remoteSource = SystemRemoteCommandSource()
         let remote = RemoteCommandController(source: remoteSource, session: { [unowned app] command in
             app.client?.dispatch(command) ?? .noOp
@@ -193,10 +196,13 @@ extension VerifyRun {
         remote.playlist = app.playlist
         remote.start()
         defer { remote.stop() }
+        let beforeRemote = swaps
         guard remoteSource.deliver(MPRemoteCommandCenter.shared().nextTrackCommand) == .success else {
             throw VerifyError("MediaPlayer Next Track was not dispatched")
         }
-        try await wait("MediaPlayer Next Track played the appended file") { self.snapshot.source?.location == extra.path }
+        try await wait("MediaPlayer Next Track played the appended file") {
+            self.snapshot.source?.location == extra.path && self.snapshot.status == .playing && self.swaps > beforeRemote
+        }
     }
 
     private func chooseQueueMenuItem(_ name: String, row: Int) throws {

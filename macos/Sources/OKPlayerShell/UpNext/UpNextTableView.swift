@@ -41,12 +41,13 @@ final class UpNextCellView: NSTableCellView {
         super.init(frame: .zero)
         identifier = Self.reuseIdentifier
         textField = title
-        handle.image = UpNextMaterial.symbol("circle.grid.2x3.fill", size: 12)
+        handle.image = UpNextMaterial.dots(columns: 2)
         handle.contentTintColor = NSColor.black.withAlphaComponent(0.27)
         handle.toolTip = "Drag to reorder"
         lane.alignment = .center
         lane.wantsLayer = true
         lane.layer?.cornerRadius = 6
+        actions.image = UpNextMaterial.dots(columns: 1)
         actions.contentTintColor = UpNextMaterial.muted
         actions.target = self
         actions.action = #selector(actionsChosen)
