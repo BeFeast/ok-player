@@ -272,7 +272,7 @@ final class PlayerAppCommandsTests: XCTestCase {
         XCTAssertEqual(app.commands.shellCommands,
                        ["add-subtitle", "add-to-queue", "audio-track", "chapters-up-next", "escape-fullscreen", "fullscreen",
                         "mini-player", "next-item", "open-file", "open-folder", "open-settings", "play-next",
-                        "playback-speed", "previous-item", "show-commands", "subtitles"])
+                        "playback-speed", "previous-item", "send-feedback", "show-commands", "subtitles"])
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("okp-menu-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let client = try SessionClient(config: SessionConfig(
@@ -303,6 +303,9 @@ final class PlayerAppCommandsTests: XCTestCase {
         let mini = try XCTUnwrap(rows.first { $0.id == "mini-player" })
         XCTAssertTrue(mini.available)
         XCTAssertFalse(mini.enabled, "Mini-Player requires video")
+        let help = try XCTUnwrap(models.first { $0.menu == .help })
+        XCTAssertEqual(help.entries, [.command(id: "send-feedback", title: "Send Feedback…",
+                                                keyEquivalent: nil, submenu: false)])
         let next = try XCTUnwrap(rows.first { $0.id == "next-item" })
         XCTAssertTrue(next.available)
         XCTAssertFalse(next.enabled, "nothing to step to without a playlist")
