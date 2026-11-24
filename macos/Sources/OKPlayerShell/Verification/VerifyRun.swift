@@ -9,6 +9,7 @@ struct VerificationOptions {
     let appearance: String
     let negativeControl: Bool
     let httpFixture: URL?
+    let phase: String?
     var scenarioID: String { scenario.deletingPathExtension().lastPathComponent }
     var control: String {
         guard negativeControl else { return "none" }
@@ -22,6 +23,7 @@ struct VerificationOptions {
         case "osc-idle-and-pins": "panel_pin_disabled"
         case "osc-volume-speed": "volume_wheel_disabled"
         case "osc-status": "copy_details_disabled"
+        case "settings-shell-appearance": "appearance_persistence_disabled"
         default: "unsupported_control"
         }
     }
@@ -40,6 +42,7 @@ struct VerificationOptions {
         self.profile = URL(fileURLWithPath: profile, isDirectory: true)
         self.appearance = appearance
         httpFixture = value("--verify-http-fixture").flatMap { URL(string: $0) }
+        phase = value("--verify-phase")
         negativeControl = arguments.contains("--verify-negative-control")
     }
 
@@ -86,6 +89,7 @@ struct VerificationScenario: Decodable {
         let subtitleLabels: [String]?
         let selectedSubtitle: String?
         let width: Double?
+        let phase: String?
     }
     enum Action: String, Decodable {
         case open, pause, seek, capture
@@ -102,12 +106,17 @@ struct VerificationScenario: Decodable {
         case openStall = "open_stall", releaseStall = "release_stall", openFailure = "open_failure"
         case openBuffer = "open_buffer", releaseBuffer = "release_buffer"
         case checkFailureActions = "check_failure_actions", checkStale = "check_stale"
+        case settingsShortcut = "settings_shortcut", settingsContext = "settings_context"
+        case settingsLegacy = "settings_legacy", settingsSearch = "settings_search", settingsResize = "settings_resize"
+        case settingsSystem = "settings_system", settingsLight = "settings_light", settingsAuto = "settings_auto"
+        case settingsPlayerInput = "settings_player_input"
     }
     enum Expectation: String, Decodable {
         case noCue = "no_cue", clearance, baseMargin = "base_margin"
         case welcome, playing, fullscreen, restored, landscape, portrait, idle, floating, normal, repinned
         case oscRow = "osc_row", oscHidden = "osc_hidden", oscPinned = "osc_pinned"
         case volume, speed, loading, buffering, failure, recovered
+        case settingsLight = "settings_light", settingsAuto = "settings_auto"
     }
     let schemaVersion: Int
     let id: String
@@ -154,6 +163,7 @@ final class VerifyRun {
             "appearance": options.appearance, "pid": getpid(),
             "control": options.control,
         ]
+        result["phase"] = options.phase
         var code: Int32 = 0
         do {
             let scenario = try options.readScenario()
@@ -168,18 +178,25 @@ final class VerifyRun {
             }
             guard let window = app.window else { throw VerifyError("The mapped player window disappeared", blocked: true) }
             let appearance: NSAppearance.Name = options.appearance == "dark" ? .darkAqua : .aqua
-            window.appearance = NSAppearance(named: appearance)
-            guard window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == appearance else {
-                throw VerifyError("Requested appearance is unavailable", blocked: true)
+            if scenario.id == "settings-shell-appearance" {
+                app.settings.autoAppearance = NSAppearance(named: appearance)
+            } else {
+                window.appearance = NSAppearance(named: appearance)
+                guard window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == appearance else {
+                    throw VerifyError("Requested appearance is unavailable", blocked: true)
+                }
             }
             result["window_id"] = window.windowNumber
             result["source_sha"] = Bundle.main.object(forInfoDictionaryKey: "OKPSourceSHA")
             result["revision"] = Bundle.main.object(forInfoDictionaryKey: "OKPSourceRevision")
             result["window_backing_scale"] = window.backingScaleFactor
             compositorStatus = CGPreflightScreenCaptureAccess() ? "available" : "permission_unavailable"
-            for step in scenario.steps {
+            let steps = scenario.steps.filter { $0.phase == options.phase }
+            guard !steps.isEmpty else { throw VerifyError("Unknown verification phase") }
+            for step in steps {
                 if scenario.id.hasPrefix("window-") { try await performWindowStep(step) }
                 else if scenario.id.hasPrefix("osc-") { try await performTransportStep(step) }
+                else if scenario.id == "settings-shell-appearance" { try await performSettingsStep(step) }
                 else { try await perform(step) }
             }
             result["status"] = failures.isEmpty ? "passed" : "failed"
@@ -431,15 +448,16 @@ final class VerifyRun {
         print("OKP_VERIFY captured \(name) via \(captureMode)")
     }
 
-    func captureCompositor(width: Int, height: Int) async -> CGImage? {
+    func captureCompositor(width: Int, height: Int, window: NSWindow? = nil) async -> CGImage? {
+        let target = window ?? app.window!
         guard compositorStatus == "available" || compositorStatus == "captured" else { return nil }
-        guard app.window.backingScaleFactor == 2 else {
+        guard target.backingScaleFactor == 2 else {
             compositorStatus = "window_backing_is_not_2x"
             return nil
         }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            guard let own = content.windows.first(where: { $0.windowID == CGWindowID(app.window.windowNumber) }) else {
+            guard let own = content.windows.first(where: { $0.windowID == CGWindowID(target.windowNumber) }) else {
                 compositorStatus = "window_unavailable"
                 return nil
             }

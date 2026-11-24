@@ -25,6 +25,9 @@ pub use crate::history::{
 };
 pub use crate::open_paths::{OpenFormats, OpenPlan};
 pub use crate::playlist::{PlaylistAction, PlaylistEntry, PlaylistState, QueueMode, RepeatMode};
+pub use crate::settings::{
+    AppearanceSelection, SettingsDestination, SettingsSearchHit, SettingsView,
+};
 pub use crate::status::{
     FailureAction, FailureActionView, FailureCard, FailureKind, StatusSurface,
 };
@@ -179,6 +182,10 @@ pub enum Command {
     /// reported one. Forwarded as a `set_subtitle_scale`.
     NudgeSubtitleScale {
         delta: f64,
+    },
+    /// Save a supported app theme before the shell applies it.
+    SetAppearanceTheme {
+        theme: AppearanceSelection,
     },
 }
 
@@ -353,6 +360,10 @@ pub enum Query {
     /// What the audio and subtitle menus show: the tracks with their labels,
     /// and the subtitle delay and size.
     Tracks {},
+    /// The current app theme and the Settings navigation destinations.
+    Settings {},
+    /// Match controls and section names in the Settings catalogue.
+    SettingsSearch { text: String },
 }
 
 /// `{"schema_version":1,"result":{...}}`, the answer to a query.
@@ -410,6 +421,12 @@ pub enum QueryResult {
     },
     Tracks {
         tracks: TracksView,
+    },
+    Settings {
+        settings: SettingsView,
+    },
+    SettingsSearch {
+        hits: Vec<SettingsSearchHit>,
     },
     Rejected {
         reason: RejectReason,
@@ -648,6 +665,7 @@ pub(crate) enum Route<'a> {
     /// A playlist command: the session's playlist decides it and plays an item
     /// with an `open`, so the command itself is never forwarded.
     Playlist(&'a PlaylistAction),
+    Settings,
 }
 
 impl Command {
@@ -706,6 +724,7 @@ impl Command {
             Self::History { action } => return Route::History(action),
             Self::InvokeCommand { .. } => return Route::Registry,
             Self::Playlist { action } => return Route::Playlist(action),
+            Self::SetAppearanceTheme { .. } => return Route::Settings,
         })
     }
 }

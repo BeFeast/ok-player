@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "settings-shell-appearance",
+  "fixture": "01-h264-1080p24-tone.mp4",
+  "appearances": ["light", "dark"],
+  "steps": [
+    {"phase": "edit", "action": "settings_shortcut"},
+    {"phase": "edit", "action": "settings_legacy"},
+    {"phase": "edit", "action": "settings_context"},
+    {"phase": "edit", "action": "settings_search"},
+    {"phase": "edit", "action": "settings_resize"},
+    {"phase": "edit", "action": "settings_auto"},
+    {"phase": "edit", "action": "settings_system"},
+    {"phase": "edit", "action": "capture", "name": "appearance", "expect": "settings_auto"},
+    {"phase": "edit", "action": "settings_light"},
+    {"phase": "edit", "action": "capture", "name": "light", "expect": "settings_light"},
+    {"phase": "light-relaunch", "action": "settings_shortcut"},
+    {"phase": "light-relaunch", "action": "capture", "name": "light-relaunch", "expect": "settings_light"},
+    {"phase": "light-relaunch", "action": "settings_auto"},
+    {"phase": "auto-relaunch", "action": "settings_shortcut"},
+    {"phase": "auto-relaunch", "action": "capture", "name": "auto-relaunch", "expect": "settings_auto"},
+    {"phase": "auto-relaunch", "action": "settings_player_input"}
+  ]
+}

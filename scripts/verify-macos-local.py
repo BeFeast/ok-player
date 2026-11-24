@@ -28,8 +28,20 @@ TRANSPORT_CONTROLS = {
     "osc-volume-speed": ("volume_wheel_disabled", {"osc_volume_speed:wheel"}),
     "osc-status": ("copy_details_disabled", {"osc_status:copy_details"}),
 }
-CONTROLS = {"subtitle-lift": "subtitle_clearance_disabled", **WINDOW_CONTROLS,
-            **{scenario: entry[0] for scenario, entry in TRANSPORT_CONTROLS.items()}}
+SETTINGS = "settings-shell-appearance"
+SETTINGS_PHASES = ("edit", "light-relaunch", "auto-relaunch")
+LEGACY_SETTINGS = {
+    "version": 1,
+    "appearance": {"theme": " Dark ", "accent_source": "System"},
+    "playback": {"volume": 67.0, "resume": False},
+    "profile_extension": {"keep": True},
+}
+CONTROLS = {
+    "subtitle-lift": "subtitle_clearance_disabled",
+    SETTINGS: "appearance_persistence_disabled",
+    **WINDOW_CONTROLS,
+    **{scenario: entry[0] for scenario, entry in TRANSPORT_CONTROLS.items()},
+}
 FIXTURE_SUBTITLES = {
     "subtitle-lift.mp4": (".srt",),
     "A Serious Man (2009) {tmdb-12573}.mp4": (".en.hi.srt", ".he.srt", ".ru.hi.srt"),
@@ -64,10 +76,15 @@ def read_scenario(path):
                "size_osc", "check_more", "check_seek", "check_idle", "check_pins", "show_volume",
                "check_wheel", "check_speed_mute", "set_unity", "open_stall", "release_stall", "open_failure",
                "check_failure_actions", "check_stale", "open_buffer", "release_buffer"}
+    if path.stem == SETTINGS:
+        actions.update({"settings_shortcut", "settings_context", "settings_legacy", "settings_search",
+                        "settings_resize", "settings_system", "settings_light", "settings_auto", "settings_player_input"})
     if (spec["schema_version"] != 1 or spec["id"] != path.stem
             or spec["appearances"] != ["light", "dark"] or not spec["steps"]):
         raise ValueError("Unsupported scenario ID, schema or appearances")
     for step in spec["steps"]:
+        if spec["id"] == SETTINGS and step.get("phase") not in SETTINGS_PHASES:
+            raise ValueError("Settings steps require a relaunch phase")
         if step["action"] not in actions:
             raise ValueError(f"Unsupported action {step['action']!r}")
         if step["action"] in {"seek", "play_to"} and not isinstance(step.get("seconds"), (float, int)):
@@ -78,7 +95,8 @@ def read_scenario(path):
             if (step.get("expect") not in {"no_cue", "clearance", "base_margin", "welcome", "playing",
                                            "fullscreen", "restored", "landscape", "portrait", "idle",
                                            "floating", "normal", "repinned", "osc_row", "osc_hidden", "osc_pinned",
-                                           "volume", "speed", "loading", "buffering", "failure", "recovered"}
+                                           "volume", "speed", "loading", "buffering", "failure", "recovered",
+                                           "settings_light", "settings_auto"}
                     or not step.get("name", "").replace("-", "").isalnum()):
                 raise ValueError("Invalid capture checkpoint")
         if step["action"] == "check_subtitle_menu":
@@ -157,6 +175,8 @@ def prepare_app(args, temporary, receipt):
         raise ValueError("Unexpected bundle identifier")
     receipt["bundle_revision"] = plist["OKPSourceRevision"]
     receipt["bundle_source_sha"] = plist["OKPSourceSHA"]
+    receipt["bundle_version"] = plist["CFBundleShortVersionString"]
+    receipt["bundle_build"] = plist["CFBundleVersion"]
     if args.source_sha and args.source_sha != plist["OKPSourceSHA"]:
         raise ValueError("Bundle revision does not match the requested Forgejo SHA")
     return executable
@@ -237,12 +257,7 @@ def http_fixture(video, enabled):
             thread.join()
 
 
-def run_appearance(executable, scenario, video, temporary, output, appearance, negative_control):
-    folder = output / appearance
-    folder.mkdir()
-    profile = temporary / appearance
-    for subdir in ("data", "config", "cache", "pictures"):
-        (profile / subdir).mkdir(parents=True)
+def run_process(executable, scenario, video, profile, output, folder, appearance, negative_control, phase=None):
     env = {key: value for key, value in os.environ.items() if not key.startswith("DYLD_")}
     env.update({"TZ": "UTC", "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"})
     argv = [executable, f"--verify-scenario={scenario}", f"--verify-fixture={video}",
@@ -250,6 +265,8 @@ def run_appearance(executable, scenario, video, temporary, output, appearance, n
             f"--verify-appearance={appearance}"]
     if negative_control:
         argv.append("--verify-negative-control")
+    if phase:
+        argv.append(f"--verify-phase={phase}")
     with http_fixture(video, scenario.stem == "osc-status") as url, (folder / "app.log").open("w") as log:
         if url:
             argv.append(f"--verify-http-fixture={url}")
@@ -268,16 +285,60 @@ def run_appearance(executable, scenario, video, temporary, output, appearance, n
     result["exit_code"] = run.returncode
     status = result.get("status")
     if (run.returncode, status) in {(0, "passed"), (1, "failed")}:
-        expected = [step["name"] for step in read_scenario(scenario)["steps"] if step["action"] == "capture"]
+        expected = [step["name"] for step in read_scenario(scenario)["steps"]
+                    if step["action"] == "capture" and step.get("phase") == phase]
         if [point["name"] for point in result["checkpoints"]] != expected:
             return {**result, "status": "error", "error": "App did not return every checkpoint"}
         for checkpoint in result["checkpoints"]:
             path = folder / checkpoint["png"]
-            checkpoint["png"] = f"{appearance}/{path.name}"
+            checkpoint["png"] = path.relative_to(output).as_posix()
             checkpoint["png_sha256"] = digest(path)
     elif result.get("status") not in {"blocked_environment", "error"}:
         result.update(status="error", error="App status and exit code disagree")
     return result
+
+
+def run_appearance(executable, scenario, video, temporary, output, appearance, negative_control):
+    folder = output / appearance
+    folder.mkdir()
+    profile = temporary / appearance
+    for subdir in ("data", "config", "cache", "pictures"):
+        (profile / subdir).mkdir(parents=True)
+    if scenario.stem != SETTINGS:
+        return run_process(executable, scenario, video, profile, output, folder, appearance, negative_control)
+
+    path = profile / "config/settings.json"
+    path.write_text(json.dumps(LEGACY_SETTINGS), encoding="utf-8")
+    phases = []
+    for phase in SETTINGS_PHASES:
+        phase_dir = folder / phase
+        phase_dir.mkdir()
+        result = run_process(executable, scenario, video, profile, output, phase_dir,
+                             appearance, negative_control, phase)
+        if result["status"] not in {"passed", "failed"}:
+            return result
+        phases.append(result)
+
+    last = phases[-1]
+    with path.open(encoding="utf-8") as settings:
+        profile_after = json.load(settings)
+    preserved = (profile_after["playback"] == LEGACY_SETTINGS["playback"]
+                 and profile_after["profile_extension"] == LEGACY_SETTINGS["profile_extension"]
+                 and profile_after["appearance"]["accent_source"] == LEGACY_SETTINGS["appearance"]["accent_source"]
+                 and profile_after["appearance"]["theme"] == "Auto")
+    if not all(case.get("source_sha") == last.get("source_sha") and case.get("control") == last.get("control")
+               for case in phases):
+        return {**last, "status": "error", "error": "Settings relaunches used different builds or controls"}
+    failures = [failure for case in phases for failure in case["assertion_failures"]]
+    if not preserved:
+        failures.append("settings_shell_appearance:unrelated_profile_fields")
+    return {
+        **last, "status": "failed" if failures else "passed",
+        "processes": [{"pid": case["pid"], "phase": case["phase"], "status": case["status"]} for case in phases],
+        "profile_preserved": preserved,
+        "assertion_failures": failures,
+        "checkpoints": [checkpoint for case in phases for checkpoint in case["checkpoints"]],
+    }
 
 
 def main():
@@ -342,6 +403,8 @@ def main():
                     }
                 elif spec["id"] in TRANSPORT_CONTROLS:
                     expected_failures = TRANSPORT_CONTROLS[spec["id"]][1]
+                elif spec["id"] == SETTINGS:
+                    expected_failures = {"settings_shell_appearance:light-relaunch"}
                 else:
                     checkpoints = {
                         "window-chrome": ["welcome", "playing"],
@@ -354,6 +417,10 @@ def main():
                 if not all(expected_failures <= set(result["assertion_failures"])
                            for result in receipt["appearances"]):
                     receipt.update(status="error", error="Negative control did not expose all expected failures in both themes")
+                if spec["id"] == SETTINGS and any(
+                    set(result["assertion_failures"]) != expected_failures for result in receipt["appearances"]
+                ):
+                    receipt.update(status="error", error="Settings negative control must fail only the Light relaunch")
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         receipt["error"] = str(error)
     finally:

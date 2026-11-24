@@ -52,6 +52,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     lazy var history: HistoryIntegration = HistoryIntegration(app: self)
     /// The registry commands of the menu bar and the window keys (Menu/).
     let commands = PlayerCommands()
+    let settings = PlayerSettings()
     var menuBar: MenuBar?
     lazy var closeMediaItem = windowMenuItem("Close Media", action: #selector(closeMedia), key: "W")
     lazy var pinItem = windowMenuItem("Always on Top", action: #selector(togglePlayerPin), key: "")
@@ -100,6 +101,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             prompt.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 12)
         ])
         behaviour.install(in: root, videoArea: videoArea)
+        installSettingsContextMenu(on: [root, videoArea, behaviour.titleStrip])
         for view in [videoArea, osc] {
             view.topAnchor.constraint(equalTo: behaviour.titleStrip.bottomAnchor).isActive = true
         }
@@ -163,6 +165,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             fail("\(error)"); return
         }
         self.client = client
+        settings.connect(client)
         behaviour.connect(client) { [weak self] in self?.togglePause() }
         client.onBatch = { [weak self] batch in self?.sessionChanged(batch) }
         playlist.state = client.store.playlist

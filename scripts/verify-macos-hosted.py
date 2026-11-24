@@ -27,6 +27,7 @@ CONTROLS = {
     "osc-idle-and-pins": "panel_pin_disabled",
     "osc-volume-speed": "volume_wheel_disabled",
     "osc-status": "copy_details_disabled",
+    "settings-shell-appearance": "appearance_persistence_disabled",
 }
 
 

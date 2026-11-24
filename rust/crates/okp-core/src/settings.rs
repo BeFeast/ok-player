@@ -3,9 +3,8 @@
 //! This is the shared "truth" both shells consume: the Linux GTK store and the WinUI
 //! settings service read and write the same canonical document (a later C-ABI projection
 //! may replace the managed schema mirror without changing the bytes).
-//! Only the *schema* and the *migration* live here — path resolution and file IO stay
-//! behind a shell seam (XDG on Linux, `%APPDATA%` on Windows), so this module never
-//! touches the filesystem.
+//! This module owns the schema and migration. Shells resolve profile paths, and
+//! the portable Rust settings store handles file I/O.
 //!
 //! The canonical form is snake_case, sectioned, and versioned ([`SETTINGS_VERSION`]).
 //! It is a superset of both current on-disk dialects, so migration never drops a
@@ -201,7 +200,8 @@ pub struct AppearanceSettings {
     pub accent_source: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AppearanceTheme {
     Light,
     Dark,

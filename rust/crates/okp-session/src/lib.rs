@@ -21,6 +21,7 @@ mod playlist;
 pub mod protocol;
 pub mod reconcile;
 mod session;
+mod settings;
 pub mod status;
 mod tracks;
 mod transport;

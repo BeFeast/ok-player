@@ -1,0 +1,1333 @@
+//! Portable settings persistence. Each shell supplies its own profile path.
+
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+
+use crate::gapless::{GaplessPlaybackCapability, effective_gapless_enabled};
+use crate::hwdec_policy::{self, HwdecPlan};
+use crate::settings::{
+    AppearanceTheme, HistoryRetention, ScreenshotFormat, Settings, SkippedUpdateVersions,
+    UpdateChannel,
+};
+use crate::subtitle_style::{self, SubtitleStyle};
+
+const DEFAULT_VOLUME: f64 = 100.0;
+const MAX_VOLUME: f64 = 130.0;
+const DEFAULT_RESUME: bool = true;
+const DEFAULT_AUTO_ADVANCE: bool = true;
+const DEFAULT_SHUFFLE: bool = false;
+const DEFAULT_GAPLESS: bool = false;
+const REPEAT_OFF: &str = "off";
+const REPEAT_ONE: &str = "one";
+const REPEAT_ALL: &str = "all";
+const DEFAULT_AUDIO_NORMALIZATION: bool = false;
+const DEFAULT_DOWNMIX_SURROUND_TO_STEREO: bool = false;
+const DEFAULT_AUDIO_DEVICE: &str = "auto";
+const HWDEC_OFF: &str = "no";
+const HWDEC_AUTO_SAFE: &str = "auto-safe";
+const DEFAULT_VIDEO_ADJUSTMENT: f64 = 0.0;
+const MIN_VIDEO_ADJUSTMENT: f64 = -100.0;
+const MAX_VIDEO_ADJUSTMENT: f64 = 100.0;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VideoAdjustments {
+    pub brightness: f64,
+    pub contrast: f64,
+    pub saturation: f64,
+    pub gamma: f64,
+}
+
+#[derive(Debug)]
+pub struct SettingsStore {
+    path: PathBuf,
+    data: Settings,
+    dirty: bool,
+}
+
+impl SettingsStore {
+    /// The settings document at `path`; a missing or unreadable file reads as the defaults.
+    pub fn open_at(path: PathBuf) -> Self {
+        let data = fs::read_to_string(&path)
+            .ok()
+            .and_then(|json| Settings::load(&json))
+            .unwrap_or_default();
+
+        Self {
+            path,
+            data,
+            dirty: false,
+        }
+    }
+
+    pub fn volume(&self) -> f64 {
+        normalized_volume(self.data.playback.volume).unwrap_or(DEFAULT_VOLUME)
+    }
+
+    pub fn resume_enabled(&self) -> bool {
+        self.data.playback.resume.unwrap_or(DEFAULT_RESUME)
+    }
+
+    pub fn auto_advance_enabled(&self) -> bool {
+        self.data
+            .playback
+            .auto_advance
+            .unwrap_or(DEFAULT_AUTO_ADVANCE)
+    }
+
+    pub fn shuffle_enabled(&self) -> bool {
+        self.data.playback.shuffle.unwrap_or(DEFAULT_SHUFFLE)
+    }
+
+    pub fn repeat_mode(&self) -> &'static str {
+        normalized_repeat(self.data.playback.repeat.as_deref())
+    }
+
+    pub fn gapless_enabled(&self, capability: GaplessPlaybackCapability) -> bool {
+        effective_gapless_enabled(
+            self.data.playback.gapless.unwrap_or(DEFAULT_GAPLESS),
+            capability,
+        )
+    }
+
+    pub fn audio_normalization_enabled(&self) -> bool {
+        self.data
+            .audio
+            .normalization
+            .unwrap_or(DEFAULT_AUDIO_NORMALIZATION)
+    }
+
+    pub fn downmix_surround_to_stereo_enabled(&self) -> bool {
+        self.data
+            .audio
+            .downmix_surround_to_stereo
+            .unwrap_or(DEFAULT_DOWNMIX_SURROUND_TO_STEREO)
+    }
+
+    pub fn audio_device(&self) -> &str {
+        normalized_audio_device(self.data.audio.device.as_deref())
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn auto_check_updates(&self) -> bool {
+        self.data.updates.auto_check
+    }
+
+    /// The persisted update channel. `Public` for every default install;
+    /// `Candidate` only when the operator has explicitly enrolled this QA
+    /// install in the rolling candidate channel (issue #339).
+    pub fn update_channel(&self) -> UpdateChannel {
+        self.data.updates.channel
+    }
+
+    pub fn skipped_update_version(&self, channel: UpdateChannel) -> Option<&str> {
+        self.data.updates.skipped_versions.version(channel)
+    }
+
+    pub fn skipped_update_versions(&self) -> &SkippedUpdateVersions {
+        &self.data.updates.skipped_versions
+    }
+
+    pub fn appearance_theme(&self) -> AppearanceTheme {
+        AppearanceTheme::from_setting(self.data.appearance.theme.as_deref())
+    }
+
+    pub fn hardware_decode_enabled(&self) -> bool {
+        normalized_hwdec(self.data.video.hwdec.as_deref()) == HWDEC_AUTO_SAFE
+    }
+
+    /// The mpv `hwdec` value for this install, and where it came from.
+    ///
+    /// `renderer_forced_hwdec` is the value renderer policy insists on, if any.
+    /// `raw_mpv_options` are the escape-hatch options the shell is about to
+    /// hand the engine; the override is read from those rather than from the
+    /// config text so it cannot disagree with what mpv actually receives.
+    pub fn hwdec_plan(
+        &self,
+        renderer_forced_hwdec: Option<&str>,
+        raw_mpv_options: &[(String, String)],
+    ) -> HwdecPlan {
+        hwdec_policy::plan_hwdec(
+            self.hardware_decode_enabled(),
+            renderer_forced_hwdec,
+            hwdec_policy::hwdec_from_options(raw_mpv_options),
+        )
+    }
+
+    pub fn hardware_decode_label(&self) -> &'static str {
+        if self.hardware_decode_enabled() {
+            "on"
+        } else {
+            "off"
+        }
+    }
+
+    pub fn video_adjustments(&self) -> VideoAdjustments {
+        VideoAdjustments {
+            brightness: self.brightness(),
+            contrast: self.contrast(),
+            saturation: self.saturation(),
+            gamma: self.gamma(),
+        }
+    }
+
+    pub fn subtitle_scale(&self) -> f64 {
+        subtitle_style::normalized_scale(self.data.subtitles.scale)
+    }
+
+    pub fn subtitle_position(&self) -> i64 {
+        subtitle_style::normalized_position(self.data.subtitles.position)
+    }
+
+    pub fn subtitle_style(&self) -> &'static SubtitleStyle {
+        subtitle_style::from_key(self.data.subtitles.style.as_deref())
+    }
+
+    pub fn brightness(&self) -> f64 {
+        normalized_video_adjustment(self.data.video.brightness).unwrap_or(DEFAULT_VIDEO_ADJUSTMENT)
+    }
+
+    pub fn contrast(&self) -> f64 {
+        normalized_video_adjustment(self.data.video.contrast).unwrap_or(DEFAULT_VIDEO_ADJUSTMENT)
+    }
+
+    pub fn saturation(&self) -> f64 {
+        normalized_video_adjustment(self.data.video.saturation).unwrap_or(DEFAULT_VIDEO_ADJUSTMENT)
+    }
+
+    pub fn gamma(&self) -> f64 {
+        normalized_video_adjustment(self.data.video.gamma).unwrap_or(DEFAULT_VIDEO_ADJUSTMENT)
+    }
+
+    pub fn raw_mpv_config(&self) -> &str {
+        self.data.advanced.mpv_conf.as_deref().unwrap_or("")
+    }
+
+    pub fn raw_keybindings_config(&self) -> &str {
+        self.data.advanced.keybindings.as_deref().unwrap_or("")
+    }
+
+    pub fn screenshot_format(&self) -> ScreenshotFormat {
+        self.data.screenshots.format.unwrap_or_default()
+    }
+
+    pub fn screenshot_directory(&self) -> Option<PathBuf> {
+        let directory = self.data.screenshots.directory.as_deref()?.trim();
+        let path = PathBuf::from(directory);
+        path.is_absolute().then_some(path)
+    }
+
+    pub fn history_retention(&self) -> HistoryRetention {
+        HistoryRetention::from_days(self.data.privacy.history_retention_days)
+    }
+
+    pub fn replay_cache_enabled(&self) -> bool {
+        self.data.online_video.replay_cache_enabled
+    }
+
+    /// Whether turning `ok-player://` link handling back on should make OK Player the scheme's
+    /// default handler again (#850).
+    pub fn restore_uri_scheme_default(&self) -> bool {
+        self.data
+            .integration
+            .restore_uri_scheme_default
+            .unwrap_or(false)
+    }
+
+    pub fn set_volume(&mut self, volume: f64) {
+        let Some(volume) = normalized_volume(Some(volume)) else {
+            return;
+        };
+
+        if !same_volume(self.data.playback.volume, volume) {
+            self.data.playback.volume = Some(volume);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_resume_enabled(&mut self, enabled: bool) {
+        if self.resume_enabled() != enabled {
+            self.data.playback.resume = Some(enabled);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_auto_advance_enabled(&mut self, enabled: bool) {
+        if self.auto_advance_enabled() != enabled {
+            self.data.playback.auto_advance = Some(enabled);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_shuffle_enabled(&mut self, enabled: bool) {
+        if self.shuffle_enabled() != enabled {
+            self.data.playback.shuffle = Some(enabled);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_repeat_mode(&mut self, repeat: &str) {
+        let repeat = normalized_repeat(Some(repeat));
+        if self.repeat_mode() != repeat {
+            self.data.playback.repeat = Some(repeat.to_owned());
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_gapless_enabled(
+        &mut self,
+        capability: GaplessPlaybackCapability,
+        enabled: bool,
+    ) -> bool {
+        if !capability.allows_enablement() {
+            return false;
+        }
+        if self.gapless_enabled(capability) != enabled {
+            self.data.playback.gapless = Some(enabled);
+            self.dirty = true;
+        }
+        true
+    }
+
+    pub fn set_audio_normalization_enabled(&mut self, enabled: bool) {
+        if self.audio_normalization_enabled() != enabled {
+            self.data.audio.normalization = Some(enabled);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_downmix_surround_to_stereo_enabled(&mut self, enabled: bool) {
+        if self.downmix_surround_to_stereo_enabled() != enabled {
+            self.data.audio.downmix_surround_to_stereo = Some(enabled);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_audio_device(&mut self, device: &str) {
+        let device = normalized_audio_device(Some(device));
+        if self.audio_device() != device {
+            self.data.audio.device = audio_device_setting(device);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_auto_check_updates(&mut self, enabled: bool) {
+        if self.data.updates.auto_check != enabled {
+            self.data.updates.auto_check = enabled;
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_skipped_update_version(&mut self, channel: UpdateChannel, version: Option<String>) {
+        if self.skipped_update_version(channel) != version.as_deref() {
+            self.data.updates.skipped_versions.set(channel, version);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_appearance_theme(&mut self, theme: AppearanceTheme) {
+        if self.appearance_theme() != theme {
+            self.data.appearance.theme = Some(theme.as_setting().to_owned());
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_hardware_decode_enabled(&mut self, enabled: bool) {
+        let updated = if enabled { HWDEC_AUTO_SAFE } else { HWDEC_OFF };
+        if normalized_hwdec(self.data.video.hwdec.as_deref()) != updated {
+            self.data.video.hwdec = Some(updated.to_owned());
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_brightness(&mut self, value: f64) {
+        if let Some(value) = normalized_video_adjustment(Some(value))
+            && !same_video_adjustment(self.data.video.brightness, value)
+        {
+            self.data.video.brightness = video_adjustment_setting(value);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_contrast(&mut self, value: f64) {
+        if let Some(value) = normalized_video_adjustment(Some(value))
+            && !same_video_adjustment(self.data.video.contrast, value)
+        {
+            self.data.video.contrast = video_adjustment_setting(value);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_saturation(&mut self, value: f64) {
+        if let Some(value) = normalized_video_adjustment(Some(value))
+            && !same_video_adjustment(self.data.video.saturation, value)
+        {
+            self.data.video.saturation = video_adjustment_setting(value);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_gamma(&mut self, value: f64) {
+        if let Some(value) = normalized_video_adjustment(Some(value))
+            && !same_video_adjustment(self.data.video.gamma, value)
+        {
+            self.data.video.gamma = video_adjustment_setting(value);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_subtitle_scale(&mut self, value: f64) {
+        let value = subtitle_style::normalized_scale(Some(value));
+        if (self.subtitle_scale() - value).abs() >= 0.005 {
+            self.data.subtitles.scale = Some(value);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_subtitle_position(&mut self, value: i64) {
+        let value = subtitle_style::normalized_position(Some(value));
+        if self.subtitle_position() != value {
+            self.data.subtitles.position = Some(value);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_subtitle_style(&mut self, key: &str) {
+        let style = subtitle_style::from_key(Some(key));
+        if self.subtitle_style().key != style.key {
+            self.data.subtitles.style = Some(style.key.to_owned());
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_raw_mpv_config(&mut self, text: &str) {
+        let updated = raw_mpv_config_setting(text);
+        if self.data.advanced.mpv_conf != updated {
+            self.data.advanced.mpv_conf = updated;
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_raw_keybindings_config(&mut self, text: &str) {
+        let updated = raw_mpv_config_setting(text);
+        if self.data.advanced.keybindings != updated {
+            self.data.advanced.keybindings = updated;
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_screenshot_format(&mut self, format: ScreenshotFormat) {
+        if self.screenshot_format() != format {
+            self.data.screenshots.format = Some(format);
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_screenshot_directory(&mut self, directory: Option<&Path>) -> bool {
+        let updated = match directory {
+            None => None,
+            Some(directory) if directory.is_absolute() => {
+                let Some(directory) = directory.to_str().map(str::trim) else {
+                    return false;
+                };
+                if directory.is_empty() {
+                    return false;
+                }
+                Some(directory.to_owned())
+            }
+            Some(_) => return false,
+        };
+
+        if self.data.screenshots.directory != updated {
+            self.data.screenshots.directory = updated;
+            self.dirty = true;
+        }
+        true
+    }
+
+    pub fn set_history_retention(&mut self, retention: HistoryRetention) {
+        if self.history_retention() != retention {
+            self.data.privacy.history_retention_days = Some(retention.days());
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_replay_cache_enabled(&mut self, enabled: bool) {
+        if self.replay_cache_enabled() != enabled {
+            self.data.online_video.replay_cache_enabled = enabled;
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_restore_uri_scheme_default(&mut self, restore: bool) {
+        if self.restore_uri_scheme_default() != restore {
+            // Absent rather than `false`, so a default document stays free of the section.
+            self.data.integration.restore_uri_scheme_default = restore.then_some(true);
+            self.dirty = true;
+        }
+    }
+
+    pub fn save(&mut self) -> io::Result<()> {
+        if !self.dirty {
+            return Ok(());
+        }
+
+        self.write_document(&self.data)?;
+        self.dirty = false;
+        Ok(())
+    }
+
+    /// Apply a profile edit as a single write. Work from the current document so
+    /// the edit keeps unrelated values, including fields from other shells.
+    /// Failed writes leave the last valid theme available to the caller.
+    pub fn save_appearance_theme(&mut self, theme: AppearanceTheme) -> io::Result<bool> {
+        let (mut data, mut raw) = match fs::read_to_string(&self.path) {
+            Ok(json) => {
+                let data = Settings::load(&json).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "unrecognized settings document")
+                })?;
+                let raw: serde_json::Value =
+                    serde_json::from_str(&json).map_err(io::Error::other)?;
+                (data, raw)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                (Settings::default(), serde_json::Value::Null)
+            }
+            Err(error) => return Err(error),
+        };
+        let changed = AppearanceTheme::from_setting(data.appearance.theme.as_deref()) != theme;
+        if changed {
+            data.appearance.theme = Some(theme.as_setting().to_owned());
+            if raw.get("version").is_some() {
+                // Keep all other sections and members of the canonical document.
+                raw["version"] = data.version.into();
+                raw["appearance"]["theme"] = theme.as_setting().into();
+                self.write_document(&raw)?;
+            } else {
+                // A fresh profile or the legacy Windows dialect.
+                self.write_document(&data)?;
+            }
+        }
+        if self.dirty {
+            self.data.appearance = data.appearance;
+        } else {
+            self.data = data;
+        }
+        Ok(changed)
+    }
+
+    fn write_document(&self, data: &impl serde::Serialize) -> io::Result<()> {
+        let parent = self
+            .path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent)?;
+        let json = serde_json::to_vec_pretty(data).map_err(io::Error::other)?;
+        let mut staging = tempfile::NamedTempFile::new_in(parent)?;
+        staging.write_all(&json)?;
+        staging.persist(&self.path).map_err(|error| error.error)?;
+        Ok(())
+    }
+}
+
+fn normalized_volume(volume: Option<f64>) -> Option<f64> {
+    volume
+        .filter(|volume| volume.is_finite())
+        .map(|volume| volume.clamp(0.0, MAX_VOLUME))
+}
+
+fn normalized_video_adjustment(value: Option<f64>) -> Option<f64> {
+    value
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(MIN_VIDEO_ADJUSTMENT, MAX_VIDEO_ADJUSTMENT))
+}
+
+fn normalized_audio_device(device: Option<&str>) -> &str {
+    device
+        .map(str::trim)
+        .filter(|device| !device.is_empty())
+        .unwrap_or(DEFAULT_AUDIO_DEVICE)
+}
+
+fn audio_device_setting(device: &str) -> Option<String> {
+    if device == DEFAULT_AUDIO_DEVICE {
+        None
+    } else {
+        Some(device.to_owned())
+    }
+}
+
+fn video_adjustment_setting(value: f64) -> Option<f64> {
+    if (value - DEFAULT_VIDEO_ADJUSTMENT).abs() < 0.005 {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn raw_mpv_config_setting(text: &str) -> Option<String> {
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text.to_owned())
+    }
+}
+
+fn normalized_hwdec(hwdec: Option<&str>) -> &'static str {
+    match hwdec {
+        Some(HWDEC_AUTO_SAFE) => HWDEC_AUTO_SAFE,
+        Some(HWDEC_OFF) => HWDEC_OFF,
+        // Match mpv's practical desktop default on supported systems: a clean
+        // install must not fall back to software decoding for 4K HEVC. Users
+        // who explicitly disable hardware decoding keep the persisted `no`.
+        None => HWDEC_AUTO_SAFE,
+        Some(_) => HWDEC_OFF,
+    }
+}
+
+fn normalized_repeat(repeat: Option<&str>) -> &'static str {
+    match repeat {
+        Some(REPEAT_ONE) => REPEAT_ONE,
+        Some(REPEAT_ALL) => REPEAT_ALL,
+        _ => REPEAT_OFF,
+    }
+}
+
+fn same_volume(current: Option<f64>, updated: f64) -> bool {
+    current
+        .and_then(|volume| normalized_volume(Some(volume)))
+        .is_some_and(|volume| (volume - updated).abs() < 0.005)
+}
+
+fn same_video_adjustment(current: Option<f64>, updated: f64) -> bool {
+    normalized_video_adjustment(current).is_some_and(|current| (current - updated).abs() < 0.005)
+        || (current.is_none() && (updated - DEFAULT_VIDEO_ADJUSTMENT).abs() < 0.005)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use okp_test_fixtures::unique_temp_dir;
+
+    fn store() -> SettingsStore {
+        SettingsStore {
+            path: PathBuf::from("unused.json"),
+            data: Settings::default(),
+            dirty: false,
+        }
+    }
+
+    #[test]
+    fn a_scoped_appearance_edit_preserves_other_members_of_a_legacy_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"version":1,"appearance":{"theme":" Dark ","accent_source":"System","future":"keep"},"audio":{"device":"auto"},"custom":{"rate":7}}"#,
+        )
+        .unwrap();
+        let mut store = SettingsStore::open_at(path.clone());
+        assert_eq!(store.appearance_theme(), AppearanceTheme::Dark);
+        assert!(store.save_appearance_theme(AppearanceTheme::Light).unwrap());
+        assert!(!store.save_appearance_theme(AppearanceTheme::Light).unwrap());
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["version"], crate::settings::SETTINGS_VERSION);
+        assert_eq!(saved["appearance"]["accent_source"], "System");
+        assert_eq!(saved["appearance"]["future"], "keep");
+        assert_eq!(saved["custom"]["rate"], 7);
+        assert_eq!(saved["audio"]["device"], "auto");
+        assert_eq!(
+            SettingsStore::open_at(path.clone()).appearance_theme(),
+            AppearanceTheme::Light,
+        );
+        assert!(store.save_appearance_theme(AppearanceTheme::Auto).unwrap());
+        assert_eq!(
+            SettingsStore::open_at(path).appearance_theme(),
+            AppearanceTheme::Auto,
+        );
+    }
+
+    #[test]
+    fn a_failed_appearance_edit_keeps_the_last_valid_theme_and_the_newer_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let mut store = SettingsStore::open_at(path.clone());
+        store.save_appearance_theme(AppearanceTheme::Light).unwrap();
+        let newer = r#"{"version":65535,"appearance":{"theme":"Auto"}}"#;
+        fs::write(&path, newer).unwrap();
+        assert!(store.save_appearance_theme(AppearanceTheme::Auto).is_err());
+        assert_eq!(store.appearance_theme(), AppearanceTheme::Light);
+        assert_eq!(fs::read_to_string(path).unwrap(), newer);
+    }
+
+    #[test]
+    fn volume_defaults_to_one_hundred() {
+        assert_eq!(store().volume(), 100.0);
+    }
+
+    #[test]
+    fn playback_defaults_match_player_modes() {
+        let settings = store();
+
+        assert!(settings.resume_enabled());
+        assert!(settings.auto_advance_enabled());
+        assert!(!settings.shuffle_enabled());
+        assert_eq!(settings.repeat_mode(), "off");
+        assert!(!settings.gapless_enabled(GaplessPlaybackCapability::Available));
+    }
+
+    #[test]
+    fn stores_clamped_finite_volume() {
+        let mut settings = store();
+
+        settings.set_volume(140.0);
+
+        assert_eq!(settings.volume(), 130.0);
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn ignores_non_finite_volume() {
+        let mut settings = store();
+
+        settings.set_volume(f64::NAN);
+
+        assert_eq!(settings.volume(), 100.0);
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn unchanged_volume_does_not_mark_dirty() {
+        let mut settings = store();
+
+        settings.set_volume(100.0);
+        settings.dirty = false;
+        settings.set_volume(100.002);
+
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn auto_update_checks_default_on() {
+        assert!(store().auto_check_updates());
+    }
+
+    #[test]
+    fn appearance_theme_defaults_to_auto_and_persists_light() {
+        let mut settings = store();
+        assert_eq!(settings.appearance_theme(), AppearanceTheme::Auto);
+
+        settings.set_appearance_theme(AppearanceTheme::Light);
+        assert_eq!(settings.appearance_theme(), AppearanceTheme::Light);
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn history_retention_defaults_to_forever_and_marks_changes_dirty_once() {
+        let mut settings = store();
+        assert_eq!(settings.history_retention(), HistoryRetention::Forever);
+
+        settings.set_history_retention(HistoryRetention::Days30);
+        assert_eq!(settings.history_retention(), HistoryRetention::Days30);
+        assert_eq!(settings.data.privacy.history_retention_days, Some(30));
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_history_retention(HistoryRetention::Days30);
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn history_retention_saves_as_human_readable_json_and_reloads() {
+        let dir = unique_temp_dir("okp-history-retention-settings");
+        let path = dir.path().join("settings.json");
+        let mut settings = SettingsStore {
+            path: path.clone(),
+            data: Settings::default(),
+            dirty: false,
+        };
+
+        settings.set_history_retention(HistoryRetention::Days365);
+        settings.save().expect("retention setting should save");
+
+        let json = fs::read_to_string(&path).expect("settings should be readable");
+        assert!(json.contains("\"history_retention_days\": 365"));
+        let reloaded = Settings::load(&json).expect("settings should reload");
+        assert_eq!(
+            HistoryRetention::from_days(reloaded.privacy.history_retention_days),
+            HistoryRetention::Days365
+        );
+        dir.close().expect("temp settings dir should be removed");
+    }
+
+    #[test]
+    fn uri_scheme_default_restore_flag_is_absent_until_set_and_marks_dirty_once() {
+        let mut settings = store();
+        assert!(!settings.restore_uri_scheme_default());
+
+        settings.set_restore_uri_scheme_default(true);
+        assert!(settings.restore_uri_scheme_default());
+        assert!(settings.dirty);
+        let saved = serde_json::to_value(&settings.data).expect("settings serialize");
+        assert_eq!(
+            saved["integration"]["restore_uri_scheme_default"],
+            serde_json::Value::Bool(true)
+        );
+
+        settings.dirty = false;
+        settings.set_restore_uri_scheme_default(true);
+        assert!(!settings.dirty);
+
+        settings.set_restore_uri_scheme_default(false);
+        assert!(!settings.restore_uri_scheme_default());
+        assert!(settings.dirty);
+        let cleared = serde_json::to_value(&settings.data).expect("settings serialize");
+        assert!(
+            cleared.get("integration").is_none(),
+            "a cleared flag leaves no integration section behind: {cleared}"
+        );
+    }
+
+    #[test]
+    fn replay_cache_defaults_on_and_toggle_marks_dirty_once() {
+        let mut settings = store();
+        assert!(settings.replay_cache_enabled());
+
+        settings.set_replay_cache_enabled(false);
+        assert!(!settings.replay_cache_enabled());
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_replay_cache_enabled(false);
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn replay_cache_setting_saves_and_reloads_through_the_portable_schema() {
+        let dir = unique_temp_dir("okp-replay-cache-settings");
+        let path = dir.path().join("settings.json");
+        let mut settings = SettingsStore {
+            path: path.clone(),
+            data: Settings::default(),
+            dirty: false,
+        };
+
+        settings.set_replay_cache_enabled(false);
+        settings.save().expect("replay-cache setting should save");
+
+        let json = fs::read_to_string(&path).expect("settings should be readable");
+        let data = Settings::load(&json).expect("portable settings should reload");
+        let reloaded = SettingsStore {
+            path,
+            data,
+            dirty: false,
+        };
+        assert!(!reloaded.replay_cache_enabled());
+        dir.close().expect("temp settings dir should be removed");
+    }
+
+    #[test]
+    fn audio_normalization_defaults_off() {
+        assert!(!store().audio_normalization_enabled());
+    }
+
+    #[test]
+    fn audio_normalization_toggle_marks_dirty_once() {
+        let mut settings = store();
+
+        settings.set_audio_normalization_enabled(true);
+
+        assert!(settings.audio_normalization_enabled());
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_audio_normalization_enabled(true);
+
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn surround_downmix_defaults_off_and_toggle_marks_dirty_once() {
+        let mut settings = store();
+
+        assert!(!settings.downmix_surround_to_stereo_enabled());
+        settings.set_downmix_surround_to_stereo_enabled(true);
+        assert!(settings.downmix_surround_to_stereo_enabled());
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_downmix_surround_to_stereo_enabled(true);
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn audio_device_defaults_to_auto() {
+        assert_eq!(store().audio_device(), "auto");
+    }
+
+    #[test]
+    fn audio_device_setting_trims_and_marks_dirty_once() {
+        let mut settings = store();
+
+        settings.set_audio_device(" pulse/device ");
+
+        assert_eq!(settings.audio_device(), "pulse/device");
+        assert_eq!(settings.data.audio.device.as_deref(), Some("pulse/device"));
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_audio_device("pulse/device");
+
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn audio_device_stores_auto_as_none() {
+        let mut settings = store();
+
+        settings.set_audio_device("pulse/device");
+        settings.dirty = false;
+        settings.set_audio_device("auto");
+
+        assert_eq!(settings.audio_device(), "auto");
+        assert_eq!(settings.data.audio.device, None);
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn auto_update_toggle_marks_dirty_once() {
+        let mut settings = store();
+
+        settings.set_auto_check_updates(false);
+
+        assert!(!settings.auto_check_updates());
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_auto_check_updates(false);
+
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn skipped_update_versions_save_and_reload_per_channel() {
+        let dir = unique_temp_dir("okp-update-skip-settings");
+        let path = dir.path().join("settings.json");
+        let mut settings = SettingsStore {
+            path: path.clone(),
+            data: Settings::default(),
+            dirty: false,
+        };
+
+        settings
+            .set_skipped_update_version(UpdateChannel::Public, Some("0.11.0-beta.2".to_owned()));
+        settings.set_skipped_update_version(
+            UpdateChannel::Candidate,
+            Some("0.11.0-beta.2.41".to_owned()),
+        );
+        settings.save().expect("skip settings should save");
+
+        let json = fs::read_to_string(&path).expect("settings should be readable");
+        let reloaded = Settings::load(&json).expect("settings should reload");
+        assert_eq!(
+            reloaded
+                .updates
+                .skipped_versions
+                .version(UpdateChannel::Public),
+            Some("0.11.0-beta.2")
+        );
+        assert_eq!(
+            reloaded
+                .updates
+                .skipped_versions
+                .version(UpdateChannel::Candidate),
+            Some("0.11.0-beta.2.41")
+        );
+        dir.close().expect("temp settings dir should be removed");
+    }
+
+    #[test]
+    fn playback_toggles_mark_dirty_once() {
+        let mut settings = store();
+
+        settings.set_resume_enabled(false);
+        settings.set_auto_advance_enabled(false);
+        settings.set_shuffle_enabled(true);
+        settings.set_repeat_mode("all");
+
+        assert!(!settings.resume_enabled());
+        assert!(!settings.auto_advance_enabled());
+        assert!(settings.shuffle_enabled());
+        assert_eq!(settings.repeat_mode(), "all");
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_resume_enabled(false);
+        settings.set_auto_advance_enabled(false);
+        settings.set_shuffle_enabled(true);
+        settings.set_repeat_mode("all");
+
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn gapless_setting_is_persisted_only_when_capability_allows_it() {
+        let mut settings = store();
+
+        assert!(!settings.set_gapless_enabled(GaplessPlaybackCapability::Deferred, true));
+        assert_eq!(settings.data.playback.gapless, None);
+        assert!(!settings.dirty);
+
+        assert!(settings.set_gapless_enabled(GaplessPlaybackCapability::Available, true));
+        assert!(settings.gapless_enabled(GaplessPlaybackCapability::Available));
+        assert_eq!(settings.data.playback.gapless, Some(true));
+        assert!(settings.dirty);
+
+        assert!(!settings.gapless_enabled(GaplessPlaybackCapability::Deferred));
+    }
+
+    #[test]
+    fn unknown_repeat_mode_falls_back_to_off() {
+        let mut settings = store();
+        settings.data.playback.repeat = Some("forever".to_owned());
+
+        assert_eq!(settings.repeat_mode(), "off");
+    }
+
+    #[test]
+    fn hardware_decode_defaults_on() {
+        let settings = store();
+
+        assert!(settings.hardware_decode_enabled());
+        assert_eq!(settings.hardware_decode_label(), "on");
+    }
+
+    #[test]
+    fn hardware_decode_toggle_marks_dirty_once() {
+        let mut settings = store();
+
+        settings.set_hardware_decode_enabled(false);
+
+        assert!(!settings.hardware_decode_enabled());
+        assert_eq!(settings.hardware_decode_label(), "off");
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_hardware_decode_enabled(false);
+
+        assert!(!settings.dirty);
+
+        settings.set_hardware_decode_enabled(true);
+        assert!(settings.hardware_decode_enabled());
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn unknown_hardware_decode_value_falls_back_to_off() {
+        let mut settings = store();
+        settings.data.video.hwdec = Some("yes-please".to_owned());
+
+        assert!(!settings.hardware_decode_enabled());
+        assert_eq!(settings.hwdec_plan(None, &[]).value, "no");
+    }
+
+    #[test]
+    fn a_default_install_asks_mpv_for_a_copy_free_decoder() {
+        let plan = store().hwdec_plan(None, &[]);
+
+        assert_eq!(plan.source, hwdec_policy::HwdecSource::Automatic);
+        assert!(
+            hwdec_policy::automatic_hwdec_is_copy_free(&plan.value),
+            "default install would let mpv pick copy-back: {}",
+            plan.value
+        );
+    }
+
+    #[test]
+    fn hardware_decode_off_asks_mpv_for_software_decoding() {
+        let mut settings = store();
+        settings.set_hardware_decode_enabled(false);
+
+        let plan = settings.hwdec_plan(None, &[]);
+
+        assert_eq!(plan.value, "no");
+        assert!(!plan.source.allows_runtime_demotion());
+    }
+
+    #[test]
+    fn an_unusable_mpv_conf_hwdec_still_leaves_a_safe_fallback() {
+        let settings = store();
+        let raw = [("hwdec".to_owned(), "not-a-real-decoder".to_owned())];
+
+        // What the engine is asked for first, and what it is asked for if the
+        // escape hatch has to be dropped because it is what broke creation.
+        let primary = settings.hwdec_plan(None, &raw);
+        let fallback = settings.hwdec_plan(None, &[]);
+
+        assert_eq!(primary.value, "not-a-real-decoder");
+        assert_ne!(
+            fallback.value, primary.value,
+            "the fallback must not carry the value that failed"
+        );
+        assert!(hwdec_policy::automatic_hwdec_is_copy_free(&fallback.value));
+    }
+
+    #[test]
+    fn an_mpv_conf_hwdec_option_overrules_the_toggle_and_the_renderer() {
+        let settings = store();
+        let raw = [("hwdec".to_owned(), "vaapi-copy".to_owned())];
+
+        let plan = settings.hwdec_plan(Some("no"), &raw);
+
+        assert_eq!(plan.value, "vaapi-copy");
+        assert!(!plan.source.allows_runtime_demotion());
+    }
+
+    #[test]
+    fn video_adjustments_default_to_zero() {
+        let settings = store();
+
+        assert_eq!(
+            settings.video_adjustments(),
+            VideoAdjustments {
+                brightness: 0.0,
+                contrast: 0.0,
+                saturation: 0.0,
+                gamma: 0.0,
+            }
+        );
+    }
+
+    #[test]
+    fn video_adjustments_clamp_and_mark_dirty() {
+        let mut settings = store();
+
+        settings.set_brightness(150.0);
+        settings.set_contrast(-125.0);
+        settings.set_saturation(25.0);
+        settings.set_gamma(-10.0);
+
+        assert_eq!(settings.brightness(), 100.0);
+        assert_eq!(settings.contrast(), -100.0);
+        assert_eq!(settings.saturation(), 25.0);
+        assert_eq!(settings.gamma(), -10.0);
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn video_adjustments_ignore_non_finite_values() {
+        let mut settings = store();
+
+        settings.set_brightness(f64::NAN);
+        settings.set_contrast(f64::INFINITY);
+
+        assert_eq!(settings.brightness(), 0.0);
+        assert_eq!(settings.contrast(), 0.0);
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn video_adjustments_store_default_as_none() {
+        let mut settings = store();
+
+        settings.set_brightness(12.0);
+        assert_eq!(settings.data.video.brightness, Some(12.0));
+        settings.dirty = false;
+
+        settings.set_brightness(0.0);
+
+        assert_eq!(settings.brightness(), 0.0);
+        assert_eq!(settings.data.video.brightness, None);
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn subtitle_presentation_defaults_match_windows() {
+        let settings = store();
+
+        assert_eq!(settings.subtitle_scale(), 1.0);
+        assert_eq!(settings.subtitle_position(), 100);
+        assert_eq!(settings.subtitle_style().key, "Default");
+    }
+
+    #[test]
+    fn subtitle_presentation_normalizes_and_marks_dirty_once() {
+        let mut settings = store();
+
+        settings.set_subtitle_scale(9.0);
+        settings.set_subtitle_position(-10);
+        settings.set_subtitle_style("contrast");
+
+        assert_eq!(settings.subtitle_scale(), 4.0);
+        assert_eq!(settings.subtitle_position(), 0);
+        assert_eq!(settings.subtitle_style().key, "Contrast");
+        assert_eq!(settings.data.subtitles.style.as_deref(), Some("Contrast"));
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_subtitle_scale(4.0);
+        settings.set_subtitle_position(0);
+        settings.set_subtitle_style("Contrast");
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn unknown_subtitle_style_falls_back_without_persisting_an_invalid_key() {
+        let mut settings = store();
+        settings.data.subtitles.style = Some("Cinema".to_owned());
+
+        assert_eq!(settings.subtitle_style().key, "Default");
+        settings.set_subtitle_style("unknown");
+        assert_eq!(settings.data.subtitles.style.as_deref(), Some("Cinema"));
+        assert!(!settings.dirty);
+
+        settings.set_subtitle_style("Bold");
+        assert_eq!(settings.data.subtitles.style.as_deref(), Some("Bold"));
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn subtitle_presentation_survives_save_and_reload() {
+        let root = unique_temp_dir("okp-subtitle-settings");
+        let path = root.path().join("missing-parent/settings.json");
+        let mut settings = SettingsStore {
+            path: path.clone(),
+            data: Settings::default(),
+            dirty: false,
+        };
+
+        settings.set_subtitle_scale(1.4);
+        settings.set_subtitle_position(90);
+        settings.set_subtitle_style("Contrast");
+        settings.save().expect("subtitle settings should save");
+
+        let data = fs::read_to_string(&path).expect("saved settings should be readable");
+        let reloaded = Settings::load(&data).expect("saved settings should reload");
+        assert_eq!(reloaded.subtitles.scale, Some(1.4));
+        assert_eq!(reloaded.subtitles.position, Some(90));
+        assert_eq!(reloaded.subtitles.style.as_deref(), Some("Contrast"));
+
+        root.close()
+            .expect("temporary settings directory should be removed");
+    }
+
+    #[test]
+    fn raw_mpv_config_defaults_empty() {
+        assert_eq!(store().raw_mpv_config(), "");
+    }
+
+    #[test]
+    fn raw_mpv_config_stores_text_and_marks_dirty_once() {
+        let mut settings = store();
+
+        settings.set_raw_mpv_config("scale=ewa_lanczossharp\nprofile=gpu-hq\n");
+
+        assert_eq!(
+            settings.raw_mpv_config(),
+            "scale=ewa_lanczossharp\nprofile=gpu-hq\n"
+        );
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_raw_mpv_config("scale=ewa_lanczossharp\nprofile=gpu-hq\n");
+
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn raw_mpv_config_stores_blank_as_none() {
+        let mut settings = store();
+
+        settings.set_raw_mpv_config("profile=gpu-hq");
+        settings.dirty = false;
+        settings.set_raw_mpv_config("   \n\t");
+
+        assert_eq!(settings.raw_mpv_config(), "");
+        assert_eq!(settings.data.advanced.mpv_conf, None);
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn raw_keybindings_config_stores_text_and_marks_dirty_once() {
+        let mut settings = store();
+
+        settings.set_raw_keybindings_config("play-pause=P\ncopy-frame=Shift+C\n");
+
+        assert_eq!(
+            settings.raw_keybindings_config(),
+            "play-pause=P\ncopy-frame=Shift+C\n"
+        );
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_raw_keybindings_config("play-pause=P\ncopy-frame=Shift+C\n");
+
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn raw_keybindings_config_stores_blank_as_none() {
+        let mut settings = store();
+
+        settings.set_raw_keybindings_config("play-pause=P");
+        settings.dirty = false;
+        settings.set_raw_keybindings_config("\n ");
+
+        assert_eq!(settings.raw_keybindings_config(), "");
+        assert_eq!(settings.data.advanced.keybindings, None);
+        assert!(settings.dirty);
+    }
+
+    #[test]
+    fn screenshot_settings_default_validate_and_mark_dirty_once() {
+        let mut settings = store();
+        assert_eq!(settings.screenshot_format(), ScreenshotFormat::Png);
+        assert_eq!(settings.screenshot_directory(), None);
+
+        assert!(!settings.set_screenshot_directory(Some(Path::new("relative/captures"))));
+        assert!(!settings.dirty);
+
+        settings.set_screenshot_format(ScreenshotFormat::Jpeg);
+        assert!(settings.set_screenshot_directory(Some(Path::new("/captures"))));
+        assert_eq!(settings.screenshot_format(), ScreenshotFormat::Jpeg);
+        assert_eq!(
+            settings.screenshot_directory().as_deref(),
+            Some(Path::new("/captures"))
+        );
+        assert!(settings.dirty);
+
+        settings.dirty = false;
+        settings.set_screenshot_format(ScreenshotFormat::Jpeg);
+        assert!(settings.set_screenshot_directory(Some(Path::new("/captures"))));
+        assert!(!settings.dirty);
+    }
+
+    #[test]
+    fn screenshot_settings_persist_in_the_human_readable_document() {
+        let directory = unique_temp_dir("okp-screenshot-settings");
+        let path = directory.path().join("settings.json");
+        let mut settings = SettingsStore {
+            path: path.clone(),
+            data: Settings::default(),
+            dirty: false,
+        };
+        settings.set_screenshot_format(ScreenshotFormat::Webp);
+        assert!(settings.set_screenshot_directory(Some(directory.path())));
+
+        settings.save().expect("save settings");
+
+        let json = fs::read_to_string(path).expect("read settings");
+        assert!(json.contains("\"screenshots\""));
+        assert!(json.contains("\"format\": \"webp\""));
+        let restored = Settings::load(&json).expect("reload settings");
+        assert_eq!(restored.screenshots.format, Some(ScreenshotFormat::Webp));
+        assert_eq!(
+            restored.screenshots.directory.as_deref(),
+            directory.path().to_str()
+        );
+    }
+}

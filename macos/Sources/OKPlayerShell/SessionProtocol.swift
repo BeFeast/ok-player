@@ -107,6 +107,8 @@ enum Command: Codable, Equatable {
     case setSubtitleScale(scale: Double)
     /// Change the subtitle size by `delta` from the size the session asked for last.
     case nudgeSubtitleScale(delta: Double)
+    /// Write the app theme through the shared settings profile.
+    case setAppearanceTheme(theme: AppearanceSelection)
 }
 
 struct CommandEnvelope: Codable, Equatable {
@@ -175,6 +177,8 @@ enum Query: Codable, Equatable {
     case openPaths(paths: [String], folders: [String])
     /// What the audio and subtitle menus show (Tracks/TracksProtocol.swift).
     case tracks
+    case settings
+    case settingsSearch(text: String)
 }
 
 struct QueryEnvelope: Codable, Equatable {
@@ -198,6 +202,8 @@ enum QueryResult: Codable, Equatable {
     case openFormats(formats: OpenFormats)
     case openPaths(plan: OpenPlan)
     case tracks(tracks: TracksView)
+    case settings(settings: SettingsState)
+    case settingsSearch(hits: [SettingsSearchHit])
     case rejected(reason: RejectReason, message: String)
 }
 

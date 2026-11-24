@@ -4,7 +4,10 @@
 //! portable page IDs, deterministic rail order, and the searchable destination
 //! index so deep links and Settings search cannot drift between surfaces.
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SettingsPage {
     Appearance,
     Playback,
@@ -176,6 +179,15 @@ const SETTINGS_SEARCH_INDEX: &[SettingsSearchResult] = &[
 ];
 
 pub fn search_settings(query: &str) -> Vec<SettingsSearchResult> {
+    search_settings_with(query, &[])
+}
+
+/// Shells can index controls as they become available without changing the
+/// search results of existing consumers.
+pub fn search_settings_with(
+    query: &str,
+    controls: &[SettingsSearchResult],
+) -> Vec<SettingsSearchResult> {
     let terms = query
         .split_whitespace()
         .map(str::to_ascii_lowercase)
@@ -186,6 +198,7 @@ pub fn search_settings(query: &str) -> Vec<SettingsSearchResult> {
 
     SETTINGS_SEARCH_INDEX
         .iter()
+        .chain(controls)
         .copied()
         .filter(|result| {
             let label = result.label.to_ascii_lowercase();

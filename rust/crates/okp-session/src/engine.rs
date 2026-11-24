@@ -231,6 +231,9 @@ impl Engine for MpvEngine {
             Command::History { .. } => {
                 return Err("a history action is not an engine command".to_owned());
             }
+            Command::SetAppearanceTheme { .. } => {
+                return Err("an appearance setting is not an engine command".to_owned());
+            }
             // The session resolves an invoked registry command to the command it
             // stands for before anything reaches the engine.
             Command::InvokeCommand { id } => {

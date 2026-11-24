@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "result": {"settings_search":{"hits":[
+    {"label":"History retention","destination":{"id":"integration","title":"Integration","available":false}}
+  ]}}
+}

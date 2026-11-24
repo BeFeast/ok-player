@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "result": {"settings":{"settings":{
+    "theme": "auto",
+    "sections": [
+      {"id":"appearance","title":"Appearance","available":true},
+      {"id":"playback","title":"Playback","available":false},
+      {"id":"subtitles","title":"Subtitles","available":false},
+      {"id":"video","title":"Video","available":false},
+      {"id":"audio","title":"Audio","available":false},
+      {"id":"shortcuts","title":"Shortcuts","available":false},
+      {"id":"integration","title":"Integration","available":false},
+      {"id":"updates","title":"Updates","available":false},
+      {"id":"advanced","title":"Advanced","available":false}
+    ],
+    "about":{"id":"about","title":"About","available":false}
+  }}}
+}

@@ -58,6 +58,7 @@ pub mod seek_readout;
 pub mod settings;
 pub mod settings_geometry;
 pub mod settings_navigation;
+pub mod settings_store;
 pub mod sha256sums;
 pub mod shortcuts;
 pub mod srt;

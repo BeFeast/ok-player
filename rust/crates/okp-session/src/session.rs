@@ -14,6 +14,7 @@ use okp_core::player::{
     TrackInfo, TrackKind as CoreTrackKind,
 };
 use okp_core::playlist::PlaylistItem;
+use okp_core::settings_store::SettingsStore;
 use okp_mpv::{EndFileReason, EntryEvent, MpvEvent, error_description};
 
 use crate::coalesce::Coalescer;
@@ -30,6 +31,7 @@ use crate::protocol::{
     parse_envelope, to_json,
 };
 use crate::reconcile::{core_end_reason, endfile_error, event_matches_source};
+use crate::settings::{self, SettingsView};
 use crate::status::{self, StatusState};
 use crate::tracks::{self, TrackState};
 use crate::transport::{TransportView, VolumeTarget};
@@ -57,6 +59,7 @@ pub struct Session {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
     commands: CommandRegistry,
+    settings: Mutex<Option<SettingsStore>>,
 }
 
 struct Shared {
@@ -152,6 +155,9 @@ impl Session {
         let engine = MpvEngine::new(config)?;
         let mut session = Self::start(Box::new(engine), SessionHistory::open(&config.data_dir));
         session.commands = commands;
+        session.settings = Mutex::new(Some(SettingsStore::open_at(
+            config.config_dir.join("settings.json"),
+        )));
         Ok(session)
     }
 
@@ -212,6 +218,7 @@ impl Session {
             shared,
             thread: Some(thread),
             commands: CommandRegistry::default(),
+            settings: Mutex::new(None),
         }
     }
 
@@ -239,6 +246,9 @@ impl Session {
         if let Command::InvokeCommand { id } = command {
             return self.invoke_command(id);
         }
+        if let Command::SetAppearanceTheme { theme } = command {
+            return settings::save_theme(lock(&self.settings).as_mut(), *theme);
+        }
         let engine = &*self.shared.engine;
         let mut state = lock(&self.shared.state);
         let result = match command.route() {
@@ -247,7 +257,7 @@ impl Session {
                 result: state.history_action(action),
             },
             // Handled above, before the state is locked.
-            Route::Registry => rejected(RejectReason::Malformed),
+            Route::Registry | Route::Settings => rejected(RejectReason::Malformed),
             Route::Player(_) => {
                 let result = state.forward(engine, command);
                 state.playlist.follow(command, &result);
@@ -261,6 +271,12 @@ impl Session {
 
     pub fn query(&self, query: &Query) -> QueryResult {
         match query {
+            Query::Settings {} => QueryResult::Settings {
+                settings: SettingsView::new(lock(&self.settings).as_ref()),
+            },
+            Query::SettingsSearch { text } => QueryResult::SettingsSearch {
+                hits: settings::search(text),
+            },
             Query::Snapshot {} => QueryResult::Snapshot {
                 snapshot: self.snapshot(),
             },
