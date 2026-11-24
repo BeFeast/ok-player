@@ -18,7 +18,7 @@ final class TitleChrome: NSView {
 
     var hasMedia = false {
         didSet {
-            label.textColor = hasMedia ? .white : PaletteRole.text.color
+            label.textColor = hasMedia ? PaletteRole.onAccent.overVideo : PaletteRole.text.color
             if hasMedia {
                 let shadow = NSShadow()
                 shadow.shadowColor = NSColor.black
@@ -51,7 +51,12 @@ final class TitleChrome: NSView {
         let lights = trafficLights?().map { $0.convert($0.bounds, to: self) } ?? []
         guard let center = lights.first?.midY else { return }
         let leading = (lights.map(\.maxX).max() ?? 0) + 10
-        let trailing = pinButton.map { $0.convert($0.bounds, to: self).minX } ?? bounds.maxX - 44
+        let trailing: CGFloat
+        if let pinButton, pinButton.window === window {
+            trailing = pinButton.convert(pinButton.bounds, to: self).minX
+        } else {
+            trailing = bounds.maxX - 44
+        }
         let size = label.intrinsicContentSize
         label.frame = CGRect(x: leading, y: center - size.height / 2 + verificationOffset,
                              width: min(size.width, max(0, trailing - leading - 8)), height: size.height)

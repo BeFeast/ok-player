@@ -16,7 +16,9 @@ extension PlayerApp: PlayerCommandResponder, NSMenuItemValidation {
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem.action == #selector(closeKeyWindow(_:)) { return NSApp.keyWindow != nil }
+        if menuItem.action == #selector(closeKeyWindow(_:)) {
+            return NSApp.keyWindow.map { $0 !== window || $0.attachedSheet == nil } ?? false
+        }
         if menuItem === closeMediaItem { return client?.store.snapshot.source != nil }
         if menuItem === pinItem { return windowBehaviour?.canTogglePin == true }
         if menuItem.playerCommandID != nil, window?.attachedSheet != nil { return false }

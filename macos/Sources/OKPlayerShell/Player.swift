@@ -391,7 +391,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func closeKeyWindow(_ sender: Any?) {
         guard let keyWindow = NSApp.keyWindow else { return }
-        if keyWindow === window, window.attachedSheet == nil, client?.store.snapshot.source != nil {
+        if keyWindow === window, window.attachedSheet != nil { return }
+        if keyWindow === window, client?.store.snapshot.source != nil {
             closeMedia()
         } else {
             keyWindow.performClose(sender)

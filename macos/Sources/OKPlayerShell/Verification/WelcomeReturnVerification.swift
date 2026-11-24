@@ -151,8 +151,9 @@ extension VerifyRun {
         let region = CGRect(x: x - 4, y: y + 52, width: 590, height: 74)
         guard region.minX >= 0, region.maxX <= CGFloat(bitmap.pixelsWide),
               region.minY >= 0, region.maxY <= CGFloat(bitmap.pixelsHigh) else { return nil }
-        let ink = appearance.performAsCurrentDrawingAppearance { PaletteRole.text.color.usingColorSpace(.sRGB) }
-        guard let ink else { return nil }
+        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let palette = PaletteRole.text.srgb
+        let ink = NSColor.fromSRGB(dark ? palette.dark : palette.light)
         var painted = CGRect.null
         for row in stride(from: Int(region.minY), to: Int(region.maxY), by: 2) {
             for column in stride(from: Int(region.minX), to: Int(region.maxX), by: 2) {

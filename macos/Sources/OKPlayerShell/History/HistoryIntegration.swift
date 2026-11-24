@@ -12,7 +12,7 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
     /// The Welcome view's hosting view, hidden until `setWelcomeShown(true)`.
     let welcomeView = NSView()
     let firstRun = WelcomeFirstRun()
-    let shelfView: NSView
+    private let shelfView: NSView
     private(set) var showsWelcome = false
     /// The History window is open.
     private(set) var showsHistory = false
