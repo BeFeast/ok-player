@@ -12,18 +12,23 @@ The launcher is `~/.local/bin/ok-player`. It forwards files and URI arguments to
 AppImage under `$XDG_DATA_HOME/ok-player` (default `~/.local/share/ok-player`). The installer
 registers the application and `ok-player://` desktop handler for the user.
 
-Run `ok-player --update beta` or `ok-player --update stable` when the player is closed.
-The launcher and updater share a lock. This keeps a running image in place and makes an update
-available on the next launch. The updater verifies the selected channel manifest's OpenPGP
-signature, the immutable provenance it names, the AppImage signature, and the payload size and
-SHA-256. The updater uses an immutable signature addressed by the manifest's SHA-256. This keeps
-the current manifest verifiable if publication stops before advancing the channel. The signing
-authority is the checked-in OK Player Linux archive key. The updater accepts
-only newer builds and retains previous build directories for rollback. Settings and history use
-the same per-user locations across builds.
+**Settings → Updates** shows the selected channel, running build, last check, and
+available build. Automatic checks run at launch, every 28 minutes, and on activation
+with a five-minute throttle. **Install & Relaunch** verifies and stages the package
+beside the managed AppImage. It waits for the player to exit, advances the current
+link, then checks that the expected build reports startup. An unconfirmed startup
+restores and reopens the previous build.
 
-The managed `OK-Player.AppImage` link identifies the installed build. To roll back, close the
-player and point it at the previous executable in `builds/<number>/` under the same directory.
+For a manual update with the player closed, run `ok-player --update beta` or
+`ok-player --update stable`. Both routes share the install lock and verify the
+selected manifest's OpenPGP signature, provenance, AppImage signature, size, and
+SHA-256. The manifest signature is stored at a key derived from the manifest's
+SHA-256 so a publication interruption leaves the previous pointer verifiable.
+Only newer builds are installed. Settings and history carry forward across builds.
+
+The managed `OK-Player.AppImage` link identifies the installed build. For a manual
+rollback, close the player and point the link at the previous executable under
+`builds/<number>/`.
 
 ## Release workflow
 

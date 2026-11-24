@@ -135,6 +135,27 @@ class AppImageTests(unittest.TestCase):
             appimage.publish_channel(self.store, older, self.signer.sign, self.signer)
         self.assertEqual(appimage.read_channel(self.store.read, "stable", self.signer), fetched)
 
+    def test_mac_prefix_orders_dotted_builds_and_retains_the_latest_pointer(self):
+        prefix = "ok-player/macos"
+        old = {"channel": "beta", "build": "10.9"}
+        new = {"channel": "beta", "build": "10.10"}
+
+        def order(value):
+            return tuple(map(int, value.split(".")))
+
+        for release in (old, new):
+            appimage.publish_channel(self.store, release, self.signer.sign, self.signer,
+                                     prefix=prefix, order=order)
+        pointer = f"{prefix}/beta/latest.json"
+        actual = self.store.read(pointer)
+        self.assertEqual(actual, appimage.encode(new))
+        sig_key = appimage.channel_signature_key("beta", actual, prefix)
+        self.signer.verify(actual, self.store.read(sig_key))
+        with self.assertRaisesRegex(ValueError, "backwards"):
+            appimage.publish_channel(self.store, old, self.signer.sign, self.signer,
+                                     prefix=prefix, order=order)
+        self.assertEqual(self.store.read(pointer), actual)
+
     def test_current_channel_stays_verifiable_when_publication_is_interrupted(self):
         current = self.archive()
         appimage.publish_channel(self.store, current, self.signer.sign, self.signer)

@@ -76,12 +76,12 @@ def read_signed(read, key, verifier):
     return json.loads(data)
 
 
-def channel_key(channel):
-    return f"{PREFIX}/{channel}/latest.json"
+def channel_key(channel, prefix=PREFIX):
+    return f"{prefix}/{channel}/latest.json"
 
 
-def channel_signature_key(channel, data):
-    return f"{PREFIX}/{channel}/manifests/{digest(data)}.sig"
+def channel_signature_key(channel, data, prefix=PREFIX):
+    return f"{prefix}/{channel}/manifests/{digest(data)}.sig"
 
 
 def read_channel(read, channel, verifier):
@@ -175,15 +175,20 @@ def sign(data, home, verifier):
 
 
 def publish_archive(store, metadata, image, signer, verifier):
-    prefix = archive(metadata["build"])
     release = encode(descriptor(metadata, "beta"))
-    files = {metadata["filename"]: image, "provenance.json": encode(metadata), "release.json": release}
+    publish_signed_archive(store, archive(metadata["build"]), metadata["filename"], image,
+                           encode(metadata), release, signer, verifier)
+    return json.loads(release)
+
+
+def publish_signed_archive(store, prefix, filename, image, provenance, release, signer, verifier):
+    files = {filename: image, "provenance.json": provenance, "release.json": release}
     existing = {name: store.read(f"{prefix}/{name}", missing=True) for name in files}
     for name, data in files.items():
         if existing[name] is not None and existing[name] != data:
-            raise ValueError(f"Conflicting immutable AppImage object: {name}")
+            raise ValueError(f"Conflicting immutable release object: {name}")
     signatures = {}
-    for name in (metadata["filename"], "release.json"):
+    for name in (filename, "release.json"):
         key = f"{name}.sig"
         previous = store.read(f"{prefix}/{key}", missing=True)
         if previous is not None:
@@ -193,21 +198,20 @@ def publish_archive(store, metadata, image, signer, verifier):
     for name, data in {**files, **signatures}.items():
         if existing.get(name) is None:
             store.put(f"{prefix}/{name}", data, immutable=True)
-    return json.loads(release)
 
 
-def publish_channel(store, release, signer, verifier):
+def publish_channel(store, release, signer, verifier, *, prefix=PREFIX, order=int):
     channel = release["channel"]
-    key = channel_key(channel)
+    key = channel_key(channel, prefix)
     data = encode(release)
     current = store.read(key, missing=True)
     if current is not None:
         active = json.loads(current)
-        if active["build"] > release["build"]:
-            raise ValueError("Refusing to move an AppImage channel backwards")
+        if order(active["build"]) > order(release["build"]):
+            raise ValueError("Refusing to move a release channel backwards")
         if active["build"] == release["build"] and current != data:
-            raise ValueError("Conflicting AppImage channel descriptor for the same build")
-    signature_key = channel_signature_key(channel, data)
+            raise ValueError("Conflicting release channel descriptor for the same build")
+    signature_key = channel_signature_key(channel, data, prefix)
     signature = store.read(signature_key, missing=True)
     if signature is None:
         signature = signer(data)
@@ -258,7 +262,7 @@ def install(data, metadata, root):
                     raise ValueError("Installed archive contains different bytes for this build")
             else:
                 copy = stage / "build"
-                copy.mkdir()
+                copy.mkdir(mode=0o700)
                 (copy / image.name).write_bytes(data)
                 (copy / image.name).chmod(0o755)
                 (copy / "release.json").write_bytes(encode(metadata))
@@ -297,8 +301,12 @@ def main():
             current = installed_build(root / "OK-Player.AppImage")
             if current and current >= release["build"]:
                 print(f"Build {current} is already installed")
-                return
-            install(payload(fetch, release, args.channel, verifier), release, root)
+            else:
+                install(payload(fetch, release, args.channel, verifier), release, root)
+            with tempfile.TemporaryDirectory(prefix=".channel-", dir=root) as work:
+                preference = Path(work) / "update-channel"
+                preference.write_text(args.channel + "\n")
+                preference.replace(root / "update-channel")
             return
 
         signing = home / "signing"
