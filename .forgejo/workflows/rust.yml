@@ -147,6 +147,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE: 1
         run: python3 scripts/tests/mac-ci-bridge.Tests.py
 
+      - name: Signed AppImage updater transaction tests
+        run: |
+          cargo build --locked --manifest-path rust/Cargo.toml -p okp-core --features signed-updates --bin okp-updater
+          python3 -B scripts/tests/signed-updater.Tests.py rust/target/debug/okp-updater
+
       - name: Candidate gate split tests
         run: ./scripts/tests/candidate-gate-split.Tests.sh
       - name: Narrow-width seam aiming tests

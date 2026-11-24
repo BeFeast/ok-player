@@ -2192,7 +2192,10 @@ impl AboutSnapshot {
             ),
             cpu: env::consts::ARCH.to_owned(),
             install: "—".to_owned(),
-            update_status: state.linux_update.describe().about_message,
+            update_status: state.signed_appimage.as_ref().map_or_else(
+                || state.linux_update.describe().about_message,
+                |updates| updates.status(),
+            ),
         }
     }
 }

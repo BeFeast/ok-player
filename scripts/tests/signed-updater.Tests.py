@@ -88,7 +88,7 @@ int main(void) {
             exe.seek(8)
             exe.write(b"AI\x02")
 
-    def release(self, *, bad_manifest=False, bad_package=False, publish_startup=True):
+    def release(self, *, bad_manifest=False, bad_package=False, publish_startup=True, channel="beta"):
         key = f"ok-player/linux/builds/{NEW_BUILD}/{name(NEW_BUILD)}"
         package = self.feed / key
         self.image(NEW_BUILD, package, publish_startup)
@@ -100,7 +100,7 @@ int main(void) {
         manifest = self.feed / "ok-player/linux/beta/latest.json"
         signature_dir = manifest.parent / "manifests"
         signature_dir.mkdir(parents=True)
-        release = {**provenance, "provenance_sha256": sha(wire), "schema": 1, "channel": "beta",
+        release = {**provenance, "provenance_sha256": sha(wire), "schema": 1, "channel": channel,
                    "key": key, "fingerprint": self.fingerprint, "platform": "linux-appimage"}
         manifest.write_bytes(encode(release))
         self.sign(manifest, signature_dir / (sha(manifest.read_bytes()) + ".sig"), bad_manifest)
@@ -152,6 +152,19 @@ int main(void) {
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("signature could not be verified", result.stderr)
         self.assertEqual(self.target.readlink(), self.previous)
+
+    def test_signed_manifest_from_other_channel_is_rejected(self):
+        self.release(channel="stable")
+        result = subprocess.run(self.command("check"), capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("invalid release identity", result.stderr)
+
+    def test_current_build_is_not_offered_again(self):
+        self.release()
+        argv = self.command("check")
+        argv[3] = str(NEW_BUILD)
+        result = subprocess.run(argv, capture_output=True, text=True, check=True)
+        self.assertIsNone(json.loads(result.stdout))
 
     def test_invalid_package_stops_before_restart(self):
         release = self.release(bad_package=True)

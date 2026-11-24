@@ -10,6 +10,7 @@ pub(crate) struct AppImageUpdates {
     build: String,
     view: RefCell<View>,
     rows: RefCell<Vec<Rows>>,
+    about: RefCell<Vec<glib::WeakRef<gtk::Label>>>,
     last_automatic: Cell<Option<Instant>>,
     player: RefCell<std::rc::Weak<RefCell<PlayerState>>>,
 }
@@ -69,6 +70,7 @@ impl AppImageUpdates {
                 skipped: false,
             }),
             rows: RefCell::new(Vec::new()),
+            about: RefCell::new(Vec::new()),
             last_automatic: Cell::new(None),
             player: RefCell::new(std::rc::Weak::new()),
         }))
@@ -372,9 +374,13 @@ impl AppImageUpdates {
         });
     }
 
-    fn refresh(&self) {
+    pub(crate) fn register_about(&self, label: &gtk::Label) {
+        self.about.borrow_mut().push(label.downgrade());
+    }
+
+    pub(crate) fn status(&self) -> String {
         let view = self.view.borrow();
-        let status = if let Some(work) = view.work {
+        if let Some(work) = view.work {
             work.to_owned()
         } else if let Some(problem) = &view.problem {
             problem.clone()
@@ -389,7 +395,19 @@ impl AppImageUpdates {
             "You’re up to date.".to_owned()
         } else {
             "No update check yet.".to_owned()
-        };
+        }
+    }
+
+    fn refresh(&self) {
+        let status = self.status();
+        self.about.borrow_mut().retain(|label| {
+            let Some(label) = label.upgrade() else {
+                return false;
+            };
+            label.set_text(&status);
+            true
+        });
+        let view = self.view.borrow();
         let last = view
             .last_check
             .and_then(|at| at.duration_since(SystemTime::UNIX_EPOCH).ok())

@@ -278,10 +278,12 @@ pub(crate) fn about_app_card(
     // cached, so a check that settles while it is open must reach it too.
     let (update_row, update_label) =
         about_spec_row_with_label("Updates", &snapshot.update_status, false, None);
-    state
-        .borrow_mut()
-        .about_update_labels
-        .push(update_label.downgrade());
+    let mut player = state.borrow_mut();
+    if let Some(updates) = &player.signed_appimage {
+        updates.register_about(&update_label);
+    } else {
+        player.about_update_labels.push(update_label.downgrade());
+    }
     rows.append(&update_row);
     rows.append(&about_spec_row("Channel", &snapshot.channel, false, None));
     rows.append(&about_spec_row("Build", &snapshot.build, true, None));

@@ -50,11 +50,11 @@ pub fn run() -> Result<()> {
     } else {
         Feed::production()?
     };
-    let release = feed.check(adapter::PLATFORM, channel, &build, &source)?;
     if operation == "check" {
         if args.next().is_some() {
             return Err("Unexpected check arguments.".into());
         }
+        let release = feed.check(adapter::PLATFORM, channel, &build, &source)?;
         println!("{}", serde_json::to_string(&release)?);
         return Ok(());
     }
@@ -63,10 +63,17 @@ pub fn run() -> Result<()> {
         .next()
         .ok_or("Missing player process ID.")?
         .parse::<libc::pid_t>()?;
-    if args.next().is_some() || parent <= 1 || parent == process::id() as libc::pid_t {
+    if args.next().is_some()
+        || parent <= 1
+        || parent == process::id() as libc::pid_t
+        || (!fixture && parent != unsafe { libc::getppid() })
+    {
         return Err("Invalid restart request.".into());
     }
-    let release = release.ok_or("This build is already current.")?;
+    let player = adapter::watch_process(parent)?;
+    let release = feed
+        .check(adapter::PLATFORM, channel, &build, &source)?
+        .ok_or("This build is already current.")?;
     if release.sha256 != expected {
         return Err("The channel changed. Check for updates again.".into());
     }
@@ -83,27 +90,14 @@ pub fn run() -> Result<()> {
     if confirmation.trim_end() != "relaunch" {
         return Ok(());
     }
-    wait_for_exit(parent)?;
-    if let Err(error) = old.apply(prepared, &release, staging.path()) {
-        old.reopen_after_failure(&error.to_string(), staging.path())?;
+    if !adapter::wait_for_exit(&player)? {
+        return Err("OK Player did not quit in time. The update was left untouched.".into());
+    }
+    if let Err(error) = old.apply(prepared, &release, staging) {
+        old.reopen_after_failure(&error.to_string())?;
         return Err(error);
     }
     Ok(())
-}
-
-fn wait_for_exit(pid: libc::pid_t) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(45);
-    while Instant::now() < deadline {
-        if unsafe { libc::kill(pid, 0) } < 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::ESRCH) {
-                return Ok(());
-            }
-            return Err(error.into());
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    Err("OK Player did not quit in time. The update was left untouched.".into())
 }
 
 fn install_lock(path: &Path) -> Result<File> {

@@ -1,11 +1,32 @@
 use super::*;
 use std::io::Read;
+use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
 pub const PLATFORM: Platform = Platform::Linux;
 const MANAGED_IMAGE: &str = "OK-Player.AppImage";
+
+pub fn watch_process(pid: libc::pid_t) -> io::Result<OwnedFd> {
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0_u32) } as libc::c_int;
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+pub fn wait_for_exit(player: &OwnedFd) -> io::Result<bool> {
+    let mut event = libc::pollfd {
+        fd: player.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    if unsafe { libc::poll(&mut event, 1, 45_000) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(event.revents & libc::POLLIN != 0)
+}
 
 pub fn managed_root() -> Result<PathBuf> {
     let data = env::var_os("XDG_DATA_HOME")
@@ -81,13 +102,14 @@ impl Installation {
         Ok(payload.to_path_buf())
     }
 
-    pub fn apply(&self, payload: PathBuf, release: &Release, staging: &Path) -> Result<()> {
+    pub fn apply(
+        &self,
+        payload: PathBuf,
+        release: &Release,
+        staging: tempfile::TempDir,
+    ) -> Result<()> {
+        let stage = staging.path();
         let lock = install_lock(&self.directory.join(".appimage.lock"))?;
-        if fs::read_link(&self.target)? != self.previous
-            || image_identity(&self.directory.join(&self.previous))? != self.inode
-        {
-            return Err("The managed AppImage changed during the update.".into());
-        }
         let builds = self.directory.join("builds");
         require_owned_directory(&builds)?;
         let archived = builds.join(release.build.to_string());
@@ -99,23 +121,30 @@ impl Installation {
                 return Err("Different bytes already exist for the update build.".into());
             }
         } else {
-            let directory = staging.join("build");
+            let directory = stage.join("build");
             fs::create_dir(&directory)?;
             fs::rename(payload, directory.join(&release.filename))?;
+            File::open(&directory)?.sync_all()?;
             fs::rename(directory, &archived)?;
+            File::open(builds)?.sync_all()?;
         }
         let relative = image.strip_prefix(&self.directory)?;
-        self.set_current(relative, staging)?;
+        if fs::read_link(&self.target)? != self.previous
+            || image_identity(&self.directory.join(&self.previous))? != self.inode
+        {
+            return Err("The managed AppImage changed during the update.".into());
+        }
+        self.set_current(relative, stage)?;
         drop(lock);
 
-        let receipt = staging.join("started");
+        let receipt = stage.join("started");
         let entered = self
             .launch(Some(&receipt), None)
             .and_then(|child| await_startup(child, &receipt, release));
         if let Err(error) = entered {
             let _lock = install_lock(&self.directory.join(".appimage.lock"))?;
             if fs::read_link(&self.target)? == relative {
-                self.set_current(&self.previous, staging)?;
+                self.set_current(&self.previous, stage)?;
             }
             return Err(error);
         }
@@ -130,8 +159,10 @@ impl Installation {
         Ok(())
     }
 
-    pub fn reopen_after_failure(&self, error: &str, _: &Path) -> Result<()> {
-        self.launch(None, Some(error))?;
+    pub fn reopen_after_failure(&self, error: &str) -> Result<()> {
+        if fs::read_link(&self.target)? == self.previous {
+            self.launch(None, Some(error))?;
+        }
         Ok(())
     }
 

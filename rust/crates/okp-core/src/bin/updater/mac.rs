@@ -1,5 +1,6 @@
 use super::*;
 use std::ffi::CString;
+use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
@@ -8,6 +9,59 @@ pub const PLATFORM: Platform = Platform::Mac;
 const APP_NAME: &str = "OK Player.app";
 const BUNDLE_ID: &str = "uk.oklabs.ok-player";
 const EXECUTABLE: &str = "Contents/MacOS/ok-player";
+
+pub fn watch_process(pid: libc::pid_t) -> io::Result<OwnedFd> {
+    let fd = unsafe { libc::kqueue() };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let queue = unsafe { OwnedFd::from_raw_fd(fd) };
+    let subscription = libc::kevent {
+        ident: pid as libc::uintptr_t,
+        filter: libc::EVFILT_PROC,
+        flags: libc::EV_ADD | libc::EV_ONESHOT,
+        fflags: libc::NOTE_EXIT,
+        data: 0,
+        udata: std::ptr::null_mut(),
+    };
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0
+        || unsafe {
+            libc::kevent(
+                fd,
+                &subscription,
+                1,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+            )
+        } < 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(queue)
+}
+
+pub fn wait_for_exit(player: &OwnedFd) -> io::Result<bool> {
+    let timeout = libc::timespec {
+        tv_sec: 45,
+        tv_nsec: 0,
+    };
+    let mut event = std::mem::MaybeUninit::<libc::kevent>::uninit();
+    let count = unsafe {
+        libc::kevent(
+            player.as_raw_fd(),
+            std::ptr::null(),
+            0,
+            event.as_mut_ptr(),
+            1,
+            &timeout,
+        )
+    };
+    if count < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(count == 1 && unsafe { event.assume_init() }.fflags & libc::NOTE_EXIT != 0)
+}
 
 pub struct Installation {
     target: PathBuf,
@@ -104,7 +158,12 @@ impl Installation {
         Ok(candidate)
     }
 
-    pub fn apply(&self, candidate: PathBuf, release: &Release, staging: &Path) -> Result<()> {
+    pub fn apply(
+        &self,
+        candidate: PathBuf,
+        release: &Release,
+        staging: tempfile::TempDir,
+    ) -> Result<()> {
         let _lock = install_lock(&self.directory.join(".ok-player-update.lock"))?;
         if identity(&self.target)? != self.inode {
             return Err("The installed app changed during the update.".into());
@@ -112,19 +171,17 @@ impl Installation {
         validate_signature(&self.target, &self.requirement)?;
         validate_signature(&candidate, &self.requirement)?;
         swap(&candidate, &self.target)?;
-        let receipt = staging.join("started");
+        let receipt = staging.path().join("started");
         let started = launch(&self.target, Some(&receipt))
             .and_then(|child| await_startup(child, &receipt, release));
         if let Err(error) = started {
             if let Err(rollback) = swap(&candidate, &self.target) {
-                // Preserve the previous bundle for manual recovery if the OS
-                // refuses the reverse swap. TempDir cleanup sees a moved bundle.
-                let backup = self
-                    .directory
-                    .join(format!("OK Player Backup-{}.app", process::id()));
-                let recovery = fs::rename(&candidate, &backup);
+                // Skip automatic staging cleanup so it cannot delete the
+                // previous bundle if the system refused the reverse exchange.
+                let backup = staging.keep().join(APP_NAME);
                 return Err(format!(
-                    "{error} Rollback failed: {rollback}. Backup recovery: {recovery:?}."
+                    "{error} Rollback failed: {rollback}. Previous bundle is at {}.",
+                    backup.display(),
                 )
                 .into());
             }
@@ -133,13 +190,15 @@ impl Installation {
         Ok(())
     }
 
-    pub fn reopen_after_failure(&self, error: &str, _: &Path) -> Result<()> {
-        let _ = Command::new(self.target.join(EXECUTABLE))
-            .env("OKP_UPDATE_RESTART_ERROR", error)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
+    pub fn reopen_after_failure(&self, error: &str) -> Result<()> {
+        if identity(&self.target)? == self.inode {
+            Command::new(self.target.join(EXECUTABLE))
+                .env("OKP_UPDATE_RESTART_ERROR", error)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?;
+        }
         Ok(())
     }
 }

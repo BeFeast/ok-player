@@ -774,3 +774,37 @@ Successful engine events and rendering calls are automated evidence; seeing the
 image and hearing the sound on a physical Mac remain separate operator observations,
 and so does the check that privacy grants survive an update with the stable identity.
 The wider codec/display/audio acceptance matrix remains tracked in issue #348.
+
+## ZIP updates
+
+Open Settings → Updates to select Beta or Stable, check for a release, or
+install and relaunch. Automatic checks run on launch and activation (at most
+once per five minutes) and every 28–30 minutes. The Mac publication currently
+advances Beta. An absent Stable manifest is reported as a check failure.
+
+In-app installation is available for an identity-signed `~/Applications/OK Player.app`.
+Install the updater-capable ZIP there once. Settings also links to the verified
+download for manual installation. A build signed with the existing persistent
+certificate keeps bundle identity `uk.oklabs.ok-player` and the designated
+requirement covered by existing macOS access grants.
+
+The Forgejo bridge publishes the verified GitHub-hosted ZIP for the exact
+canonical main SHA. The release keys are:
+
+- `https://updates.befeast.com/ok-player/macos/beta/latest.json`
+- `https://updates.befeast.com/ok-player/macos/stable/latest.json`
+- `https://updates.befeast.com/ok-player/macos/builds/<build>/ok-player-macos-arm64.zip`
+
+The updater verifies the detached signatures on the manifest and ZIP against
+the bundled OK Player archive key. It checks provenance, size, and SHA-256,
+then checks the bundle identifier, source, build, and code-signing requirement
+before replacing the bundle. The replacement uses a same-volume atomic
+directory exchange and preserves the installed quarantine attribute. If the
+new process fails to confirm startup, the helper exchanges the old bundle
+back. Previous immutable ZIPs also remain available for manual rollback.
+
+Run `scripts/verify-macos updates-status --sha <Forgejo SHA>` on a published
+source SHA. The scenario isolates the installation and update feed, changes the
+candidate bundle build from N to N+1 and re-signs it, then records the staged
+digest and the relaunched process in light and dark. Add `--negative-control`
+for the separate run with a corrupt manifest signature.
