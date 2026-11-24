@@ -91,7 +91,7 @@ final class HistoryPosters: @unchecked Sendable {
         let width = 384
         let height = 216
         var pixels = Data(count: width * height * 4)
-        let count = pixels.count
+        let count = UInt(pixels.count)
         let decoded = path.withCString { path in
             pixels.withUnsafeMutableBytes { buffer in
                 okp_history_poster_decode(path, duration, buffer.bindMemory(to: UInt8.self).baseAddress, count)
