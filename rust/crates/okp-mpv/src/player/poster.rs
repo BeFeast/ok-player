@@ -79,20 +79,24 @@ pub fn decode_history_poster(path: &str, duration: f64) -> Option<Vec<u8>> {
         previous = Some(offset);
         // A fresh load with an exact start gives each restarted decoder a single
         // frame boundary. Waiting on a timer alone can capture a preceding sample.
-        decoder
+        if decoder
             .load_with_file_options(path, &[("start", offset.to_string())])
-            .ok()?;
-        if !wait_for_poster_frame(&decoder, deadline) {
+            .is_err()
+            || !wait_for_poster_frame(&decoder, deadline)
+        {
             break;
         }
-        decoder
+        if decoder
             .render_software(
                 POSTER_WIDTH as i32,
                 POSTER_HEIGHT as i32,
                 POSTER_WIDTH * 4,
                 &mut candidate,
             )
-            .ok()?;
+            .is_err()
+        {
+            break;
+        }
         #[cfg(target_endian = "big")]
         for pixel in candidate.chunks_exact_mut(4) {
             pixel.reverse();

@@ -27,6 +27,9 @@ pub unsafe extern "C" fn okp_history_poster_key(
     else {
         return false;
     };
+    if key.len() != output_len - 1 {
+        return false;
+    }
     unsafe {
         ptr::copy_nonoverlapping(key.as_ptr().cast(), output, key.len());
         *output.add(key.len()) = 0;
@@ -57,6 +60,9 @@ pub unsafe extern "C" fn okp_history_poster_decode(
     else {
         return false;
     };
+    if frame.len() != output_len {
+        return false;
+    }
     unsafe { ptr::copy_nonoverlapping(frame.as_ptr(), output, frame.len()) };
     true
 }
