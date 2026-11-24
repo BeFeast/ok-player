@@ -161,6 +161,20 @@ final class PlayerWindowControllerTests: XCTestCase {
         XCTAssertEqual(fullscreenToggles, 1)
     }
 
+    func testFailedNativeFullscreenRestoresThePinnedWindowLevel() {
+        controller.togglePin()
+        XCTAssertTrue(controller.isPinned)
+        XCTAssertEqual(window.level, .floating)
+
+        NotificationCenter.default.post(name: NSWindow.willEnterFullScreenNotification, object: window)
+        XCTAssertTrue(controller.isPinned)
+        XCTAssertEqual(window.level, .normal)
+
+        controller.fullscreenFailed()
+        XCTAssertTrue(controller.isPinned)
+        XCTAssertEqual(window.level, .floating)
+    }
+
     // MARK: Clicks on the video
 
     func testASingleClickPausesAfterTheIntervalAndADoubleClickOnlyTogglesFullscreen() throws {

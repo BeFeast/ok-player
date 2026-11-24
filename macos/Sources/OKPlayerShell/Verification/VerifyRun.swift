@@ -162,6 +162,8 @@ final class VerifyRun {
             fputs("Verification could not write its result: \(error)\n", stderr)
             code = 2
         }
+        testWindow?.close()
+        testWindow = nil
         app.shutdown()
         exit(code)
     }

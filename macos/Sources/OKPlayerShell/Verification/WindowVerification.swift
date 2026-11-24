@@ -58,6 +58,9 @@ extension VerifyRun {
             while (fullscreenEntries == 0 || swaps == before) && ProcessInfo.processInfo.systemUptime < deadline {
                 try await Task.sleep(nanoseconds: 50_000_000)
             }
+            if controller.isPinned && (fullscreenEntries != 1 || controller.window.level != .normal) {
+                failures.append("window_float:fullscreen_level")
+            }
         case .leaveFullscreen:
             if controller.window.isInFullscreen { try await perform(step) }
         case .pointerReveal, .pause:
@@ -101,6 +104,7 @@ extension VerifyRun {
                 (app.pinItem.state == .on) != expected { failures.append("window_float:pin_state") }
         case .overlapWindow:
             let overlap = testWindow ?? NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
+            overlap.isReleasedWhenClosed = false
             let frame = app.window.frame
             overlap.setFrame(frame.insetBy(dx: frame.width / 4, dy: frame.height / 4), display: true)
             overlap.level = .normal
@@ -122,6 +126,9 @@ extension VerifyRun {
         try await Task.sleep(nanoseconds: 320_000_000)
         root.layoutSubtreeIfNeeded()
         let window = controller.window
+        guard let screen = window.screen else {
+            throw VerifyError("The player lost its display at \(name)", blocked: true)
+        }
         let strip = controller.titleStrip
         let titleRect = strip.label.convert(strip.label.bounds, to: root)
         let videoRect = video.convert(video.bounds, to: root)
@@ -144,7 +151,7 @@ extension VerifyRun {
             let mediaTitle = snapshot.title ?? options.fixture.lastPathComponent
             let span = videoRect.minX == root.bounds.minX && videoRect.maxX == root.bounds.maxX &&
                 videoRect.minY == root.bounds.minY && abs(videoRect.maxY - (root.bounds.maxY - TitleStripView.height)) < 1
-            let onScreen = window.screen?.visibleFrame.contains(window.frame) ?? false
+            let onScreen = screen.visibleFrame.contains(window.frame)
             if !onScreen || !chromeVisible || lights.count != 3 || !lights.allSatisfy(viewVisible) || !visiblePin ||
                 titleRect.minX <= lightsRight || titleRect.minX >= 125 || titleRect.maxX > pin.minX + 1 ||
                 strip.hasMedia != hasVideo || strip.title != (expected == .welcome ? "OK Player" : mediaTitle) ||
@@ -157,7 +164,7 @@ extension VerifyRun {
             facts["playback_strip"] = strip.hasMedia
         case .fullscreen, .restored:
             let fullscreen = expected == .fullscreen
-            let screenFrame = window.screen?.frame ?? .zero
+            let screenFrame = screen.frame
             let fillsScreen = sameFrame(window.frame, screenFrame) && sameFrame(videoRect, root.bounds)
             let restored = preFullscreenFrame.map { sameFrame(window.frame, $0) } ?? false
             let progressing = snapshot.status == .playing && (snapshot.timePos ?? 0) > (preFullscreenTime ?? 0)
