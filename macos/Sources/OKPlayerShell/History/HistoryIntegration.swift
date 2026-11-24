@@ -276,7 +276,7 @@ extension HistoryIntegration {
                   openSettings: { [weak app] in app?.showSettings() },
                   posters: HistoryPosters(directory: posterDirectory,
                                           canDecode: app.verification?.control != "history_poster_disabled"),
-                  pageSize: app.verification?.scenarioID == "history-page" ? 6 : 24)
+                  pageSize: app.verification?.scenarioID == "history-page" ? VerificationOptions.historyPageSize : 24)
         page.allowsPagination = app.verification?.control != "history_pagination_disabled"
         onInlineHistoryChanged = { [weak app] history in
             app?.dropTarget?.usesInlineHighlight = !history && app?.history.showsWelcome == true

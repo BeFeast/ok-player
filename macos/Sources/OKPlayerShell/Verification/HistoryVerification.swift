@@ -1,6 +1,10 @@
 import AppKit
 
 extension VerificationOptions {
+    // Keep the visible pager inside the hosted runner's viewport while testing
+    // the same window expansion as the production page size.
+    static let historyPageSize: UInt32 = 4
+
     var isHistoryScenario: Bool {
         scenarioID == "history-page" || scenarioID == "welcome-resume-shelf"
     }
@@ -88,12 +92,14 @@ extension VerifyRun {
         case .historyClear:
             try await activateHistory("clear")
             try await wait("Clear restores the first page") {
-                history.page.search.isEmpty && self.historyRows.count == 6 && history.page.hasMore
+                history.page.search.isEmpty && self.historyRows.count == Int(VerificationOptions.historyPageSize)
+                    && history.page.hasMore
             }
         case .historyMore:
             let first = historyRows.map(\.id)
-            guard first.count == 6, history.page.hasMore else { throw VerifyError("Incorrect first History page") }
-            try await activateHistory("scroll-history-end")
+            guard first.count == Int(VerificationOptions.historyPageSize), history.page.hasMore else {
+                throw VerifyError("Incorrect first History page")
+            }
             try await activateHistory("show-more")
             do {
                 try await wait("Show more appends rows and reaches the end of history") {
@@ -107,7 +113,6 @@ extension VerifyRun {
             }
         case .historyCompact:
             app.window.setContentSize(CGSize(width: 442, height: 580))
-            try await activateHistory("scroll-history-top")
             try await wait("compact History keeps navigation and row actions in bounds") {
                 self.historyGeometryFits()
             }
@@ -248,11 +253,12 @@ extension VerifyRun {
             throw VerifyError("History and Continue watching disagree about the newest source")
         }
         guard options.scenarioID == "history-page", history.page.search.isEmpty else { return }
+        let expected = ["Episode 3", "Dark fallback", "Finished", "Missing episode",
+                        "Archive episode", "recorded-stream", "older-stream"]
         guard case .sections(let groups) = history.page.content, groups.map(\.bucket) == [.today, .earlier],
-              rows.prefix(6).map(\.title) == ["Episode 3", "Dark fallback", "Finished", "Missing episode",
-                                               "Archive episode", "recorded-stream"],
-              rows[2].state == .finished, !rows[3].isAvailable, rows[3].resumeFrom == nil,
-              rows.count == 6 || rows.count == 7 else {
+              [Int(VerificationOptions.historyPageSize), expected.count].contains(rows.count),
+              rows.map(\.title) == Array(expected.prefix(rows.count)),
+              rows[2].state == .finished, !rows[3].isAvailable, rows[3].resumeFrom == nil else {
             throw VerifyError("History has unexpected order, grouping or states: \(rows.map(\.title))")
         }
     }
