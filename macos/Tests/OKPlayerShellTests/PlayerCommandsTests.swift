@@ -271,9 +271,8 @@ final class PlayerAppCommandsTests: XCTestCase {
         app.registerPlayerCommands()
         XCTAssertEqual(app.commands.shellCommands,
                        ["add-subtitle", "add-to-queue", "audio-track", "chapters-up-next", "escape-fullscreen", "fullscreen",
-                        "next-item", "open-file", "open-folder", "open-settings", "play-next", "playback-speed",
-                        "previous-item", "show-commands",
-                        "subtitles"])
+                        "mini-player", "next-item", "open-file", "open-folder", "open-settings", "play-next",
+                        "playback-speed", "previous-item", "show-commands", "subtitles"])
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("okp-menu-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let client = try SessionClient(config: SessionConfig(
@@ -301,6 +300,9 @@ final class PlayerAppCommandsTests: XCTestCase {
         }
         let settings = try XCTUnwrap(rows.first { $0.id == "open-settings" })
         XCTAssertTrue(settings.enabled, "Settings is available from Welcome")
+        let mini = try XCTUnwrap(rows.first { $0.id == "mini-player" })
+        XCTAssertTrue(mini.available)
+        XCTAssertFalse(mini.enabled, "Mini-Player requires video")
         let next = try XCTUnwrap(rows.first { $0.id == "next-item" })
         XCTAssertTrue(next.available)
         XCTAssertFalse(next.enabled, "nothing to step to without a playlist")
