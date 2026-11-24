@@ -91,6 +91,12 @@ extension VerifyRun {
     }
 
     private func checkNoAudio() async throws {
+        if snapshot.status == .paused {
+            try pressKey(" ", code: 49)
+            try await wait("the previous fixture resumed before opening the video-only clip") {
+                self.snapshot.status == .playing
+            }
+        }
         let fixture = options.fixture.deletingLastPathComponent().appendingPathComponent("video-only.mp4")
         let before = swaps
         app.application(NSApp, open: [fixture])
@@ -235,6 +241,9 @@ extension VerifyRun {
         try openTracks(kind)
         try clickOutsideTrackPanel()
         if tracks.isPopoverShown { failures.append("track_switcher:outside") }
+        // The click reaches the video after dismissing the popover. Let its
+        // single-click action settle before the caller opens the video-only clip.
+        try await Task.sleep(nanoseconds: UInt64((NSEvent.doubleClickInterval + 0.10) * 1_000_000_000))
         trackChecks["osc_pinned_across_idle"] = pinned
     }
 
