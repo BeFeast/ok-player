@@ -28,7 +28,8 @@ extension PlayerApp {
             guard root.bounds.contains(local) else { return false }
             let hit = root.hitTest(parent.convert(point, from: nil))
             // Controls, title chrome and the queue retain their own input.
-            let interactive = [behaviour.titleStrip, self.osc.panel, self.osc.volumeCapsule, self.upNext.panel]
+            let interactive: [NSView] = [behaviour.titleStrip, self.osc.panel, self.osc.volumeCapsule,
+                                         self.upNext.panel, self.tracks.panel]
             guard !interactive.contains(where: { hit?.isDescendant(of: $0) == true }),
                   !(hit is NSControl) else { return false }
             var candidate = hit

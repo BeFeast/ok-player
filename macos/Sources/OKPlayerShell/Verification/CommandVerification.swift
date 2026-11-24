@@ -40,7 +40,8 @@ extension VerifyRun {
         guard let video = app.video, app.history.showsWelcome, snapshot.status == .idle else {
             throw VerifyError("The clean Welcome surface was not shown")
         }
-        let point = video.convert(CGPoint(x: video.bounds.midX, y: video.bounds.midY), to: nil)
+        // Anchor just beside the centered Welcome controls.
+        let point = video.convert(CGPoint(x: max(12, video.bounds.midX - 176), y: video.bounds.midY), to: nil)
         try clickCommandSurface(at: point, right: true)
         guard context.isShown else { throw VerifyError("Right-click did not open commands on Welcome") }
         let titles = context.entries.map { entry -> String in
