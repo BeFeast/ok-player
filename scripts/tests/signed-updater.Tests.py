@@ -174,6 +174,18 @@ int main(void) {
         self.assertIn("signature could not be verified", error)
         self.assertEqual(self.target.readlink(), self.previous)
 
+    def test_wrong_package_digest_stops_before_restart(self):
+        release = self.release()
+        package = self.feed / release["key"]
+        payload = bytearray(package.read_bytes())
+        payload[-1] ^= 1
+        package.write_bytes(payload)
+        status, phase, error = self.apply(release)
+        self.assertNotEqual(status, 0)
+        self.assertEqual(phase, "")
+        self.assertIn("wrong SHA-256", error)
+        self.assertEqual(self.target.readlink(), self.previous)
+
     def test_failed_startup_rolls_back(self):
         release = self.release(publish_startup=False)
         status, phase, error = self.apply(release)

@@ -85,7 +85,7 @@ plutil -insert OKPUpdateSigningMode -string "${OKP_SIGNING_MODE:-ad-hoc}" "$app/
 plutil -lint "$app/Contents/Info.plist" | tee -a "$output/tests.log"
 icon_file="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIconFile' "$app/Contents/Info.plist")"
 cp "$package/Resources/$icon_file" "$package/Resources/WelcomeIcon.png" "$app/Contents/Resources/"
-cp "$root/LICENSE" "$app/Contents/Resources/"
+cp "$root/LICENSE" "$root/LICENSE.LGPL-3.0" "$root/THIRD-PARTY-NOTICES.md" "$app/Contents/Resources/"
 cp "$package/README.md" "$app/Contents/Resources/README.md"
 cp "$OKP_MPV_PREFIX/provenance.json" "$app/Contents/Resources/runtime-provenance.json"
 

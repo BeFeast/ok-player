@@ -789,7 +789,7 @@ certificate keeps bundle identity `uk.oklabs.ok-player` and the designated
 requirement covered by existing macOS access grants.
 
 The Forgejo bridge publishes the verified GitHub-hosted ZIP for the exact
-canonical main SHA. The release keys are:
+canonical main SHA. The files live under the macOS prefix in R2.
 
 - `https://updates.befeast.com/ok-player/macos/beta/latest.json`
 - `https://updates.befeast.com/ok-player/macos/stable/latest.json`

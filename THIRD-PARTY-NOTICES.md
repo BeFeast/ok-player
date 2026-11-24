@@ -99,6 +99,13 @@ distributed and licensed independently by Freedesktop/Flathub.
 - **Not affected:** the application icon and desktop integration
   (`rust/packaging/linux/`), which are first-party and unchanged.
 
+## Sequoia OpenPGP
+
+The macOS ZIP and Linux AppImage include Sequoia OpenPGP for detached
+release-signature verification. Sequoia PGP contributors distribute it under
+LGPL-2.0-or-later. The workspace lockfile identifies the exact version, and
+the distributions include the LGPLv3 text. <https://gitlab.com/sequoia-pgp/sequoia>
+
 ## Obtaining the source
 
 OK Player's source is at <https://github.com/BeFeast/ok-player>. The corresponding source for the

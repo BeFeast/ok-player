@@ -46,6 +46,8 @@ from pathlib import Path
 # .github/workflows/macos-player-preview.yml list the same patterns.
 MACOS_PATHS = (
     "macos/**",
+    "LICENSE*",
+    "THIRD-PARTY-NOTICES.md",
     "scripts/build-macos-preview.sh",
     "scripts/publish-macos-beta.py",
     "scripts/linux-appimage.py",
