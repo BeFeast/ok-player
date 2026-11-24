@@ -17,13 +17,36 @@ class PlayerWindow: NSWindow {
     /// The single-key shortcuts (`PlayerCommands.handle`), offered every key press
     /// no view took; returns whether it ran a command.
     var shortcutKeys: ((NSEvent) -> Bool)?
+    var settingsContextMenu: NSMenu?
 
     /// The window is in native fullscreen. (Tests stand in a flagged window.)
     var isInFullscreen: Bool { styleMask.contains(.fullScreen) }
 
     override func sendEvent(_ event: NSEvent) {
+        if let menu = settingsMenu(for: event), let contentView {
+            NSMenu.popUpContextMenu(menu, with: event, for: contentView)
+            return
+        }
         if event.type == .keyDown { onKeyDown?() }
         if onPlayerInput?(event) != true { super.sendEvent(event) }
+    }
+
+    /// The player background menu is available over the video and the Welcome
+    /// host. A contextual menu supplied by a hit view gets first refusal.
+    func settingsMenu(for event: NSEvent) -> NSMenu? {
+        let contextClick = event.type == .rightMouseDown
+            || (event.type == .leftMouseDown && event.modifierFlags.contains(.control))
+        guard contextClick, let settingsContextMenu, let contentView else { return nil }
+        let local = contentView.convert(event.locationInWindow, from: nil)
+        guard contentView.bounds.contains(local) else { return nil }
+        let hitPoint = contentView.convert(local, to: contentView.superview)
+        var hit = contentView.hitTest(hitPoint)
+        while let view = hit {
+            if view.menu(for: event) != nil { return nil }
+            if view === contentView { break }
+            hit = view.superview
+        }
+        return settingsContextMenu
     }
 
     override func keyDown(with event: NSEvent) {

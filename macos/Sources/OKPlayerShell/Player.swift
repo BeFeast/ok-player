@@ -70,6 +70,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menuBar.install()
         let behaviour = PlayerWindowController(contentRect: NSRect(x: 0, y: 0, width: 960, height: 580))
         windowBehaviour = behaviour; window = behaviour.window
+        behaviour.window.settingsContextMenu = makeSettingsContextMenu()
         behaviour.showTitleIdentity = verification?.control != "title_identity_hidden"
         behaviour.allowVideoFullscreen = verification?.control != "video_fullscreen_disabled"
         behaviour.applyInitialFit = verification?.control != "initial_fit_disabled"
@@ -105,7 +106,6 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             view.topAnchor.constraint(equalTo: behaviour.titleStrip.bottomAnchor).isActive = true
         }
         history.install(in: root, below: behaviour.titleStrip, above: osc.panel)
-        installSettingsContextMenu(on: [root, videoArea, behaviour.titleStrip, history.welcomeView])
         upNext.install(in: root, below: behaviour.titleStrip, above: osc.panel)
         upNext.onVisibilityChange = { [weak self] visible in
             guard let self, self.verification?.control != "panel_pin_disabled" else { return }

@@ -19,12 +19,13 @@ extension VerifyRun {
             before.close()
             app.window.makeKeyAndOrderFront(nil)
             let welcome = app.history.welcomeView
-            guard !welcome.isHidden,
-                  let click = NSEvent.mouseEvent(with: .rightMouseDown, location: .zero, modifierFlags: [],
+            let background = welcome.convert(NSPoint(x: 12, y: welcome.bounds.midY), to: nil)
+            guard !welcome.isHidden, let player = app.windowBehaviour?.window,
+                  let click = NSEvent.mouseEvent(with: .rightMouseDown, location: background, modifierFlags: [],
                                                  timestamp: ProcessInfo.processInfo.systemUptime,
                                                  windowNumber: app.window.windowNumber, context: nil,
                                                  eventNumber: 0, clickCount: 1, pressure: 1),
-                  let menu = welcome.menu(for: click),
+                  let menu = player.settingsMenu(for: click),
                   let item = menu.items.firstIndex(where: { $0.playerCommandID == "open-settings" }) else {
                 throw VerifyError("The player context menu has no Settings action")
             }

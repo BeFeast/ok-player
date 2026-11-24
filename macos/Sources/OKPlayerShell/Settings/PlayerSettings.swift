@@ -65,11 +65,11 @@ extension PlayerApp {
         settings.show(rememberFrame: verification == nil && !smoke)
     }
 
-    func installSettingsContextMenu(on views: [NSView]) {
+    func makeSettingsContextMenu() -> NSMenu {
         let menu = NSMenu()
         let item = NSMenuItem.playerCommand("open-settings", title: "Settings…", keyEquivalent: nil)
         item.target = self
         menu.addItem(item)
-        for view in views { view.menu = menu }
+        return menu
     }
 }
