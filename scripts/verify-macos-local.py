@@ -89,6 +89,7 @@ def read_scenario(path):
     actions = {"open", "pause", "seek", "capture", "play_to", "play_until_hidden", "pointer_reveal",
                "enter_fullscreen", "leave_fullscreen", "check_subtitle_menu",
                "size_window", "close_media", "double_click",
+               "wait_for_eof", "close_media_shortcut", "open_another",
                "small_work_area", "open_portrait", "resize_edges", "pin", "unpin", "overlap_window",
                "size_osc", "check_more", "check_seek", "check_idle", "check_pins", "show_volume",
                "check_wheel", "check_speed_mute", "set_unity", "open_stall", "release_stall", "open_failure",
@@ -131,7 +132,7 @@ def read_scenario(path):
                     or step["selected_subtitle"] not in labels):
                 raise ValueError("Subtitle menu check needs labels and an expected selected item")
     if spec["fixture"] not in {*FIXTURE_SUBTITLES, "01-h264-1080p24-tone.mp4", "landscape-4k.mp4",
-                               "04-mkv-2audio-2subs.mkv", OPEN_FIXTURE}:
+                               "04-mkv-2audio-2subs.mkv", "welcome-return.mp4", OPEN_FIXTURE}:
         raise ValueError("Unknown scenario fixture")
     return spec
 
@@ -142,6 +143,14 @@ def fixture(ffmpeg, temporary, spec, receipt):
     receipt["fixture"] = {"ffmpeg_version": version, "ffmpeg_sha256": digest(Path(ffmpeg))}
     if video.name == "04-mkv-2audio-2subs.mkv":
         track_fixtures(ffmpeg, video, receipt["fixture"])
+    elif video.name == "welcome-return.mp4":
+        command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "color=c=magenta:s=640x288:r=24:d=4", "-c:v", "libx264",
+                "-pix_fmt", "yuv420p", "-threads", "1", "-movflags", "+faststart", str(video))
+        broken = temporary / "broken" / "invalid.mp4"
+        broken.parent.mkdir()
+        broken.write_text("Invalid media fixture\n", encoding="utf-8")
+        receipt["fixture"].update({video.name: digest(video), "broken/invalid.mp4": digest(broken)})
     elif video.name == OPEN_FIXTURE:
         command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
                 "-f", "lavfi", "-i", "testsrc2=s=640x360:r=24:d=18", "-c:v", "libx264",
@@ -384,6 +393,15 @@ def run_appearance(executable, scenario, video, temporary, output, appearance, n
     profile = temporary / appearance
     for subdir in ("data", "config", "cache", "pictures"):
         (profile / subdir).mkdir(parents=True)
+    if scenario.stem == "welcome-return":
+        (profile / "data/history.json").write_text(json.dumps({
+            "version": 2, "files": {
+                "https://example.com/welcome-return.mp4": {
+                    "title": "Earlier playback", "position": 30.0, "duration": 180.0,
+                    "finished": False, "updated_at_unix": 1700000000,
+                },
+            },
+        }), encoding="utf-8")
     if scenario.stem != SETTINGS:
         return run_process(executable, scenario, video, profile, output, folder, appearance, negative_control)
 
