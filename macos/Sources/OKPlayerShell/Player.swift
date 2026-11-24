@@ -129,7 +129,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         osc.moreActions = { [weak self] in self?.oscMenuActions() ?? [] }
         osc.collapsesSlots = verification?.control != "slot_collapse_disabled"
         osc.acceptsVolumeWheel = verification?.control != "volume_wheel_disabled"
-        miniPlayer.install(in: root, video: videoArea, above: osc, controller: behaviour)
+        miniPlayer.install(in: root, video: videoArea, above: osc, status: statusLayer, controller: behaviour)
         miniPlayer.snapsToCorners = verification?.control != "compact_snap_disabled"
         miniPlayer.liftsSubtitles = verification?.control != "compact_clearance_disabled"
         miniPlayer.onModeChange = { [weak self] active in

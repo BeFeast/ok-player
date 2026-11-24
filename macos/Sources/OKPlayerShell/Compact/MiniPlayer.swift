@@ -17,6 +17,10 @@ final class MiniPlayer: NSObject {
     private weak var controller: PlayerWindowController?
     private weak var video: NSView?
     private weak var root: NSView?
+    private weak var statusOverlay: NSView?
+    private var statusAutoresizing: NSView.AutoresizingMask = []
+    private var standardLayout: [NSLayoutConstraint] = []
+    private var compactLayout: [NSLayoutConstraint] = []
     private let autoHide = AutoHide()
     private var snapshot = SessionSnapshot()
     private var standard: StandardWindow?
@@ -93,10 +97,20 @@ final class MiniPlayer: NSObject {
         NotificationCenter.default.removeObserver(self)
     }
 
-    func install(in root: NSView, video: NSView, above osc: NSView, controller: PlayerWindowController) {
+    func install(in root: NSView, video: NSView, above osc: NSView, status: StatusLayer,
+                 controller: PlayerWindowController) {
         self.controller = controller
         self.root = root
         self.video = video
+        statusOverlay = status.overlay
+        compactLayout = [
+            video.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            video.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            video.topAnchor.constraint(equalTo: root.topAnchor),
+            video.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            status.toastView.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
+            status.toastView.centerXAnchor.constraint(equalTo: root.centerXAnchor),
+        ]
         controller.onExitMiniPlayer = { [weak self] in self?.restore() }
         root.wantsLayer = true
         root.addTrackingArea(NSTrackingArea(rect: .zero,
@@ -105,6 +119,26 @@ final class MiniPlayer: NSObject {
         controls.autoresizingMask = [.width, .height]
         controls.frame = root.bounds
         root.addSubview(controls, positioned: .above, relativeTo: osc)
+    }
+
+    private func layOutCompact(in root: NSView) {
+        // Hidden standard panels still participate in AppKit's fitting size.
+        // The compact plane binds the renderer to the actual content bounds.
+        standardLayout = root.constraints.filter(\.isActive)
+        NSLayoutConstraint.deactivate(standardLayout)
+        if let statusOverlay {
+            statusAutoresizing = statusOverlay.autoresizingMask
+            statusOverlay.autoresizingMask = [.width, .height]
+            statusOverlay.frame = root.bounds
+        }
+        NSLayoutConstraint.activate(compactLayout)
+    }
+
+    private func layOutStandard() {
+        NSLayoutConstraint.deactivate(compactLayout)
+        statusOverlay?.autoresizingMask = statusAutoresizing
+        NSLayoutConstraint.activate(standardLayout)
+        standardLayout.removeAll()
     }
 
     func toggle() {
@@ -125,8 +159,8 @@ final class MiniPlayer: NSObject {
         aspectVideo = video
         window.isMiniPlayer = true
         onModeChange?(true)
+        layOutCompact(in: root)
         changeStyle(of: window, to: .borderless)
-        (window.contentView as? FileDropView)?.sizeCompactContent(true)
         window.minSize = NSSize(width: 1, height: 1)
         window.collectionBehavior.remove(.fullScreenPrimary)
         window.collectionBehavior.insert(.fullScreenNone)
@@ -162,7 +196,6 @@ final class MiniPlayer: NSObject {
         NSCursor.arrow.set()
         window.isMiniPlayer = false
         changeStyle(of: window, to: standard.style)
-        (window.contentView as? FileDropView)?.sizeCompactContent(false)
         window.collectionBehavior = standard.behavior
         window.backgroundColor = standard.background
         window.isOpaque = standard.opaque
@@ -178,6 +211,7 @@ final class MiniPlayer: NSObject {
         let frame = area.flatMap { session?.compactPlacement(of: standard.frame, inside: $0, snap: false) }
             ?? standard.frame
         window.setFrame(frame, display: true, animate: !controls.accessibility.reduceMotion)
+        layOutStandard()
         window.makeFirstResponder(video)
         onModeChange?(false)
         root.layoutSubtreeIfNeeded()
