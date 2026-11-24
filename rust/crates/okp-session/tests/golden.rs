@@ -9,11 +9,11 @@ use std::path::PathBuf;
 
 use okp_core::app::{AppIdentity, Platform};
 use okp_session::protocol::{
-    Chapter, Command, CommandEnvelope, CommandGroup, CommandMenu, DispatchReply, DispatchResult,
-    EndReason, ErrorKind, Event, EventBatch, MediaSource, MpvOption, Query, QueryEnvelope,
-    QueryReply, QueryResult, RejectReason, SeekMode, SeekPrecision, SessionConfig, SessionSnapshot,
-    SnapshotChange, SourceKind, Status, Track, TrackKind, VideoClickIntent, VideoGeometry,
-    WindowRect, WindowSize,
+    AudioMetadata, Chapter, Command, CommandEnvelope, CommandGroup, CommandMenu, DispatchReply,
+    DispatchResult, EndReason, ErrorKind, Event, EventBatch, MediaSource, MpvOption, Query,
+    QueryEnvelope, QueryReply, QueryResult, RejectReason, SeekMode, SeekPrecision, SessionConfig,
+    SessionSnapshot, SnapshotChange, SourceKind, Status, Track, TrackKind, VideoClickIntent,
+    VideoGeometry, WindowRect, WindowSize,
 };
 use okp_session::{CommandRegistry, SCHEMA_VERSION, WindowState};
 use serde::Serialize;
@@ -303,6 +303,7 @@ fn the_snapshot_query_and_its_replies_match_their_fixtures() {
                         height: 800,
                         display_aspect: 2.4,
                     }),
+                    audio_metadata: None,
                     buffering: false,
                     cache_ahead: Some(20.0),
                 },
@@ -539,6 +540,7 @@ fn change_name(change: &SnapshotChange) -> &'static str {
         SnapshotChange::EndReason { .. } => "end_reason",
         SnapshotChange::Title { .. } => "title",
         SnapshotChange::Video { .. } => "video",
+        SnapshotChange::AudioMetadata { .. } => "audio_metadata",
         SnapshotChange::Buffering { .. } => "buffering",
         SnapshotChange::CacheAhead { .. } => "cache_ahead",
     }
@@ -553,7 +555,7 @@ fn every_event_and_snapshot_change_matches_the_batch_fixture() {
         SnapshotChange::Source {
             value: Some(MediaSource {
                 kind: SourceKind::Url,
-                location: "https://example.com/a.mp4".to_owned(),
+                location: "https://example.com/a.mp3".to_owned(),
             }),
         },
         SnapshotChange::TimePos { value: None },
@@ -578,14 +580,21 @@ fn every_event_and_snapshot_change_matches_the_batch_fixture() {
             value: Some(EndReason::Eof),
         },
         SnapshotChange::Title {
-            value: Some("a.mp4".to_owned()),
+            value: Some("a.mp3".to_owned()),
         },
         SnapshotChange::Video { value: None },
+        SnapshotChange::AudioMetadata {
+            value: Some(AudioMetadata {
+                title: Some("Blue Hour".to_owned()),
+                artist: Some("OK Player".to_owned()),
+                album: Some("Compact Sessions".to_owned()),
+            }),
+        },
         SnapshotChange::Buffering { value: true },
         SnapshotChange::CacheAhead { value: Some(3.5) },
     ];
     let names: BTreeSet<_> = changes.iter().map(change_name).collect();
-    assert_eq!(names.len(), 15, "the batch fixture lists every change once");
+    assert_eq!(names.len(), 16, "the batch fixture lists every change once");
 
     golden(
         "events-batch.json",

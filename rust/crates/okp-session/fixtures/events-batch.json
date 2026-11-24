@@ -5,7 +5,7 @@
       "snapshot_changed": {
         "changes": [
           { "status": { "value": "ended" } },
-          { "source": { "value": { "kind": "url", "location": "https://example.com/a.mp4" } } },
+          { "source": { "value": { "kind": "url", "location": "https://example.com/a.mp3" } } },
           { "time_pos": { "value": null } },
           { "duration": { "value": 61.0 } },
           { "volume": { "value": 70.0 } },
@@ -29,8 +29,9 @@
           },
           { "chapters": { "value": [] } },
           { "end_reason": { "value": "eof" } },
-          { "title": { "value": "a.mp4" } },
+          { "title": { "value": "a.mp3" } },
           { "video": { "value": null } },
+          { "audio_metadata": { "value": { "title": "Blue Hour", "artist": "OK Player", "album": "Compact Sessions" } } },
           { "buffering": { "value": true } },
           { "cache_ahead": { "value": 3.5 } }
         ]

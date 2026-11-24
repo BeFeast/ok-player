@@ -314,7 +314,7 @@ final class SessionProtocolTests: XCTestCase {
         store.apply(batch)
         let snapshot = store.snapshot
         XCTAssertEqual(snapshot.status, .ended)
-        XCTAssertEqual(snapshot.source, MediaSource(kind: .url, location: "https://example.com/a.mp4"))
+        XCTAssertEqual(snapshot.source, MediaSource(kind: .url, location: "https://example.com/a.mp3"))
         XCTAssertNil(snapshot.timePos, "a change to null clears the field")
         XCTAssertEqual(snapshot.duration, 61)
         XCTAssertEqual(snapshot.volume, 70)
@@ -325,7 +325,9 @@ final class SessionProtocolTests: XCTestCase {
                                                title: nil, lang: "deu")])
         XCTAssertEqual(snapshot.chapters, [])
         XCTAssertEqual(snapshot.endReason, .eof)
-        XCTAssertEqual(snapshot.title, "a.mp4")
+        XCTAssertEqual(snapshot.title, "a.mp3")
+        XCTAssertEqual(snapshot.audioMetadata, AudioMetadata(title: "Blue Hour", artist: "OK Player",
+                                                            album: "Compact Sessions"))
         XCTAssertNil(snapshot.video)
         XCTAssertTrue(snapshot.buffering)
         XCTAssertEqual(snapshot.cacheAhead, 3.5)
