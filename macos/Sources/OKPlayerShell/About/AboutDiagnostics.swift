@@ -53,7 +53,7 @@ struct AboutDiagnostics {
         let system = ProcessInfo.processInfo.operatingSystemVersion
         host = [
             Row("macOS", "\(system.majorVersion).\(system.minorVersion).\(system.patchVersion)"),
-            Row("AppKit", String(NSAppKitVersionNumber)),
+            Row("AppKit", String(NSAppKitVersionNumber.rawValue)),
             Row("CPU", Self.machineArchitecture()),
             Row("Install", info("OKPPackageKind")),
         ]

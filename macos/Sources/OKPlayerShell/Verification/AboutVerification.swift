@@ -33,7 +33,7 @@ extension VerifyRun {
             checkAbout(window.contentView?.bounds.size == window.contentMinSize
                        && pane.bounds.height > clip.bounds.height, "narrow_scroll")
         case .aboutFooter:
-            let (window, pane) = try aboutWindow()
+            let (_, pane) = try aboutWindow()
             let footer = pane.footer!
             footer.scrollToVisible(footer.bounds)
             checkAbout(footer.visibleRect.insetBy(dx: -0.5, dy: -0.5).contains(footer.bounds), "footer_reachable")

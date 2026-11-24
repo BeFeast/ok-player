@@ -147,7 +147,7 @@ final class AboutPane: NSView {
         board.clearContents()
         guard board.setString(diagnostics.plainText, forType: .string) else { return }
         copyButton.title = "Diagnostics copied"
-        NSAccessibility.post(element: self, notification: .announcementRequested,
+        NSAccessibility.post(element: NSApplication.shared, notification: .announcementRequested,
                              userInfo: [.announcement: "Diagnostics copied", .priority: NSAccessibilityPriorityLevel.medium.rawValue])
         copyNotice?.invalidate()
         copyNotice = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
