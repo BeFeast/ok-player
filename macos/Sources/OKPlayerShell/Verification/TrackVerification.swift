@@ -86,6 +86,7 @@ extension VerifyRun {
         try checkSelection(.audio, id: low.id, contains: "Low 300Hz")
         try await selectTrack(.audio, id: high.id, label: "High 900Hz")
         try await selectTrack(.audio, id: low.id, label: "Low 300Hz")
+        try await playThroughCue(in: .audio)
         trackChecks["audio_engine_ids_by_frequency_hz"] = ["300": low.id, "900": high.id]
     }
 
@@ -116,8 +117,10 @@ extension VerifyRun {
             throw VerifyError("The reference subtitle languages are missing")
         }
         try await selectTrack(.subtitle, id: en.id, label: "eng")
+        try await playThroughCue(in: .subtitle)
         let enCue = try await measureCue(wide: true)
         try await selectTrack(.subtitle, id: ru.id, label: "rus")
+        try await playThroughCue(in: .subtitle)
         let ruCue = try await measureCue(wide: false)
         try await selectTrack(.subtitle, id: nil, label: "Off")
         let off = try await measureCue(wide: nil)
@@ -143,6 +146,24 @@ extension VerifyRun {
         trackChecks["subtitle_glyph_width_px"] = ["en": enCue, "ru": ruCue, "off": off, "external": externalCue]
         try await adjustSubtitles()
         try await selectTrack(.subtitle, id: en.id, label: "eng")
+        try await playThroughCue(in: .subtitle)
+    }
+
+    private func playThroughCue(in kind: TrackKind) async throws {
+        // libmpv can report the new track before the demuxer has read its first cue.
+        // Resume before that packet and pause once its intended cue is active.
+        let before = swaps
+        try seek(0.25)
+        try await wait("seek ahead of the first embedded subtitle packet") {
+            abs((self.snapshot.timePos ?? -1) - 0.25) < 0.08 && self.swaps > before
+        }
+        try pressKey(" ", code: 49)
+        try await wait("played through the embedded subtitle packet") {
+            self.snapshot.status == .playing && (self.snapshot.timePos ?? -1) >= 2.5
+        }
+        try pressKey(" ", code: 49)
+        try await wait("paused on the subtitle cue") { self.snapshot.status == .paused }
+        try openTracks(kind)
     }
 
     private func adjustSubtitles() async throws {

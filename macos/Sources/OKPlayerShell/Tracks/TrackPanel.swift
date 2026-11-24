@@ -228,7 +228,7 @@ final class TrackRowButton: NSButton {
 
     private func drawLine(_ text: String, y: CGFloat, font: NSFont, color: NSColor) {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineBreakMode = .byTruncatingTail
+        paragraph.lineBreakMode = title.hasSuffix(" · External") ? .byTruncatingMiddle : .byTruncatingTail
         (text as NSString).draw(in: NSRect(x: 30, y: y - 8, width: max(0, bounds.width - 38), height: 16),
                                 withAttributes: [.font: font, .foregroundColor: color, .paragraphStyle: paragraph])
     }
@@ -244,6 +244,7 @@ final class TrackAdjustmentRow: NSStackView {
         super.init(frame: .zero)
         orientation = .horizontal
         alignment = .centerY
+        distribution = .fill
         spacing = 2
         let title = NSTextField(labelWithString: adjustment.title)
         title.font = .systemFont(ofSize: 12)
@@ -252,6 +253,7 @@ final class TrackAdjustmentRow: NSStackView {
         value.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
         value.textColor = PaletteRole.link.color
         value.alignment = .right
+        value.setContentHuggingPriority(.required, for: .horizontal)
         addArrangedSubview(title)
         addArrangedSubview(value)
         buttons = [

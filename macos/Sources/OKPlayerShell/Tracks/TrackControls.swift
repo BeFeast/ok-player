@@ -258,6 +258,7 @@ final class TrackControls: NSObject {
         osc.noteActivity()
         window.makeFirstResponder(osc.focusReturn)
         panelKind = kind
+        updateButtonTint()
         panel.update(kind: kind, tracks: query?())
         panelAnchor?.isActive = false
         let anchor = panel.centerXAnchor.constraint(equalTo: button.centerXAnchor)
@@ -313,11 +314,17 @@ final class TrackControls: NSObject {
     func dismissPopover() -> Bool {
         guard panelKind != nil else { return false }
         panelKind = nil
+        updateButtonTint()
         panel.isHidden = true
         panelAnchor?.isActive = false
         panelAnchor = nil
         holdControls?(false)
         return true
+    }
+
+    private func updateButtonTint() {
+        subtitleButton.contentTintColor = panelKind == .subtitle ? PaletteRole.link.overVideo : PaletteRole.text.overVideo
+        audioButton.contentTintColor = panelKind == .audio ? PaletteRole.link.overVideo : PaletteRole.text.overVideo
     }
 
     /// The Audio or Subtitles items for the menu bar, for the session's state now.
