@@ -105,8 +105,9 @@ extension VerifyRun {
         guard fields.count == 2,
               let key = fields.first as? NSTextField, let value = fields.last as? NSTextField,
               let font = value.font else { return "Missing About fields" }
-        let keyRect = key.convert(key.bounds, to: row)
-        let valueRect = value.convert(value.bounds, to: row)
+        // AppKit text fields extend past their alignment rect by the cell padding.
+        let keyRect = key.convert(key.alignmentRect(forFrame: key.bounds), to: row)
+        let valueRect = value.convert(value.alignmentRect(forFrame: value.bounds), to: row)
         let tolerance = row.bounds.insetBy(dx: -1, dy: -1)
         guard !keyRect.isEmpty && !valueRect.isEmpty && tolerance.contains(keyRect)
                 && tolerance.contains(valueRect) && !keyRect.intersects(valueRect) else {
@@ -115,7 +116,7 @@ extension VerifyRun {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byCharWrapping
         let text = NSAttributedString(string: value.stringValue, attributes: [.font: font, .paragraphStyle: paragraph])
-        let measure = NSSize(width: max(1, valueRect.width - 4), height: .greatestFiniteMagnitude)
+        let measure = NSSize(width: valueRect.width, height: .greatestFiniteMagnitude)
         let needed = text.boundingRect(with: measure, options: [.usesLineFragmentOrigin]).height
         guard needed <= valueRect.height + 1 else {
             return "\(key.stringValue): text needs \(needed) pt in a \(valueRect.height) pt field"
