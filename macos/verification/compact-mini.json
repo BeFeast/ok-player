@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "compact-mini",
+  "fixture": "mini-landscape.mp4",
+  "appearances": ["light", "dark"],
+  "steps": [
+    {"action": "open"},
+    {"action": "pin"},
+    {"action": "enter_mini"},
+    {"action": "pointer_reveal"},
+    {"action": "capture", "name": "mini-landscape-hover", "expect": "mini_hover"},
+    {"action": "wheel_mini"},
+    {"action": "pause"},
+    {"action": "seek_mini", "seconds": 4.0},
+    {"action": "play_to", "seconds": 4.1},
+    {"action": "drag_mini"},
+    {"action": "restore_mini"},
+    {"action": "open_portrait"},
+    {"action": "enter_mini"},
+    {"action": "pointer_reveal"},
+    {"action": "capture", "name": "mini-portrait-hover", "expect": "mini_hover"},
+    {"action": "restore_mini"}
+  ]
+}

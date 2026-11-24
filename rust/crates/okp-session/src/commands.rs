@@ -270,8 +270,19 @@ impl CommandRegistry {
                     menu: menu_of(command.id),
                     label: command.label,
                     available: self.is_available(id),
-                    enabled: session_command_enabled(id, snapshot.status)
-                        .unwrap_or(command.enabled),
+                    enabled: if self.platform == Platform::MacOs {
+                        match command.id {
+                            PlayerCommandId::MiniPlayer => {
+                                window.mini_player
+                                    || (context.has_video_geometry && !window.fullscreen)
+                            }
+                            PlayerCommandId::ChaptersUpNext if window.mini_player => false,
+                            _ => session_command_enabled(id, snapshot.status)
+                                .unwrap_or(command.enabled),
+                        }
+                    } else {
+                        session_command_enabled(id, snapshot.status).unwrap_or(command.enabled)
+                    },
                     checked: command.checked,
                     shortcut: shortcut
                         .map(|action| primary_chord(self.platform, &bindings, action)),
@@ -382,7 +393,11 @@ impl CommandRegistry {
         };
         CommandSurface {
             entries,
-            preferred_width: PLAYER_COMMAND_SURFACE_PREFERRED_WIDTH,
+            preferred_width: if window.mini_player {
+                224
+            } else {
+                PLAYER_COMMAND_SURFACE_PREFERRED_WIDTH
+            },
             max_height: PLAYER_COMMAND_SURFACE_MAX_HEIGHT,
         }
     }

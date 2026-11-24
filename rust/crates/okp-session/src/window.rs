@@ -33,6 +33,79 @@ pub struct WindowRect {
     pub height: i32,
 }
 
+impl From<WindowSize> for window_fit::WindowSize {
+    fn from(size: WindowSize) -> Self {
+        Self {
+            width: size.width,
+            height: size.height,
+        }
+    }
+}
+
+impl From<WindowRect> for window_fit::WindowRect {
+    fn from(frame: WindowRect) -> Self {
+        Self {
+            x: frame.x,
+            y: frame.y,
+            width: frame.width,
+            height: frame.height,
+        }
+    }
+}
+
+pub(crate) fn compact_size(
+    video: WindowSize,
+    maximum: WindowSize,
+    resize: Option<(WindowSize, WindowSize)>,
+) -> Option<WindowSize> {
+    let size = window_fit::constrain_compact_size(
+        video.into(),
+        maximum.into(),
+        resize.map(|(proposed, current)| (proposed.into(), current.into())),
+    )?;
+    Some(WindowSize {
+        width: size.width,
+        height: size.height,
+    })
+}
+
+pub(crate) fn compact_placement(
+    frame: WindowRect,
+    visible: WindowRect,
+    snap: bool,
+) -> Option<WindowRect> {
+    let mut frame: window_fit::WindowRect = frame.into();
+    let visible: window_fit::WindowRect = visible.into();
+    let inset = window_fit::COMPACT_SNAP_INSET;
+    if snap
+        && frame.width <= visible.width.saturating_sub(2 * inset)
+        && frame.height <= visible.height.saturating_sub(2 * inset)
+        && let Some(point) = window_fit::compact_corner_snap(
+            window_fit::WindowPoint {
+                x: frame.x,
+                y: frame.y,
+            },
+            window_fit::WindowSize {
+                width: frame.width,
+                height: frame.height,
+            },
+            visible,
+            inset,
+            window_fit::COMPACT_SNAP_THRESHOLD,
+        )
+    {
+        frame.x = point.x;
+        frame.y = point.y;
+    }
+    let frame = window_fit::restore_window_frame(frame, visible)?;
+    Some(WindowRect {
+        x: frame.x,
+        y: frame.y,
+        width: frame.width,
+        height: frame.height,
+    })
+}
+
 /// What a primary-button release on the video means (core
 /// `video_click::Intent`). The shell owns the timer: a single click waits for
 /// the double-click interval, so a double-click toggles fullscreen without
@@ -202,6 +275,54 @@ mod tests {
 
     fn size(width: i32, height: i32) -> WindowSize {
         WindowSize { width, height }
+    }
+
+    #[test]
+    fn compact_geometry_clamps_resize_preserves_portrait_and_restores_on_another_display() {
+        let max = size(LAPTOP.width, LAPTOP.height);
+        let landscape = size(1920, 1080);
+        assert_eq!(compact_size(landscape, max, None), Some(size(480, 270)));
+        assert_eq!(
+            compact_size(landscape, max, Some((size(480, 10), size(480, 270)))),
+            Some(size(284, 160))
+        );
+        assert_eq!(
+            compact_size(size(1080, 1920), max, None),
+            Some(size(270, 480))
+        );
+        assert_eq!(
+            compact_size(size(1080, 1920), size(400, 200), None),
+            Some(size(112, 200))
+        );
+
+        let dragged = WindowRect {
+            x: 30,
+            y: 645,
+            width: 480,
+            height: 270,
+        };
+        assert_eq!(
+            compact_placement(dragged, LAPTOP, true),
+            Some(WindowRect {
+                x: 16,
+                y: 659,
+                ..dragged
+            })
+        );
+        assert_eq!(compact_placement(dragged, LAPTOP, false), Some(dragged));
+        let on_removed_display = WindowRect {
+            x: -780,
+            y: -80,
+            ..dragged
+        };
+        assert_eq!(
+            compact_placement(on_removed_display, LAPTOP, false),
+            Some(WindowRect {
+                x: 0,
+                y: 0,
+                ..dragged
+            })
+        );
     }
 
     #[test]

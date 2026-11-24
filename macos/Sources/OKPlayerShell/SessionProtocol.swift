@@ -153,11 +153,13 @@ enum Query: Codable, Equatable {
     case windowFit(video: WindowSize, backingScale: Double, visibleFrame: WindowRect, minSize: WindowSize?,
                    chrome: WindowSize?)
     case initialWindowFit(backingScale: Double, visibleFrame: WindowRect, minSize: WindowSize?, chrome: WindowSize?)
+    case compactWindowSize(video: WindowSize, maximum: WindowSize, proposed: WindowSize?, current: WindowSize?)
+    case compactWindowPlacement(frame: WindowRect, visibleFrame: WindowRect, snap: Bool)
     case videoClick(pressCount: Int32)
     /// Every registry command, resolved against the session state and the window
     /// state only the shell knows. Query it when a menu opens.
     case commandRegistry(fullscreen: Bool = false, miniPlayer: Bool = false)
-    case commandSurface(fullscreen: Bool, page: CommandMenu, query: String)
+    case commandSurface(fullscreen: Bool, miniPlayer: Bool = false, page: CommandMenu, query: String)
     /// Every bindable action with its chords on the config's platform.
     case shortcutTable
     /// The actions whose key repeats while held; every other one runs once per press.
@@ -192,6 +194,7 @@ struct QueryEnvelope: Codable, Equatable {
 enum QueryResult: Codable, Equatable {
     case snapshot(snapshot: SessionSnapshot)
     case windowFit(frame: WindowRect?)
+    case compactWindowSize(size: WindowSize?)
     case videoClick(intent: VideoClickIntent)
     case commandRegistry(commands: [RegistryCommand])
     case commandSurface(surface: CommandSurface)

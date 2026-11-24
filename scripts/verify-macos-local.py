@@ -62,6 +62,8 @@ ACTION_CONTROLS = {
     **QUEUE_CONTROLS,
     "context-idle-and-playback": ("context_clamp_disabled", {"context:work_area_clamp"}),
     "command-keyboard": ("text_priority_disabled", {"keyboard:text_priority"}),
+    "compact-mini": ("compact_snap_disabled", {"compact_mini:corner_snap"}),
+    "compact-mini-floor": ("compact_clearance_disabled", {"compact_mini_floor:clearance"}),
 }
 CONTROLS = {
     **TRACK_CONTROLS,
@@ -113,7 +115,9 @@ def read_scenario(path):
                "check_context_pages", "check_context_corners",
                "check_playback_keys", "check_queue_keys", "check_escape_priority", "check_text_priority",
                "open_queue", "open_queue_url", "show_queue", "check_queue_jump", "preview_queue_move",
-               "check_queue_edit", "open_queue_menu", "check_queue_actions", "check_queue_add"}
+               "check_queue_edit", "open_queue_menu", "check_queue_actions", "check_queue_add",
+               "enter_mini", "drag_mini", "resize_mini", "restore_mini", "wheel_mini", "seek_mini",
+               "idle_mini", "accessible_mini"}
     if path.stem == SETTINGS:
         actions.update({"settings_shortcut", "settings_context", "settings_legacy", "settings_search",
                         "settings_resize", "settings_system", "settings_light", "settings_auto",
@@ -129,7 +133,7 @@ def read_scenario(path):
             raise ValueError("Settings steps require a relaunch phase")
         if step["action"] not in actions:
             raise ValueError(f"Unsupported action {step['action']!r}")
-        if step["action"] in {"seek", "play_to"} and not isinstance(step.get("seconds"), (float, int)):
+        if step["action"] in {"seek", "seek_mini", "play_to"} and not isinstance(step.get("seconds"), (float, int)):
             raise ValueError("Seek and playback targets require numeric seconds")
         if step["action"] == "size_osc" and not isinstance(step.get("width"), (float, int)):
             raise ValueError("OSC resize requires a numeric width")
@@ -139,7 +143,9 @@ def read_scenario(path):
                                            "floating", "normal", "repinned", "osc_row", "osc_hidden", "osc_pinned",
                                            "volume", "speed", "loading", "buffering", "failure", "recovered",
                                            "context_welcome", "context_video", "context_results", "context_empty",
-                                           "keyboard_playback", "settings_light", "settings_auto", "track_panel", "open_evidence", "about_identity", "about_footer", "queue_panel"}
+                                           "keyboard_playback", "settings_light", "settings_auto", "track_panel",
+                                           "open_evidence", "about_identity", "about_footer", "queue_panel", "mini_hover",
+                                           "mini_floor", "mini_hidden", "mini_accessible"}
                     or not step.get("name", "").replace("-", "").isalnum()):
                 raise ValueError("Invalid capture checkpoint")
         if step["action"] == "check_subtitle_menu":
@@ -148,7 +154,7 @@ def read_scenario(path):
                     or step["selected_subtitle"] not in labels):
                 raise ValueError("Subtitle menu check needs labels and an expected selected item")
     if spec["fixture"] not in {*FIXTURE_SUBTITLES, "01-h264-1080p24-tone.mp4", "landscape-4k.mp4",
-                               "04-mkv-2audio-2subs.mkv", OPEN_FIXTURE, "S01E01.mp4"}:
+                               "04-mkv-2audio-2subs.mkv", "mini-landscape.mp4", OPEN_FIXTURE, "S01E01.mp4"}:
         raise ValueError("Unknown scenario fixture")
     return spec
 
@@ -179,6 +185,14 @@ def fixture(ffmpeg, temporary, spec, receipt):
                 path = temporary / name
                 path.write_text(contents, encoding="utf-8")
                 receipt["fixture"][name] = digest(path)
+    elif video.name == "mini-landscape.mp4":
+        for path, size in [(video, "640x360"), (temporary / "portrait.mp4", "360x640")]:
+            command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i", f"color=c=0xeceef0:s={size}:r=24:d=30",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-threads", "1",
+                    "-g", "12", "-map_metadata", "-1", "-fflags", "+bitexact", "-flags", "+bitexact",
+                    "-movflags", "+faststart", str(path))
+            receipt["fixture"][path.name] = digest(path)
     elif video.name in FIXTURE_SUBTITLES:
         for suffix in FIXTURE_SUBTITLES[video.name]:
             subtitle = video.with_suffix(suffix)

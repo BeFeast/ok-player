@@ -34,7 +34,7 @@ extension PlayerApp: PlayerCommandResponder, NSMenuItemValidation {
         // key press does (keys already count through the window's key hook), and
         // a subtitle delay or size step shows its readout.
         commands.onRun = { [weak self] invocation in
-            self?.osc.noteActivity()
+            self?.notePlayerActivity()
             self?.tracks.commandRan(invocation)
         }
         commands.register("open-file") { [weak self] in self?.openFile() }
@@ -42,6 +42,7 @@ extension PlayerApp: PlayerCommandResponder, NSMenuItemValidation {
         commands.register("open-settings") { [weak self] in self?.showSettings() }
         commands.register("fullscreen") { [weak self] in _ = self?.windowBehaviour?.perform(.toggleFullscreen) }
         commands.register("escape-fullscreen") { [weak self] in _ = self?.windowBehaviour?.perform(.exitFullscreen) }
+        commands.register("mini-player") { [weak self] in self?.miniPlayer.toggle() }
         commands.register("previous-item") { [weak self] in _ = self?.playlist.step(.previous) }
         commands.register("next-item") { [weak self] in _ = self?.playlist.step(.next) }
         commands.register("show-commands") { [weak self] in
@@ -71,8 +72,9 @@ extension PlayerApp: PlayerCommandResponder, NSMenuItemValidation {
             session: { [weak client] command in
                 client?.dispatch(command) ?? .rejected(reason: .noActiveMedia, message: "No playback session")
             },
-            registry: { [weak client] fullscreen in
-                guard case .commandRegistry(let rows)? = client?.query(.commandRegistry(fullscreen: fullscreen)) else {
+            registry: { [weak self, weak client] fullscreen in
+                guard case .commandRegistry(let rows)? = client?.query(.commandRegistry(
+                    fullscreen: fullscreen, miniPlayer: self?.miniPlayer.isActive == true)) else {
                     return []
                 }
                 return rows

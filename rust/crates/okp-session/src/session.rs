@@ -373,6 +373,21 @@ impl Session {
             Query::VideoClick { press_count } => QueryResult::VideoClick {
                 intent: window::video_click_intent(*press_count),
             },
+            Query::CompactWindowSize {
+                video,
+                maximum,
+                proposed,
+                current,
+            } => QueryResult::CompactWindowSize {
+                size: window::compact_size(*video, *maximum, proposed.zip(*current)),
+            },
+            Query::CompactWindowPlacement {
+                frame,
+                visible_frame,
+                snap,
+            } => QueryResult::WindowFit {
+                frame: window::compact_placement(*frame, *visible_frame, *snap),
+            },
             Query::History { query } => QueryResult::History {
                 result: lock(&self.shared.state).history.query(query),
             },
@@ -398,6 +413,7 @@ impl Session {
             },
             Query::CommandSurface {
                 fullscreen,
+                mini_player,
                 page,
                 query,
             } => {
@@ -408,7 +424,7 @@ impl Session {
                         &snapshot,
                         WindowState {
                             fullscreen: *fullscreen,
-                            ..WindowState::default()
+                            mini_player: *mini_player,
                         },
                         playlist_items,
                         *page,

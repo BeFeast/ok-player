@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "id": "compact-mini-floor",
+  "fixture": "subtitle-lift.mp4",
+  "appearances": ["light", "dark"],
+  "steps": [
+    {"action": "open"},
+    {"action": "enter_mini"},
+    {"action": "resize_mini"},
+    {"action": "pause"},
+    {"action": "seek_mini", "seconds": 4.0},
+    {"action": "capture", "name": "mini-floor-paused", "expect": "mini_floor"},
+    {"action": "idle_mini"},
+    {"action": "capture", "name": "mini-floor-idle", "expect": "mini_hidden"},
+    {"action": "pause"},
+    {"action": "accessible_mini"},
+    {"action": "capture", "name": "mini-floor-accessibility", "expect": "mini_accessible"},
+    {"action": "enter_fullscreen"},
+    {"action": "leave_fullscreen"}
+  ]
+}

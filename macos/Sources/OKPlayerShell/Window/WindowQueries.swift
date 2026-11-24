@@ -64,6 +64,26 @@ protocol WindowRules: AnyObject {
 }
 
 extension SessionClient: WindowRules {
+    func compactSize(for video: VideoGeometry, maximum: CGSize,
+                     proposed: CGSize? = nil, current: CGSize? = nil) -> CGSize? {
+        let dimensions = WindowSize(width: video.width, height: video.height)
+        let maximum = WindowSize(width: Int32(maximum.width.rounded(.down)),
+                                 height: Int32(maximum.height.rounded(.down)))
+        guard case .compactWindowSize(let size?)? = query(.compactWindowSize(
+            video: dimensions, maximum: maximum, proposed: proposed.map(WindowSize.init(points:)),
+            current: current.map(WindowSize.init(points:)))) else { return nil }
+        return CGSize(width: CGFloat(size.width), height: CGFloat(size.height))
+    }
+
+    func compactPlacement(of frame: CGRect, inside area: CGRect, snap: Bool) -> CGRect? {
+        if !snap && area.contains(frame) { return frame }
+        let wholeFrame = WindowRect(x: Int32(frame.minX.rounded()), y: Int32(frame.minY.rounded()),
+                                    width: Int32(frame.width.rounded()), height: Int32(frame.height.rounded()))
+        guard case .windowFit(let fitted)? = query(.compactWindowPlacement(
+            frame: wholeFrame, visibleFrame: WindowRect(inside: area), snap: snap)) else { return nil }
+        return fitted?.cgRect
+    }
+
     /// The frame of a window fitted to `video` on a screen; nil when there is
     /// nothing to fit or the session cannot answer. `chrome` is the room the
     /// window's own controls take outside the video area: the frame grows by it.

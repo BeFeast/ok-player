@@ -16,6 +16,8 @@ final class ScrubberView: NSView {
     var isEnabled = false { didSet { if isEnabled != oldValue { needsDisplay = true } } }
     /// The controls are shown, so the bar may take keyboard focus.
     var allowsFocus = true
+    var highContrast = false { didSet { needsDisplay = true } }
+    var onAccessibilitySeek: ((Double) -> Void)?
     var onScrub: ((Phase, Double) -> Void)?
     /// A press on the enabled bar that has not been released yet.
     private(set) var isPressed = false
@@ -44,12 +46,12 @@ final class ScrubberView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        PaletteRole.borderSubtle.overVideo.setFill()
+        (highContrast ? NSColor.secondaryLabelColor : PaletteRole.borderSubtle.overVideo).setFill()
         NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2).fill()
         guard isEnabled else { return }
-        PaletteRole.border.overVideo.setFill()
+        (highContrast ? NSColor.tertiaryLabelColor : PaletteRole.border.overVideo).setFill()
         NSBezierPath(roundedRect: span(buffered), xRadius: 2, yRadius: 2).fill()
-        PaletteRole.accent.overVideo.setFill()
+        (highContrast ? NSColor.controlAccentColor : PaletteRole.accent.overVideo).setFill()
         NSBezierPath(roundedRect: span(progress), xRadius: 2, yRadius: 2).fill()
         PaletteRole.text.overVideo.setFill()
         for tick in ticks where tick > 0 && tick < 1 {
@@ -57,7 +59,7 @@ final class ScrubberView: NSView {
             NSRect(x: x - 0.75, y: track.minY - 2, width: 1.5, height: track.height + 4).fill()
         }
         let knob = NSRect(x: span(progress).maxX - 6, y: bounds.midY - 6, width: 12, height: 12)
-        PaletteRole.onAccent.overVideo.setFill()
+        (highContrast ? NSColor.labelColor : PaletteRole.onAccent.overVideo).setFill()
         NSBezierPath(ovalIn: knob).fill()
         if window?.isKeyWindow == true, window?.firstResponder === self {
             let ring = NSBezierPath(ovalIn: knob.insetBy(dx: -2.5, dy: -2.5))
@@ -65,6 +67,15 @@ final class ScrubberView: NSView {
             PaletteRole.focus.overVideo.setStroke()
             ring.stroke()
         }
+    }
+
+    override func accessibilityPerformIncrement() -> Bool { accessibilitySeek(by: 0.05) }
+    override func accessibilityPerformDecrement() -> Bool { accessibilitySeek(by: -0.05) }
+
+    private func accessibilitySeek(by delta: Double) -> Bool {
+        guard isEnabled, allowsFocus, let onAccessibilitySeek else { return false }
+        onAccessibilitySeek(min(max(progress + delta, 0), 1))
+        return true
     }
 
     private func fraction(of event: NSEvent) -> Double {

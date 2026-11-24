@@ -76,6 +76,7 @@ final class TransportOverlay: NSView, NSMenuDelegate {
     private var subtitleClearance: (height: CGFloat, bottom: CGFloat)?
     private var windowObservers: [NSObjectProtocol] = []
     private var layoutWidth: Int?
+    private var suspended = false
 
     init(hideTimer: HideTimer = MainQueueHideTimer()) {
         autoHide = AutoHide(timer: hideTimer)
@@ -96,7 +97,7 @@ final class TransportOverlay: NSView, NSMenuDelegate {
     }
 
     private func updateSubtitleClearance() {
-        guard let subtitleSession, bounds.height > 0 else { return }
+        guard !suspended, let subtitleSession, bounds.height > 0 else { return }
         let coversVideo = surface?.hitTestable == true && !panel.isHidden
         let top = volumeCapsule.isHidden ? panel.frame.maxY : capsuleRect.maxY
         guard !coversVideo || panel.frame.height > 0 else { return }
@@ -119,7 +120,22 @@ final class TransportOverlay: NSView, NSMenuDelegate {
             volumeSuppressed = false
         }
         self.snapshot = snapshot
-        refresh()
+        if !suspended { refresh() }
+    }
+
+    func suspend(_ suspend: Bool) {
+        suspended = suspend
+        subtitleClearance = nil
+        isHidden = suspend
+        if suspend {
+            closeVolume()
+            endScrub()
+            pointerLeft()
+            autoHide.update(allowed: false, hideAfter: 0)
+        } else {
+            noteActivity()
+            refresh()
+        }
     }
 
     /// The controls are shown.
@@ -174,7 +190,7 @@ final class TransportOverlay: NSView, NSMenuDelegate {
     }
 
     private func applySurface() {
-        guard let view = transport else { return }
+        guard !suspended, let view = transport else { return }
         let next = view.osc.surface(revealed: autoHide.revealed)
         let previous = surface
         surface = next

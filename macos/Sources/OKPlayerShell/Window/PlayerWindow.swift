@@ -22,6 +22,18 @@ class PlayerWindow: NSWindow {
 
     /// The window is in native fullscreen. (Tests stand in a flagged window.)
     var isInFullscreen: Bool { styleMask.contains(.fullScreen) }
+    var isMiniPlayer = false
+
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
+    override func toggleFullScreen(_ sender: Any?) {
+        if isMiniPlayer {
+            _ = onCommand?(.toggleFullscreen)
+            return
+        }
+        super.toggleFullScreen(sender)
+    }
 
     override func sendEvent(_ event: NSEvent) {
         if event.type == .keyDown {
@@ -94,6 +106,10 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     private var idleFrame: CGRect?
     private var normalFrame: CGRect?
     private var fullscreenTransition = false
+    var onExitMiniPlayer: (() -> Void)?
+    var canEnterMiniPlayer: Bool {
+        !fullscreenTransition && !window.isInFullscreen && window.attachedSheet == nil
+    }
     /// The menu and header expose the same player window preference.
     var onPinChanged: ((Bool) -> Void)?
     var dismissTransient: (() -> Bool)?
@@ -196,11 +212,25 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
             schedule: schedule)
         clicks.onTogglePause = togglePause
         clicks.onToggleFullscreen = { [weak self] in
-            guard let self, self.allowVideoFullscreen else { return }
+            guard let self else { return }
+            if self.window.isMiniPlayer {
+                self.onExitMiniPlayer?()
+                return
+            }
+            guard self.allowVideoFullscreen else { return }
             self.perform(.toggleFullscreen)
         }
         self.clicks = clicks
     }
+
+    func miniPlayerChanged() {
+        clicks?.cancel()
+        applyChrome(animated: false)
+    }
+
+    func cancelVideoClick() { clicks?.cancel() }
+
+    func compactVideoClick(count: Int) { clicks?.released(clickCount: count) }
 
     /// The session reported a batch; `snapshot` is the state after it.
     func sessionChanged(_ snapshot: SessionSnapshot) {
@@ -237,7 +267,7 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     }
 
     var canTogglePin: Bool {
-        !chrome.fullscreen && !fullscreenTransition && !window.isInFullscreen
+        !chrome.fullscreen && !fullscreenTransition && !window.isInFullscreen && !window.isMiniPlayer
     }
 
     @objc func togglePin() {
@@ -248,7 +278,7 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     }
 
     private func updatePin() {
-        let level: NSWindow.Level = isPinned && canTogglePin ? .floating : .normal
+        let level: NSWindow.Level = window.isMiniPlayer || (isPinned && canTogglePin) ? .floating : .normal
         if applyFloatingLevel, window.level != level { window.level = level }
         pinButton.state = isPinned ? .on : .off
         let label = isPinned ? "Disable Always on Top" : "Always on Top"
@@ -264,7 +294,9 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     /// shows, the video area keeps the video's aspect. Called from the window
     /// delegate's `windowWillResize(_:to:)`.
     func windowWillResize(to frameSize: NSSize) -> NSSize {
-        guard !chrome.fullscreen, !window.isInFullscreen, !fullscreenTransition else { return frameSize }
+        guard !chrome.fullscreen, !window.isInFullscreen, !fullscreenTransition, !window.isMiniPlayer else {
+            return frameSize
+        }
         let proposed = contentSize(forFrameSize: frameSize)
         let minimum = contentSize(forFrameSize: window.minSize)
         let maximum = workArea.map { contentSize(forFrameSize: $0.size) }
@@ -283,7 +315,7 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     /// AppKit chooses the frame origin from the edge being dragged. After the
     /// gesture, keep the resulting title and controls on the active display.
     func windowDidEndLiveResize() {
-        guard !chrome.fullscreen, !fullscreenTransition else { return }
+        guard !chrome.fullscreen, !fullscreenTransition, !window.isMiniPlayer else { return }
         restore(window.frame)
     }
 
@@ -291,7 +323,12 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     @discardableResult
     func perform(_ command: WindowCommand) -> Bool {
         if command == .exitFullscreen, dismissTransient?() == true { return true }
-        guard !fullscreenTransition, command.togglesFullscreen(isFullscreen: window.isInFullscreen) else { return false }
+        if window.isMiniPlayer {
+            onExitMiniPlayer?()
+            if command == .exitFullscreen { return !window.isMiniPlayer }
+        }
+        guard !window.isMiniPlayer, !fullscreenTransition,
+              command.togglesFullscreen(isFullscreen: window.isInFullscreen) else { return false }
         toggleFullscreen()
         return true
     }
@@ -326,7 +363,7 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
                                                    visibleFrame: area,
                                                    minSize: contentSize(forFrameSize: window.minSize),
                                                    chrome: videoChrome),
-              !window.isInFullscreen, applyInitialFit else { return }
+              !window.isInFullscreen, !window.isMiniPlayer, applyInitialFit else { return }
         var target = aspectFittedFrame(content: content, in: area)
         window.setFrame(target, display: true)
         if target.size != window.frame.size {
@@ -360,14 +397,14 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     private func applyChrome(animated: Bool) {
         chromeChanges += 1
         let change = chromeChanges
-        stripHeight?.constant = chrome.fullscreen ? 0 : TitleStripView.height
+        stripHeight?.constant = chrome.fullscreen || window.isMiniPlayer ? 0 : TitleStripView.height
         updatePin()
-        pinAccessory.isHidden = chrome.fullscreen
+        pinAccessory.isHidden = chrome.fullscreen || window.isMiniPlayer
         let showLights = chrome.trafficLightsVisible
         let showStrip = chrome.titleStripVisible
         let lights = trafficLights
         let identity = titleStrip.identity
-        titleStrip.isHidden = chrome.fullscreen
+        titleStrip.isHidden = chrome.fullscreen || window.isMiniPlayer
         let views: [(NSView, Bool)] = lights.map { ($0 as NSView, showLights) }
             + [(pinButton, showStrip), (identity, showStrip && showTitleIdentity)]
         if !showStrip, window.firstResponder === pinButton { window.makeFirstResponder(videoArea) }

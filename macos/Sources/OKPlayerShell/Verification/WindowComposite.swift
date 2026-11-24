@@ -12,6 +12,10 @@ extension VerifyRun {
                                       bytesPerRow: width * 4, space: space,
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         context.scaleBy(x: 2, y: 2)
+        if app.miniPlayer.isActive {
+            context.addPath(CGPath(roundedRect: root.bounds, cornerWidth: 14, cornerHeight: 14, transform: nil))
+            context.clip()
+        }
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
         PlayerCanvas.drawCanvas(in: root.bounds, appearance: root.effectiveAppearance)
@@ -21,7 +25,8 @@ extension VerifyRun {
         }
         // The video and OSC both begin below the title plane. The Welcome view
         // covers the idle video, while the side panel and toast sit above the OSC.
-        var planes: [NSView] = [app.osc.scrim, app.osc.panel, app.statusLayer.overlay, app.prompt,
+        var planes: [NSView] = [app.osc.scrim, app.osc.panel, app.miniPlayer.controls,
+                                app.statusLayer.overlay, app.prompt,
                                 app.history.welcomeView, controller.titleStrip, app.upNext.panel,
                                 app.osc.volumeCapsule, app.tracks.panel, app.statusLayer.toastView] + controller.trafficLights + [controller.pinButton]
         if let dropTarget = app.dropTarget { planes.append(dropTarget.highlight) }

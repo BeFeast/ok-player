@@ -156,6 +156,60 @@ pub fn compact_size_for_video(
     })
 }
 
+/// Size a compact window on the current display. During resize, the axis
+/// moved farther leads. A display too small for the source's floor takes
+/// precedence, while the source aspect still holds.
+pub fn constrain_compact_size(
+    video: WindowSize,
+    maximum: WindowSize,
+    resize: Option<(WindowSize, WindowSize)>,
+) -> Option<WindowSize> {
+    if video.width <= 0 || video.height <= 0 || maximum.width <= 0 || maximum.height <= 0 {
+        return None;
+    }
+    let width = f64::from(video.width);
+    let height = f64::from(video.height);
+    let desired = match resize {
+        Some((proposed, current))
+            if proposed.height.abs_diff(current.height)
+                > proposed.width.abs_diff(current.width) =>
+        {
+            f64::from(proposed.height) / height
+        }
+        Some((proposed, _)) => f64::from(proposed.width) / width,
+        None => f64::from(COMPACT_DEFAULT_SHORT_EDGE) / width.min(height),
+    };
+    let floor = f64::from(COMPACT_MIN_SHORT_EDGE) / width.min(height);
+    let ceiling = (f64::from(maximum.width) / width).min(f64::from(maximum.height) / height);
+    let scale = desired.max(floor).min(ceiling);
+    Some(WindowSize {
+        width: (width * scale).round_ties_even().max(1.0) as i32,
+        height: (height * scale).round_ties_even().max(1.0) as i32,
+    })
+}
+
+/// Recover a saved frame on its display, or keep it entirely visible on the
+/// replacement work area if the display configuration has changed.
+pub fn restore_window_frame(frame: WindowRect, work_area: WindowRect) -> Option<WindowRect> {
+    if frame.width <= 0 || frame.height <= 0 || work_area.width <= 0 || work_area.height <= 0 {
+        return None;
+    }
+    let width = frame.width.min(work_area.width);
+    let height = frame.height.min(work_area.height);
+    Some(WindowRect {
+        x: frame.x.clamp(
+            work_area.x,
+            work_area.x.saturating_add(work_area.width - width),
+        ),
+        y: frame.y.clamp(
+            work_area.y,
+            work_area.y.saturating_add(work_area.height - height),
+        ),
+        width,
+        height,
+    })
+}
+
 /// Settle a compact window into the nearest work-area corner when the release
 /// position is within the configured threshold on both axes.
 pub fn compact_corner_snap(

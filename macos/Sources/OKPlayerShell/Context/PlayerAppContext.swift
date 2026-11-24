@@ -8,11 +8,16 @@ extension PlayerApp {
         context.clampsToWindow = verification?.control != "context_clamp_disabled"
         context.query = { [weak self, weak behaviour] page, query in
             guard let self, let behaviour, case .commandSurface(let surface)? = self.client?.query(
-                .commandSurface(fullscreen: behaviour.window.isInFullscreen, page: page, query: query)) else { return nil }
+                .commandSurface(fullscreen: behaviour.window.isInFullscreen, miniPlayer: self.miniPlayer.isActive,
+                                page: page, query: query)) else { return nil }
             return surface
         }
         context.onVisibilityChange = { [weak self] shown in
             guard let self else { return }
+            if self.miniPlayer.isActive {
+                self.miniPlayer.setContextShown(shown)
+                return
+            }
             if shown {
                 self.osc.dismissVolume()
                 self.tracks.dismissPopover()
@@ -32,7 +37,7 @@ extension PlayerApp {
             let hit = root.hitTest(parent.convert(point, from: nil))
             // Controls, title chrome and the queue retain their own input.
             let interactive: [NSView] = [behaviour.titleStrip, self.osc.panel, self.osc.volumeCapsule,
-                                         self.upNext.panel, self.tracks.panel]
+                                         self.upNext.panel, self.tracks.panel, self.miniPlayer.controls]
             guard !interactive.contains(where: { hit?.isDescendant(of: $0) == true }),
                   !(hit is NSControl) else { return false }
             var candidate = hit

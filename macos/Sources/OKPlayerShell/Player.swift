@@ -24,6 +24,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let prompt = NSStackView()
     /// The floating transport controls over the video.
     let osc = TransportOverlay()
+    let miniPlayer = MiniPlayer()
     /// Loading, buffering and failure states over the video, and the toast.
     let statusLayer = StatusLayer()
     /// The Up Next side panel and its button on the controls.
@@ -128,6 +129,19 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         osc.moreActions = { [weak self] in self?.oscMenuActions() ?? [] }
         osc.collapsesSlots = verification?.control != "slot_collapse_disabled"
         osc.acceptsVolumeWheel = verification?.control != "volume_wheel_disabled"
+        miniPlayer.install(in: root, video: videoArea, controller: behaviour)
+        miniPlayer.snapsToCorners = verification?.control != "compact_snap_disabled"
+        miniPlayer.liftsSubtitles = verification?.control != "compact_clearance_disabled"
+        miniPlayer.onModeChange = { [weak self] active in
+            guard let self else { return }
+            self.commandPopover.dismiss()
+            self.tracks.dismissPopover()
+            self.upNext.hide()
+            self.osc.suspend(active)
+            self.commands.invalidate()
+        }
+        miniPlayer.showCommands = { [weak self] point in self?.commandPopover.show(at: point) }
+        miniPlayer.toast = { [weak self] readout in self?.statusLayer.show(toast: readout) }
         tracks.window = window
         // The status layer's toast goes on top of everything installed so far.
         statusLayer.install(in: root, below: behaviour.titleStrip, above: osc)
@@ -145,6 +159,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         behaviour.window.acceptsMouseMovedEvents = true
         behaviour.window.onPlayerInput = { [weak self] event in
             guard let self, !self.commandPopover.isShown else { return false }
+            if self.miniPlayer.isActive { return self.miniPlayer.handle(event) }
             let trackInput = event.type != .keyDown && self.tracks.handleWindowInput(event)
             return trackInput || self.osc.handleWindowInput(event)
         }
@@ -172,6 +187,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             fail("\(error)"); return
         }
         self.client = client
+        miniPlayer.session = client
         settings.connect(client)
         behaviour.connect(client) { [weak self] in self?.togglePause() }
         client.onBatch = { [weak self] batch in self?.sessionChanged(batch) }
@@ -239,7 +255,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         pin.state = pinItem.state
         let close = NSMenuItem(title: "Close Media", action: #selector(closeMedia), keyEquivalent: "")
         for item in [pin, close] { item.target = self }
-        return [pin, close]
+        let mini = NSMenuItem.playerCommand("mini-player", title: "Mini-Player", keyEquivalent: nil)
+        mini.target = self
+        mini.isEnabled = commands.row("mini-player")?.enabled == true
+        return [mini, pin, close]
     }
 
     func play(_ path: String) {
@@ -270,7 +289,11 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     func keyPressed() {
         keyPresses += 1
-        osc.noteActivity()
+        notePlayerActivity()
+    }
+
+    func notePlayerActivity() {
+        if miniPlayer.isActive { miniPlayer.noteActivity() } else { osc.noteActivity() }
     }
     /// The session reported a batch; the store already holds the new state.
     func sessionChanged(_ batch: EventBatch) {
@@ -305,6 +328,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if batch.events.contains(.shutdown) { fail("The playback engine stopped"); return }
         statusLayer.sessionChanged(shown)
         let snapshot = client.store.snapshot
+        miniPlayer.sessionChanged(snapshot)
         windowBehaviour?.sessionChanged(snapshot)
         video?.hasVideo = snapshot.video != nil
         if snapshot.source == nil { upNext.hide() }

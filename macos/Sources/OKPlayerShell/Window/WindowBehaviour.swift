@@ -156,6 +156,11 @@ final class VideoClickArbiter {
     /// A single click is waiting to toggle pause.
     var pausePending: Bool { pending != nil }
 
+    func cancel() {
+        pending?.cancel()
+        pending = nil
+    }
+
     /// A primary-button release on the video with AppKit's click count.
     func released(clickCount: Int) {
         switch classify(clickCount) {
@@ -166,8 +171,7 @@ final class VideoClickArbiter {
                 self?.onTogglePause?()
             }
         case .cancelPlayPauseAndToggleFullscreen:
-            pending?.cancel()
-            pending = nil
+            cancel()
             onToggleFullscreen?()
         case .ignore:
             break

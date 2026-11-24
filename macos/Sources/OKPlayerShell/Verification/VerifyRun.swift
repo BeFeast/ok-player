@@ -35,6 +35,8 @@ struct VerificationOptions {
         case "queue-show": "queue_pin_disabled"
         case "queue-edit": "queue_move_disabled"
         case "queue-single": "queue_add_disabled"
+        case "compact-mini": "compact_snap_disabled"
+        case "compact-mini-floor": "compact_clearance_disabled"
         default: "unsupported_control"
         }
     }
@@ -139,6 +141,9 @@ struct VerificationScenario: Decodable {
         case checkQueueJump = "check_queue_jump", previewQueueMove = "preview_queue_move"
         case checkQueueEdit = "check_queue_edit", openQueueMenu = "open_queue_menu"
         case checkQueueActions = "check_queue_actions", checkQueueAdd = "check_queue_add"
+        case enterMini = "enter_mini", dragMini = "drag_mini", resizeMini = "resize_mini"
+        case restoreMini = "restore_mini", wheelMini = "wheel_mini", seekMini = "seek_mini"
+        case idleMini = "idle_mini", accessibleMini = "accessible_mini"
     }
     enum Expectation: String, Decodable {
         case noCue = "no_cue", clearance, baseMargin = "base_margin"
@@ -152,6 +157,8 @@ struct VerificationScenario: Decodable {
         case contextEmpty = "context_empty", keyboardPlayback = "keyboard_playback"
         case contextResults = "context_results"
         case aboutIdentity = "about_identity", aboutFooter = "about_footer"
+        case miniHover = "mini_hover", miniFloor = "mini_floor", miniHidden = "mini_hidden"
+        case miniAccessible = "mini_accessible"
     }
     let schemaVersion: Int
     let id: String
@@ -182,6 +189,7 @@ final class VerifyRun {
     var preFullscreenTime: Double?
     var fullscreenEntries = 0
     var testWindow: NSWindow?
+    var miniOriginal: (frame: CGRect, level: NSWindow.Level, id: Int, media: MediaSource?, client: SessionClient)?
     private var visibleCueBottom: CGFloat?
     private var hiddenCueBottom: CGFloat?
     private var compositorStatus = "not_probed"
@@ -243,6 +251,7 @@ final class VerifyRun {
                 else if scenario.id == "context-idle-and-playback" || scenario.id == "command-keyboard" {
                     try await performCommandStep(step)
                 }
+                else if scenario.id.hasPrefix("compact-mini") { try await performMiniStep(step) }
                 else { try await perform(step) }
             }
             result["status"] = failures.isEmpty ? "passed" : "failed"

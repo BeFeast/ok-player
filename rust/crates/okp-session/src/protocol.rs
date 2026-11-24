@@ -311,6 +311,21 @@ pub enum Query {
         #[serde(default)]
         chrome: Option<WindowSize>,
     },
+    /// The default or resized Mini-Player size in logical points.
+    CompactWindowSize {
+        video: WindowSize,
+        maximum: WindowSize,
+        #[serde(default)]
+        proposed: Option<WindowSize>,
+        #[serde(default)]
+        current: Option<WindowSize>,
+    },
+    /// Settle a dragged Mini-Player or recover the saved standard frame.
+    CompactWindowPlacement {
+        frame: WindowRect,
+        visible_frame: WindowRect,
+        snap: bool,
+    },
     /// What a primary-button release with `press_count` clicks on the video
     /// means ([`crate::window::video_click_intent`]). Reads no session state.
     VideoClick { press_count: i32 },
@@ -326,6 +341,8 @@ pub enum Query {
     CommandSurface {
         #[serde(default)]
         fullscreen: bool,
+        #[serde(default)]
+        mini_player: bool,
         page: CommandMenu,
         query: String,
     },
@@ -397,6 +414,9 @@ pub enum QueryResult {
     /// is nothing to fit.
     WindowFit {
         frame: Option<WindowRect>,
+    },
+    CompactWindowSize {
+        size: Option<WindowSize>,
     },
     VideoClick {
         intent: VideoClickIntent,
