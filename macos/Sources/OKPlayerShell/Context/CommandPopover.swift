@@ -7,6 +7,7 @@ final class CommandPopover: PalettePanel, NSSearchFieldDelegate {
     private let search = NSSearchField()
     private let scroll = NSScrollView()
     private let list = CommandList()
+    private let groupHeading = NSUserInterfaceItemIdentifier("command-group-heading")
     private weak var shadowHost: NSView?
     private weak var host: NSView?
     private weak var previousResponder: NSResponder?
@@ -80,7 +81,8 @@ final class CommandPopover: PalettePanel, NSSearchFieldDelegate {
 
     @discardableResult
     func show(at windowPoint: NSPoint? = nil) -> Bool {
-        guard let host, let window = host.window, !isShown, let initial = query?(.topLevel, "") else { return false }
+        guard let host, let window = host.window, window.attachedSheet == nil,
+              !isShown, let initial = query?(.topLevel, "") else { return false }
         host.layoutSubtreeIfNeeded()
         let firstResponder = window.firstResponder
         let editingControl: NSResponder? = (firstResponder as? NSTextView)?.delegate as? NSView
@@ -104,6 +106,7 @@ final class CommandPopover: PalettePanel, NSSearchFieldDelegate {
         rebuildRows(initial.entries)
         reposition()
         guard isShown else { return false }
+        scrollToTop()
         search.selectText(nil)
         onVisibilityChange?(true)
         return true
@@ -179,10 +182,12 @@ final class CommandPopover: PalettePanel, NSSearchFieldDelegate {
         model = updated
         rebuildRows(updated.entries)
         reposition()
-        if resetScroll {
-            scroll.contentView.scroll(to: .zero)
-            scroll.reflectScrolledClipView(scroll.contentView)
-        }
+        if resetScroll { scrollToTop() }
+    }
+
+    private func scrollToTop() {
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
     }
 
     func controlTextDidChange(_ notification: Notification) { searchChanged() }
@@ -268,6 +273,12 @@ final class CommandPopover: PalettePanel, NSSearchFieldDelegate {
                     }
                 case .page(let page, let label):
                     appendRow(label, hasPage: true) { [weak self] in self?.openPage(page, title: label) }
+                case .group(let label):
+                    let heading = NSTextField(labelWithString: label)
+                    heading.identifier = groupHeading
+                    heading.font = .systemFont(ofSize: 11, weight: .semibold)
+                    heading.textColor = PaletteRole.textMuted.color
+                    rows.append(heading)
                 case .separator:
                     rows.append(PaletteSurface(fill: .borderSubtle))
                 }
@@ -341,12 +352,19 @@ final class CommandPopover: PalettePanel, NSSearchFieldDelegate {
             row.frame = row is PaletteSurface
                 ? NSRect(x: 6, y: y + 5, width: max(0, width - 12), height: 1)
                 : NSRect(x: 0, y: y, width: width, height: height)
-            if row is NSTextField { row.frame.origin.y += 12 }
+            if row.identifier == groupHeading {
+                row.frame = NSRect(x: 10, y: y + 6, width: max(0, width - 20), height: 16)
+            } else if row is NSTextField {
+                row.frame.origin.y += 12
+            }
             y += height
         }
     }
 
-    private func rowHeight(_ row: NSView) -> CGFloat { row is PaletteSurface ? 11 : 36 }
+    private func rowHeight(_ row: NSView) -> CGFloat {
+        if row is PaletteSurface { return 11 }
+        return row.identifier == groupHeading ? 24 : 36
+    }
 }
 
 private final class CommandList: NSView {

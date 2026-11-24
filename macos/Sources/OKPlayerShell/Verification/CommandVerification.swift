@@ -12,6 +12,8 @@ extension VerifyRun {
             try checkContextIdle()
         case .checkContextSearch:
             try checkContextSearch()
+        case .checkContextEmpty:
+            try clearContextSearch(toEmptyResult: true)
         case .checkContextPages:
             try checkContextPages()
         case .checkContextCorners:
@@ -45,6 +47,7 @@ extension VerifyRun {
             switch entry {
             case .command(let row): return row.label
             case .page(_, let title): return title
+            case .group(let label): return label
             case .separator: return "-"
             }
         }
@@ -72,14 +75,18 @@ extension VerifyRun {
 
         editor.selectAll(nil)
         editor.insertText("⌘O", replacementRange: editor.selectedRange())
-        guard let open = contextRow("open-file") else {
+        if let open = contextRow("open-file") {
+            if !open.available || !open.enabled || open.shortcut?.macOSHint != "⌘O" {
+                failures.append("context:native_hint")
+            }
+        } else {
             failures.append("context:search_shortcut")
-            return try clearContextSearch(toEmptyResult: true)
         }
-        if !open.available || !open.enabled || open.shortcut?.macOSHint != "⌘O" {
-            failures.append("context:native_hint")
+        editor.selectAll(nil)
+        editor.insertText("window", replacementRange: editor.selectedRange())
+        if !context.entries.contains(.group(label: "View & window")) || contextRow("fit-window-to-media") == nil {
+            failures.append("context:grouped_search")
         }
-        try clearContextSearch(toEmptyResult: true)
     }
 
     private func clearContextSearch(toEmptyResult: Bool) throws {
@@ -351,6 +358,7 @@ extension VerifyRun {
         let visible = context.isShown
         if visible != wantsContext || (wantsContext && !context.isSearching)
             || (expected == .contextEmpty && !context.showsEmptyResult)
+            || (expected == .contextResults && context.searchText != "window")
             || (wantsVideo ? snapshot.status != .playing : snapshot.status != .idle) {
             failures.append("command_capture:\(name)")
         }

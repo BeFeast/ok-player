@@ -90,6 +90,7 @@ pub enum CommandMenu {
 pub enum CommandSurfaceEntry {
     Command { row: RegistryCommand },
     Page { page: CommandMenu, label: String },
+    Group { label: String },
     Separator {},
 }
 
@@ -333,26 +334,34 @@ impl CommandRegistry {
                 &PortableKeyNames,
             )
             .ok();
-            let bindings = default_bindings_on(self.platform);
-            player_command_registry()
-                .iter()
-                .filter_map(|spec| {
-                    let row = rows.iter().find(|row| row.id == spec.id.id())?;
-                    let matches_chord = chord.as_ref().is_some_and(|chord| {
-                        row.shortcut.as_ref() == Some(chord)
-                            || bindings.iter().any(|binding| {
-                                binding.chord == *chord
-                                    && command_for_action(self.platform, binding.action) == row.id
-                            })
+            let bound_id = chord.and_then(|chord| {
+                default_bindings_on(self.platform)
+                    .into_iter()
+                    .find(|binding| binding.chord == chord)
+                    .map(|binding| command_for_action(self.platform, binding.action))
+            });
+            let mut entries = Vec::new();
+            let mut last_group = None;
+            for spec in player_command_registry() {
+                let Some(row) = rows.iter().find(|row| row.id == spec.id.id()) else {
+                    continue;
+                };
+                let top_label = player_command_menu_top_level_label(spec.id).unwrap_or_default();
+                if bound_id != Some(spec.id.id())
+                    && !top_label.to_lowercase().contains(&query)
+                    && !player_command_matches(spec.id, &row.label, &query)
+                {
+                    continue;
+                }
+                if last_group != Some(spec.group) {
+                    entries.push(CommandSurfaceEntry::Group {
+                        label: spec.group.label().to_owned(),
                     });
-                    let top_label =
-                        player_command_menu_top_level_label(spec.id).unwrap_or_default();
-                    (matches_chord
-                        || top_label.to_lowercase().contains(&query)
-                        || player_command_matches(spec.id, &row.label, &query))
-                    .then(|| CommandSurfaceEntry::Command { row: row.clone() })
-                })
-                .collect()
+                    last_group = Some(spec.group);
+                }
+                entries.push(CommandSurfaceEntry::Command { row: row.clone() });
+            }
+            entries
         } else if let Some(page) = page.page() {
             page.commands()
                 .iter()
@@ -959,6 +968,9 @@ mod tests {
                 CommandSurfaceEntry::Command { row } if row.id == id)));
         }
         assert!(rows("nothing like a command").is_empty());
+        assert!(rows("window").contains(&CommandSurfaceEntry::Group {
+            label: "View & window".to_owned(),
+        }));
         let snapshot = playing(SourceKind::Local, "/media/film.mkv");
         let entries = mac
             .surface(&snapshot, state, 1, CommandMenu::TopLevel, "")

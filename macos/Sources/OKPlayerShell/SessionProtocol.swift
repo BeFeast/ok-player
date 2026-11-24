@@ -271,6 +271,7 @@ struct CommandSurface: Codable, Equatable {
 enum CommandSurfaceEntry: Codable, Equatable {
     case command(row: RegistryCommand)
     case page(page: CommandMenu, label: String)
+    case group(label: String)
     case separator
 }
 

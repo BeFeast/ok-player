@@ -195,7 +195,8 @@ change.
 `result.command_surface.surface`, including `preferred_width` and
 `max_height` in points. An empty query returns the curated `page`. A
 nonempty query searches labels, keywords and platform shortcuts across all
-pages. Entries are `command {row}`, `page {page, label}` or `separator {}`.
+pages. Entries are `command {row}`, `page {page, label}`, `group {label}`
+for search groups, or `separator {}`.
 The root uses `page: "top_level"`. Rows carry the same availability and state
 as the registry, so the context surface can show disabled commands.
 
