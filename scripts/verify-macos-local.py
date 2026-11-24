@@ -85,11 +85,19 @@ def fixture(ffmpeg, temporary, spec, receipt):
         if spec["id"] == "window-fit":
             fixtures = [(video, "3840x2160"), (temporary / "portrait.mp4", "1080x1440")]
         for path, size in fixtures:
-            command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-                    "-f", "lavfi", "-i", f"smptebars=s={size}:r=24:d=25",
+            if spec["id"] == "window-fit":
+                sources = ["-f", "lavfi", "-i", f"smptebars=s={size}:r=24:d=12"]
+            else:
+                # Match the reference's pattern without testsrc2's burned-in timecode.
+                sources = [
+                    "-f", "lavfi", "-i", f"testsrc2=s={size}:r=24:d=60",
+                    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=60",
+                    "-vf", "drawbox=x=0:y=0:w=125:h=55:color=red:t=fill", "-c:a", "aac",
+                ]
+            command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", *sources,
                     "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2", "-pix_fmt", "yuv420p",
                     "-g", "48", "-map_metadata", "-1", "-fflags", "+bitexact", "-flags", "+bitexact",
-                    "-movflags", "+faststart", str(path), timeout=90)
+                    "-movflags", "+faststart", str(path), timeout=120)
             receipt["fixture"][path.name] = digest(path)
     return video
 

@@ -11,8 +11,11 @@ extension VerifyRun {
         case .sizeWindow, .smallWorkArea:
             let area = screen.visibleFrame
             let small = step.action == .smallWorkArea
-            let permitted = CGSize(width: min(area.width, small ? 750 : 1280),
-                                   height: min(area.height, small ? 676 : 800))
+            // The 1× hosted display is smaller than the reference. The chrome
+            // case lays out the full logical size for the app-composite capture.
+            let referenceSize = options.scenarioID == "window-chrome"
+            let permitted = referenceSize ? CGSize(width: 1280, height: 800)
+                : CGSize(width: min(area.width, small ? 750 : 1280), height: min(area.height, small ? 676 : 800))
             let workArea = WindowRect(inside: CGRect(
                 x: area.midX - permitted.width / 2, y: area.midY - permitted.height / 2,
                 width: permitted.width, height: permitted.height)).cgRect
@@ -29,6 +32,11 @@ extension VerifyRun {
             try await wait("opened \(url.lastPathComponent) via AppKit and swapped") {
                 self.snapshot.source?.location == url.path && self.snapshot.status == .playing &&
                     self.snapshot.video != nil && self.swaps > before
+            }
+        case .playTo:
+            guard let seconds = step.seconds else { throw VerifyError("Missing playback timestamp") }
+            try await wait("playback reached the reference checkpoint at \(seconds) s") {
+                self.snapshot.status == .playing && (self.snapshot.timePos ?? -1) >= seconds
             }
         case .doubleClick:
             preFullscreenFrame = app.window.frame
@@ -139,7 +147,8 @@ extension VerifyRun {
             let mediaTitle = snapshot.title ?? options.fixture.lastPathComponent
             let span = videoRect.minX == root.bounds.minX && videoRect.maxX == root.bounds.maxX &&
                 videoRect.minY == root.bounds.minY && abs(videoRect.maxY - (root.bounds.maxY - TitleStripView.height)) < 1
-            if !chromeVisible || lights.count != 3 || !lights.allSatisfy(viewVisible) || !visiblePin ||
+            if root.bounds.size != CGSize(width: 1280, height: 800) ||
+                !chromeVisible || lights.count != 3 || !lights.allSatisfy(viewVisible) || !visiblePin ||
                 titleRect.minX <= lightsRight || titleRect.minX >= 125 || titleRect.maxX > pin.minX + 1 ||
                 strip.hasMedia != hasVideo || strip.title != (expected == .welcome ? "OK Player" : mediaTitle) ||
                 !span || (expected == .welcome ? !app.history.showsWelcome : !hasVideo) {

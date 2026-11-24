@@ -19,6 +19,13 @@
       "action": "open"
     },
     {
+      "action": "size_window"
+    },
+    {
+      "action": "play_to",
+      "seconds": 1.1
+    },
+    {
       "action": "pointer_reveal"
     },
     {
