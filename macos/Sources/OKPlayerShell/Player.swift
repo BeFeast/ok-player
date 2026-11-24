@@ -129,7 +129,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         osc.moreActions = { [weak self] in self?.oscMenuActions() ?? [] }
         osc.collapsesSlots = verification?.control != "slot_collapse_disabled"
         osc.acceptsVolumeWheel = verification?.control != "volume_wheel_disabled"
-        miniPlayer.install(in: root, video: videoArea, controller: behaviour)
+        miniPlayer.install(in: root, video: videoArea, above: osc, controller: behaviour)
         miniPlayer.snapsToCorners = verification?.control != "compact_snap_disabled"
         miniPlayer.liftsSubtitles = verification?.control != "compact_clearance_disabled"
         miniPlayer.onModeChange = { [weak self] active in
@@ -144,7 +144,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         miniPlayer.toast = { [weak self] readout in self?.statusLayer.show(toast: readout) }
         tracks.window = window
         // The status layer's toast goes on top of everything installed so far.
-        statusLayer.install(in: root, below: behaviour.titleStrip, above: osc)
+        statusLayer.install(in: root, below: behaviour.titleStrip, above: miniPlayer.controls)
         installCommandPopover(in: root, behaviour: behaviour)
         statusLayer.onRetry = { [weak self] source in self?.play(source) }
         statusLayer.onOpenAnother = { [weak self] in self?.openFile() }

@@ -83,11 +83,16 @@ final class MiniPlayer: NSObject {
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(accessibilityChanged(_:)),
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(displaysChanged(_:)),
+                                               name: NSApplication.didChangeScreenParametersNotification, object: nil)
     }
 
-    deinit { NSWorkspace.shared.notificationCenter.removeObserver(self) }
+    deinit {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        NotificationCenter.default.removeObserver(self)
+    }
 
-    func install(in root: NSView, video: NSView, controller: PlayerWindowController) {
+    func install(in root: NSView, video: NSView, above osc: NSView, controller: PlayerWindowController) {
         self.controller = controller
         self.root = root
         self.video = video
@@ -98,7 +103,7 @@ final class MiniPlayer: NSObject {
                                             owner: root, userInfo: nil))
         controls.autoresizingMask = [.width, .height]
         controls.frame = root.bounds
-        root.addSubview(controls)
+        root.addSubview(controls, positioned: .above, relativeTo: osc)
     }
 
     func toggle() {
@@ -196,6 +201,10 @@ final class MiniPlayer: NSObject {
 
     @objc private func accessibilityChanged(_ notification: Notification) { updateAccessibility() }
 
+    @objc private func displaysChanged(_ notification: Notification) {
+        if isActive, let window { settle(window, snap: false) }
+    }
+
     private func updateAccessibility() {
         controls.accessibility = accessibilityOverride ?? .system
     }
@@ -245,6 +254,7 @@ final class MiniPlayer: NSObject {
             .transport(at: scrub.dragPosition(duration: snapshot.duration))) else { return }
         if !view.seekable { cancelScrub() }
         let title = snapshot.title ?? snapshot.source.map { ($0.location as NSString).lastPathComponent } ?? ""
+        controls.hasSubtitles = snapshot.tracks.contains { $0.kind == .subtitle && $0.selected }
         controls.update(view, title: title, playing: snapshot.status == .playing)
         autoHide.update(allowed: view.osc.autoHide, hideAfter: view.osc.hideAfter)
         updateSubtitleClearance()
@@ -392,8 +402,13 @@ final class MiniPlayer: NSObject {
     }
 
     private func settle(_ window: PlayerWindow, snap: Bool) {
-        guard let area = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame,
-              let frame = session?.compactPlacement(of: window.frame, inside: area, snap: snap && snapsToCorners),
+        guard let area = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame, let session else { return }
+        var proposed = window.frame
+        if let video = aspectVideo, proposed.width > area.width || proposed.height > area.height,
+           let size = session.compactSize(for: video, maximum: area.size, proposed: proposed.size, current: proposed.size) {
+            proposed.size = size
+        }
+        guard let frame = session.compactPlacement(of: proposed, inside: area, snap: snap && snapsToCorners),
               frame != window.frame else { return }
         window.setFrame(frame, display: true, animate: !controls.accessibility.reduceMotion)
     }

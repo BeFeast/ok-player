@@ -30,6 +30,9 @@ final class MiniPlayerControls: NSView {
     private var surfaces: [MiniMaterial] { [caption, playPlate, rail] }
     private var animationGeneration = 0
     private(set) var revealed = false
+    var hasSubtitles = false {
+        didSet { if hasSubtitles != oldValue { needsLayout = true } }
+    }
 
     var accessibility = MiniPlayerAccessibility.system {
         didSet {
@@ -67,14 +70,25 @@ final class MiniPlayerControls: NSView {
         closeMedia.frame = NSRect(x: caption.bounds.width - 36, y: 7, width: 28, height: 28)
         title.frame = NSRect(x: 46, y: 12, width: max(0, caption.bounds.width - 90), height: 17)
         playPlate.frame = NSRect(x: bounds.midX - 22, y: bounds.midY - 22, width: 44, height: 44)
-        play.frame = playPlate.bounds
         rail.frame = NSRect(x: 10, y: 9, width: width - 20, height: 40)
+        // A centered play button would cover the lifted cue on a short
+        // video. Keep it in the rail while that subtitle track is selected.
+        let playInRail = hasSubtitles && bounds.height < 220
+        let playHost = playInRail ? rail : playPlate
+        if play.superview !== playHost {
+            play.removeFromSuperview()
+            playHost.addSubview(play)
+        }
+        playPlate.isHidden = playInRail
+        play.frame = playInRail ? NSRect(x: 5, y: 6, width: 28, height: 28) : playPlate.bounds
         more.frame = NSRect(x: rail.bounds.width - 34, y: 6, width: 28, height: 28)
         mute.isHidden = width < 360
         mute.frame = more.frame.offsetBy(dx: -30, dy: 0)
         let end = mute.isHidden ? more.frame.minX : mute.frame.minX
         let elapsedWidth = min(58, ceil(elapsed.intrinsicContentSize.width))
-        elapsed.frame = NSRect(x: 9, y: 12, width: elapsedWidth, height: 16)
+        elapsed.isHidden = playInRail && width < 236
+        elapsed.frame = NSRect(x: playInRail ? play.frame.maxX + 3 : 9, y: 12,
+                               width: elapsed.isHidden ? 0 : elapsedWidth, height: 16)
         seek.frame = NSRect(x: elapsed.frame.maxX + 3, y: 8,
                             width: max(0, end - elapsed.frame.maxX - 5), height: 24)
         onLayout?()
@@ -83,7 +97,7 @@ final class MiniPlayerControls: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard !usesSolidMaterial,
               let fade = NSGradient(starting: NSColor.black.withAlphaComponent(0.5), ending: .clear) else { return }
-        for surface in surfaces {
+        for surface in surfaces where !surface.isHidden {
             fade.draw(in: surface.frame.insetBy(dx: -24, dy: -28), relativeCenterPosition: .zero)
         }
     }
@@ -144,6 +158,7 @@ final class MiniPlayerControls: NSView {
 
     var subtitleClearance: CGFloat { revealed ? rail.frame.maxY + 8 : 0 }
     var usesSolidMaterial: Bool { surfaces.allSatisfy(\.isSolid) }
+    var visiblePlates: [CGRect] { revealed ? surfaces.filter { !$0.isHidden }.map(\.frame) : [] }
 
     func interactive(at point: NSPoint) -> NSView? {
         guard revealed else { return nil }

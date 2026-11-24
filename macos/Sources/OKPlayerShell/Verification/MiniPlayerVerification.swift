@@ -191,10 +191,10 @@ extension VerifyRun {
         var frame: VideoEvidence?
         for attempt in 0..<8 {
             frame = video.videoLayer.verificationFrame(width: width, height: height)
-            if let frame, hover ? frame.hasPicture : frame.videoPresent && frame.glyphPixels > 100 { break }
+            if let frame, frame.hasPicture && (hover || frame.glyphPixels > 100) { break }
             if attempt < 7 { try await Task.sleep(nanoseconds: 130_000_000) }
         }
-        guard let frame, hover ? frame.hasPicture : frame.videoPresent else {
+        guard let frame, frame.hasPicture else {
             throw VerifyError("Could not capture live 2× compact video", blocked: true)
         }
 
@@ -212,7 +212,10 @@ extension VerifyRun {
             if hidden {
                 if bottom >= 49 { failures.append("compact_mini_floor:baseline") }
             } else {
-                if bottom <= controls.subtitleClearance { failures.append("compact_mini_floor:clearance") }
+                let cue = CGRect(x: glyphs.minX / 2, y: bottom, width: glyphs.width / 2, height: glyphs.height / 2)
+                if bottom <= controls.subtitleClearance || controls.visiblePlates.contains(where: { $0.intersects(cue) }) {
+                    failures.append("compact_mini_floor:clearance")
+                }
             }
         }
 
