@@ -121,6 +121,7 @@ final class SessionProtocolTests: XCTestCase {
             .union(TrackProtocolTests.covered.map { "tracks/\($0)" })
             .union(WindowSessionQueryTests.fixtures)
             .union(OpenProtocolTests.covered.map { "open/\($0)" })
+            .union(SettingsProtocolTests.fixtures)
             .union(ShortcutKeyTests.fixtures)
         XCTAssertFalse(names.isEmpty, "no fixtures found in \(GoldenFixtures.directory.path)")
         XCTAssertEqual(Set(names), covered, "a fixture was added or removed without a Swift test")

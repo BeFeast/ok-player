@@ -134,6 +134,9 @@ final class SettingsWindow: NSWindow, NSSearchFieldDelegate {
 
     private func navigate(to page: SettingsPage) {
         selectedPage = page
+        if searchField.currentEditor() != nil, !searchField.stringValue.isEmpty {
+            _ = makeFirstResponder(nil)
+        }
         searchField.stringValue = ""
         showPage()
     }

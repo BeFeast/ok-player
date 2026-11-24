@@ -18,12 +18,13 @@ extension VerifyRun {
             let before = try settingsWindow()
             before.close()
             app.window.makeKeyAndOrderFront(nil)
-            guard let video = app.video,
+            let welcome = app.history.welcomeView
+            guard !welcome.isHidden,
                   let click = NSEvent.mouseEvent(with: .rightMouseDown, location: .zero, modifierFlags: [],
                                                  timestamp: ProcessInfo.processInfo.systemUptime,
                                                  windowNumber: app.window.windowNumber, context: nil,
                                                  eventNumber: 0, clickCount: 1, pressure: 1),
-                  let menu = video.menu(for: click),
+                  let menu = welcome.menu(for: click),
                   let item = menu.items.firstIndex(where: { $0.playerCommandID == "open-settings" }) else {
                 throw VerifyError("The player context menu has no Settings action")
             }
@@ -76,8 +77,10 @@ extension VerifyRun {
               let editor = window.searchField.currentEditor() as? NSTextView else {
             throw VerifyError("The native Settings search field did not take focus")
         }
-        editor.insertText("no such preference", replacementRange: editor.selectedRange())
-        checkSettings(window.resultButtons.isEmpty, "no_search_match")
+        editor.insertText("appearance", replacementRange: editor.selectedRange())
+        try await wait("search finds Appearance") { window.resultButtons.contains { $0.page == .appearance } }
+        editor.insertText("no such preference", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        try await wait("search clears stale results for unmatched text") { window.resultButtons.isEmpty }
         editor.insertText("history retention", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
         try await wait("a shared cross-page search result") {
             window.resultButtons.contains { $0.title == "History retention — Integration" }

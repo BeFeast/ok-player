@@ -35,7 +35,7 @@ final class SettingsRailButton: NSButton {
 
     init(destination: SettingsDestination, label: String) {
         page = destination.id
-        symbol = NSImage(systemSymbolName: page.symbol, accessibilityDescription: nil)
+        symbol = NSImage(systemSymbolName: destination.id.symbol, accessibilityDescription: nil)
         super.init(frame: .zero)
         title = label
         setButtonType(.onOff)

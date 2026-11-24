@@ -2,6 +2,11 @@ import XCTest
 @testable import OKPlayerShell
 
 final class SettingsProtocolTests: XCTestCase {
+    static let fixtures: Set<String> = [
+        "settings/command-theme.json", "settings/query-settings.json", "settings/query-search.json",
+        "settings/reply-settings.json", "settings/reply-search.json",
+    ]
+
     func testSettingsDocumentsRoundTrip() throws {
         let commandPath = "settings/command-theme.json"
         let command = CommandEnvelope(command: .setAppearanceTheme(theme: .light))

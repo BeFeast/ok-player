@@ -262,7 +262,8 @@ impl SessionHistory {
             // remembered for the media yet.
             | Command::AddSubtitle { .. }
             | Command::SetSubtitleScale { .. }
-            | Command::NudgeSubtitleScale { .. } => return,
+            | Command::NudgeSubtitleScale { .. }
+            | Command::SetAppearanceTheme { .. } => return,
         };
         // The value the shell just set, not the engine's next report of it,
         // which may still hold the previous value. It is written with the next

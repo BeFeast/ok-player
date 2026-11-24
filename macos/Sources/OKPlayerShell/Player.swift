@@ -101,11 +101,11 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             prompt.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 12)
         ])
         behaviour.install(in: root, videoArea: videoArea)
-        installSettingsContextMenu(on: [root, videoArea, behaviour.titleStrip])
         for view in [videoArea, osc] {
             view.topAnchor.constraint(equalTo: behaviour.titleStrip.bottomAnchor).isActive = true
         }
         history.install(in: root, below: behaviour.titleStrip, above: osc.panel)
+        installSettingsContextMenu(on: [root, videoArea, behaviour.titleStrip, history.welcomeView])
         upNext.install(in: root, below: behaviour.titleStrip, above: osc.panel)
         upNext.onVisibilityChange = { [weak self] visible in
             guard let self, self.verification?.control != "panel_pin_disabled" else { return }

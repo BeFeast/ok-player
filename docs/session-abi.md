@@ -281,6 +281,22 @@ is forwarded as `set_mute(false)` instead, so the first toggle always clears it.
 
 The documents are pinned by `rust/crates/okp-session/fixtures/transport/`.
 
+## Settings and Appearance
+
+`settings {}` returns the saved theme, the ordered rail destinations and the
+separate About destination in `result.settings.settings`. Each destination
+has an ID, title and availability. `settings_search {text}` returns matching
+labels and their destinations in `result.settings_search.hits`.
+
+`set_appearance_theme {theme}` accepts `light` or `auto`. The session saves
+the edit to `config_dir/settings.json` before replying `applied`. It replies
+`no_op` for the current value and `rejected` if it cannot read or save the
+profile. Rejection leaves the previous theme active. The read view can also
+return `dark` from an existing profile. The shell applies the confirmed
+theme and resolves Auto against the system's effective appearance.
+
+Rust and Swift share fixtures in `rust/crates/okp-session/fixtures/settings/`.
+
 ## Tracks and subtitles
 
 The `tracks` query answers what the audio and subtitle menus show, with the
