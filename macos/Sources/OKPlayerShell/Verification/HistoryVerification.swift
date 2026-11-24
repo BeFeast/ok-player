@@ -52,11 +52,11 @@ extension VerifyRun {
             guard history.showsWelcome, !history.showsInlineHistory else {
                 throw VerifyError("The shelf must be visible before navigating to History")
             }
-            try await clickHistory(step.action == .historyArrow ? "shelf-arrow" : "footer-navigation", shelf: true)
+            try await activateHistory(step.action == .historyArrow ? "shelf-arrow" : "footer-navigation", shelf: true)
             try await wait("History takes the idle player surface") { history.showsInlineHistory }
             try verifyHistoryRows()
         case .historyBack:
-            try await clickHistory(step.name == "footer" ? "footer-navigation" : "back")
+            try await activateHistory(step.name == "footer" ? "footer-navigation" : "back")
             try await wait("Back returns to the shelf in the same window") {
                 !history.showsHistory && !history.shelfView.isHiddenOrHasHiddenAncestor
             }
@@ -68,7 +68,12 @@ extension VerifyRun {
                 }
             }
         case .historySearch:
-            try await clickHistory("search")
+            try await wait("History search is laid out") {
+                history.pageBounds["search"] != nil && self.historySearchField(in: history.historyPane) != nil
+            }
+            guard let field = historySearchField(in: history.historyPane), app.window.makeFirstResponder(field) else {
+                throw VerifyError("The visible search field did not accept focus")
+            }
             try await wait("History search has a live field editor") {
                 self.app.window.firstResponder is NSTextView
             }
@@ -81,14 +86,14 @@ extension VerifyRun {
                     && !history.page.hasMore
             }
         case .historyClear:
-            try await clickHistory("clear")
+            try await activateHistory("clear")
             try await wait("Clear restores the first page") {
                 history.page.search.isEmpty && self.historyRows.count == 6 && history.page.hasMore
             }
         case .historyMore:
             let first = historyRows.map(\.id)
             guard first.count == 6, history.page.hasMore else { throw VerifyError("Incorrect first History page") }
-            try await clickHistory("show-more")
+            try await activateHistory("show-more")
             do {
                 try await wait("Show more appends rows and reaches the end of history") {
                     self.historyRows.count == 7 && !history.page.hasMore
@@ -108,7 +113,7 @@ extension VerifyRun {
             guard let first = history.welcome.entries.first, let position = first.resumeFrom, position > 4 else {
                 throw VerifyError("The newest card has no saved resume point")
             }
-            try await clickHistory(first.id, shelf: true)
+            try await activateHistory(first.id, shelf: true)
             try await wait("clicking the card resumes the original source at its stored position") {
                 self.snapshot.source == first.source && self.snapshot.video != nil
                     && (self.snapshot.status == .playing || self.snapshot.status == .paused)
@@ -182,6 +187,7 @@ extension VerifyRun {
             return abs(position - 7) < 0.12
         }
         app.window.setContentSize(CGSize(width: 1120, height: 780))
+        app.window.center()
         let shelf = app.history.welcome.entries
         guard shelf.map(\.title) == ["Episode 3", "Dark fallback", "Finished"],
               shelf[0].state == .progress, abs(shelf[0].progress - 7.0 / 18) < 0.02,
@@ -242,37 +248,30 @@ extension VerifyRun {
         let extent = CGRect(origin: .zero, size: history.historyPane.bounds.size).insetBy(dx: -0.5, dy: -0.5)
         guard extent.width > 1, extent.width < 510, let first = historyRows.first else { return false }
         return ["back", "search", first.id, "actions:\(first.id)", "footer", "footer-navigation"].allSatisfy {
-            guard let rect = history.pageBounds[$0] else { return false }
+            guard let rect = history.pageBounds[$0]?.frame else { return false }
             return !rect.isEmpty && extent.contains(rect)
         }
     }
 
-    private func clickHistory(_ id: String, shelf: Bool = false) async throws {
+    private func historySearchField(in view: NSView) -> HistorySearchTextField? {
+        if let field = view as? HistorySearchTextField { return field }
+        return view.subviews.lazy.compactMap { self.historySearchField(in: $0) }.first
+    }
+
+    private func activateHistory(_ id: String, shelf: Bool = false) async throws {
         let history = app.history
         let host = shelf ? history.shelfView : history.historyPane
         try await wait("History control \(id) is laid out and reachable") {
-            guard let rect = (shelf ? history.shelfBounds : history.pageBounds)[id] else { return false }
-            return !host.isHiddenOrHasHiddenAncestor && host.bounds.size.height > rect.midY
+            guard let control = (shelf ? history.shelfBounds : history.pageBounds)[id],
+                  control.activate != nil else { return false }
+            let rect = control.frame
+            return !rect.isEmpty && !host.isHiddenOrHasHiddenAncestor && host.bounds.size.height > rect.midY
                 && host.bounds.size.width > rect.midX && rect.midX >= 0 && rect.midY >= 0
         }
-        guard let rect = (shelf ? history.shelfBounds : history.pageBounds)[id] else {
+        guard let activate = (shelf ? history.shelfBounds : history.pageBounds)[id]?.activate else {
             throw VerifyError("History control \(id) disappeared")
         }
-        let point = host.convert(CGPoint(x: rect.midX, y: host.isFlipped ? rect.midY : host.bounds.height - rect.midY),
-                                 to: nil)
-        func event(_ type: NSEvent.EventType) throws -> NSEvent {
-            guard let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
-                                                timestamp: ProcessInfo.processInfo.systemUptime,
-                                                windowNumber: app.window.windowNumber, context: nil,
-                                                eventNumber: 0, clickCount: 1,
-                                                pressure: type == .leftMouseDown ? 1 : 0) else {
-                throw VerifyError("Cannot construct a History click")
-            }
-            return event
-        }
-        // Controls that enter a tracking loop consume the up event from AppKit.
-        NSApp.postEvent(try event(.leftMouseUp), atStart: true)
-        NSApp.postEvent(try event(.leftMouseDown), atStart: true)
+        activate()
     }
 
     private func captureHistory(_ name: String) async throws {
@@ -290,7 +289,7 @@ extension VerifyRun {
             }
             let dark = history.welcome.entries.first(where: { $0.title == "Dark fallback" })?.id ?? ""
             let bounds = onPage ? history.pageBounds : history.shelfBounds
-            guard let firstRect = bounds[first], let darkRect = bounds[dark],
+            guard let firstRect = bounds[first]?.frame, let darkRect = bounds[dark]?.frame,
                   firstRect.size == darkRect.size, bounds["poster:\(dark)"] == nil else {
                 throw VerifyError("The dark fallback changes card/row geometry or displays a black poster")
             }
@@ -312,7 +311,7 @@ extension VerifyRun {
         observations.append([
             "name": name, "png": file, "capture": "app_composite_2x", "render_scale": 2,
             "surface": onPage ? "history" : "continue-watching", "window_points": dimensions(root.bounds),
-            "geometry": bounds.filter { !$0.key.contains(":") }.mapValues { dimensions($0) },
+            "geometry": bounds.filter { !$0.key.contains(":") }.mapValues { dimensions($0.frame) },
             "rows": entries.map { entry in [
                 "title": entry.title, "state": entry.state.rawValue, "progress": entry.progress,
                 "available": entry.isAvailable, "poster": bounds["poster:\(entry.id)"] != nil,

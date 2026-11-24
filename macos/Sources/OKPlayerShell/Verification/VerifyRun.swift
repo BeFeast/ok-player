@@ -211,7 +211,7 @@ final class VerifyRun {
     private var hiddenCueBottom: CGFloat?
     private var compositorStatus = "not_probed"
     private var subtitleMenu: [String: [String]]?
-    var initialShelfBounds: [String: CGRect]?
+    var initialShelfBounds: [String: HistoryControl]?
 
     init(app: PlayerApp, options: VerificationOptions) {
         self.app = app

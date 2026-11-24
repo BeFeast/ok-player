@@ -12,11 +12,10 @@ struct HistoryFooter: View {
                 .font(.caption)
                 .foregroundStyle((privateSession ? PaletteRole.textMuted : PaletteRole.link).swiftUI)
             HStack {
-                Button(action: navigate) {
+                HistoryButton("footer-navigation", action: navigate) {
                     Label(returnsToWelcome ? "Continue watching" : "History",
                           systemImage: returnsToWelcome ? "chevron.left" : "clock.arrow.circlepath")
                 }
-                .historyBounds("footer-navigation")
                 Spacer()
                 Button(action: settings) {
                     Image(systemName: "gearshape")
@@ -38,22 +37,48 @@ struct HistoryFooter: View {
     }
 }
 
-// AppKit's hosted verifier uses the laid-out bounds to send ordinary mouse
-// events to live SwiftUI controls and to compare geometry between checkpoints.
-struct HistoryBoundsKey: PreferenceKey {
-    static let defaultValue: [String: CGRect] = [:]
+/// Exposes a mounted SwiftUI control's action and geometry to the hosted verifier.
+struct HistoryControl: Equatable {
+    let frame: CGRect
+    var activate: (() -> Void)?
 
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+    static func == (left: Self, right: Self) -> Bool {
+        left.frame == right.frame && (left.activate == nil) == (right.activate == nil)
+    }
+}
+
+struct HistoryBoundsKey: PreferenceKey {
+    static let defaultValue: [String: HistoryControl] = [:]
+
+    static func reduce(value: inout [String: HistoryControl], nextValue: () -> [String: HistoryControl]) {
         value.merge(nextValue(), uniquingKeysWith: { _, next in next })
     }
 }
 
+struct HistoryButton<Label: View>: View {
+    let id: String
+    let action: () -> Void
+    let label: () -> Label
+
+    init(_ id: String, action: @escaping () -> Void, @ViewBuilder label: @escaping () -> Label) {
+        self.id = id
+        self.action = action
+        self.label = label
+    }
+
+    var body: some View {
+        Button(action: action, label: label)
+            .historyBounds(id, action: action)
+    }
+}
+
 extension View {
-    func historyBounds(_ id: String) -> some View {
+    func historyBounds(_ id: String, action: (() -> Void)? = nil) -> some View {
         background {
             GeometryReader { proxy in
                 Color.clear.preference(key: HistoryBoundsKey.self,
-                                       value: [id: proxy.frame(in: .named("history-surface"))])
+                                       value: [id: HistoryControl(frame: proxy.frame(in: .named("history-surface")),
+                                                                  activate: action)])
             }
             .allowsHitTesting(false)
         }

@@ -41,7 +41,7 @@ func historyStateText(_ entry: HistoryEntry) -> String {
 struct WelcomeView: View {
     let model: ContinueWatchingModel
     let posters: HistoryPosters
-    var onBounds: ([String: CGRect]) -> Void = { _ in }
+    var onBounds: ([String: HistoryControl]) -> Void = { _ in }
 
     static let cardWidth: CGFloat = 194
 
@@ -110,9 +110,8 @@ struct WelcomeView: View {
             ForEach(model.entries.prefix(count)) { entry in
                 ContinueWatchingCard(entry: entry, posters: posters, privateSession: model.privateSession,
                                      width: width) { model.resume(entry) }
-                    .historyBounds(entry.id)
             }
-            Button { model.showHistory() } label: {
+            HistoryButton("shelf-arrow", action: model.showHistory) {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(PaletteRole.text.swiftUI)
@@ -124,7 +123,6 @@ struct WelcomeView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Open History")
             .help("History")
-            .historyBounds("shelf-arrow")
         }
     }
 }
@@ -138,7 +136,7 @@ struct ContinueWatchingCard: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        HistoryButton(entry.id, action: action) {
             VStack(alignment: .leading, spacing: 4) {
                 HistoryPoster(entry: entry, posters: posters, privateSession: privateSession,
                               width: width, height: width * 9 / 16)

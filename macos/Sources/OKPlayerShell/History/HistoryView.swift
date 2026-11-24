@@ -4,7 +4,7 @@ import SwiftUI
 struct HistoryView: View {
     let model: HistoryPageModel
     let posters: HistoryPosters
-    var onBounds: ([String: CGRect]) -> Void = { _ in }
+    var onBounds: ([String: HistoryControl]) -> Void = { _ in }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -39,7 +39,7 @@ struct HistoryView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 11) {
-                Button(action: model.onBack) {
+                HistoryButton("back", action: model.onBack) {
                     Image(systemName: "chevron.left")
                         .frame(width: 32, height: 42)
                         .background(PaletteRole.surfaceRaised.swiftUI, in: RoundedRectangle(cornerRadius: 8))
@@ -47,7 +47,6 @@ struct HistoryView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Back to Continue watching")
                 .help("Back to Continue watching")
-                .historyBounds("back")
                 Text("History")
                     .font(.system(size: 30, weight: .semibold))
                 Spacer(minLength: 4)
@@ -68,19 +67,18 @@ struct HistoryView: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(PaletteRole.textMuted.swiftUI)
                     .accessibilityHidden(true)
-                TextField("Search history", text: Binding(get: { model.search }, set: { model.setSearch($0) }))
-                    .textFieldStyle(.plain)
-                    .foregroundStyle(PaletteRole.text.swiftUI)
+                HistorySearchField(text: Binding(get: { model.search }, set: { model.setSearch($0) }))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 17)
                     .historyBounds("search")
                 if !model.search.isEmpty {
-                    Button { model.setSearch("") } label: {
+                    HistoryButton("clear", action: { model.setSearch("") }) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(PaletteRole.textMuted.swiftUI)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Clear search")
                     .help("Clear search")
-                    .historyBounds("clear")
                 }
             }
             .padding(8)
@@ -143,8 +141,7 @@ struct HistoryView: View {
                 }
                 Group {
                     if model.hasMore {
-                        Button("Show more", action: model.loadMore)
-                            .historyBounds("show-more")
+                        HistoryButton("show-more", action: model.loadMore) { Text("Show more") }
                     } else if !model.endCap.isEmpty {
                         Text(model.endCap)
                             .font(.caption)
@@ -263,5 +260,47 @@ struct HistoryRow: View {
         Button("Remove from History") { model.remove(entry) }
         Button("Reveal in Finder") { model.reveal(entry) }
             .disabled(!model.canReveal(entry))
+    }
+}
+
+final class HistorySearchTextField: NSTextField {}
+
+private struct HistorySearchField: NSViewRepresentable {
+    @Binding var text: String
+
+    func makeNSView(context: Context) -> HistorySearchTextField {
+        let field = HistorySearchTextField(frame: .zero)
+        field.placeholderString = "Search history"
+        field.setAccessibilityLabel("Search history")
+        field.font = .systemFont(ofSize: NSFont.systemFontSize)
+        field.textColor = PaletteRole.text.color
+        field.isBezeled = false
+        field.drawsBackground = false
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.delegate = context.coordinator
+        return field
+    }
+
+    func updateNSView(_ field: HistorySearchTextField, context: Context) {
+        context.coordinator.text = $text
+        if field.stringValue != text {
+            field.stringValue = text
+            field.currentEditor()?.string = text
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var text: Binding<String>
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            text.wrappedValue = field.stringValue
+        }
     }
 }

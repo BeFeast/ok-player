@@ -18,8 +18,8 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
     private(set) var showsWelcome = false
     private(set) var showsHistory = false
     private(set) var showsInlineHistory = false
-    private(set) var shelfBounds: [String: CGRect] = [:]
-    private(set) var pageBounds: [String: CGRect] = [:]
+    private(set) var shelfBounds: [String: HistoryControl] = [:]
+    private(set) var pageBounds: [String: HistoryControl] = [:]
     var onInlineHistoryChanged: (Bool) -> Void = { _ in }
     private var historyWindow: NSWindow?
 
