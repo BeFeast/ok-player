@@ -159,6 +159,7 @@ final class TrackControlsTests: XCTestCase {
     func testTheTrackButtonsSitBetweenSpeedAndFullscreen() {
         let osc = TransportOverlay(hideTimer: ManualHideTimer())
         let root = NSView()
+        root.addSubview(osc)
         controls.install(in: osc, over: root)
         let trailing = osc.slots.suffix(5).map(\.view)
         let expected: [NSView] = [osc.speedButton, controls.subtitleButton, controls.audioButton,

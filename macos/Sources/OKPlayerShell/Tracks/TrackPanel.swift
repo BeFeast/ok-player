@@ -160,6 +160,7 @@ final class TrackRowButton: NSButton {
         self.action = #selector(activate)
         setAccessibilityLabel(item.title)
         if item.kind == .choice {
+            state = item.checked ? .on : .off
             setAccessibilityRole(.radioButton)
             setAccessibilityValue(NSNumber(value: item.checked))
         }

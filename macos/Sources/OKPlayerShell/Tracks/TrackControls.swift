@@ -277,12 +277,14 @@ final class TrackControls: NSObject {
     /// A click outside dismisses the panel and continues to its original target.
     /// Escape consumes the event so the queue and fullscreen stay in place.
     func handleWindowInput(_ event: NSEvent) -> Bool {
-        guard isPopoverShown else { return false }
+        guard isPopoverShown, let window else { return false }
+        if let target = event.window, target !== window { return false }
         switch event.type {
         case .keyDown:
             return event.keyCode == WindowKeys.escapeKeyCode && dismissPopover()
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
-            let point = event.locationInWindow
+            let point = event.window == nil ? window.convertPoint(fromScreen: event.locationInWindow)
+                : event.locationInWindow
             let surfaces = [panel, audioButton, subtitleButton] as [NSView]
             if !surfaces.contains(where: {
                 !$0.isHiddenOrHasHiddenAncestor && $0.bounds.contains($0.convert(point, from: nil))

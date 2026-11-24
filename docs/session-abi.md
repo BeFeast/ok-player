@@ -309,6 +309,7 @@ and after it changed the delay or the size.
 | `audio` | the audio tracks in libmpv's order, each `{id, label, selected}`; empty without loaded media |
 | `subtitles` | `Off` (`id: null`, selected while no subtitle track is) first, then the subtitle tracks the same way |
 | `label` | the one-line descriptor: name (title, else language, else `Track N`), language, channels and codec for audio; format, `Image`, `Native style` and `External` or `Default` for subtitles (`track_label`) |
+| `audio_detail` | optional suffix of an audio row’s `label`, covering the language, channels and codec displayed on a separate line in the switcher |
 | `subtitle_delay` | `{value, label, reported}`: seconds and `+250 ms` / `0 ms` (`subtitle_delay::format_label`) |
 | `subtitle_scale` | `{value, label, reported}`: the size factor and `110%` |
 | `adjustable` | media is `playing` or `paused`, so a file can be added and the delay and size changed |
