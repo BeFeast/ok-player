@@ -373,6 +373,8 @@ pub enum Query {
     Settings {},
     /// Match controls and section names in the Settings catalogue.
     SettingsSearch { text: String },
+    /// Versions and renderer of the engine serving this session.
+    EngineDiagnostics {},
 }
 
 /// `{"schema_version":1,"result":{...}}`, the answer to a query.
@@ -440,10 +442,28 @@ pub enum QueryResult {
     SettingsSearch {
         hits: Vec<SettingsSearchHit>,
     },
+    EngineDiagnostics {
+        diagnostics: EngineDiagnostics,
+    },
     Rejected {
         reason: RejectReason,
         message: String,
     },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineDiagnostics {
+    pub mpv_version: Option<String>,
+    pub ffmpeg_version: Option<String>,
+    pub render_api: Option<RenderApi>,
+    pub hardware_decode: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RenderApi {
+    OpenGl,
 }
 
 /// `{"schema_version":1,"events":[...]}`, one drained batch.

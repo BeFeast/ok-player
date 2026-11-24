@@ -13,6 +13,6 @@
       {"id":"updates","title":"Updates","available":false},
       {"id":"advanced","title":"Advanced","available":false}
     ],
-    "about":{"id":"about","title":"About","available":false}
+    "about":{"id":"about","title":"About","available":true}
   }}}
 }

@@ -16,7 +16,7 @@ final class PlayerSettings {
         window?.showTheme(theme, problem: nil)
     }
 
-    func show(rememberFrame: Bool) {
+    func show(page: SettingsPage? = nil, rememberFrame: Bool) {
         guard let client, case .settings(let state)? = client.query(.settings) else { return }
         if window == nil {
             let made = SettingsWindow(state: state)
@@ -25,12 +25,27 @@ final class PlayerSettings {
                 return hits
             }
             made.onSelectTheme = { [weak self] choice in self?.selectTheme(choice) }
+            made.aboutDiagnostics = { [weak self] in
+                let runtime: EngineDiagnostics?
+                if case .engineDiagnostics(let diagnostics)? = self?.client?.query(.engineDiagnostics) {
+                    runtime = diagnostics
+                } else {
+                    runtime = nil
+                }
+                return AboutDiagnostics(runtime: runtime)
+            }
             made.center()
             if rememberFrame { _ = made.setFrameAutosaveName("OKPlayerSettings") }
             window = made
         }
         if window?.isMiniaturized == true { window?.deminiaturize(nil) }
+        if let page { window?.navigate(to: page) }
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    func close() {
+        window?.close()
+        window = nil
     }
 
     private func applyAppearance() {
@@ -63,6 +78,10 @@ final class PlayerSettings {
 extension PlayerApp {
     func showSettings() {
         settings.show(rememberFrame: verification == nil && !smoke)
+    }
+
+    @objc func showAbout() {
+        settings.show(page: .about, rememberFrame: verification == nil && !smoke)
     }
 
     func makeSettingsContextMenu(in menu: NSMenu = NSMenu()) -> NSMenu {

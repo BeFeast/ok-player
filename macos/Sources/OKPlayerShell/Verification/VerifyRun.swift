@@ -30,6 +30,8 @@ struct VerificationOptions {
         case "open-drag-drop": "welcome_drop_highlight_disabled"
         case "context-idle-and-playback": "context_clamp_disabled"
         case "command-keyboard": "text_priority_disabled"
+        case "about-identity": "about_copy_disabled"
+        case "about-geometry": "about_owner_cleanup_disabled"
         default: "unsupported_control"
         }
     }
@@ -128,6 +130,8 @@ struct VerificationScenario: Decodable {
         case checkContextPages = "check_context_pages", checkContextCorners = "check_context_corners"
         case checkPlaybackKeys = "check_playback_keys", checkQueueKeys = "check_queue_keys"
         case checkEscapePriority = "check_escape_priority", checkTextPriority = "check_text_priority"
+        case aboutPlayback = "about_playback", aboutMenu = "about_menu", aboutRail = "about_rail", aboutCopy = "about_copy"
+        case aboutResize = "about_resize", aboutFooter = "about_footer", aboutClose = "about_close"
     }
     enum Expectation: String, Decodable {
         case noCue = "no_cue", clearance, baseMargin = "base_margin"
@@ -140,6 +144,7 @@ struct VerificationScenario: Decodable {
         case contextWelcome = "context_welcome", contextVideo = "context_video"
         case contextEmpty = "context_empty", keyboardPlayback = "keyboard_playback"
         case contextResults = "context_results"
+        case aboutIdentity = "about_identity", aboutFooter = "about_footer"
     }
     let schemaVersion: Int
     let id: String
@@ -163,6 +168,7 @@ final class VerifyRun {
     let options: VerificationOptions
     var observations: [[String: Any]] = []
     var trackChecks: [String: Any] = [:]
+    var copiedAboutDiagnostics: String?
     var failures: [String] = []
     var initialFrame: CGRect?
     var preFullscreenFrame: CGRect?
@@ -202,7 +208,7 @@ final class VerifyRun {
             }
             guard let window = app.window else { throw VerifyError("The mapped player window disappeared", blocked: true) }
             let appearance: NSAppearance.Name = options.appearance == "dark" ? .darkAqua : .aqua
-            if scenario.id == "settings-shell-appearance" {
+            if scenario.id == "settings-shell-appearance" || scenario.id.hasPrefix("about-") {
                 app.settings.autoAppearance = NSAppearance(named: appearance)
             } else {
                 window.appearance = NSAppearance(named: appearance)
@@ -221,6 +227,7 @@ final class VerifyRun {
                 if scenario.id.hasPrefix("window-") { try await performWindowStep(step) }
                 else if scenario.id.hasPrefix("osc-") { try await performTransportStep(step) }
                 else if scenario.id == "settings-shell-appearance" { try await performSettingsStep(step) }
+                else if scenario.id.hasPrefix("about-") { try await performAboutStep(step) }
                 else if scenario.id.hasSuffix("-switcher") { try await performTrackStep(step) }
                 else if scenario.id.hasPrefix("open-") || scenario.id == "welcome-first-run" {
                     try await performOpenStep(step)
@@ -242,6 +249,7 @@ final class VerifyRun {
         result["compositor"] = compositorStatus
         result["subtitle_menu"] = subtitleMenu
         result["track_checks"] = trackChecks.isEmpty ? nil : trackChecks
+        result["copied_about_diagnostics"] = copiedAboutDiagnostics
         do {
             try options.write(result)
         } catch {

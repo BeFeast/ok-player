@@ -180,6 +180,7 @@ enum Query: Codable, Equatable {
     case tracks
     case settings
     case settingsSearch(text: String)
+    case engineDiagnostics
 }
 
 struct QueryEnvelope: Codable, Equatable {
@@ -206,6 +207,7 @@ enum QueryResult: Codable, Equatable {
     case tracks(tracks: TracksView)
     case settings(settings: SettingsState)
     case settingsSearch(hits: [SettingsSearchHit])
+    case engineDiagnostics(diagnostics: EngineDiagnostics)
     case rejected(reason: RejectReason, message: String)
 }
 

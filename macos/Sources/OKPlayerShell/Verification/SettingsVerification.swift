@@ -163,6 +163,16 @@ extension VerifyRun {
         checkSettings(window.railButtons.map(\.page) == [.appearance, .playback, .subtitles, .video, .audio,
                                                         .shortcuts, .integration, .updates, .advanced]
                       && window.aboutButton.page == .about && window.selectedPage == .appearance, "rail_order")
+        let mode = try await captureSettingsImage(window, name: name)
+        observations.append([
+            "name": name, "png": "\(name).png", "capture": mode, "window_id": window.windowNumber,
+            "theme": window.shownTheme.rawValue, "effective_appearance": shown?.rawValue ?? "unknown",
+            "content_width": root.bounds.width, "content_height": root.bounds.height,
+        ])
+    }
+
+    func captureSettingsImage(_ window: SettingsWindow, name: String) async throws -> String {
+        guard let root = window.contentView else { throw VerifyError("Settings has no content view") }
         let png: Data?
         let mode: String
         if let screen = await captureCompositor(width: Int((window.frame.width * 2).rounded()),
@@ -185,11 +195,7 @@ extension VerifyRun {
         guard SmokeSnapshots.write(png, in: options.output.path, as: name) else {
             throw VerifyError("Could not write the Settings PNG")
         }
-        observations.append([
-            "name": name, "png": "\(name).png", "capture": mode, "window_id": window.windowNumber,
-            "theme": window.shownTheme.rawValue, "effective_appearance": shown?.rawValue ?? "unknown",
-            "content_width": root.bounds.width, "content_height": root.bounds.height,
-        ])
+        return mode
     }
 
     private func settingsAppearance(_ window: NSWindow) -> NSAppearance.Name? {

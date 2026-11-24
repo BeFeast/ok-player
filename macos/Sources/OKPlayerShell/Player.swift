@@ -67,7 +67,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // One player window: no window tabs, so no tab items in View and Window.
         NSWindow.allowsAutomaticWindowTabbing = false
         let menuBar = MenuBar(commands: commands, openRecent: system.makeOpenRecentItem(),
-                              history: history.makeMenuItem(), closeMedia: closeMediaItem, pinPlayer: pinItem)
+                              history: history.makeMenuItem(), closeMedia: closeMediaItem, pinPlayer: pinItem,
+                              aboutTarget: self)
         self.menuBar = menuBar
         menuBar.install()
         let behaviour = PlayerWindowController(contentRect: NSRect(x: 0, y: 0, width: 960, height: 580))
@@ -330,6 +331,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Close, then destroy the render context, then free the session.
     func shutdown() {
         guard !shuttingDown else { return }; shuttingDown = true
+        if verification?.control != "about_owner_cleanup_disabled" { settings.close() }
         smokeRun?.cancel()
         if verification == nil { system.shutdown() }
         if let client {
@@ -371,6 +373,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.terminate(nil)
     }
     func applicationWillTerminate(_ notification: Notification) { shutdown() }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Let the geometry verifier inspect the windows after the real close path.
+        verification?.scenarioID == "about-geometry" ? .terminateCancel : .terminateNow
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? { system.makeDockMenu() }
 }

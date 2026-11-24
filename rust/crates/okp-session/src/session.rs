@@ -284,6 +284,9 @@ impl Session {
             Query::SettingsSearch { text } => QueryResult::SettingsSearch {
                 hits: settings::search(text),
             },
+            Query::EngineDiagnostics {} => QueryResult::EngineDiagnostics {
+                diagnostics: self.shared.engine.diagnostics(),
+            },
             Query::Snapshot {} => QueryResult::Snapshot {
                 snapshot: self.snapshot(),
             },

@@ -342,9 +342,10 @@ jobs:
             track_scenarios=(audio-switcher subtitle-switcher)
             window_scenarios=(window-chrome window-fullscreen window-fit window-float)
             transport_scenarios=(osc-layout osc-idle-and-pins osc-volume-speed osc-status)
+            about_scenarios=(about-identity about-geometry)
             open_scenarios=(welcome-first-run open-files-folders open-drag-drop)
             controlled_scenarios=("${window_scenarios[@]}" "${transport_scenarios[@]}" "${track_scenarios[@]}"
-                                  settings-shell-appearance "${open_scenarios[@]}" context-idle-and-playback command-keyboard)
+                                  settings-shell-appearance "${open_scenarios[@]}" context-idle-and-playback command-keyboard "${about_scenarios[@]}")
             for scenario in subtitle-lift tagged-sidecars "${controlled_scenarios[@]}"; do
               verify "$scenario" "$OKP_MACOS_OUTPUT/verify/$scenario" || status=1
             done

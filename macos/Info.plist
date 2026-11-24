@@ -12,6 +12,9 @@
 <key>CFBundleIconFile</key><string>OKPlayer.icns</string>
 <key>CFBundleShortVersionString</key><string>0.0.0</string>
 <key>CFBundleVersion</key><string>0</string>
+<key>OKPReleaseChannel</key><string>Preview</string>
+<key>OKPPackageKind</key><string>ZIP preview</string>
+<key>OKPLicense</key><string>GPL-3.0-or-later</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSLocalNetworkUsageDescription</key><string>OK Player opens videos and subtitles from network shares and media servers on your local network.</string>

@@ -3,7 +3,7 @@ import AppKit
 final class SettingsWindow: NSWindow, NSSearchFieldDelegate {
     let searchField = NSSearchField()
     let themeControl = NSSegmentedControl(labels: ["Light", "Auto"], trackingMode: .selectOne, target: nil, action: nil)
-    private let content = SettingsScrollView()
+    let content = SettingsScrollView()
     private let rail = SettingsScrollView()
     private let problem = NSTextField(wrappingLabelWithString: "")
     private let themeNote = NSTextField(wrappingLabelWithString: "")
@@ -13,9 +13,11 @@ final class SettingsWindow: NSWindow, NSSearchFieldDelegate {
     private(set) var resultButtons: [SettingsRailButton] = []
     private(set) var selectedPage: SettingsPage = .appearance
     private(set) var shownTheme: AppearanceTheme
+    private(set) var aboutPane: AboutPane?
     private var saveProblem: String?
     var search: (String) -> [SettingsSearchHit] = { _ in [] }
     var onSelectTheme: ((AppearanceSelection) -> Void)?
+    var aboutDiagnostics: () -> AboutDiagnostics = { AboutDiagnostics(runtime: nil) }
 
     init(state: SettingsState) {
         shownTheme = state.theme
@@ -108,6 +110,7 @@ final class SettingsWindow: NSWindow, NSSearchFieldDelegate {
         let text = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { showPage(); return }
         let hits = search(text)
+        aboutPane = nil
         resultButtons = hits.map { hit in
             let label = hit.label == hit.destination.title ? hit.label : "\(hit.label) — \(hit.destination.title)"
             return makeButton(hit.destination, label: label)
@@ -132,7 +135,7 @@ final class SettingsWindow: NSWindow, NSSearchFieldDelegate {
         navigate(to: sender.page)
     }
 
-    private func navigate(to page: SettingsPage) {
+    func navigate(to page: SettingsPage) {
         selectedPage = page
         if searchField.currentEditor() != nil, !searchField.stringValue.isEmpty {
             _ = makeFirstResponder(nil)
@@ -148,8 +151,13 @@ final class SettingsWindow: NSWindow, NSSearchFieldDelegate {
             button.needsDisplay = true
         }
         guard let destination = destinations.first(where: { $0.id == selectedPage }) else { return }
+        aboutPane = nil
         if destination.available && selectedPage == .appearance {
             content.setRows([appearanceCard()])
+        } else if destination.available && selectedPage == .about {
+            let pane = AboutPane(diagnostics: aboutDiagnostics())
+            aboutPane = pane
+            content.setRows([pane])
         } else {
             content.setRows([card([
                 label(destination.title, weight: .semibold),

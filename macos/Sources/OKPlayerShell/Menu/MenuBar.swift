@@ -17,18 +17,20 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let history: NSMenuItem?
     private let closeMedia: NSMenuItem?
     private let pinPlayer: NSMenuItem?
+    private weak var aboutTarget: PlayerApp?
     /// The registry command each provider-filled submenu stands for.
     private var dynamic: [ObjectIdentifier: String] = [:]
 
     /// `openRecent` and `history` are the items other parts of the app provide for
     /// File > Open Recent and File > History…; nil leaves them out.
     init(commands: PlayerCommands, openRecent: NSMenuItem?, history: NSMenuItem? = nil,
-         closeMedia: NSMenuItem? = nil, pinPlayer: NSMenuItem? = nil) {
+         closeMedia: NSMenuItem? = nil, pinPlayer: NSMenuItem? = nil, aboutTarget: PlayerApp? = nil) {
         self.commands = commands
         self.openRecent = openRecent
         self.history = history
         self.closeMedia = closeMedia
         self.pinPlayer = pinPlayer
+        self.aboutTarget = aboutTarget
         super.init()
     }
 
@@ -99,6 +101,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         case .standard(let standard):
             let item = NSMenuItem(title: standard.title, action: standard.action,
                                   keyEquivalent: standard.keyEquivalent?.key ?? "")
+            if standard == .about { item.target = aboutTarget }
             if let keyEquivalent = standard.keyEquivalent { item.keyEquivalentModifierMask = keyEquivalent.modifiers }
             return item
         case .command(let id, let title, let keyEquivalent, let filledByProvider):

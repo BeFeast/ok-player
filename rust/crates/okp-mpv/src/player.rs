@@ -2072,6 +2072,15 @@ impl Mpv {
         RawReader::new(self.handle).get_double("sub-pos")
     }
 
+    /// Read the loaded libraries' versions during startup, before the render context exists.
+    pub fn runtime_versions(&self) -> (Option<String>, Option<String>) {
+        let reader = self.reader();
+        (
+            reader.get_string("mpv-version").ok().flatten(),
+            reader.get_string("ffmpeg-version").ok().flatten(),
+        )
+    }
+
     /// Move subtitles without waiting for the core while the host lays out its controls.
     pub fn set_subtitle_position_async(&self, position: f64) -> Result<(), MpvError> {
         self.command_async(&["no-osd", "set", "sub-pos", &position.to_string()])

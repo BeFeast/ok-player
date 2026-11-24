@@ -82,7 +82,7 @@ enum StandardMenuItem: Equatable {
     /// The responder-chain action; nil for the two submenus.
     var action: Selector? {
         switch self {
-        case .about: return #selector(NSApplication.orderFrontStandardAboutPanel(_:))
+        case .about: return #selector(PlayerApp.showAbout)
         case .services, .openRecent, .history: return nil
         case .hide: return #selector(NSApplication.hide(_:))
         case .hideOthers: return #selector(NSApplication.hideOtherApplications(_:))

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "about-geometry",
+  "fixture": "01-h264-1080p24-tone.mp4",
+  "appearances": ["light", "dark"],
+  "steps": [
+    {"action": "about_rail"},
+    {"action": "capture", "name": "standard", "expect": "about_identity"},
+    {"action": "about_resize"},
+    {"action": "about_footer"},
+    {"action": "capture", "name": "narrow-footer", "expect": "about_footer"},
+    {"action": "about_menu"},
+    {"action": "about_close"}
+  ]
+}

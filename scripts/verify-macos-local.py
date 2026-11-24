@@ -10,6 +10,7 @@ from pathlib import Path
 import platform
 import plistlib
 import subprocess
+import sys
 import tempfile
 from threading import Event, Thread
 
@@ -33,6 +34,10 @@ TRACK_CONTROLS = {
     "subtitle-switcher": "track_pin_disabled",
 }
 SETTINGS = "settings-shell-appearance"
+ABOUT_CONTROLS = {
+    "about-identity": ("about_copy_disabled", {"about-identity:copy_diagnostics"}),
+    "about-geometry": ("about_owner_cleanup_disabled", {"about-geometry:owner_close"}),
+}
 SETTINGS_PHASES = ("edit", "light-relaunch", "auto-relaunch")
 LEGACY_SETTINGS = {
     "version": 1,
@@ -48,6 +53,7 @@ OPEN_CONTROLS = {
 ACTION_CONTROLS = {
     **TRANSPORT_CONTROLS,
     **OPEN_CONTROLS,
+    **ABOUT_CONTROLS,
     "context-idle-and-playback": ("context_clamp_disabled", {"context:work_area_clamp"}),
     "command-keyboard": ("text_priority_disabled", {"keyboard:text_priority"}),
 }
@@ -104,6 +110,9 @@ def read_scenario(path):
         actions.update({"settings_shortcut", "settings_context", "settings_legacy", "settings_search",
                         "settings_resize", "settings_system", "settings_light", "settings_auto",
                         "settings_player_input"})
+    if path.stem in ABOUT_CONTROLS:
+        actions.update({"about_playback", "about_menu", "about_rail", "about_copy",
+                        "about_resize", "about_footer", "about_close"})
     if (spec["schema_version"] != 1 or spec["id"] != path.stem
             or spec["appearances"] != ["light", "dark"] or not spec["steps"]):
         raise ValueError("Unsupported scenario ID, schema or appearances")
@@ -122,7 +131,7 @@ def read_scenario(path):
                                            "floating", "normal", "repinned", "osc_row", "osc_hidden", "osc_pinned",
                                            "volume", "speed", "loading", "buffering", "failure", "recovered",
                                            "context_welcome", "context_video", "context_results", "context_empty",
-                                           "keyboard_playback", "settings_light", "settings_auto", "track_panel", "open_evidence"}
+                                           "keyboard_playback", "settings_light", "settings_auto", "track_panel", "open_evidence", "about_identity", "about_footer"}
                     or not step.get("name", "").replace("-", "").isalnum()):
                 raise ValueError("Invalid capture checkpoint")
         if step["action"] == "check_subtitle_menu":
@@ -260,6 +269,98 @@ def prepare_app(args, temporary, receipt):
     if args.source_sha and args.source_sha != plist["OKPSourceSHA"]:
         raise ValueError("Bundle revision does not match the requested Forgejo SHA")
     return executable
+
+
+def about_expected(executable, receipt):
+    contents = executable.parent.parent
+    plist = plistlib.loads((contents / "Info.plist").read_bytes())
+    if not (contents / "Resources" / "LICENSE").is_file():
+        raise ValueError("The app is missing its bundled license")
+    frameworks = contents / "Frameworks"
+    libmpv = next(iter(sorted(frameworks.glob("libmpv*.dylib"))), None)
+    if libmpv is None:
+        raise ValueError("The app is missing its bundled libmpv")
+    probe = """
+import ctypes as c
+import json
+import sys
+
+lib = c.CDLL(sys.argv[1])
+lib.mpv_create.restype = c.c_void_p
+lib.mpv_initialize.argtypes = [c.c_void_p]
+lib.mpv_get_property_string.argtypes = [c.c_void_p, c.c_char_p]
+lib.mpv_get_property_string.restype = c.c_void_p
+lib.mpv_free.argtypes = [c.c_void_p]
+lib.mpv_free.restype = None
+lib.mpv_terminate_destroy.argtypes = [c.c_void_p]
+lib.mpv_terminate_destroy.restype = None
+handle = lib.mpv_create()
+if not handle:
+    raise RuntimeError("Bundled libmpv could not create a probe handle")
+try:
+    if lib.mpv_initialize(handle) < 0:
+        raise RuntimeError("Bundled libmpv could not initialize its probe handle")
+    versions = {}
+    for name, prop in (("libmpv", b"mpv-version"), ("FFmpeg", b"ffmpeg-version")):
+        value = lib.mpv_get_property_string(handle, prop)
+        if not value:
+            raise RuntimeError(f"Bundled libmpv did not report {prop!r}")
+        try:
+            versions[name] = c.string_at(value).decode()
+        finally:
+            lib.mpv_free(value)
+finally:
+    lib.mpv_terminate_destroy(handle)
+appkit = c.CDLL("/System/Library/Frameworks/AppKit.framework/AppKit")
+versions["AppKit"] = c.c_double.in_dll(appkit, "NSAppKitVersionNumber").value
+print(json.dumps(versions))
+"""
+    # The separate probe needs a dylib lookup path. The app under test launches without DYLD_*.
+    env = {key: value for key, value in os.environ.items() if not key.startswith("DYLD_")}
+    versions = json.loads(command(sys.executable, "-c", probe, str(libmpv), capture_output=True, text=True,
+                                  env={**env, "DYLD_LIBRARY_PATH": str(frameworks)}).stdout)
+    product = command("sw_vers", "-productVersion", capture_output=True, text=True).stdout.strip()
+    product_parts = product.split(".")
+    return {
+        "name": plist["CFBundleName"],
+        "App": {
+            "Version": receipt["bundle_version"], "Channel": plist["OKPReleaseChannel"],
+            "Build": receipt["bundle_build"], "Revision": receipt["bundle_revision"],
+            "License": plist["OKPLicense"],
+        },
+        "Engine": {
+            "libmpv": versions["libmpv"], "FFmpeg": versions["FFmpeg"],
+            "Render API": "libmpv render", "Graphics": "OpenGL · CAOpenGLLayer",
+        },
+        "Host": {
+            "macOS": ".".join(product_parts + ["0"] * (3 - len(product_parts))),
+            "AppKit": str(versions["AppKit"]), "CPU": command("uname", "-m", capture_output=True, text=True).stdout.strip(),
+            "Install": plist["OKPPackageKind"],
+        },
+    }
+
+
+def check_about_copy(result, expected):
+    failures = result["assertion_failures"]
+    lines = result.get("copied_about_diagnostics", "").split("\n\n")
+    if len(lines) != 4 or lines[0] != expected["name"]:
+        failures.append("about-identity:clipboard_metadata")
+        result["status"] = "failed"
+        return
+    for block, section in zip(lines[1:], ("App", "Engine", "Host"), strict=True):
+        title, _, content = block.partition("\n")
+        actual = content.splitlines()
+        valid = title == section
+        if section == "Engine":
+            decode_rows = [row for row in actual if row.startswith("  Hardware decode: ")]
+            if len(decode_rows) == 1 and decode_rows[0].removeprefix("  Hardware decode: ").strip():
+                actual.remove(decode_rows[0])
+            else:
+                valid = False
+        if not valid or sorted(actual) != sorted(f"  {key}: {value}" for key, value in expected[section].items()):
+            failures.append(f"about-identity:clipboard_{section.lower()}_metadata")
+    if failures:
+        result["status"] = "failed"
 
 
 @contextmanager
@@ -466,6 +567,8 @@ def main():
         with tempfile.TemporaryDirectory(prefix="okp-verify-") as work:
             temporary = Path(work)
             executable = prepare_app(args, temporary, receipt)
+            if spec["id"] == "about-identity" and not args.negative_control:
+                receipt["about_expected"] = about_expected(executable, receipt)
             video = fixture(args.ffmpeg, temporary, spec, receipt)
             if spec["id"] == "open-files-folders":
                 command("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework"
@@ -477,6 +580,8 @@ def main():
                         result.update(status="error", error="Running bundle SHA differed from the relocated package")
                     elif result.get("control") != control:
                         result.update(status="error", error="App did not report the requested control mode")
+                    elif "about_expected" in receipt:
+                        check_about_copy(result, receipt["about_expected"])
                 receipt["appearances"].append(result)
             states = {result["status"] for result in receipt["appearances"]}
             receipt["status"] = next((state for state in ("error", "blocked_environment", "failed") if state in states), "passed")
@@ -504,10 +609,10 @@ def main():
                 if not all(expected_failures <= set(result["assertion_failures"])
                            for result in receipt["appearances"]):
                     receipt.update(status="error", error="Negative control did not expose all expected failures in both themes")
-                if spec["id"] == SETTINGS and any(
+                if (spec["id"] == SETTINGS or spec["id"] in ABOUT_CONTROLS) and any(
                     set(result["assertion_failures"]) != expected_failures for result in receipt["appearances"]
                 ):
-                    receipt.update(status="error", error="Settings negative control must fail only the Light relaunch")
+                    receipt.update(status="error", error="Negative control failed unrelated assertions")
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         receipt["error"] = str(error)
     finally:

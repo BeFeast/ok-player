@@ -8,8 +8,8 @@ use okp_mpv::{
 };
 
 use crate::protocol::{
-    Command, MediaSource, SeekMode, SeekPrecision, SessionConfig, TrackKind, media_position,
-    seek_seconds,
+    Command, EngineDiagnostics, MediaSource, RenderApi, SeekMode, SeekPrecision, SessionConfig,
+    TrackKind, media_position, seek_seconds,
 };
 
 /// Called by the engine, on an engine thread, whenever its observed state or
@@ -45,6 +45,10 @@ pub(crate) trait Engine: Send + Sync {
     /// Lifecycle events since the previous call, oldest first.
     fn take_events(&self) -> Vec<EntryEvent>;
     fn set_listener(&self, listener: Option<ChangeListener>);
+
+    fn diagnostics(&self) -> EngineDiagnostics {
+        EngineDiagnostics::default()
+    }
 
     /// Keep captions above the controls that overlap the bottom of the video surface.
     fn set_subtitle_clearance(&self, _surface_height: f64, _obscured_bottom: f64) -> bool {
@@ -82,6 +86,8 @@ pub(crate) struct MpvEngine {
     /// Declared before `mpv` so it is dropped first, as libmpv requires.
     renderer: Mutex<Option<OpenGlRenderer>>,
     mpv: Mpv,
+    mpv_version: Option<String>,
+    ffmpeg_version: Option<String>,
     base_subtitle_position: f64,
 }
 
@@ -103,6 +109,7 @@ impl MpvEngine {
             &engine_options(config),
         )
         .map_err(|error| format!("libmpv could not start: {error}"))?;
+        let (mpv_version, ffmpeg_version) = mpv.runtime_versions();
         let base_subtitle_position = mpv.subtitle_position().ok().flatten().unwrap_or(100.0);
         // Audio-device discovery is not part of the session contract yet, and
         // enumerating devices can stall on hosts without a desktop audio service.
@@ -110,6 +117,8 @@ impl MpvEngine {
         Ok(Self {
             renderer: Mutex::new(None),
             mpv,
+            mpv_version,
+            ffmpeg_version,
             base_subtitle_position,
         })
     }
@@ -273,6 +282,15 @@ impl Engine for MpvEngine {
 
     fn set_listener(&self, listener: Option<ChangeListener>) {
         self.mpv.set_observation_listener(listener);
+    }
+
+    fn diagnostics(&self) -> EngineDiagnostics {
+        EngineDiagnostics {
+            mpv_version: self.mpv_version.clone(),
+            ffmpeg_version: self.ffmpeg_version.clone(),
+            render_api: self.renderer().as_ref().map(|_| RenderApi::OpenGl),
+            hardware_decode: self.mpv.observed_playback_diagnostics().hwdec_current,
+        }
     }
 
     fn set_subtitle_clearance(&self, surface_height: f64, obscured_bottom: f64) -> bool {

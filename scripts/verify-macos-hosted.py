@@ -35,6 +35,8 @@ CONTROLS = {
     "open-drag-drop": "welcome_drop_highlight_disabled",
     "context-idle-and-playback": "context_clamp_disabled",
     "command-keyboard": "text_priority_disabled",
+    "about-identity": "about_copy_disabled",
+    "about-geometry": "about_owner_cleanup_disabled",
 }
 
 

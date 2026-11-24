@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "about-identity",
+  "fixture": "01-h264-1080p24-tone.mp4",
+  "appearances": ["light", "dark"],
+  "steps": [
+    {"action": "about_playback"},
+    {"action": "about_menu"},
+    {"action": "capture", "name": "about", "expect": "about_identity"},
+    {"action": "about_rail"},
+    {"action": "about_copy"}
+  ]
+}
