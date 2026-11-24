@@ -271,7 +271,8 @@ final class PlayerAppCommandsTests: XCTestCase {
         app.registerPlayerCommands()
         XCTAssertEqual(app.commands.shellCommands,
                        ["add-subtitle", "audio-track", "chapters-up-next", "escape-fullscreen", "fullscreen",
-                        "next-item", "open-file", "open-folder", "playback-speed", "previous-item", "subtitles"])
+                        "next-item", "open-file", "open-folder", "open-settings", "playback-speed", "previous-item",
+                        "subtitles"])
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("okp-menu-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let client = try SessionClient(config: SessionConfig(
@@ -297,6 +298,8 @@ final class PlayerAppCommandsTests: XCTestCase {
         for id in app.commands.shellCommands where id != "escape-fullscreen" {
             XCTAssertTrue(shown.contains(id), "\(id) is in the menu bar")
         }
+        let settings = try XCTUnwrap(rows.first { $0.id == "open-settings" })
+        XCTAssertTrue(settings.enabled, "Settings is available from Welcome")
         let next = try XCTUnwrap(rows.first { $0.id == "next-item" })
         XCTAssertTrue(next.available)
         XCTAssertFalse(next.enabled, "nothing to step to without a playlist")
