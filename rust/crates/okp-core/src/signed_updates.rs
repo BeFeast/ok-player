@@ -228,7 +228,10 @@ impl Feed {
         let cert = pgp::Cert::from_bytes(cert).map_err(|e| format!("Invalid release key: {e}"))?;
         let agent = ureq::Agent::config_builder()
             .max_redirects(0)
-            .timeout_global(Some(Duration::from_secs(180)))
+            .timeout_resolve(Some(Duration::from_secs(15)))
+            .timeout_connect(Some(Duration::from_secs(20)))
+            .timeout_send_request(Some(Duration::from_secs(15)))
+            .timeout_recv_response(Some(Duration::from_secs(30)))
             .build()
             .into();
         Ok(Self {
@@ -257,11 +260,15 @@ impl Feed {
     }
 
     fn fetch(&self, key: &str, limit: u64, mut output: impl Write) -> Result<u64> {
+        let body_seconds = if limit <= MAX_METADATA { 30 } else { 30 * 60 };
         let mut response = self
             .agent
             .get(format!("{}/{key}", self.origin))
             .header("Cache-Control", "no-cache")
             .header("User-Agent", "OK Player Updater/1")
+            .config()
+            .timeout_recv_body(Some(Duration::from_secs(body_seconds)))
+            .build()
             .call()
             .map_err(|e| format!("Could not fetch update data: {e}"))?;
         if response.status() != 200 {

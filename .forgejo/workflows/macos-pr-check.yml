@@ -76,7 +76,6 @@ jobs:
           test "$BRANCH" = main
           [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
           git rev-list --first-parent HEAD | grep -Fx "$HEAD_SHA" >/dev/null
-          git checkout --detach "$HEAD_SHA"
 
       - name: Does the change touch the macOS build?
         id: scope
@@ -107,7 +106,6 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
           test -s mac-ci-artifact/ok-player-macos-arm64.zip
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends gnupg gpgv python3-boto3

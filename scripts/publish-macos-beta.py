@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Publish a verified hosted macOS ZIP using OK Player's existing R2 authority."""
 import argparse
+import hashlib
 import importlib.util
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ import zipfile
 PREFIX = "ok-player/macos"
 FILENAME = "ok-player-macos-arm64.zip"
 BUNDLE_ID = "uk.oklabs.ok-player"
+SIGNING_CERTIFICATE = "C559D043379C4CB20AB2A1432B593E89AA7706A6"
 
 
 def appimage_publisher():
@@ -24,40 +26,47 @@ def appimage_publisher():
     return module
 
 
+def build_order(build):
+    if not re.fullmatch(r"[1-9][0-9]*\.(?:0|[1-9][0-9]*)", build):
+        raise ValueError("The ZIP has an invalid build number")
+    first, second = build.split(".")
+    return int(first), int(second)
+
+
 def describe(directory, source):
     if not re.fullmatch(r"[0-9a-f]{40}", source):
         raise ValueError("Expected the exact Forgejo source SHA")
     if (directory / "source-sha.txt").read_text().strip() != source:
         raise ValueError("The hosted receipt names a different source")
     signing = (directory / "signing.txt").read_text().splitlines()
-    identity = next((match[1] for line in signing
-                     if (match := re.fullmatch(r"mode=self-signed identity=([A-Fa-f0-9]{40})", line))), None)
-    expected_requirement = f'identifier "{BUNDLE_ID}" and certificate leaf = H"{identity.lower()}"' if identity else None
-    if not identity or f"designated_requirement={expected_requirement}" not in signing:
+    expected_requirement = f'identifier "{BUNDLE_ID}" and certificate leaf = H"{SIGNING_CERTIFICATE.lower()}"'
+    if (f"mode=self-signed identity={SIGNING_CERTIFICATE}" not in signing
+            or f"designated_requirement={expected_requirement}" not in signing):
         raise ValueError("The update ZIP requires OK Player's persistent macOS signing identity")
-    image = (directory / FILENAME).read_bytes()
-    with zipfile.ZipFile(directory / FILENAME) as bundle:
+    archive = directory / FILENAME
+    if not 1024 <= archive.stat().st_size <= 512 * 1024 * 1024:
+        raise ValueError("The ZIP is outside the supported update size")
+    image = archive.read_bytes()
+    sha256 = hashlib.sha256(image).hexdigest()
+    if (directory / "SHA256SUMS.txt").read_text().split() != [sha256, FILENAME]:
+        raise ValueError("The ZIP differs from the hosted runner's checksum")
+    with zipfile.ZipFile(archive) as bundle:
         info = plistlib.loads(bundle.read("OK Player.app/Contents/Info.plist"))
         if ("OK Player.app/Contents/MacOS/okp-updater" not in bundle.namelist()
                 or info["OKPUpdateSigningMode"] != "self-signed"
                 or info["CFBundleIdentifier"] != BUNDLE_ID or info["OKPSourceSHA"] != source):
             raise ValueError("The ZIP does not contain the expected update-capable bundle")
     build, version = info["CFBundleVersion"], info["CFBundleShortVersionString"]
-    if (not re.fullmatch(r"[1-9][0-9]*\.(?:0|[1-9][0-9]*)", build)
-            or not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}", version)):
-        raise ValueError("The ZIP has an invalid build or version number")
-    return image, {"source": source, "build": build, "version": version, "filename": FILENAME}
+    build_order(build)
+    if not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}", version):
+        raise ValueError("The ZIP has an invalid version number")
+    return image, {"source": source, "build": build, "version": version, "filename": FILENAME,
+                   "sha256": sha256, "size": len(image)}
 
 
 def publish(directory, source):
     common = appimage_publisher()
     image, metadata = describe(directory, source)
-    metadata.update(sha256=common.digest(image), size=len(image))
-    if not 1024 <= metadata["size"] <= 512 * 1024 * 1024:
-        raise ValueError("The ZIP is outside the supported update size")
-    if (directory / "SHA256SUMS.txt").read_text().split() != [metadata["sha256"], FILENAME]:
-        raise ValueError("The ZIP differs from the hosted runner's checksum")
-
     provenance = common.encode(metadata)
     archive = f"{PREFIX}/builds/{metadata['build']}"
     key = f"{archive}/{FILENAME}"
@@ -82,7 +91,7 @@ def publish(directory, source):
             common.publish_signed_archive(store, archive, metadata["filename"], image, provenance,
                                           common.encode(release), signer, verifier)
             common.publish_channel(store, release, signer, verifier, prefix=PREFIX,
-                                   order=lambda build: tuple(map(int, build.split("."))))
+                                   order=build_order)
         finally:
             if shutil.which("gpgconf"):
                 subprocess.run(["gpgconf", "--homedir", signing, "--kill", "all"], check=False)
