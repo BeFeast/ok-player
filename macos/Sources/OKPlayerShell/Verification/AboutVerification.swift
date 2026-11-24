@@ -57,8 +57,8 @@ extension VerifyRun {
             window.displayIfNeeded()
             let appearance = window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])
             checkAbout(appearance == (options.appearance == "dark" ? .darkAqua : .aqua), "appearance")
-            checkAbout(pane.cards.count == 3 && pane.specRows.count == 14 && pane.specRows.allSatisfy(rowFits),
-                       "rows_fit")
+            let badRows = pane.specRows.compactMap(rowProblem)
+            checkAbout(pane.cards.count == 3 && pane.specRows.count == 14 && badRows.isEmpty, "rows_fit")
             if step.expect == .aboutIdentity {
                 checkAbout(!pane.mark.visibleRect.isEmpty, "mark_visible")
             }
@@ -67,6 +67,7 @@ extension VerifyRun {
                 "name": name, "png": "\(name).png", "capture": mode, "window_id": window.windowNumber,
                 "effective_appearance": appearance?.rawValue ?? "unknown",
                 "content_width": root.bounds.width, "content_height": root.bounds.height,
+                "layout_problems": badRows,
             ])
         default:
             throw VerifyError("Unsupported About action")
@@ -99,14 +100,27 @@ extension VerifyRun {
         checkAbout(SmokeSnapshots.captureIcons(in: options.output.path), "bundle_icon")
     }
 
-    private func rowFits(_ row: NSView) -> Bool {
-        guard let fields = (row as? NSStackView)?.arrangedSubviews, fields.count == 2,
+    private func rowProblem(_ row: NSStackView) -> String? {
+        let fields = row.arrangedSubviews
+        guard fields.count == 2,
               let key = fields.first as? NSTextField, let value = fields.last as? NSTextField,
-              let cell = value.cell else { return false }
-        let measure = NSRect(x: 0, y: 0, width: value.bounds.width, height: 10_000)
-        let tolerance = row.bounds.insetBy(dx: -0.5, dy: -0.5)
-        return value.bounds.width > 0 && value.bounds.height + 1 >= cell.cellSize(forBounds: measure).height
-            && tolerance.contains(key.frame) && tolerance.contains(value.frame) && !key.frame.intersects(value.frame)
+              let font = value.font else { return "Missing About fields" }
+        let keyRect = key.convert(key.bounds, to: row)
+        let valueRect = value.convert(value.bounds, to: row)
+        let tolerance = row.bounds.insetBy(dx: -1, dy: -1)
+        guard !keyRect.isEmpty && !valueRect.isEmpty && tolerance.contains(keyRect)
+                && tolerance.contains(valueRect) && !keyRect.intersects(valueRect) else {
+            return "\(key.stringValue): overlapping or clipped fields \(keyRect) \(valueRect) in \(row.bounds)"
+        }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byCharWrapping
+        let text = NSAttributedString(string: value.stringValue, attributes: [.font: font, .paragraphStyle: paragraph])
+        let measure = NSSize(width: max(1, valueRect.width - 4), height: .greatestFiniteMagnitude)
+        let needed = text.boundingRect(with: measure, options: [.usesLineFragmentOrigin]).height
+        guard needed <= valueRect.height + 1 else {
+            return "\(key.stringValue): text needs \(needed) pt in a \(valueRect.height) pt field"
+        }
+        return nil
     }
 
     private func aboutWindow() throws -> (SettingsWindow, AboutPane) {

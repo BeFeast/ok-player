@@ -8,7 +8,7 @@ final class AboutPane: NSView {
     let licenseButton = NSButton()
     private(set) var footer: NSStackView!
     private(set) var cards: [NSView] = []
-    private(set) var specRows: [NSView] = []
+    private(set) var specRows: [NSStackView] = []
     var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
     private var copyNotice: Timer?
 
@@ -101,6 +101,7 @@ final class AboutPane: NSView {
             value.lineBreakMode = .byCharWrapping
             let line = NSStackView(views: [key, value])
             line.alignment = .firstBaseline
+            line.distribution = .fill
             line.spacing = 8
             return line
         }
