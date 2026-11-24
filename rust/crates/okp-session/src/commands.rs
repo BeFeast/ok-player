@@ -260,6 +260,7 @@ impl CommandRegistry {
             .into_iter()
             .map(|command| {
                 let id = command.id.id();
+                let available = self.is_available(id);
                 let shortcut = player_command_registry()
                     .iter()
                     .find(|spec| spec.id == command.id)
@@ -269,8 +270,8 @@ impl CommandRegistry {
                     group: command.group.into(),
                     menu: menu_of(command.id),
                     label: command.label,
-                    available: self.is_available(id),
-                    enabled: if self.platform == Platform::MacOs {
+                    available,
+                    enabled: if self.platform == Platform::MacOs && available {
                         match command.id {
                             PlayerCommandId::MiniPlayer => {
                                 window.mini_player
