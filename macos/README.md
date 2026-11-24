@@ -334,7 +334,9 @@ file-open, video double-click and Escape, resize proposals for all four edges,
 Close Media, and the Always on Top control. The float case reads the
 WindowServer order of two overlapping windows. Each case has a targeted
 `--negative-control` and writes its layout and 2× PNG checkpoints. The standard
-hosted preview runs all four cases and `subtitle-lift` against the same ZIP.
+hosted preview runs all four cases, their negative controls, and `subtitle-lift`
+against the same ZIP. In that job the verdicts are under `verify/<scenario>/`
+and `verify/<scenario>-negative/`.
 
 From a checkout with the verifier, run:
 

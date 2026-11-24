@@ -339,8 +339,17 @@ jobs:
             verify "${requested%%/*}" "$OKP_MACOS_OUTPUT/verify" "$@"
           else
             status=0
-            for scenario in subtitle-lift window-chrome window-fullscreen window-fit window-float; do
+            window_scenarios=(window-chrome window-fullscreen window-fit window-float)
+            for scenario in subtitle-lift "${window_scenarios[@]}"; do
               verify "$scenario" "$OKP_MACOS_OUTPUT/verify/$scenario" || status=1
+            done
+            for scenario in "${window_scenarios[@]}"; do
+              result=0
+              verify "$scenario" "$OKP_MACOS_OUTPUT/verify/$scenario-negative" --negative-control || result=$?
+              if [[ "$result" != 1 ]]; then
+                echo "::error::Negative control for $scenario returned $result, expected assertion failure"
+                status=1
+              fi
             done
             exit "$status"
           fi
