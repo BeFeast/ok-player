@@ -1,3 +1,5 @@
+use okp_session::queue::{QueueRow, QueueRowState, QueueView};
+
 use super::*;
 
 pub(crate) fn update_up_next_panel(
@@ -422,66 +424,43 @@ pub(crate) fn render_playlist_panel(
     current_index: Option<usize>,
     actions: &mut Vec<SidePanelAction>,
 ) {
-    if snapshot.playlist.len() <= 1 {
-        render_short_queue_panel(controls, snapshot, current_index, actions);
-        return;
-    }
-
-    if let Some(current) = current_index.and_then(|index| snapshot.playlist.get(index)) {
+    // GTK's queue lane identifies the next row in folder order. Playback modes
+    // and auto-advance continue to be handled by the existing GTK commands.
+    let queue = QueueView::project(
+        &snapshot.playlist,
+        current_index,
+        current_index.map(|index| index + 1),
+        snapshot.current_title.as_deref(),
+        false,
+    );
+    let pinned = queue
+        .current_index
+        .or_else(|| (queue.heading.is_none() && !queue.rows.is_empty()).then_some(0));
+    if let Some(index) = pinned {
         controls.up_next_list.append(&now_playing_pinned_row(
-            current,
-            true,
-            snapshot.current_title.as_deref(),
+            &snapshot.playlist[index],
+            &queue.rows[index],
         ));
         actions.push(SidePanelAction::None);
     }
 
-    controls.up_next_list.append(&panel_heading_row(&format!(
-        "FROM THIS FOLDER · {}",
-        snapshot.playlist.len()
-    )));
+    let Some(heading) = &queue.heading else {
+        controls.up_next_list.append(&add_files_row());
+        actions.push(SidePanelAction::AddFiles);
+        return;
+    };
+    controls.up_next_list.append(&panel_heading_row(heading));
     actions.push(SidePanelAction::None);
 
-    for (index, item) in snapshot.playlist.iter().enumerate() {
+    for row in &queue.rows {
         controls.up_next_list.append(&playlist_row(
-            item,
-            index,
-            current_index,
-            snapshot.current_title.as_deref(),
-            snapshot.playlist.len(),
+            &snapshot.playlist[row.index],
+            row,
+            queue.rows.len(),
             Rc::clone(state),
         ));
-        actions.push(SidePanelAction::Playlist(index));
+        actions.push(SidePanelAction::Playlist(row.index));
     }
-}
-
-/// The Up Next panel for a queue too short to scroll (PRD §2.6: a single URL / no
-/// folder session shows the now-playing item + an "Add files…" hint). The old
-/// branch rendered a bare "No folder queue for this media yet." dead string and
-/// dropped the now-playing item entirely, so the panel read as blank with no
-/// way back to growing a queue. The lone current item is pinned as a clean
-/// now-playing row (no reorder/remove controls — there is nothing to reorder or
-/// remove), then the dashed "Add files to queue" affordance opens the same
-/// multi-select media dialog the overflow menu's "Add to Queue" uses.
-pub(crate) fn render_short_queue_panel(
-    controls: &Controls,
-    snapshot: &SidePanelSnapshot,
-    current_index: Option<usize>,
-    actions: &mut Vec<SidePanelAction>,
-) {
-    if let Some(item) = snapshot.playlist.first() {
-        controls.up_next_list.append(&now_playing_pinned_row(
-            item,
-            current_index == Some(0),
-            snapshot.current_title.as_deref(),
-        ));
-        // The pinned now-playing row is non-activatable; reserve a slot so the
-        // Add files affordance below keeps a stable action index.
-        actions.push(SidePanelAction::None);
-    }
-
-    controls.up_next_list.append(&add_files_row());
-    actions.push(SidePanelAction::AddFiles);
 }
 
 /// The pinned now-playing row used at the top of a short queue. It mirrors the
@@ -489,16 +468,12 @@ pub(crate) fn render_short_queue_panel(
 /// drops the reorder / remove action buttons — a single-item queue has nothing
 /// to reorder and the current item is not removable — so the lone entry reads as
 /// a calm pinned card instead of a row of greyed-out controls.
-pub(crate) fn now_playing_pinned_row(
-    item: &PlaylistItem,
-    is_current: bool,
-    current_title: Option<&str>,
-) -> gtk::ListBoxRow {
+fn now_playing_pinned_row(item: &PlaylistItem, entry: &QueueRow) -> gtk::ListBoxRow {
     let row = gtk::ListBoxRow::new();
     row.add_css_class("okp-now-playing-pinned-row");
     row.set_activatable(false);
     row.set_selectable(false);
-    if is_current {
+    if entry.state == QueueRowState::Current {
         row.add_css_class("is-current");
     }
     row.set_tooltip_text(Some(&item.display_location()));
@@ -521,10 +496,7 @@ pub(crate) fn now_playing_pinned_row(
     let labels = gtk::Box::new(gtk::Orientation::Vertical, 1);
     labels.set_hexpand(true);
     labels.set_valign(gtk::Align::Center);
-    let display_title = current_title
-        .map(str::to_owned)
-        .unwrap_or_else(|| item.display_name());
-    let title = gtk::Label::new(Some(&display_title));
+    let title = gtk::Label::new(Some(&entry.title));
     title.add_css_class("okp-now-playing-title");
     title.set_xalign(0.0);
     title.set_hexpand(true);
@@ -970,17 +942,16 @@ pub(crate) fn clear_list_box(list: &gtk::ListBox) {
     }
 }
 
-pub(crate) fn playlist_row(
+fn playlist_row(
     item: &PlaylistItem,
-    index: usize,
-    current_index: Option<usize>,
-    current_title: Option<&str>,
+    entry: &QueueRow,
     playlist_len: usize,
     state: Rc<RefCell<PlayerState>>,
 ) -> gtk::ListBoxRow {
-    let is_current = current_index == Some(index);
-    let is_next = current_index.is_some_and(|current| index == current + 1);
-    let is_behind = current_index.is_some_and(|current| index < current);
+    let index = entry.index;
+    let is_current = entry.state == QueueRowState::Current;
+    let is_next = entry.state == QueueRowState::Next;
+    let is_behind = entry.state == QueueRowState::Behind;
     let row = gtk::ListBoxRow::new();
     row.add_css_class("okp-up-next-row");
     row.set_activatable(!is_current);
@@ -1023,14 +994,7 @@ pub(crate) fn playlist_row(
 
     let icon = playlist_row_icon(item);
 
-    let display_title = if is_current {
-        current_title
-            .map(str::to_owned)
-            .unwrap_or_else(|| item.display_name())
-    } else {
-        item.display_name()
-    };
-    let title = gtk::Label::new(Some(&display_title));
+    let title = gtk::Label::new(Some(&entry.title));
     title.add_css_class("okp-up-next-file");
     title.set_xalign(0.0);
     title.set_hexpand(true);
@@ -1038,13 +1002,7 @@ pub(crate) fn playlist_row(
 
     let drag_handle = playlist_drag_handle();
 
-    let actions = playlist_actions_menu(
-        index,
-        current_index,
-        playlist_len,
-        is_current,
-        Rc::clone(&state),
-    );
+    let actions = playlist_actions_menu(entry, playlist_len, Rc::clone(&state));
 
     connect_playlist_row_drag_reorder(&row, &drag_handle, index, state);
 
@@ -1057,13 +1015,12 @@ pub(crate) fn playlist_row(
     row
 }
 
-pub(crate) fn playlist_actions_menu(
-    index: usize,
-    current_index: Option<usize>,
+fn playlist_actions_menu(
+    entry: &QueueRow,
     playlist_len: usize,
-    is_current: bool,
     state: Rc<RefCell<PlayerState>>,
 ) -> gtk::MenuButton {
+    let index = entry.index;
     let menu = gtk::MenuButton::builder()
         .icon_name("okp-view-more-symbolic")
         .build();
@@ -1081,12 +1038,10 @@ pub(crate) fn playlist_actions_menu(
     });
     content.append(&move_up);
 
-    let play_next_sensitive =
-        current_index.is_some_and(|current| index != current && index != current + 1);
     let play_next = playlist_menu_action(
         "okp-media-skip-forward-symbolic",
         "Play next",
-        play_next_sensitive,
+        entry.can_play_next,
     );
     let play_next_state = Rc::clone(&state);
     play_next.connect_clicked(move |_| {
@@ -1108,7 +1063,7 @@ pub(crate) fn playlist_actions_menu(
     let remove = playlist_menu_action(
         "okp-list-remove-symbolic",
         "Remove from queue",
-        !is_current && playlist_len > 1,
+        entry.state != QueueRowState::Current && playlist_len > 1,
     );
     let remove_state = Rc::clone(&state);
     remove.connect_clicked(move |_| {

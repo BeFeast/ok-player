@@ -40,9 +40,10 @@ struct OpenPanelConfiguration: Equatable {
     }
 
     /// Show the panel as a sheet on `window` and hand the chosen items to `open`.
-    func present(on window: NSWindow, open: @escaping ([URL]) -> Void) {
+    func present(on window: NSWindow, prompt: String = "Open", open: @escaping ([URL]) -> Void) {
         let panel = NSOpenPanel()
         apply(to: panel)
+        panel.prompt = prompt
         panel.beginSheetModal(for: window) { response in
             Self.submit(response, urls: panel.urls, open: open)
         }

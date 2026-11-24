@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "queue-single",
+  "fixture": "S01E01.mp4",
+  "appearances": [
+    "light",
+    "dark"
+  ],
+  "steps": [
+    {
+      "action": "open_queue_url"
+    },
+    {
+      "action": "pause"
+    },
+    {
+      "action": "show_queue"
+    },
+    {
+      "action": "capture",
+      "name": "just-this-file",
+      "expect": "queue_panel"
+    },
+    {
+      "action": "check_queue_add"
+    },
+    {
+      "action": "capture",
+      "name": "after-add-files",
+      "expect": "queue_panel"
+    }
+  ]
+}

@@ -166,6 +166,7 @@ enum Query: Codable, Equatable {
     case history(query: HistoryQuery)
     /// The playlist as it is now.
     case playlist
+    case queueView
     /// What the transport controls show; with `at`, the readout at that position.
     case transport(at: Double? = nil)
     case oscLayout(width: Int, spacing: Int, padding: Int, slots: [OscSlotMeasure])
@@ -199,6 +200,7 @@ enum QueryResult: Codable, Equatable {
     case repeatingShortcuts(actions: [String])
     case history(result: HistoryQueryResult)
     case playlist(playlist: PlaylistState)
+    case queueView(view: UpNextList)
     case transport(transport: TransportView)
     case oscLayout(layout: OscBarLayout)
     case statusSurface(surface: StatusSurface)

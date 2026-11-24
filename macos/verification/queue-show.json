@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "id": "queue-show",
+  "fixture": "S01E01.mp4",
+  "appearances": [
+    "light",
+    "dark"
+  ],
+  "steps": [
+    {
+      "action": "open_queue"
+    },
+    {
+      "action": "pause"
+    },
+    {
+      "action": "show_queue"
+    },
+    {
+      "action": "capture",
+      "name": "up-next",
+      "expect": "queue_panel"
+    },
+    {
+      "action": "check_queue_jump"
+    }
+  ]
+}

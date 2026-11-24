@@ -1,74 +1,57 @@
 import AppKit
 
-// The Up Next panel's content as plain values (#884), so XCTest can check it
-// without a window: the rows the session's playlist (docs/session-abi.md,
-// "Playlist") lists under a pinned Now Playing row, and the playlist command a
-// row asks for. The session owns the playlist; nothing here orders, steps or
-// edits it.
+// The queue view projected by okp-session. Row indices address the session playlist.
+enum UpNextRowState: String, Codable {
+    case current, next, behind, upcoming
+}
 
-/// One item of the playlist as the panel lists it.
-struct UpNextRow: Equatable {
-    /// The item's place in `PlaylistState.items`, which playlist commands take.
+struct UpNextRow: Codable, Equatable {
     var index: Int
+    var source: MediaSource
     var title: String
-    /// The file path or URL, for the tooltip.
-    var location: String
-    /// The item playing now. The panel neither plays it again nor removes it,
-    /// and the session never removes it.
-    var isCurrent: Bool
+    var state: UpNextRowState
+    var canPlayNext: Bool
 
-    /// The item's number in the list, shown before the title.
+    var location: String { source.location }
+    var isCurrent: Bool { state == .current }
     var number: String { "\(index + 1)" }
 }
 
-/// What the panel shows for one playlist state.
-struct UpNextList: Equatable {
-    /// The pinned card for the current item.
-    struct NowPlaying: Equatable {
-        var title: String
-        var location: String
+struct UpNextList: Codable, Equatable {
+    var rows: [UpNextRow] = []
+    var currentIndex: Int?
+    var heading: String?
+    var scanning = false
+
+    var nowPlaying: UpNextRow? { currentIndex.flatMap(row(at:)) }
+
+    func row(at index: Int) -> UpNextRow? {
+        rows.indices.contains(index) ? rows[index] : nil
     }
 
-    var nowPlaying: NowPlaying?
-    var rows: [UpNextRow]
-    /// The label over the rows: how many items there are, and whether a folder or
-    /// playlist file is still being read. Empty when there are none.
-    var heading: String
-
-    /// `mediaTitle` is libmpv's title for the open media (`SessionSnapshot.title`);
-    /// without one the Now Playing card shows the item's own label.
-    init(playlist: PlaylistState, mediaTitle: String?) {
-        let current = playlist.currentIndex.flatMap { playlist.items.indices.contains($0) ? $0 : nil }
-        rows = playlist.items.enumerated().map { index, entry in
-            UpNextRow(index: index, title: entry.title, location: entry.source.location, isCurrent: index == current)
-        }
-        nowPlaying = current.map { index in
-            let entry = playlist.items[index]
-            let title = mediaTitle.flatMap { $0.isEmpty ? nil : $0 } ?? entry.title
-            return NowPlaying(title: title, location: entry.source.location)
-        }
-        let count = playlist.items.count
-        let items = count == 1 ? "1 ITEM" : "\(count) ITEMS"
-        heading = count == 0 ? "" : playlist.scanning ? "\(items) · SCANNING…" : items
-    }
-
-    /// An empty playlist.
-    init() {
-        self.init(playlist: PlaylistState(), mediaTitle: nil)
-    }
-
-    /// What plays the item at `row`: a jump, except for the current item, which is
-    /// already playing. Nil for a row that is not there.
     func activation(ofRow row: Int) -> Command? {
-        guard rows.indices.contains(row), !rows[row].isCurrent else { return nil }
-        return .playlist(action: .jump(index: rows[row].index))
+        guard let entry = self.row(at: row), !entry.isCurrent else { return nil }
+        return .playlist(action: .jump(index: entry.index))
     }
 
-    /// What takes the item at `row` out of the playlist; nil for the current item,
-    /// which stays, and for a row that is not there.
     func removal(ofRow row: Int) -> Command? {
-        guard rows.indices.contains(row), !rows[row].isCurrent else { return nil }
-        return .playlist(action: .remove(index: rows[row].index))
+        guard rows.count > 1, let entry = self.row(at: row), !entry.isCurrent else { return nil }
+        return .playlist(action: .remove(index: entry.index))
+    }
+
+    func playNext(ofRow row: Int) -> Command? {
+        guard let entry = self.row(at: row), entry.canPlayNext else { return nil }
+        return .playlist(action: .playNext(index: entry.index))
+    }
+
+    /// AppKit reports an insertion boundary before a row (including the end).
+    /// The session takes the final index after the source has been removed.
+    func moving(from row: Int, before boundary: Int) -> Command? {
+        guard let entry = self.row(at: row), !entry.isCurrent,
+              (0...rows.count).contains(boundary) else { return nil }
+        let destination = boundary > row ? boundary - 1 : boundary
+        guard destination != row else { return nil }
+        return .playlist(action: .move(from: entry.index, to: destination))
     }
 }
 

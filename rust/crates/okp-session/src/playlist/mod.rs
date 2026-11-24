@@ -283,6 +283,16 @@ impl SessionPlaylist {
         }
     }
 
+    pub(crate) fn queue_view(&self, media_title: Option<&str>) -> crate::queue::QueueView {
+        crate::queue::QueueView::project(
+            self.list.items(),
+            self.list.current_index(),
+            self.list.auto_advance_target_index(),
+            media_title,
+            self.active.is_some(),
+        )
+    }
+
     /// How many items the playlist holds.
     pub(crate) fn len(&self) -> usize {
         self.list.items().len()

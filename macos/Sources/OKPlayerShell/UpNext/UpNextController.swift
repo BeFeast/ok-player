@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 
 /// The Up Next panel in the player window (#884), with the transport controls'
 /// Up Next button and the menu bar's registry item that show and hide it.
@@ -7,15 +8,14 @@ import AppKit
 /// (registered with `PlayerCommands`, so the session config lists it): the panel
 /// opens when the registry enables the command (media is open) and the session
 /// answers `perform`. It closes from the button, the menu item while it is enabled,
-/// or its own close button. Each drained batch hands it the session's playlist
-/// (`SessionStore.playlist`).
+/// or its own close button. Playlist events invalidate the shared queue view.
 final class UpNextController: NSObject {
     /// The registry command that shows and hides the panel.
     static let commandID = "chapters-up-next"
 
     let panel = UpNextPanel()
     /// The transport controls' Up Next button.
-    let button = TransportOverlay.iconButton("list.bullet", "Up Next")
+    let button = TransportOverlay.iconButton("list.bullet.rectangle", "Chapters & Up Next")
     /// Sends a command to the session.
     var dispatch: ((Command) -> DispatchResult)?
     /// Asks the session.
@@ -24,13 +24,23 @@ final class UpNextController: NSObject {
     var isFullscreen: () -> Bool = { false }
     private(set) var isShown = false
     var onVisibilityChange: ((Bool) -> Void)?
+    var onQueueError: ((String) -> Void)?
+    /// The verifier can supply a selection while exercising the same picker completion.
+    var chooseFiles: ((QueueMode, @escaping ([URL]) -> Void) -> Void)?
+    var verifyMovesDisabled = false
+    var verifyAddDisabled = false
     private var shownPlaylist = PlaylistState()
     private var shownTitle: String?
 
     override init() {
         super.init()
         panel.isHidden = true
-        panel.dispatch = { [weak self] command in _ = self?.dispatch?(command) }
+        panel.dispatch = { [weak self] command in
+            guard let self else { return }
+            if self.verifyMovesDisabled, case .playlist(action: .move) = command { return }
+            self.send(command)
+        }
+        panel.onAddFiles = { [weak self] in self?.presentAddFiles(mode: .append) }
         panel.onClose = { [weak self] in self?.hide() }
         button.target = self
         button.action = #selector(toggleUpNext(_:))
@@ -43,13 +53,13 @@ final class UpNextController: NSObject {
         panel.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(panel)
         // Narrower than this only in a window too small to hold it.
-        let width = panel.widthAnchor.constraint(equalToConstant: 300)
+        let width = panel.widthAnchor.constraint(equalToConstant: 316)
         width.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            panel.topAnchor.constraint(equalTo: strip?.bottomAnchor ?? root.safeAreaLayoutGuide.topAnchor, constant: 8),
-            panel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
-            panel.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: -10),
-            panel.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 12),
+            panel.topAnchor.constraint(equalTo: strip?.bottomAnchor ?? root.safeAreaLayoutGuide.topAnchor, constant: 4),
+            panel.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            panel.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: -2),
+            panel.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor),
             width,
         ])
     }
@@ -58,6 +68,8 @@ final class UpNextController: NSObject {
     /// it with `commands` before the session starts.
     func register(with commands: PlayerCommands) {
         commands.register(Self.commandID) { [weak self] in self?.registryCommandRan() }
+        commands.register("add-to-queue") { [weak self] in self?.presentAddFiles(mode: .append) }
+        commands.register("play-next") { [weak self] in self?.presentAddFiles(mode: .playNext) }
     }
 
     /// `PlayerCommands` ran the command and the session handed it to this shell:
@@ -68,11 +80,39 @@ final class UpNextController: NSObject {
 
     /// The session reported a batch; `playlist` and `snapshot` are the store's state
     /// after it.
-    func sessionChanged(playlist: PlaylistState, snapshot: SessionSnapshot) {
-        guard playlist != shownPlaylist || snapshot.title != shownTitle else { return }
-        shownPlaylist = playlist
-        shownTitle = snapshot.title
-        panel.show(UpNextList(playlist: playlist, mediaTitle: snapshot.title))
+    func sessionChanged(playlist: PlaylistState, snapshot: SessionSnapshot, playlistChanged: Bool = false) {
+        panel.showChapters(snapshot.chapters)
+        guard playlistChanged || playlist != shownPlaylist || snapshot.title != shownTitle else { return }
+        if case .queueView(let view)? = query?(.queueView) {
+            shownPlaylist = playlist
+            shownTitle = snapshot.title
+            panel.show(view)
+        }
+    }
+
+    private func presentAddFiles(mode: QueueMode) {
+        let append: ([URL]) -> Void = { [weak self] urls in
+            let sources = urls.filter(\.isFileURL).map { MediaSource(kind: .local, location: $0.path) }
+            guard !sources.isEmpty else { return }
+            guard let self, !self.verifyAddDisabled else { return }
+            self.send(.playlist(action: .queue(sources: sources, mode: mode)))
+        }
+        if let chooseFiles { chooseFiles(mode, append); return }
+        guard let window = panel.window, window.attachedSheet == nil else { return }
+        var formats: OpenFormats?
+        if case .openFormats(var media)? = query?(.openFormats) {
+            media.subtitle = []
+            media.playlist = []
+            formats = media
+        }
+        OpenPanelConfiguration.files(formats).present(on: window, prompt: mode == .append ? "Add" : "Play Next", open: append)
+    }
+
+    private func send(_ command: Command) {
+        switch dispatch?(command) {
+        case .rejected(_, let message), .failed(_, let message): onQueueError?(message)
+        default: break
+        }
     }
 
     /// Whether the registry offers the command now: this shell carries it out, and
@@ -116,10 +156,22 @@ final class UpNextController: NSObject {
         guard isShown != shown else { return }
         isShown = shown
         onVisibilityChange?(shown)
-        if !shown { panel.returnFocus() }
+        if !shown {
+            panel.returnFocus()
+            panel.dismissRowMenu()
+        }
         panel.isHidden = !shown
+        if shown, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            panel.wantsLayer = true
+            let slide = CABasicAnimation(keyPath: "transform.translation.x")
+            slide.fromValue = panel.bounds.width
+            slide.toValue = 0
+            slide.duration = 0.16
+            slide.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.layer?.add(slide, forKey: "up-next-reveal")
+        }
         button.contentTintColor = (shown ? PaletteRole.link : PaletteRole.text).overVideo
-        let label = shown ? "Hide Up Next" : "Up Next"
+        let label = shown ? "Hide Chapters & Up Next" : "Chapters & Up Next"
         button.toolTip = label
         button.setAccessibilityLabel(label)
     }
@@ -132,6 +184,7 @@ extension UpNextController {
     /// Returns what failed.
     func smokeShowFailure(playlist: PlaylistState) -> String? {
         guard show(), !panel.isHidden else { return "The Up Next command did not open the panel" }
+        panel.select(.upNext)
         panel.superview?.layoutSubtreeIfNeeded()
         guard panel.frame.width > 0, panel.frame.height > 0 else { return "The Up Next panel has no size" }
         let rows = panel.tableView.numberOfRows

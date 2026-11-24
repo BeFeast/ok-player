@@ -11,43 +11,24 @@ func upNextPlaylist(_ names: [String], current: Int?) -> PlaylistState {
     PlaylistState(items: names.map(entry), currentIndex: current)
 }
 
-/// What the panel shows for a playlist, and what its rows and keys ask the session for.
+func upNextView(_ playlist: PlaylistState, title: String? = nil) -> UpNextList {
+    var view = UpNextList()
+    view.currentIndex = playlist.currentIndex
+    view.scanning = playlist.scanning
+    if playlist.items.count > 1 { view.heading = "FROM THIS FOLDER · \(playlist.items.count)" }
+    view.rows = playlist.items.enumerated().map { index, item in
+        let current = index == playlist.currentIndex
+        return UpNextRow(index: index, source: item.source, title: current ? title ?? item.title : item.title,
+                         state: current ? .current : .upcoming,
+                         canPlayNext: playlist.currentIndex.map { index != $0 && index != $0 + 1 } ?? false)
+    }
+    return view
+}
+
+/// The row commands use the indices projected by the session.
 final class UpNextListTests: XCTestCase {
-    func testTheRowsListThePlaylistInOrderWithTheCurrentItemMarked() {
-        let list = UpNextList(playlist: upNextPlaylist(["a.mkv", "b.mkv", "c.mkv"], current: 1), mediaTitle: nil)
-        XCTAssertEqual(list.rows.map(\.title), ["a.mkv", "b.mkv", "c.mkv"])
-        XCTAssertEqual(list.rows.map(\.number), ["1", "2", "3"])
-        XCTAssertEqual(list.rows.map(\.isCurrent), [false, true, false])
-        XCTAssertEqual(list.rows[2].location, "/Users/example/Movies/c.mkv", "the tooltip names the file")
-        XCTAssertEqual(list.heading, "3 ITEMS")
-    }
-
-    func testNowPlayingShowsTheMediaTitleOrElseTheItemsLabel() {
-        let playlist = upNextPlaylist(["a.mkv", "b.mkv"], current: 1)
-        XCTAssertEqual(UpNextList(playlist: playlist, mediaTitle: "The Film").nowPlaying,
-                       UpNextList.NowPlaying(title: "The Film", location: "/Users/example/Movies/b.mkv"))
-        XCTAssertEqual(UpNextList(playlist: playlist, mediaTitle: nil).nowPlaying?.title, "b.mkv")
-        XCTAssertEqual(UpNextList(playlist: playlist, mediaTitle: "").nowPlaying?.title, "b.mkv")
-    }
-
-    func testWithoutACurrentItemNothingIsPinnedOrMarked() {
-        for playlist in [PlaylistState(), upNextPlaylist(["a.mkv"], current: nil), upNextPlaylist(["a.mkv"], current: 4)] {
-            let list = UpNextList(playlist: playlist, mediaTitle: "Stale title")
-            XCTAssertNil(list.nowPlaying, "\(playlist)")
-            XCTAssertFalse(list.rows.contains(where: \.isCurrent), "\(playlist)")
-        }
-        XCTAssertEqual(UpNextList().heading, "", "an empty list has no heading")
-        XCTAssertEqual(UpNextList(playlist: upNextPlaylist(["a.mkv"], current: 0), mediaTitle: nil).heading, "1 ITEM")
-    }
-
-    func testTheHeadingSaysWhileAFolderIsStillBeingRead() {
-        var playlist = upNextPlaylist(["a.mkv"], current: 0)
-        playlist.scanning = true
-        XCTAssertEqual(UpNextList(playlist: playlist, mediaTitle: nil).heading, "1 ITEM · SCANNING…")
-    }
-
     func testARowPlaysAndIsRemovedThroughTheSessionPlaylistButNeverTheCurrentOne() {
-        let list = UpNextList(playlist: upNextPlaylist(["a.mkv", "b.mkv", "c.mkv"], current: 1), mediaTitle: nil)
+        let list = upNextView(upNextPlaylist(["a.mkv", "b.mkv", "c.mkv"], current: 1))
         XCTAssertEqual(list.activation(ofRow: 2), .playlist(action: .jump(index: 2)))
         XCTAssertEqual(list.removal(ofRow: 0), .playlist(action: .remove(index: 0)))
         XCTAssertNil(list.activation(ofRow: 1), "the current item is already playing")
@@ -76,6 +57,7 @@ private final class FakeUpNextSession {
     var available = true
     var enabled = true
     var invokeResult = DispatchResult.perform
+    var view = UpNextList()
     private(set) var dispatched: [Command] = []
     private(set) var registryQueries = 0
 
@@ -86,6 +68,7 @@ private final class FakeUpNextSession {
     }
 
     func query(_ query: Query) -> QueryResult? {
+        if case .queueView = query { return .queueView(view: view) }
         guard case .commandRegistry = query else { return nil }
         registryQueries += 1
         return .commandRegistry(commands: [
@@ -187,7 +170,7 @@ final class UpNextControllerTests: XCTestCase {
     func testTheMenuBarsRegistryItemOpensAndClosesThePanel() {
         let commands = PlayerCommands()
         controller.register(with: commands)
-        XCTAssertEqual(commands.shellCommands, [UpNextController.commandID])
+        XCTAssertEqual(commands.shellCommands, ["add-to-queue", UpNextController.commandID, "play-next"])
         commands.connect(session: { [unowned self] command in self.session.dispatch(command) },
                          registry: { [unowned self] _ in
                              guard case .commandRegistry(let rows)? = self.session.query(.commandRegistry()) else {
@@ -210,24 +193,29 @@ final class UpNextControllerTests: XCTestCase {
     func testThePanelShowsTheDrainedPlaylistUnderNowPlaying() {
         var snapshot = SessionSnapshot()
         snapshot.title = "First film"
-        controller.sessionChanged(playlist: upNextPlaylist(["first.mkv", "second.mkv"], current: 0), snapshot: snapshot)
+        let playlist = upNextPlaylist(["first.mkv", "second.mkv"], current: 0)
+        session.view = upNextView(playlist, title: snapshot.title)
+        controller.sessionChanged(playlist: playlist, snapshot: snapshot)
         let panel = controller.panel
         XCTAssertEqual(panel.tableView.numberOfRows, 2)
         XCTAssertEqual(panel.nowPlayingTitle.stringValue, "First film")
         XCTAssertEqual(panel.nowPlayingState.stringValue, "NOW PLAYING")
-        XCTAssertEqual(panel.headingLabel.stringValue, "2 ITEMS")
+        XCTAssertEqual(panel.headingLabel.stringValue, "FROM THIS FOLDER · 2")
         XCTAssertTrue(panel.emptyLabel.isHidden)
 
+        session.view = UpNextList()
         controller.sessionChanged(playlist: PlaylistState(), snapshot: SessionSnapshot())
         XCTAssertEqual(panel.tableView.numberOfRows, 0, "closing the media empties the playlist")
-        XCTAssertEqual(panel.nowPlayingTitle.stringValue, "Nothing is playing")
+        XCTAssertTrue(panel.nowPlayingCard.isHidden)
         XCTAssertFalse(panel.emptyLabel.isHidden)
     }
 
     func testHidingThePanelGivesTheListsKeyboardFocusBackToTheVideo() {
-        controller.sessionChanged(playlist: upNextPlaylist(["first.mkv", "second.mkv"], current: 0),
-                                  snapshot: SessionSnapshot())
+        let playlist = upNextPlaylist(["first.mkv", "second.mkv"], current: 0)
+        session.view = upNextView(playlist)
+        controller.sessionChanged(playlist: playlist, snapshot: SessionSnapshot())
         XCTAssertTrue(controller.show())
+        controller.panel.select(.upNext)
         XCTAssertTrue(window.makeFirstResponder(controller.panel.tableView))
         controller.hide()
         XCTAssertTrue(window.firstResponder === video, "Space would not reach the video")
@@ -289,6 +277,10 @@ final class UpNextAppTests: XCTestCase {
                                        remoteSource: FakeRemoteCommandSource(), power: FakePowerAssertions(),
                                        recentList: FakeRecentDocumentList(), artwork: nil, clock: { 0 })
         app.client = client
+        app.upNext.query = { [weak client] query in
+            guard case .queueView = query, let client else { return nil }
+            return .queueView(view: upNextView(client.store.playlist))
+        }
         func deliver(_ events: [Event]) {
             let batch = EventBatch(schemaVersion: SessionJSON.schemaVersion, events: events)
             client.store.apply(batch)

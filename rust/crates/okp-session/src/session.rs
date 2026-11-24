@@ -335,6 +335,14 @@ impl Session {
             Query::Playlist {} => QueryResult::Playlist {
                 playlist: lock(&self.shared.state).playlist.state(),
             },
+            Query::QueueView {} => {
+                let snapshot = self.snapshot();
+                QueryResult::QueueView {
+                    view: lock(&self.shared.state)
+                        .playlist
+                        .queue_view(snapshot.title.as_deref()),
+                }
+            }
             Query::WindowFit {
                 video,
                 backing_scale,

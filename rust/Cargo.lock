@@ -1266,6 +1266,7 @@ dependencies = [
  "libc",
  "okp-core",
  "okp-mpv",
+ "okp-session",
  "okp-test-fixtures",
  "pkg-config",
  "relm4",

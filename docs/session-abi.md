@@ -88,7 +88,7 @@ written as `null` and may be left out on input.
 | Config (`okp_session_new`) | `schema_version`, `app` (`name`, `platform`), absolute `data_dir`, `config_dir`, `cache_dir`, optional `hwdec`, ordered `mpv_options` (`name`, `value`) applied after the session defaults, optional `shell_commands` (see Command registry) |
 | Command (`okp_session_dispatch`) | `{"schema_version":1,"command":{...}}`: `open`, `close`, `set_paused`, `toggle_pause`, `seek`, `set_volume`, `set_mute`, `set_speed`, `select_track` (`id: null` turns the kind off), `set_subtitle_delay`, `invoke_command {id}`, `playlist` (see Playlist), `nudge_volume` and `toggle_mute` (see Transport controls), `add_subtitle`, `set_subtitle_scale` and `nudge_subtitle_scale` (see Tracks and subtitles) |
 | Reply | `{"schema_version":1,"result":{...}}`: `accepted {request_id}`, `no_op {}`, `rejected {reason, message}`, `failed {request_id, message}` when the engine refused an accepted command at once, `perform {}` (`invoke_command` only), or `applied {}` when the session carried the command out itself and nothing reached libmpv yet |
-| Query (`okp_session_query`) | `{"schema_version":1,"query":{...}}`: `snapshot {}`, answered with `result.snapshot.snapshot` (the full state); `command_registry {fullscreen, mini_player}` (both optional), answered with `result.command_registry.commands`; `shortcut_table {}`, answered with `result.shortcut_table.shortcuts`; `repeating_shortcuts {}`, answered with `result.repeating_shortcuts.actions`; `playlist {}`, answered with `result.playlist.playlist`; `transport {at}` (`at` optional), answered with `result.transport.transport` (see Transport controls); `tracks {}`, answered with `result.tracks.tracks` (see Tracks and subtitles); `status_surface {}`, answered with `result.status_surface.surface` (see Status surface and notices); `window_fit`, `initial_window_fit` and `video_click` (see Window queries); `open_formats {}` and `open_paths {paths}` (see Opening files); or `result.rejected`; `history` queries are below |
+| Query (`okp_session_query`) | `{"schema_version":1,"query":{...}}`: `snapshot {}`, answered with `result.snapshot.snapshot` (the full state); `command_registry {fullscreen, mini_player}` (both optional), answered with `result.command_registry.commands`; `shortcut_table {}`, answered with `result.shortcut_table.shortcuts`; `repeating_shortcuts {}`, answered with `result.repeating_shortcuts.actions`; `playlist {}`, answered with `result.playlist.playlist`; `queue_view {}`, answered with `result.queue_view.view` (see Playlist); `transport {at}` (`at` optional), answered with `result.transport.transport` (see Transport controls); `tracks {}`, answered with `result.tracks.tracks` (see Tracks and subtitles); `status_surface {}`, answered with `result.status_surface.surface` (see Status surface and notices); `window_fit`, `initial_window_fit` and `video_click` (see Window queries); `open_formats {}` and `open_paths {paths}` (see Opening files); or `result.rejected`; `history` queries are below |
 | Event batch (`okp_session_drain_events`) | `{"schema_version":1,"events":[...]}` |
 
 An open source is `{"kind":"local"|"url","location":"..."}`. A URL is handed
@@ -480,6 +480,14 @@ playlist files belong in a playlist `open`); `close` empties it.
 The query `{"schema_version":1,"query":{"playlist":{}}}` answers
 `result.playlist.playlist`: `items` (`source`, `title`), `current_index`,
 `repeat`, `shuffle`, and `scanning` (a folder or playlist file is being read).
+
+`queue_view {}` projects the same playlist for the Up Next panel. It returns
+`rows` in playlist identity order, `current_index` for the pinned card, a folder
+`heading` for multiple items, and `scanning`. A row carries its playlist
+`index`, `source`, display `title`, `state` (`current`, `next`, `behind`,
+or `upcoming`) and `can_play_next`. On the session-backed shell, the next
+badge follows the next distinct item at EOF. A single item has no heading
+and is still available to the pinned card.
 
 ## Opening files
 

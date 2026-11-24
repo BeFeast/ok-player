@@ -111,12 +111,12 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         history.firstRun.openButton.allowsKeyFocus = verification?.control != "welcome_focus_disabled"
         upNext.install(in: root, below: behaviour.titleStrip, above: osc.panel)
         upNext.onVisibilityChange = { [weak self] visible in
-            guard let self, self.verification?.control != "panel_pin_disabled" else { return }
+            guard let self, !["panel_pin_disabled", "queue_pin_disabled"].contains(self.verification?.control ?? "") else { return }
             self.osc.setPinned(visible, by: .panel)
         }
         behaviour.dismissTransient = { [weak self] in
             guard let self else { return false }
-            if self.tracks.dismissPopover() || self.osc.dismissVolume() { return true }
+            if self.tracks.dismissPopover() || self.osc.dismissVolume() || self.upNext.panel.dismissRowMenu() { return true }
             guard self.upNext.isShown else { return false }
             self.upNext.hide()
             return true
@@ -213,6 +213,9 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         upNext.query = { [weak client] query in client?.query(query) }
         upNext.isFullscreen = { [weak behaviour] in behaviour?.window.isInFullscreen ?? false }
         upNext.panel.focusReturn = video
+        upNext.onQueueError = { [weak self] message in self?.statusLayer.show(toast: message) }
+        upNext.verifyMovesDisabled = verification?.control == "queue_move_disabled"
+        upNext.verifyAddDisabled = verification?.control == "queue_add_disabled"
         statusLayer.overlay.focusReturn = video
         video.videoLayer.onError = { [weak self] message, transient in self?.fail(message, clearsOnOpen: transient) }
         if let handle = client.handle { video.videoLayer.attach(session: handle) }
@@ -282,7 +285,12 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Up Next only renders the store, and its rows send playlist commands by
         // index into the session's playlist, so it follows every batch, also while
         // a failure card is up: a jump from it does not go through play().
-        upNext.sessionChanged(playlist: client.store.playlist, snapshot: client.store.snapshot)
+        let playlistChanged = batch.events.contains { event in
+            if case .playlistChanged = event { return true }
+            return false
+        }
+        upNext.sessionChanged(playlist: client.store.playlist, snapshot: client.store.snapshot,
+                              playlistChanged: playlistChanged)
         // An error against a track surface's own request (a subtitle file libmpv
         // cannot read) shows in the track readout, and an open that found nothing
         // leaves what plays alone and comes with the session's notice

@@ -33,6 +33,11 @@ TRACK_CONTROLS = {
     "audio-switcher": "track_pin_disabled",
     "subtitle-switcher": "track_pin_disabled",
 }
+QUEUE_CONTROLS = {
+    "queue-show": ("queue_pin_disabled", {"queue_show:pin"}),
+    "queue-edit": ("queue_move_disabled", {"queue_edit:reorder"}),
+    "queue-single": ("queue_add_disabled", {"queue_single:add"}),
+}
 SETTINGS = "settings-shell-appearance"
 ABOUT_CONTROLS = {
     "about-identity": ("about_copy_disabled", {"about-identity:copy_diagnostics"}),
@@ -54,6 +59,7 @@ ACTION_CONTROLS = {
     **TRANSPORT_CONTROLS,
     **OPEN_CONTROLS,
     **ABOUT_CONTROLS,
+    **QUEUE_CONTROLS,
     "context-idle-and-playback": ("context_clamp_disabled", {"context:work_area_clamp"}),
     "command-keyboard": ("text_priority_disabled", {"keyboard:text_priority"}),
 }
@@ -105,7 +111,9 @@ def read_scenario(path):
                "drop_mixed", "drop_subtitle",
                "check_context_idle", "check_context_search", "check_context_empty",
                "check_context_pages", "check_context_corners",
-               "check_playback_keys", "check_queue_keys", "check_escape_priority", "check_text_priority"}
+               "check_playback_keys", "check_queue_keys", "check_escape_priority", "check_text_priority",
+               "open_queue", "open_queue_url", "show_queue", "check_queue_jump", "preview_queue_move",
+               "check_queue_edit", "open_queue_menu", "check_queue_actions", "check_queue_add"}
     if path.stem == SETTINGS:
         actions.update({"settings_shortcut", "settings_context", "settings_legacy", "settings_search",
                         "settings_resize", "settings_system", "settings_light", "settings_auto",
@@ -131,7 +139,7 @@ def read_scenario(path):
                                            "floating", "normal", "repinned", "osc_row", "osc_hidden", "osc_pinned",
                                            "volume", "speed", "loading", "buffering", "failure", "recovered",
                                            "context_welcome", "context_video", "context_results", "context_empty",
-                                           "keyboard_playback", "settings_light", "settings_auto", "track_panel", "open_evidence", "about_identity", "about_footer"}
+                                           "keyboard_playback", "settings_light", "settings_auto", "track_panel", "open_evidence", "about_identity", "about_footer", "queue_panel"}
                     or not step.get("name", "").replace("-", "").isalnum()):
                 raise ValueError("Invalid capture checkpoint")
         if step["action"] == "check_subtitle_menu":
@@ -140,7 +148,7 @@ def read_scenario(path):
                     or step["selected_subtitle"] not in labels):
                 raise ValueError("Subtitle menu check needs labels and an expected selected item")
     if spec["fixture"] not in {*FIXTURE_SUBTITLES, "01-h264-1080p24-tone.mp4", "landscape-4k.mp4",
-                               "04-mkv-2audio-2subs.mkv", OPEN_FIXTURE}:
+                               "04-mkv-2audio-2subs.mkv", OPEN_FIXTURE, "S01E01.mp4"}:
         raise ValueError("Unknown scenario fixture")
     return spec
 
@@ -149,7 +157,9 @@ def fixture(ffmpeg, temporary, spec, receipt):
     video = temporary / spec["fixture"]
     version = command(ffmpeg, "-version", capture_output=True, text=True).stdout.splitlines()[0]
     receipt["fixture"] = {"ffmpeg_version": version, "ffmpeg_sha256": digest(Path(ffmpeg))}
-    if video.name == "04-mkv-2audio-2subs.mkv":
+    if video.name == "S01E01.mp4":
+        video = queue_fixtures(ffmpeg, temporary, spec["id"], receipt["fixture"])
+    elif video.name == "04-mkv-2audio-2subs.mkv":
         track_fixtures(ffmpeg, video, receipt["fixture"])
     elif video.name == OPEN_FIXTURE:
         command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
@@ -200,6 +210,28 @@ def fixture(ffmpeg, temporary, spec, receipt):
                     "-g", "48", "-map_metadata", "-1", "-fflags", "+bitexact", "-flags", "+bitexact",
                     "-movflags", "+faststart", str(path), timeout=120)
             receipt["fixture"][path.name] = digest(path)
+    return video
+
+
+def queue_fixtures(ffmpeg, temporary, scenario, provenance):
+    folder = temporary / "episodes"
+    folder.mkdir()
+    bars = ",".join(f"drawbox=x={160 * column}:y=0:w=160:h=540:color={color}:t=fill"
+                    for column, color in enumerate(("0xff1900", "0x00da00", "0xffeb00", "0x1414f8",
+                                                    "0xff00ff", "0x00deec")))
+    video = folder / "S01E01.mp4"
+    command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", f"color=c=black:s=960x540:r=24:d=18,{bars}",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-threads", "1",
+            "-fflags", "+bitexact", "-flags", "+bitexact", "-movflags", "+faststart", str(video))
+    provenance["episodes/S01E01.mp4"] = digest(video)
+    if scenario != "queue-single":
+        for name in ("S01E02.mp4", "S01E03.mp4"):
+            (folder / name).write_bytes(video.read_bytes())
+            provenance[f"episodes/{name}"] = digest(folder / name)
+    extra = temporary / "S01E04.mp4"
+    extra.write_bytes(video.read_bytes())
+    provenance[extra.name] = digest(extra)
     return video
 
 
@@ -390,7 +422,7 @@ def http_fixture(video, enabled):
                 release["release-stale"].wait(20)
                 self.send_error(404)
                 return
-            elif path != "buffer.mp4":
+            elif path not in {"buffer.mp4", "single.mp4"}:
                 if path != "failure.mp4" or not release["allow-retry"].is_set():
                     self.send_error(404)
                     return
@@ -448,7 +480,7 @@ def run_process(executable, scenario, video, profile, output, folder, appearance
         argv.append("--verify-negative-control")
     if phase:
         argv.append(f"--verify-phase={phase}")
-    with http_fixture(video, scenario.stem == "osc-status") as url, (folder / "app.log").open("w") as log:
+    with http_fixture(video, scenario.stem in {"osc-status", "queue-single"}) as url, (folder / "app.log").open("w") as log:
         if url:
             argv.append(f"--verify-http-fixture={url}")
         try:
@@ -609,7 +641,7 @@ def main():
                 if not all(expected_failures <= set(result["assertion_failures"])
                            for result in receipt["appearances"]):
                     receipt.update(status="error", error="Negative control did not expose all expected failures in both themes")
-                if (spec["id"] == SETTINGS or spec["id"] in ABOUT_CONTROLS) and any(
+                if spec["id"] in {SETTINGS, *ABOUT_CONTROLS, *QUEUE_CONTROLS} and any(
                     set(result["assertion_failures"]) != expected_failures for result in receipt["appearances"]
                 ):
                     receipt.update(status="error", error="Negative control failed unrelated assertions")

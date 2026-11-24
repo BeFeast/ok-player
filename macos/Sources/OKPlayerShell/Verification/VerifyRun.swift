@@ -32,6 +32,9 @@ struct VerificationOptions {
         case "command-keyboard": "text_priority_disabled"
         case "about-identity": "about_copy_disabled"
         case "about-geometry": "about_owner_cleanup_disabled"
+        case "queue-show": "queue_pin_disabled"
+        case "queue-edit": "queue_move_disabled"
+        case "queue-single": "queue_add_disabled"
         default: "unsupported_control"
         }
     }
@@ -132,6 +135,10 @@ struct VerificationScenario: Decodable {
         case checkEscapePriority = "check_escape_priority", checkTextPriority = "check_text_priority"
         case aboutPlayback = "about_playback", aboutMenu = "about_menu", aboutRail = "about_rail", aboutCopy = "about_copy"
         case aboutResize = "about_resize", aboutFooter = "about_footer", aboutClose = "about_close"
+        case openQueue = "open_queue", openQueueURL = "open_queue_url", showQueue = "show_queue"
+        case checkQueueJump = "check_queue_jump", previewQueueMove = "preview_queue_move"
+        case checkQueueEdit = "check_queue_edit", openQueueMenu = "open_queue_menu"
+        case checkQueueActions = "check_queue_actions", checkQueueAdd = "check_queue_add"
     }
     enum Expectation: String, Decodable {
         case noCue = "no_cue", clearance, baseMargin = "base_margin"
@@ -139,7 +146,7 @@ struct VerificationScenario: Decodable {
         case oscRow = "osc_row", oscHidden = "osc_hidden", oscPinned = "osc_pinned"
         case volume, speed, loading, buffering, failure, recovered
         case settingsLight = "settings_light", settingsAuto = "settings_auto"
-        case trackPanel = "track_panel"
+        case trackPanel = "track_panel", queuePanel = "queue_panel"
         case openEvidence = "open_evidence"
         case contextWelcome = "context_welcome", contextVideo = "context_video"
         case contextEmpty = "context_empty", keyboardPlayback = "keyboard_playback"
@@ -228,6 +235,7 @@ final class VerifyRun {
                 else if scenario.id.hasPrefix("osc-") { try await performTransportStep(step) }
                 else if scenario.id == "settings-shell-appearance" { try await performSettingsStep(step) }
                 else if scenario.id.hasPrefix("about-") { try await performAboutStep(step) }
+                else if scenario.id.hasPrefix("queue-") { try await performQueueStep(step) }
                 else if scenario.id.hasSuffix("-switcher") { try await performTrackStep(step) }
                 else if scenario.id.hasPrefix("open-") || scenario.id == "welcome-first-run" {
                     try await performOpenStep(step)

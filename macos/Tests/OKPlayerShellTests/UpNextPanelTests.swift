@@ -27,7 +27,8 @@ final class UpNextPanelTests: XCTestCase {
         panel.focusReturn = video
         dispatched = []
         panel.dispatch = { [unowned self] command in self.dispatched.append(command) }
-        panel.show(UpNextList(playlist: upNextPlaylist(["a.mkv", "b.mkv", "c.mkv"], current: 1), mediaTitle: "B"))
+        panel.show(upNextView(upNextPlaylist(["a.mkv", "b.mkv", "c.mkv"], current: 1), title: "B"))
+        panel.select(.upNext)
         window.layoutIfNeeded()
     }
 
@@ -57,14 +58,14 @@ final class UpNextPanelTests: XCTestCase {
         try press(UpNextKey.forwardDeleteKeyCode, "\u{F728}", onRow: 1)
         XCTAssertEqual(dispatched, [])
         let items = panel.menuItems(forRow: 1)
-        XCTAssertEqual(items.map(\.title), ["Play", "Remove from Up Next"])
-        XCTAssertEqual(items.map(\.isEnabled), [false, false])
+        XCTAssertEqual(items.map(\.title), ["Play", "Play Next", "Move Up", "Move Down", "Remove from Up Next"])
+        XCTAssertEqual(items.map(\.isEnabled), [false, false, false, false, false])
     }
 
     func testTheRowMenuPlaysAndRemovesItsRow() {
         let items = panel.menuItems(forRow: 2)
-        XCTAssertEqual(items.map(\.isEnabled), [true, true])
-        for item in items { _ = NSApp.sendAction(item.action!, to: item.target, from: item) }
+        XCTAssertEqual(items.map(\.isEnabled), [true, false, true, false, true])
+        for item in [items.first!, items.last!] { _ = NSApp.sendAction(item.action!, to: item.target, from: item) }
         XCTAssertEqual(dispatched, [.playlist(action: .jump(index: 2)), .playlist(action: .remove(index: 2))])
         XCTAssertEqual(panel.menuItems(forRow: 3), [], "no menu below the last row")
     }

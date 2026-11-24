@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "id": "queue-edit",
+  "fixture": "S01E01.mp4",
+  "appearances": [
+    "light",
+    "dark"
+  ],
+  "steps": [
+    {
+      "action": "open_queue"
+    },
+    {
+      "action": "pause"
+    },
+    {
+      "action": "show_queue"
+    },
+    {
+      "action": "preview_queue_move"
+    },
+    {
+      "action": "capture",
+      "name": "reorder-insertion",
+      "expect": "queue_panel"
+    },
+    {
+      "action": "check_queue_edit"
+    },
+    {
+      "action": "open_queue_menu"
+    },
+    {
+      "action": "capture",
+      "name": "row-menu",
+      "expect": "queue_panel"
+    },
+    {
+      "action": "check_queue_actions"
+    }
+  ]
+}

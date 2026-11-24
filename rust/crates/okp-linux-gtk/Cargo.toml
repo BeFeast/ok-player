@@ -13,6 +13,7 @@ gtk.workspace = true
 libc.workspace = true
 okp-core = { path = "../okp-core" }
 okp-mpv = { path = "../okp-mpv" }
+okp-session = { path = "../okp-session" }
 relm4.workspace = true
 serde.workspace = true
 serde_json.workspace = true

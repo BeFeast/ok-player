@@ -338,6 +338,8 @@ pub enum Query {
     History { query: HistoryQuery },
     /// The playlist as it is now.
     Playlist {},
+    /// The Up Next panel, projected from the active playlist and media title.
+    QueueView {},
     /// What the transport controls show for that state; with `at`, the time
     /// readout at that position instead of the playhead (a scrubber drag).
     Transport {
@@ -417,6 +419,9 @@ pub enum QueryResult {
     },
     Playlist {
         playlist: PlaylistState,
+    },
+    QueueView {
+        view: crate::queue::QueueView,
     },
     Transport {
         transport: TransportView,

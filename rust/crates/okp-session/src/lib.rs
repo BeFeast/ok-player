@@ -19,6 +19,7 @@ pub mod machine;
 pub mod open_paths;
 mod playlist;
 pub mod protocol;
+pub mod queue;
 pub mod reconcile;
 mod session;
 mod settings;
