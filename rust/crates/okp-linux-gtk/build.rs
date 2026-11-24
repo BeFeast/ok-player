@@ -44,6 +44,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=OKP_BUILD_VERSION");
     println!("cargo:rerun-if-env-changed=OKP_PACKAGE_KIND");
     println!("cargo:rerun-if-env-changed=OKP_BUILD_SHA");
+    println!("cargo:rerun-if-env-changed=OKP_UPDATE_SOURCE_SHA");
     println!("cargo:rerun-if-env-changed=OKP_FEDORA_RPM");
     println!("cargo:rerun-if-changed=../../../.git/HEAD");
     println!("cargo:rerun-if-changed=../../../.git/refs/heads/main");
@@ -79,6 +80,17 @@ fn main() {
         })
         .unwrap_or_else(|| "unknown".to_owned());
     println!("cargo:rustc-env=OKP_BUILD_SHA={sha}");
+    let update_source = env::var("OKP_UPDATE_SOURCE_SHA").unwrap_or_default();
+    if package_kind == "appimage" && version.starts_with("0.11.0-beta.0.") {
+        assert!(
+            update_source.len() == 40
+                && update_source
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "The managed AppImage needs the full source SHA in OKP_UPDATE_SOURCE_SHA"
+        );
+    }
+    println!("cargo:rustc-env=OKP_UPDATE_SOURCE_SHA={update_source}");
 }
 
 /// Compile the shipped chrome icons into a `GResource`.

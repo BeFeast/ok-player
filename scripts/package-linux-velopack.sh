@@ -35,7 +35,7 @@ source "$ROOT/scripts/linux-bundled-mpv-env.sh"
 okp_use_linux_bundled_mpv package
 
 OKP_BUILD_VERSION="$VERSION" OKP_PACKAGE_KIND=appimage \
-  OKP_BUILD_SHA="${OKP_BUILD_SHA:-$(git -C "$ROOT" rev-parse HEAD)}" cargo build \
+  OKP_UPDATE_SOURCE_SHA="${OKP_UPDATE_SOURCE_SHA:-$(git -C "$ROOT" rev-parse HEAD)}" cargo build \
   --manifest-path "$ROOT/rust/Cargo.toml" \
   --release \
   -p okp-linux-gtk \

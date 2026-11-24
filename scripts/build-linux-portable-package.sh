@@ -35,6 +35,7 @@ case "$MODE" in
         "$ROOT/scripts/package-linux-deb.sh" "$VERSION"
     fi
     exec env OKP_BUILD_SHA="$BUILD_SHA" \
+      OKP_UPDATE_SOURCE_SHA="$SOURCE_SHA" \
       OKP_LINUX_CHANNEL="${OKP_LINUX_CHANNEL:-linux}" \
       "$ROOT/scripts/package-linux-velopack.sh" "$VERSION"
     ;;
@@ -68,6 +69,7 @@ fi
   -e OKP_LINUX_CHANNEL="${OKP_LINUX_CHANNEL:-linux}" \
   -e OKP_DEB_APT_SUITE="${OKP_DEB_APT_SUITE:-}" \
   -e OKP_BUILD_SHA="$BUILD_SHA" \
+  -e OKP_UPDATE_SOURCE_SHA="$SOURCE_SHA" \
   -e LANE="$LANE" \
   -e VERSION="$VERSION" \
   "$IMAGE" bash -ceu '

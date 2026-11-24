@@ -4,6 +4,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime};
 
+const UPDATE_SOURCE: &str = env!("OKP_UPDATE_SOURCE_SHA");
+
 pub(crate) struct AppImageUpdates {
     root: PathBuf,
     helper: PathBuf,
@@ -223,7 +225,7 @@ impl AppImageUpdates {
     fn command(&self, operation: &str, channel: Channel) -> Command {
         let mut command = Command::new(&self.helper);
         command
-            .args([operation, channel.name(), &self.build, APP_BUILD_SHA])
+            .args([operation, channel.name(), &self.build, UPDATE_SOURCE])
             .arg(self.root.join("OK-Player.AppImage"));
         command
     }
@@ -445,7 +447,7 @@ impl AppImageUpdates {
             return;
         };
         if let Ok(mut receipt) = std::fs::File::create_new(path) {
-            let _ = writeln!(receipt, "{}\n{}", self.build, APP_BUILD_SHA);
+            let _ = writeln!(receipt, "{}\n{}", self.build, UPDATE_SOURCE);
         }
     }
 }
