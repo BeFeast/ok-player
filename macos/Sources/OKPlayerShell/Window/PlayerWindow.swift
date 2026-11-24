@@ -24,8 +24,8 @@ class PlayerWindow: NSWindow {
     var isInFullscreen: Bool { styleMask.contains(.fullScreen) }
     var isMiniPlayer = false
 
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
+    override var canBecomeKey: Bool { isMiniPlayer || super.canBecomeKey }
+    override var canBecomeMain: Bool { isMiniPlayer || super.canBecomeMain }
 
     override func toggleFullScreen(_ sender: Any?) {
         if isMiniPlayer {

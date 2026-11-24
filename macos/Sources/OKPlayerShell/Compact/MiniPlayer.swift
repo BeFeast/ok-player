@@ -67,6 +67,7 @@ final class MiniPlayer: NSObject {
 
     var isActive: Bool { standard != nil }
     private var window: PlayerWindow? { controller?.window }
+    private var visibleFrame: CGRect? { window?.screen?.visibleFrame ?? NSScreen.main?.visibleFrame }
 
     override init() {
         super.init()
@@ -112,7 +113,7 @@ final class MiniPlayer: NSObject {
 
     private func enter() {
         guard let controller, controller.canEnterMiniPlayer, let window, let root,
-              let video = snapshot.video, let area = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame,
+              let video = snapshot.video, let area = visibleFrame,
               let session, let size = session.compactSize(for: video, maximum: area.size) else { return }
 
         let origin = CGPoint(x: area.maxX - size.width, y: area.minY)
@@ -171,7 +172,7 @@ final class MiniPlayer: NSObject {
         let screen = NSScreen.screens.max {
             overlap(standard.frame, $0.frame) < overlap(standard.frame, $1.frame)
         }.flatMap { overlap(standard.frame, $0.frame) > 0 ? $0 : nil }
-        let area = screen?.visibleFrame ?? window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        let area = screen?.visibleFrame ?? visibleFrame
         let frame = area.flatMap { session?.compactPlacement(of: standard.frame, inside: $0, snap: false) }
             ?? standard.frame
         window.setFrame(frame, display: true, animate: !controls.accessibility.reduceMotion)
@@ -202,7 +203,9 @@ final class MiniPlayer: NSObject {
     @objc private func accessibilityChanged(_ notification: Notification) { updateAccessibility() }
 
     @objc private func displaysChanged(_ notification: Notification) {
-        if isActive, let window { settle(window, snap: false) }
+        guard isActive, let window else { return }
+        sessionChanged(snapshot)
+        settle(window, snap: false)
     }
 
     private func updateAccessibility() {
@@ -236,13 +239,13 @@ final class MiniPlayer: NSObject {
             restore()
             return
         }
-        if let video = snapshot.video, video != aspectVideo, let window, let area = window.screen?.visibleFrame {
-            aspectVideo = video
+        if let video = snapshot.video, video != aspectVideo, let window, let area = visibleFrame {
             let original = window.frame
             if let size = session?.compactSize(for: video, maximum: area.size),
                let frame = session?.compactPlacement(
                 of: CGRect(x: original.midX - size.width / 2, y: original.midY - size.height / 2,
                            width: size.width, height: size.height), inside: area, snap: true) {
+                aspectVideo = video
                 window.setFrame(frame, display: true)
             }
         }
@@ -359,7 +362,7 @@ final class MiniPlayer: NSObject {
             }
             noteActivity()
             let frame = drag.edges.isEmpty ? drag.frame.offsetBy(dx: delta.x, dy: delta.y)
-                : resized(drag, by: delta, on: window.screen?.visibleFrame)
+                : resized(drag, by: delta, on: visibleFrame)
             window.setFrame(frame, display: true)
             return true
         case .leftMouseUp:
@@ -402,7 +405,7 @@ final class MiniPlayer: NSObject {
     }
 
     private func settle(_ window: PlayerWindow, snap: Bool) {
-        guard let area = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame, let session else { return }
+        guard let area = visibleFrame, let session else { return }
         var proposed = window.frame
         if let video = aspectVideo, proposed.width > area.width || proposed.height > area.height,
            let size = session.compactSize(for: video, maximum: area.size, proposed: proposed.size, current: proposed.size) {

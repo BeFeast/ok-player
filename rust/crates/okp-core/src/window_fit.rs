@@ -199,11 +199,15 @@ pub fn restore_window_frame(frame: WindowRect, work_area: WindowRect) -> Option<
     Some(WindowRect {
         x: frame.x.clamp(
             work_area.x,
-            work_area.x.saturating_add(work_area.width - width),
+            work_area
+                .x
+                .saturating_add(work_area.width.saturating_sub(width)),
         ),
         y: frame.y.clamp(
             work_area.y,
-            work_area.y.saturating_add(work_area.height - height),
+            work_area
+                .y
+                .saturating_add(work_area.height.saturating_sub(height)),
         ),
         width,
         height,

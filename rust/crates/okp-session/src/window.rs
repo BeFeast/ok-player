@@ -77,9 +77,10 @@ pub(crate) fn compact_placement(
     let mut frame: window_fit::WindowRect = frame.into();
     let visible: window_fit::WindowRect = visible.into();
     let inset = window_fit::COMPACT_SNAP_INSET;
+    let padding = inset.saturating_mul(2);
     if snap
-        && frame.width <= visible.width.saturating_sub(2 * inset)
-        && frame.height <= visible.height.saturating_sub(2 * inset)
+        && frame.width <= visible.width.saturating_sub(padding)
+        && frame.height <= visible.height.saturating_sub(padding)
         && let Some(point) = window_fit::compact_corner_snap(
             window_fit::WindowPoint {
                 x: frame.x,
