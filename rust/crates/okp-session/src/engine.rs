@@ -31,6 +31,7 @@ pub(crate) struct Observation {
     pub(crate) chapters: Vec<Chapter>,
     pub(crate) title: Option<String>,
     pub(crate) video: Option<VideoDimensions>,
+    pub(crate) audio_metadata: Option<okp_mpv::AudioMetadata>,
 }
 
 pub(crate) trait Engine: Send + Sync {
@@ -273,6 +274,7 @@ impl Engine for MpvEngine {
             chapters: engine.observed_chapters(),
             title: engine.observed_media_info().map(|info| info.title),
             video: engine.observed_video_dimensions(),
+            audio_metadata: engine.observed_audio_metadata(),
         }
     }
 

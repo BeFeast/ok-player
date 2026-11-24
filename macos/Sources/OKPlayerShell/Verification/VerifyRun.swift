@@ -41,6 +41,7 @@ struct VerificationOptions {
         case "queue-single": "queue_add_disabled"
         case "compact-mini": "compact_snap_disabled"
         case "compact-mini-floor": "compact_clearance_disabled"
+        case "compact-music": "music_auto_entry_disabled"
         default: "unsupported_control"
         }
     }
@@ -156,6 +157,9 @@ struct VerificationScenario: Decodable {
         case enterMini = "enter_mini", dragMini = "drag_mini", resizeMini = "resize_mini"
         case restoreMini = "restore_mini", wheelMini = "wheel_mini", seekMini = "seek_mini"
         case idleMini = "idle_mini", accessibleMini = "accessible_mini"
+        case musicPause = "music_pause", musicIdle = "music_idle", musicSeek = "music_seek"
+        case musicQueue = "music_queue", musicNext = "music_next", musicRoundTrip = "music_round_trip"
+        case openMusicVideo = "open_music_video", musicVideoRoundTrip = "music_video_round_trip"
     }
     enum Expectation: String, Decodable {
         case noCue = "no_cue", clearance, baseMargin = "base_margin"
@@ -174,6 +178,8 @@ struct VerificationScenario: Decodable {
         case miniHover = "mini_hover", miniFloor = "mini_floor", miniHidden = "mini_hidden"
         case miniAccessible = "mini_accessible"
         case feedbackAttached = "feedback_attached"
+        case musicArtwork = "music_artwork", musicHidden = "music_hidden", musicQueue = "music_queue"
+        case musicPlaceholder = "music_placeholder", musicVideo = "music_video"
     }
     let schemaVersion: Int
     let id: String
@@ -272,6 +278,7 @@ final class VerifyRun {
                 else if scenario.id == "context-idle-and-playback" || scenario.id == "command-keyboard" {
                     try await performCommandStep(step)
                 }
+                else if scenario.id == "compact-music" { try await performMusicStep(step) }
                 else if scenario.id.hasPrefix("compact-mini") { try await performMiniStep(step) }
                 else if scenario.id == "feedback-dialog" { try await performFeedbackStep(step) }
                 else { try await perform(step) }

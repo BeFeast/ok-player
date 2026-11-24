@@ -74,6 +74,8 @@ pub enum CommandGroup {
     Settings,
 }
 
+const COMPACT_MUSIC: &str = "compact-music";
+
 /// A place in the player command menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -307,7 +309,20 @@ impl CommandRegistry {
                     shortcut: Some(primary_chord(self.platform, &bindings, action)),
                 }
             });
-        player.chain(keyboard).collect()
+        let music =
+            (self.platform == Platform::MacOs && self.is_available(COMPACT_MUSIC)).then(|| {
+                RegistryCommand {
+                    id: COMPACT_MUSIC.to_owned(),
+                    label: "Compact Music".to_owned(),
+                    group: CommandGroup::ViewWindow,
+                    menu: Some(CommandMenu::Window),
+                    available: true,
+                    enabled: !window.fullscreen && snapshot.source.is_some(),
+                    checked: false,
+                    shortcut: None,
+                }
+            });
+        player.chain(music).chain(keyboard).collect()
     }
 
     #[must_use]
@@ -328,7 +343,7 @@ impl CommandRegistry {
             Some(CommandSurfaceEntry::Command { row })
         };
         let query = query.trim().to_lowercase();
-        let entries = if !query.is_empty() {
+        let mut entries: Vec<_> = if !query.is_empty() {
             let chord = parse_chord(
                 &query
                     .replace('⌃', "Ctrl+")
@@ -392,6 +407,20 @@ impl CommandRegistry {
                 })
                 .collect()
         };
+        if let Some(row) = rows.iter().find(|row| row.id == COMPACT_MUSIC) {
+            if query.is_empty() && page == CommandMenu::Window {
+                entries.push(CommandSurfaceEntry::Command { row: row.clone() });
+            } else if !query.is_empty()
+                && ["compact music", "audio player", "switch to video"]
+                    .iter()
+                    .any(|label| label.contains(&query))
+            {
+                entries.push(CommandSurfaceEntry::Group {
+                    label: PlayerCommandGroup::ViewWindow.label().to_owned(),
+                });
+                entries.push(CommandSurfaceEntry::Command { row: row.clone() });
+            }
+        }
         CommandSurface {
             entries,
             preferred_width: if window.mini_player {
@@ -570,9 +599,10 @@ fn command_for_action(platform: Platform, action: ShortcutAction) -> &'static st
 }
 
 fn is_registry_id(platform: Platform, id: &str) -> bool {
-    player_command_registry()
-        .iter()
-        .any(|spec| spec.id.id() == id)
+    (platform == Platform::MacOs && id == COMPACT_MUSIC)
+        || player_command_registry()
+            .iter()
+            .any(|spec| spec.id.id() == id)
         || shortcut_actions_on(platform).any(|action| {
             action.id() == id
                 && KEYBOARD_COMMANDS

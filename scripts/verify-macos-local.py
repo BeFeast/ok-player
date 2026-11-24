@@ -78,6 +78,7 @@ ACTION_CONTROLS = {
     "command-keyboard": ("text_priority_disabled", {"keyboard:text_priority"}),
     "compact-mini": ("compact_snap_disabled", {"compact_mini:corner_snap"}),
     "compact-mini-floor": ("compact_clearance_disabled", {"compact_mini_floor:clearance"}),
+    "compact-music": ("music_auto_entry_disabled", {"compact_music:auto_entry"}),
 }
 CONTROLS = {
     **TRACK_CONTROLS,
@@ -136,7 +137,9 @@ def read_scenario(path):
                "enter_mini", "drag_mini", "resize_mini", "restore_mini", "wheel_mini", "seek_mini",
                "idle_mini", "accessible_mini", "feedback_open", "feedback_send",
                "history_play", "history_arrow", "history_footer", "history_search", "history_clear",
-               "history_back", "history_resume", "history_more", "history_compact"}
+               "history_back", "history_resume", "history_more", "history_compact",
+               "music_pause", "music_idle", "music_seek", "music_queue",
+               "music_next", "music_round_trip", "open_music_video", "music_video_round_trip"}
     if path.stem == SETTINGS:
         actions.update({"settings_shortcut", "settings_context", "settings_legacy", "settings_search",
                         "settings_resize", "settings_system", "settings_light", "settings_auto",
@@ -154,7 +157,7 @@ def read_scenario(path):
             raise ValueError("Settings steps require a relaunch phase")
         if step["action"] not in actions:
             raise ValueError(f"Unsupported action {step['action']!r}")
-        if step["action"] in {"seek", "seek_mini", "play_to"} and not isinstance(step.get("seconds"), (float, int)):
+        if step["action"] in {"seek", "seek_mini", "music_seek", "play_to"} and not isinstance(step.get("seconds"), (float, int)):
             raise ValueError("Seek and playback targets require numeric seconds")
         if step["action"] == "size_osc" and not isinstance(step.get("width"), (float, int)):
             raise ValueError("OSC resize requires a numeric width")
@@ -167,7 +170,8 @@ def read_scenario(path):
                                            "keyboard_playback", "settings_light", "settings_auto", "track_panel",
                                            "open_evidence", "about_identity", "about_footer", "queue_panel", "mini_hover",
                                            "mini_floor", "mini_hidden", "mini_accessible", "feedback_attached",
-                                           "history_evidence"}
+                                           "history_evidence", "music_artwork",
+                                           "music_hidden", "music_queue", "music_placeholder", "music_video"}
                     or not step.get("name", "").replace("-", "").isalnum()):
                 raise ValueError("Invalid capture checkpoint")
         if step["action"] == "check_subtitle_menu":
@@ -177,7 +181,7 @@ def read_scenario(path):
                 raise ValueError("Subtitle menu check needs labels and an expected selected item")
     if spec["fixture"] not in {*FIXTURE_SUBTITLES, "01-h264-1080p24-tone.mp4", "landscape-4k.mp4",
                                "04-mkv-2audio-2subs.mkv", "mini-landscape.mp4", "welcome-return.mp4",
-                               OPEN_FIXTURE, "S01E01.mp4", HISTORY_FIXTURE}:
+                               "music-with-art.mp3", OPEN_FIXTURE, "S01E01.mp4", HISTORY_FIXTURE}:
         raise ValueError("Unknown scenario fixture")
     return spec
 
@@ -186,7 +190,9 @@ def fixture(ffmpeg, temporary, spec, receipt):
     video = temporary / spec["fixture"]
     version = command(ffmpeg, "-version", capture_output=True, text=True).stdout.splitlines()[0]
     receipt["fixture"] = {"ffmpeg_version": version, "ffmpeg_sha256": digest(Path(ffmpeg))}
-    if video.name == "S01E01.mp4":
+    if spec["id"] == "compact-music":
+        music_fixtures(ffmpeg, video, receipt["fixture"])
+    elif video.name == "S01E01.mp4":
         video = queue_fixtures(ffmpeg, temporary, spec["id"], receipt["fixture"])
     elif video.name == "04-mkv-2audio-2subs.mkv":
         track_fixtures(ffmpeg, video, receipt["fixture"])
@@ -269,6 +275,36 @@ def fixture(ffmpeg, temporary, spec, receipt):
                     "-movflags", "+faststart", str(path), timeout=120)
             receipt["fixture"][path.name] = digest(path)
     return video
+
+
+def music_fixtures(ffmpeg, audio, provenance):
+    prefix = [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error"]
+    extras = audio.parent / "extras"
+    extras.mkdir()
+    plain = extras / "music-no-art.mp3"
+    video = extras / "music-video.mp4"
+    cover = extras / "cover.jpg"
+    original = os.environ.get("OKP_VERIFY_MUSIC_TONE")
+    if original:
+        command(*prefix, "-i", original, "-map", "0:a:0", "-map_metadata", "-1", "-c:a", "copy", str(plain))
+    else:
+        command(*prefix, "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=30",
+                "-c:a", "libmp3lame", "-b:a", "64k", "-fflags", "+bitexact", str(plain))
+
+    command(*prefix, "-f", "lavfi", "-i", "color=c=0x163065:s=512x512:r=1",
+            "-vf", "drawbox=x=42:y=42:w=428:h=428:c=0x2563eb:t=16,"
+                   "drawbox=x=96:y=96:w=224:h=224:c=0x38bdf8:t=fill,"
+                   "drawbox=x=192:y=192:w=224:h=224:c=0x2563eb:t=fill",
+            "-frames:v", "1", "-threads", "1", str(cover))
+    command(*prefix, "-i", str(plain), "-i", str(cover), "-map", "0:a", "-map", "1:v",
+            "-c", "copy", "-id3v2_version", "3", "-disposition:v:0", "attached_pic",
+            "-metadata", "title=Blue Hour", "-metadata", "artist=OK Player",
+            "-metadata", "album=Compact Sessions", "-metadata:s:v:0", "comment=Cover (front)", str(audio))
+    command(*prefix, "-f", "lavfi", "-i", "testsrc2=s=640x360:r=24:d=24",
+            "-i", str(plain), "-map", "0:v", "-map", "1:a", "-shortest", "-c:a", "aac",
+            "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", str(video))
+    for path in (audio, plain, cover, video):
+        provenance[str(path.relative_to(audio.parent))] = digest(path)
 
 
 def queue_fixtures(ffmpeg, temporary, scenario, provenance):

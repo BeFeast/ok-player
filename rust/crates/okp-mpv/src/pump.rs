@@ -26,8 +26,8 @@ use libc::{c_char, c_void};
 
 use crate::ffi;
 use crate::player::{
-    AbLoopState, AudioDevice, Chapter, EndFileReason, EntryEvent, MediaInfo, MpvEvent,
-    PlaybackDiagnostics, PlaybackState, RawReader, Track, VideoDimensions,
+    AbLoopState, AudioDevice, AudioMetadata, Chapter, EndFileReason, EntryEvent, MediaInfo,
+    MpvEvent, PlaybackDiagnostics, PlaybackState, RawReader, Track, VideoDimensions,
     WaylandPresentationFeedback, audio_device_selected, audio_devices_from_entries,
     end_file_reason, media_info_with_source,
 };
@@ -99,6 +99,7 @@ pub(crate) struct Snapshot {
     pub(crate) tracks: Vec<Track>,
     pub(crate) audio_devices: Vec<AudioDevice>,
     pub(crate) media_info: Option<MediaInfo>,
+    audio_metadata: Option<AudioMetadata>,
 }
 
 impl Default for Snapshot {
@@ -120,6 +121,7 @@ impl Default for Snapshot {
             tracks: Vec::new(),
             audio_devices: Vec::new(),
             media_info: None,
+            audio_metadata: None,
         }
     }
 }
@@ -129,6 +131,7 @@ struct RecomputeFlags {
     tracks: bool,
     chapters: bool,
     media_info: bool,
+    audio_metadata: bool,
 }
 
 impl RecomputeFlags {
@@ -139,6 +142,7 @@ impl RecomputeFlags {
             // No media is loaded at startup, so a full metadata walk here only
             // adds dozens of blocking reads before the first useful event.
             media_info: false,
+            audio_metadata: false,
         }
     }
 }
@@ -278,6 +282,10 @@ impl EventPump {
 
     pub(crate) fn secondary_subtitle_id(&self) -> Option<i64> {
         lock(&self.shared.snapshot).secondary_subtitle_id
+    }
+
+    pub(crate) fn audio_metadata(&self) -> Option<AudioMetadata> {
+        lock(&self.shared.snapshot).audio_metadata.clone()
     }
 
     pub(crate) fn video_dimensions(&self) -> Option<VideoDimensions> {
@@ -530,6 +538,7 @@ fn drain_events(shared: &Arc<PumpShared>, started: Option<i64>) -> (Lifecycle, R
                     .and_then(|playback| playback.duration)
                     .filter(|duration| duration.is_finite() && *duration > 0.0);
                 lifecycle.push(MpvEvent::FileLoaded { video_dimensions });
+                flags.audio_metadata = true;
                 flags.tracks = true;
                 flags.chapters = true;
                 flags.media_info = true;
@@ -732,6 +741,9 @@ fn recompute(shared: &Arc<PumpShared>, flags: RecomputeFlags) {
     let secondary_subtitle_id = reader.secondary_subtitle_id().unwrap_or_default();
 
     let tracks = flags.tracks.then(|| reader.tracks().unwrap_or_default());
+    let audio_metadata = flags
+        .audio_metadata
+        .then(|| reader.audio_metadata().ok().flatten());
     {
         let mut snapshot = lock(&shared.snapshot);
         snapshot.playback = playback;
@@ -745,6 +757,9 @@ fn recompute(shared: &Arc<PumpShared>, flags: RecomputeFlags) {
         snapshot.secondary_subtitle_id = secondary_subtitle_id;
         if let Some(tracks) = tracks {
             snapshot.tracks = tracks;
+        }
+        if let Some(audio_metadata) = audio_metadata {
+            snapshot.audio_metadata = audio_metadata;
         }
     }
 

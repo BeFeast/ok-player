@@ -17,6 +17,7 @@ final class ScrubberView: NSView {
     /// The controls are shown, so the bar may take keyboard focus.
     var allowsFocus = true
     var highContrast = false { didSet { needsDisplay = true } }
+    var onThemedSurface = false { didSet { needsDisplay = true } }
     var onAccessibilitySeek: ((Double) -> Void)?
     var onScrub: ((Phase, Double) -> Void)?
     /// A press on the enabled bar that has not been released yet.
@@ -46,25 +47,27 @@ final class ScrubberView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        (highContrast ? NSColor.secondaryLabelColor : PaletteRole.borderSubtle.overVideo).setFill()
+        let themed = highContrast || onThemedSurface
+        (highContrast ? NSColor.secondaryLabelColor
+            : onThemedSurface ? PaletteRole.border.color : PaletteRole.borderSubtle.overVideo).setFill()
         NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2).fill()
         guard isEnabled else { return }
-        (highContrast ? NSColor.tertiaryLabelColor : PaletteRole.border.overVideo).setFill()
+        (themed ? NSColor.tertiaryLabelColor : PaletteRole.border.overVideo).setFill()
         NSBezierPath(roundedRect: span(buffered), xRadius: 2, yRadius: 2).fill()
-        (highContrast ? NSColor.controlAccentColor : PaletteRole.accent.overVideo).setFill()
+        (themed ? NSColor.controlAccentColor : PaletteRole.accent.overVideo).setFill()
         NSBezierPath(roundedRect: span(progress), xRadius: 2, yRadius: 2).fill()
-        PaletteRole.text.overVideo.setFill()
+        (themed ? NSColor.labelColor : PaletteRole.text.overVideo).setFill()
         for tick in ticks where tick > 0 && tick < 1 {
             let x = track.minX + track.width * CGFloat(tick)
             NSRect(x: x - 0.75, y: track.minY - 2, width: 1.5, height: track.height + 4).fill()
         }
         let knob = NSRect(x: span(progress).maxX - 6, y: bounds.midY - 6, width: 12, height: 12)
-        (highContrast ? NSColor.labelColor : PaletteRole.onAccent.overVideo).setFill()
+        (themed ? NSColor.labelColor : PaletteRole.onAccent.overVideo).setFill()
         NSBezierPath(ovalIn: knob).fill()
         if window?.isKeyWindow == true, window?.firstResponder === self {
             let ring = NSBezierPath(ovalIn: knob.insetBy(dx: -2.5, dy: -2.5))
             ring.lineWidth = 2
-            PaletteRole.focus.overVideo.setStroke()
+            (themed ? NSColor.keyboardFocusIndicatorColor : PaletteRole.focus.overVideo).setStroke()
             ring.stroke()
         }
     }
@@ -119,6 +122,7 @@ final class ScrubberView: NSView {
 final class VolumeSliderView: NSView {
     static let inset: CGFloat = 7
 
+    var onThemedSurface = false { didSet { needsDisplay = true } }
     var volume: VolumeView? { didSet { if volume != oldValue { needsDisplay = true } } }
     var onFraction: ((Double) -> Void)?
     var onRelease: ((NSEvent) -> Void)?
@@ -139,21 +143,25 @@ final class VolumeSliderView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let track = NSRect(x: Self.inset, y: bounds.midY - 3, width: Swift.max(0, bounds.width - 2 * Self.inset), height: 6)
-        PaletteRole.borderSubtle.overVideo.setFill()
+        (onThemedSurface ? PaletteRole.border.color : PaletteRole.borderSubtle.overVideo).setFill()
         NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2).fill()
         guard let volume else { return }
         let unityX = track.minX + track.width * CGFloat(volume.unityFraction)
         let levelX = track.minX + track.width * CGFloat(Swift.min(Swift.max(volume.fraction, 0), 1))
-        (volume.muted ? PaletteRole.textMuted : PaletteRole.accent).overVideo.setFill()
+        let fill = onThemedSurface
+            ? (volume.muted ? NSColor.secondaryLabelColor : NSColor.controlAccentColor)
+            : (volume.muted ? PaletteRole.textMuted : PaletteRole.accent).overVideo
+        fill.setFill()
         NSRect(x: track.minX, y: track.minY, width: Swift.min(levelX, unityX) - track.minX, height: track.height).fill()
         if levelX > unityX {
             (volume.muted ? PaletteRole.textMuted : PaletteRole.warning).overVideo.setFill()
             NSRect(x: unityX, y: track.minY, width: levelX - unityX, height: track.height).fill()
         }
-        PaletteRole.text.overVideo.setFill()
+        (onThemedSurface ? NSColor.labelColor : PaletteRole.text.overVideo).setFill()
         NSRect(x: unityX - 0.5, y: track.minY - 3, width: 1, height: track.height + 6).fill()
         let knob = NSRect(x: levelX - 7, y: bounds.midY - 7, width: 14, height: 14)
-        (volume.muted ? PaletteRole.textMuted : PaletteRole.text).overVideo.setFill()
+        (onThemedSurface ? NSColor.labelColor
+            : (volume.muted ? PaletteRole.textMuted : PaletteRole.text).overVideo).setFill()
         NSBezierPath(ovalIn: knob).fill()
     }
 

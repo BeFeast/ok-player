@@ -7,11 +7,12 @@ mod sidecar_subtitles;
 pub mod version;
 
 pub use player::{
-    AbLoopState, AudioDevice, Chapter, EndFileReason, EntryEvent, InfoRow, InfoSection, InfoTrack,
-    MediaInfo, Mpv, MpvError, MpvEvent, NativeWaylandDisplay, OpenGlRenderer, PlaybackDiagnostics,
-    PlaybackState, RenderTargetSize, RenderUpdate, RenderUpdateHandle, Track, TrackKind,
-    VideoDimensions, WaylandDmabufTarget, WaylandPresentationFeedback, current_render_target_size,
-    error_description, resolve_render_target_size, software_render_format,
+    AbLoopState, AudioDevice, AudioMetadata, Chapter, EndFileReason, EntryEvent, InfoRow,
+    InfoSection, InfoTrack, MediaInfo, Mpv, MpvError, MpvEvent, NativeWaylandDisplay,
+    OpenGlRenderer, PlaybackDiagnostics, PlaybackState, RenderTargetSize, RenderUpdate,
+    RenderUpdateHandle, Track, TrackKind, VideoDimensions, WaylandDmabufTarget,
+    WaylandPresentationFeedback, current_render_target_size, error_description,
+    resolve_render_target_size, software_render_format,
 };
 pub use player::{POSTER_HEIGHT, POSTER_WIDTH, decode_history_poster, history_poster_key};
 pub use version::BuildTimeMpv;

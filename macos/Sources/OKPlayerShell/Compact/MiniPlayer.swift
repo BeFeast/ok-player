@@ -168,7 +168,7 @@ final class MiniPlayer: NSObject {
         window.backgroundColor = .clear
         window.hasShadow = true
         setRounded(true, in: root)
-        controller.miniPlayerChanged()
+        controller.presentationChanged()
         window.setFrame(frame, display: true, animate: !controls.accessibility.reduceMotion)
         window.makeFirstResponder(self.video)
         autoHide.activity()
@@ -202,7 +202,7 @@ final class MiniPlayer: NSObject {
         window.hasShadow = standard.shadow
         window.minSize = standard.minimum
         setRounded(false, in: root)
-        controller?.miniPlayerChanged()
+        controller?.presentationChanged()
 
         let screen = NSScreen.screens.max {
             overlap(standard.frame, $0.frame) < overlap(standard.frame, $1.frame)

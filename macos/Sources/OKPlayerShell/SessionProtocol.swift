@@ -325,6 +325,12 @@ struct Chapter: Codable, Equatable {
     var title: String?
 }
 
+struct AudioMetadata: Codable, Equatable {
+    var title: String?
+    var artist: String?
+    var album: String?
+}
+
 struct VideoGeometry: Codable, Equatable {
     var width: Int32
     var height: Int32
@@ -346,6 +352,7 @@ struct SessionSnapshot: Codable, Equatable {
     var endReason: EndReason?
     var title: String?
     var video: VideoGeometry?
+    var audioMetadata: AudioMetadata?
     var buffering = false
     var cacheAhead: Double?
 
@@ -366,6 +373,7 @@ struct SessionSnapshot: Codable, Equatable {
         case .endReason(let value): endReason = value
         case .title(let value): title = value
         case .video(let value): video = value
+        case .audioMetadata(let value): audioMetadata = value
         case .buffering(let value): buffering = value
         case .cacheAhead(let value): cacheAhead = value
         }
@@ -387,6 +395,7 @@ enum SnapshotChange: Codable, Equatable {
     case endReason(value: EndReason?)
     case title(value: String?)
     case video(value: VideoGeometry?)
+    case audioMetadata(value: AudioMetadata?)
     case buffering(value: Bool)
     case cacheAhead(value: Double?)
 }

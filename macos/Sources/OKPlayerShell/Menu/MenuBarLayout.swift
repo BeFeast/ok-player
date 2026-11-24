@@ -198,7 +198,7 @@ enum MenuBarLayout {
                     .others]
         case .window:
             return [.standard(.minimize), .standard(.zoom), .separator,
-                    .command("fit-window-to-media"), .command("mini-player"), .others, .separator,
+                    .command("fit-window-to-media"), .command("mini-player"), .command("compact-music"), .others, .separator,
                     .standard(.bringAllToFront)]
         case .help:
             return [.command("send-feedback"), .others]

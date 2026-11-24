@@ -29,6 +29,10 @@ final class UpNextController: NSObject {
     var chooseFiles: ((QueueMode, @escaping ([URL]) -> Void) -> Void)?
     var verifyMovesDisabled = false
     var verifyAddDisabled = false
+    private weak var standardRoot: NSView?
+    private weak var standardBar: NSView?
+    private var standardLayout: [NSLayoutConstraint] = []
+    private var musicLayout: [NSLayoutConstraint] = []
     private var shownPlaylist = PlaylistState()
     private var shownTitle: String?
 
@@ -56,13 +60,36 @@ final class UpNextController: NSObject {
         // Narrower than this only in a window too small to hold it.
         let width = panel.widthAnchor.constraint(equalToConstant: 316)
         width.priority = .defaultHigh
-        NSLayoutConstraint.activate([
+        standardRoot = root
+        standardBar = bar
+        standardLayout = [
             panel.topAnchor.constraint(equalTo: strip?.bottomAnchor ?? root.safeAreaLayoutGuide.topAnchor, constant: 4),
             panel.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             panel.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: -2),
             panel.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor),
             width,
-        ])
+        ]
+        NSLayoutConstraint.activate(standardLayout)
+    }
+
+    func useMusicLayout(_ host: NSView?) {
+        NSLayoutConstraint.deactivate(standardLayout + musicLayout)
+        panel.removeFromSuperview()
+        musicLayout.removeAll()
+        if let host {
+            host.addSubview(panel)
+            musicLayout = [
+                panel.topAnchor.constraint(equalTo: host.topAnchor),
+                panel.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+                panel.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+                panel.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+            ]
+            NSLayoutConstraint.activate(musicLayout)
+        } else if let standardRoot {
+            // The OSC's bar is a child of the OSC, which is a sibling of the panel.
+            standardRoot.addSubview(panel, positioned: .above, relativeTo: standardBar?.superview)
+            NSLayoutConstraint.activate(standardLayout)
+        }
     }
 
     /// Carry out the registry command when the menu bar or a key runs it: register

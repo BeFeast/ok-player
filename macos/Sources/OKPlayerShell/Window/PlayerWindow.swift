@@ -23,12 +23,13 @@ class PlayerWindow: NSWindow {
     /// The window is in native fullscreen. (Tests stand in a flagged window.)
     var isInFullscreen: Bool { styleMask.contains(.fullScreen) }
     var isMiniPlayer = false
+    var isCompactMusic = false
 
     override var canBecomeKey: Bool { isMiniPlayer || super.canBecomeKey }
     override var canBecomeMain: Bool { isMiniPlayer || super.canBecomeMain }
 
     override func toggleFullScreen(_ sender: Any?) {
-        if isMiniPlayer {
+        if isMiniPlayer || isCompactMusic {
             _ = onCommand?(.toggleFullscreen)
             return
         }
@@ -106,7 +107,9 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     private var normalFrame: CGRect?
     private var fullscreenTransition = false
     var onExitMiniPlayer: (() -> Void)?
-    var canEnterMiniPlayer: Bool {
+    var onExitCompactMusic: (() -> Void)?
+    var canEnterMiniPlayer: Bool { canChangePresentation && !window.isCompactMusic }
+    var canChangePresentation: Bool {
         !fullscreenTransition && !window.isInFullscreen && window.attachedSheet == nil
     }
     /// The menu and header expose the same player window preference.
@@ -218,7 +221,7 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
         self.clicks = clicks
     }
 
-    func miniPlayerChanged() {
+    func presentationChanged() {
         clicks?.cancel()
         applyChrome(animated: false)
     }
@@ -228,9 +231,9 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     func compactVideoClick(count: Int) { clicks?.released(clickCount: count) }
 
     /// The session reported a batch; `snapshot` is the state after it.
-    func sessionChanged(_ snapshot: SessionSnapshot) {
+    func sessionChanged(_ snapshot: SessionSnapshot, standardFrame: CGRect? = nil) {
         if let source = snapshot.source {
-            if !chrome.hasMedia && !chrome.fullscreen { idleFrame = window.frame }
+            if !chrome.hasMedia && !chrome.fullscreen { idleFrame = standardFrame ?? window.frame }
             titleChrome.title = snapshot.title ?? (source.location as NSString).lastPathComponent
         } else if chrome.hasMedia {
             titleChrome.title = "OK Player"
@@ -251,7 +254,7 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
         aspect = VideoAreaAspect.lock(for: snapshot.video)
         if !hasMedia { restoreIdleFrame() }
         // The session owns which source is owed a fit.
-        if snapshot.video != nil { takeInitialFit() }
+        if snapshot.video != nil && !window.isCompactMusic { takeInitialFit() }
     }
 
     private func restoreIdleFrame() {
@@ -293,7 +296,8 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     /// shows, the video area keeps the video's aspect. Called from the window
     /// delegate's `windowWillResize(_:to:)`.
     func windowWillResize(to frameSize: NSSize) -> NSSize {
-        guard !chrome.fullscreen, !window.isInFullscreen, !fullscreenTransition, !window.isMiniPlayer else {
+        guard !chrome.fullscreen, !window.isInFullscreen, !fullscreenTransition,
+              !window.isMiniPlayer, !window.isCompactMusic else {
             return frameSize
         }
         let proposed = contentSize(forFrameSize: frameSize)
@@ -326,7 +330,8 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
             onExitMiniPlayer?()
             if command == .exitFullscreen { return !window.isMiniPlayer }
         }
-        guard !window.isMiniPlayer, !fullscreenTransition,
+        if window.isCompactMusic, command == .toggleFullscreen { onExitCompactMusic?() }
+        guard !window.isMiniPlayer, !window.isCompactMusic, !fullscreenTransition,
               command.togglesFullscreen(isFullscreen: window.isInFullscreen) else { return false }
         toggleFullscreen()
         return true
@@ -396,10 +401,11 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     private func applyChrome(animated: Bool) {
         chromeChanges += 1
         let change = chromeChanges
+        let hideChrome = chrome.fullscreen || window.isMiniPlayer || window.isCompactMusic
         updatePin()
-        pinAccessory.isHidden = chrome.fullscreen || window.isMiniPlayer
-        let showLights = chrome.trafficLightsVisible
-        let showTitle = chrome.titleChromeVisible && !window.isMiniPlayer
+        pinAccessory.isHidden = hideChrome
+        let showLights = window.isCompactMusic || chrome.trafficLightsVisible
+        let showTitle = !hideChrome && chrome.titleChromeVisible
         let lights = trafficLights
         titleChrome.needsLayout = true
         let views: [(NSView, Bool)] = lights.map { ($0 as NSView, showLights) }

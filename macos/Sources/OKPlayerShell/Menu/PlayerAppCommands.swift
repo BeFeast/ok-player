@@ -49,6 +49,7 @@ extension PlayerApp: PlayerCommandResponder, NSMenuItemValidation {
         commands.register("fullscreen") { [weak self] in _ = self?.windowBehaviour?.perform(.toggleFullscreen) }
         commands.register("escape-fullscreen") { [weak self] in _ = self?.windowBehaviour?.perform(.exitFullscreen) }
         commands.register("mini-player") { [weak self] in self?.miniPlayer.toggle() }
+        commands.register(CompactMusic.commandID) { [weak self] in self?.music.toggle() }
         commands.register("previous-item") { [weak self] in _ = self?.playlist.step(.previous) }
         commands.register("next-item") { [weak self] in _ = self?.playlist.step(.next) }
         commands.register("show-commands") { [weak self] in
@@ -83,7 +84,7 @@ extension PlayerApp: PlayerCommandResponder, NSMenuItemValidation {
                     fullscreen: fullscreen, miniPlayer: self?.miniPlayer.isActive == true)) else {
                     return []
                 }
-                return rows
+                return self.map { app in rows.map(app.music.project) } ?? rows
             },
             keys: ShortcutKeyMap(table: table, repeating: repeating))
         menuBar?.install()

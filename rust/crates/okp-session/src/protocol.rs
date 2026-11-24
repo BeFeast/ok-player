@@ -565,6 +565,9 @@ pub struct SessionSnapshot {
     pub title: Option<String>,
     /// Display size of the video after aspect correction; `null` without video.
     pub video: Option<VideoGeometry>,
+    /// Present for a loaded audio source, even when its tags are all empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_metadata: Option<AudioMetadata>,
     /// Playback is held while the network cache refills.
     pub buffering: bool,
     /// Seconds of media cached ahead of the playhead.
@@ -587,6 +590,7 @@ impl Default for SessionSnapshot {
             end_reason: None,
             title: None,
             video: None,
+            audio_metadata: None,
             buffering: false,
             cache_ahead: None,
         }
@@ -612,6 +616,7 @@ impl SessionSnapshot {
             SnapshotChange::EndReason { value } => self.end_reason = *value,
             SnapshotChange::Title { value } => self.title.clone_from(value),
             SnapshotChange::Video { value } => self.video.clone_from(value),
+            SnapshotChange::AudioMetadata { value } => self.audio_metadata.clone_from(value),
             SnapshotChange::Buffering { value } => self.buffering = *value,
             SnapshotChange::CacheAhead { value } => self.cache_ahead = *value,
         }
@@ -635,6 +640,7 @@ pub enum SnapshotChange {
     EndReason { value: Option<EndReason> },
     Title { value: Option<String> },
     Video { value: Option<VideoGeometry> },
+    AudioMetadata { value: Option<AudioMetadata> },
     Buffering { value: bool },
     CacheAhead { value: Option<f64> },
 }
@@ -678,6 +684,14 @@ pub struct Chapter {
     /// Start of the chapter (seconds).
     pub time: f64,
     pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AudioMetadata {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

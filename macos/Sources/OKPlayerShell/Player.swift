@@ -31,6 +31,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// The floating transport controls over the video.
     let osc = TransportOverlay()
     let miniPlayer = MiniPlayer()
+    let music = CompactMusic()
     /// Loading, buffering and failure states over the video, and the toast.
     let statusLayer = StatusLayer()
     /// The Up Next side panel and its button on the controls.
@@ -118,7 +119,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         upNext.install(in: root, above: osc.panel)
         upNext.onVisibilityChange = { [weak self] visible in
             guard let self, !["panel_pin_disabled", "queue_pin_disabled"].contains(self.verification?.control ?? "") else { return }
-            self.osc.setPinned(visible, by: .panel)
+            if self.music.isActive { self.music.setQueueShown(visible) }
+            else { self.osc.setPinned(visible, by: .panel) }
         }
         behaviour.dismissTransient = { [weak self] in
             guard let self else { return false }
@@ -147,9 +149,28 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         miniPlayer.showCommands = { [weak self] point in self?.commandPopover.show(at: point) }
         miniPlayer.toast = { [weak self] readout in self?.statusLayer.show(toast: readout) }
+        music.install(in: root, video: videoArea, controller: behaviour)
+        music.automaticallyEnters = verification?.control != "music_auto_entry_disabled"
+        music.showCommands = { [weak self] point in self?.commandPopover.show(at: point) }
+        music.onQueueToggle = { [weak self] in _ = self?.upNext.toggle() }
+        behaviour.onExitCompactMusic = { [weak self] in self?.music.restoreStandard() }
+        music.onModeChange = { [weak self] active in
+            guard let self else { return }
+            self.commandPopover.dismiss()
+            self.tracks.dismissPopover()
+            self.upNext.hide()
+            self.music.setQueueShown(false)
+            self.upNext.useMusicLayout(active ? self.music.view.queueHost : nil)
+            self.upNext.panel.focusReturn = active ? self.music.view : self.video
+            self.commandPopover.focusReturn = active ? self.music.view : self.video
+            self.osc.setPinned(false, by: .panel)
+            self.osc.setPinned(false, by: .context)
+            self.osc.suspend(active)
+            self.commands.invalidate()
+        }
         tracks.window = window
         // The status layer's toast goes on top of everything installed so far.
-        statusLayer.install(in: root, above: miniPlayer.controls)
+        statusLayer.install(in: root, above: music.view)
         installCommandPopover(in: root, behaviour: behaviour)
         statusLayer.onRetry = { [weak self] source in self?.play(source) }
         statusLayer.onOpenAnother = { [weak self] in self?.openFile() }
@@ -165,6 +186,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         behaviour.window.onPlayerInput = { [weak self] event in
             guard let self, !self.commandPopover.isShown else { return false }
             if self.miniPlayer.isActive { return self.miniPlayer.handle(event) }
+            if self.music.isActive { return self.music.handle(event) }
             let trackInput = event.type != .keyDown && self.tracks.handleWindowInput(event)
             return trackInput || self.osc.handleWindowInput(event)
         }
@@ -193,6 +215,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         self.client = client
         miniPlayer.session = client
+        music.session = client
         settings.connect(client)
         behaviour.connect(client) { [weak self] in self?.togglePause() }
         client.onBatch = { [weak self] batch in self?.sessionChanged(batch) }
@@ -305,7 +328,9 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func notePlayerActivity() {
-        if miniPlayer.isActive { miniPlayer.noteActivity() } else { osc.noteActivity() }
+        if miniPlayer.isActive { miniPlayer.noteActivity() }
+        else if music.isActive { music.noteActivity() }
+        else { osc.noteActivity() }
     }
     /// The session reported a batch; the store already holds the new state.
     func sessionChanged(_ batch: EventBatch) {
@@ -346,7 +371,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if case .accepted = result { return }
         }
         miniPlayer.sessionChanged(snapshot)
-        windowBehaviour?.sessionChanged(snapshot)
+        music.sessionChanged(snapshot)
+        windowBehaviour?.sessionChanged(snapshot, standardFrame: music.savedFrame)
         if snapshot.source == nil { upNext.hide() }
         refreshCommandPopover(batch)
         osc.sessionChanged(snapshot)

@@ -25,10 +25,10 @@ use crate::machine::SessionMachine;
 use crate::open_paths::{self, OpenFormats};
 use crate::playlist::{Background, PlannedOpen, SessionPlaylist, Step};
 use crate::protocol::{
-    Command, CommandEnvelope, DispatchReply, DispatchResult, ErrorKind, Event, EventBatch,
-    MediaSource, PlaylistAction, Query, QueryEnvelope, QueryReply, QueryResult, RejectReason,
-    Route, SCHEMA_VERSION, SessionConfig, SessionSnapshot, Track, TrackKind, VideoGeometry,
-    parse_envelope, to_json,
+    AudioMetadata, Command, CommandEnvelope, DispatchReply, DispatchResult, ErrorKind, Event,
+    EventBatch, MediaSource, PlaylistAction, Query, QueryEnvelope, QueryReply, QueryResult,
+    RejectReason, Route, SCHEMA_VERSION, SessionConfig, SessionSnapshot, Track, TrackKind,
+    VideoGeometry, parse_envelope, to_json,
 };
 use crate::reconcile::{core_end_reason, endfile_error, event_matches_source};
 use crate::settings::{self, SettingsView};
@@ -1143,11 +1143,20 @@ impl State {
             },
             video: observation
                 .video
-                .filter(|_| loaded)
+                .filter(|_| loaded && observation.audio_metadata.is_none())
                 .map(|video| VideoGeometry {
                     width: video.width,
                     height: video.height,
                     display_aspect: f64::from(video.width) / f64::from(video.height),
+                }),
+            audio_metadata: observation
+                .audio_metadata
+                .as_ref()
+                .filter(|_| loaded)
+                .map(|audio| AudioMetadata {
+                    title: audio.title.clone(),
+                    artist: audio.artist.clone(),
+                    album: audio.album.clone(),
                 }),
             buffering: !idle && observation.buffering,
             cache_ahead: observation.playback.cache_duration.filter(|_| loaded),

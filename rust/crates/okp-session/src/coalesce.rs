@@ -33,12 +33,13 @@ enum Field {
     EndReason,
     Title,
     Video,
+    AudioMetadata,
     Buffering,
     CacheAhead,
 }
 
 impl Field {
-    const ALL: [Field; 15] = [
+    const ALL: [Field; 16] = [
         Field::Status,
         Field::Source,
         Field::TimePos,
@@ -52,6 +53,7 @@ impl Field {
         Field::EndReason,
         Field::Title,
         Field::Video,
+        Field::AudioMetadata,
         Field::Buffering,
         Field::CacheAhead,
     ];
@@ -75,6 +77,7 @@ impl Field {
             Field::EndReason => a.end_reason != b.end_reason,
             Field::Title => a.title != b.title,
             Field::Video => a.video != b.video,
+            Field::AudioMetadata => a.audio_metadata != b.audio_metadata,
             Field::Buffering => a.buffering != b.buffering,
             Field::CacheAhead => a.cache_ahead != b.cache_ahead,
         }
@@ -95,6 +98,7 @@ impl Field {
             Field::EndReason => to.end_reason = from.end_reason,
             Field::Title => to.title.clone_from(&from.title),
             Field::Video => to.video.clone_from(&from.video),
+            Field::AudioMetadata => to.audio_metadata.clone_from(&from.audio_metadata),
             Field::Buffering => to.buffering = from.buffering,
             Field::CacheAhead => to.cache_ahead = from.cache_ahead,
         }
@@ -140,6 +144,9 @@ impl Field {
             },
             Field::Video => SnapshotChange::Video {
                 value: snapshot.video.clone(),
+            },
+            Field::AudioMetadata => SnapshotChange::AudioMetadata {
+                value: snapshot.audio_metadata.clone(),
             },
             Field::Buffering => SnapshotChange::Buffering {
                 value: snapshot.buffering,

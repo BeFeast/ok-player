@@ -273,6 +273,13 @@ pub struct Chapter {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioMetadata {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaInfo {
     pub title: String,
     pub path: Option<String>,
@@ -581,6 +588,35 @@ impl RawReader {
 
     pub(crate) fn speed(&self) -> Result<f64, MpvError> {
         Ok(self.get_double("speed")?.unwrap_or(1.0))
+    }
+
+    /// Attached pictures are video streams in libmpv's track list, but they
+    /// don't turn an audio file into a movie.
+    pub(crate) fn audio_metadata(&self) -> Result<Option<AudioMetadata>, MpvError> {
+        let count = self.get_i64("track-list/count")?.unwrap_or(0);
+        let mut has_audio = false;
+        for index in 0..count {
+            let prefix = format!("track-list/{index}");
+            match self.get_string(&format!("{prefix}/type"))?.as_deref() {
+                Some("audio") => has_audio = true,
+                Some("video")
+                    if !self
+                        .get_flag(&format!("{prefix}/albumart"))?
+                        .unwrap_or(false) =>
+                {
+                    return Ok(None);
+                }
+                _ => {}
+            }
+        }
+        if !has_audio {
+            return Ok(None);
+        }
+        Ok(Some(AudioMetadata {
+            title: self.get_string("metadata/by-key/title")?,
+            artist: self.get_string("metadata/by-key/artist")?,
+            album: self.get_string("metadata/by-key/album")?,
+        }))
     }
 
     pub(crate) fn tracks(&self) -> Result<Vec<Track>, MpvError> {
@@ -1615,6 +1651,10 @@ impl Mpv {
 
     pub fn observed_video_dimensions(&self) -> Option<VideoDimensions> {
         self.pump.as_ref().and_then(EventPump::video_dimensions)
+    }
+
+    pub fn observed_audio_metadata(&self) -> Option<AudioMetadata> {
+        self.pump.as_ref().and_then(EventPump::audio_metadata)
     }
 
     pub fn observed_chapters(&self) -> Vec<Chapter> {

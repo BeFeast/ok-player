@@ -12,10 +12,18 @@ extension PlayerApp {
                 ? .compactCommandSurface(page: page, query: query)
                 : .commandSurface(fullscreen: behaviour.window.isInFullscreen, page: page, query: query)
             guard case .commandSurface(let surface)? = self.client?.query(request) else { return nil }
-            return surface
+            let entries = surface.entries.map { entry in
+                guard case .command(let row) = entry else { return entry }
+                return .command(row: self.music.project(row))
+            }
+            return CommandSurface(entries: entries, preferredWidth: surface.preferredWidth, maxHeight: surface.maxHeight)
         }
         context.onVisibilityChange = { [weak self] shown in
             guard let self else { return }
+            if self.music.isActive {
+                self.music.setContextShown(shown)
+                return
+            }
             if self.miniPlayer.isActive {
                 self.miniPlayer.setContextShown(shown)
                 return

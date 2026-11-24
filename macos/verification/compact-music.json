@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "compact-music",
+  "fixture": "music-with-art.mp3",
+  "appearances": ["light", "dark"],
+  "steps": [
+    {"action": "open"},
+    {"action": "music_pause"},
+    {"action": "capture", "name": "music-artwork", "expect": "music_artwork"},
+    {"action": "music_idle"},
+    {"action": "capture", "name": "music-idle", "expect": "music_hidden"},
+    {"action": "music_pause"},
+    {"action": "music_seek", "seconds": 7.5},
+    {"action": "music_queue"},
+    {"action": "capture", "name": "music-up-next", "expect": "music_queue"},
+    {"action": "music_next"},
+    {"action": "capture", "name": "music-placeholder", "expect": "music_placeholder"},
+    {"action": "music_round_trip"},
+    {"action": "open_music_video"},
+    {"action": "capture", "name": "video-fallback", "expect": "music_video"},
+    {"action": "music_video_round_trip"},
+    {"action": "close_media"}
+  ]
+}
