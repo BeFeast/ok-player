@@ -25,7 +25,7 @@ final class SettingsProtocolTests: XCTestCase {
         let settings = try GoldenFixtures.decode(QueryReply.self, settingsPath)
         guard case .settings(let state) = settings.result else { return XCTFail("Missing Settings state") }
         XCTAssertEqual(state.theme, .auto)
-        XCTAssertEqual(state.sections.filter(\.available).map(\.id), [.appearance])
+        XCTAssertEqual(state.sections.filter(\.available).map(\.id), [.appearance, .updates])
         XCTAssertEqual(state.about.id, .about)
         XCTAssertEqual(try GoldenFixtures.encodedObject(settings), try GoldenFixtures.object(settingsPath))
 
