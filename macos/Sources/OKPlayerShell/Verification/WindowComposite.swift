@@ -21,9 +21,9 @@ extension VerifyRun {
         }
         // The video and OSC both begin below the title plane. The Welcome view
         // covers the idle video, while the side panel and toast sit above the OSC.
-        let planes: [NSView] = [app.osc.scrim, app.statusLayer.overlay, app.osc.panel, app.osc.volumeCapsule, app.prompt,
+        let planes: [NSView] = [app.osc.scrim, app.osc.panel, app.statusLayer.overlay, app.prompt,
                                 app.history.welcomeView, controller.titleStrip, app.upNext.panel,
-                                app.statusLayer.toastView] + controller.trafficLights + [controller.pinButton]
+                                app.osc.volumeCapsule, app.statusLayer.toastView] + controller.trafficLights + [controller.pinButton]
         for view in planes where !view.isHiddenOrHasHiddenAncestor && view.alphaValue > 0 && !view.bounds.isEmpty {
             let bounds = view.bounds
             guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(ceil(bounds.width * 2)),

@@ -17,11 +17,14 @@
 //! allocate + hide, so the collapse decision is deterministic and unit-tested
 //! away from any display server.
 
+use serde::{Deserialize, Serialize};
+
 /// Every control slot the OSC bar can present, in canonical left-to-right
 /// order. The variants that never collapse form the *floor*: primary transport,
 /// the timeline, volume, and the overflow entry. Everything else — including the
 /// time labels — folds into the overflow menu as width tightens.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OscControlId {
     Play,
     Previous,
@@ -161,31 +164,44 @@ fn fit_width(slot: &OscSlot, hold_flexible: bool) -> i32 {
 }
 
 /// One measured control handed to [`plan`]: its identity and the minimum width
-/// it needs to render without clipping. Widths come from the live GTK measure
-/// in production and from fixtures in tests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// it needs to render without clipping. Widths come from the shell's native measurements in
+/// production and from fixtures in tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct OscSlot {
     pub id: OscControlId,
     pub min_width: i32,
+    /// The surface keeps this slot in the row even under width pressure.
+    #[serde(default)]
+    pub required: bool,
 }
 
 impl OscSlot {
     pub fn new(id: OscControlId, min_width: i32) -> Self {
-        Self { id, min_width }
+        Self {
+            id,
+            min_width,
+            required: false,
+        }
+    }
+
+    fn is_floor(self) -> bool {
+        self.required || self.id.is_floor()
     }
 }
 
 /// The computed placement for a single slot. Collapsed slots report
 /// `visible == false` with a zeroed band so the shell can hide them without a
 /// second lookup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SlotPlacement {
     pub id: OscControlId,
     pub visible: bool,
-    /// Left edge of the slot inside the bar, in px (content coordinates,
+    /// Left edge of the slot inside the bar, in the caller's units (content coordinates,
     /// i.e. already past the leading padding). Zero when collapsed.
     pub x: i32,
-    /// Allocated width in px. Zero when collapsed.
+    /// Allocated width in the caller's units. Zero when collapsed.
     pub width: i32,
 }
 
@@ -198,7 +214,8 @@ impl SlotPlacement {
 
 /// The full adaptive layout: one [`SlotPlacement`] per input slot, in input
 /// order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct OscLayout {
     pub placements: Vec<SlotPlacement>,
     /// Leading pill inset the placements were laid out against. The bar tightens
@@ -239,7 +256,7 @@ impl OscLayout {
 /// minimum and actually hands the bar its narrow allocation instead of forcing
 /// the full-width minimum and clipping the tail.
 pub fn floor_min_width(slots: &[OscSlot], spacing: i32) -> i32 {
-    let floor: Vec<&OscSlot> = slots.iter().filter(|slot| slot.id.is_floor()).collect();
+    let floor: Vec<&OscSlot> = slots.iter().filter(|slot| slot.is_floor()).collect();
     row_width(floor.iter().map(|slot| slot.min_width), spacing)
 }
 
@@ -440,13 +457,10 @@ fn row_fits(
 fn next_collapse_victim(slots: &[OscSlot], visible: &[bool]) -> Option<usize> {
     let mut best: Option<(usize, u16)> = None;
     for (index, (slot, vis)) in slots.iter().zip(visible).enumerate() {
-        if !*vis {
+        if !*vis || slot.is_floor() {
             continue;
         }
         let priority = slot.id.collapse_priority();
-        if priority == 0 {
-            continue;
-        }
         match best {
             // `>=` so a later slot with an equal priority wins the tie.
             Some((_, best_priority)) if priority >= best_priority => {

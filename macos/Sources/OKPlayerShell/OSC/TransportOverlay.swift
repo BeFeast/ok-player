@@ -7,9 +7,8 @@ final class TransportOverlay: NSView, NSMenuDelegate {
     struct Slot {
         let id: String
         let view: NSView
-        let width: CGFloat
-        // A higher priority folds into More earlier, following the core's OSC order.
-        let collapse: Int
+        let minWidth: Int
+        let required: Bool
         let menuItem: (() -> NSMenuItem)?
     }
 
@@ -17,6 +16,9 @@ final class TransportOverlay: NSView, NSMenuDelegate {
     var dispatch: ((Command) -> Void)?
     /// The session's transport view, at a drag position when one is given.
     var query: ((Double?) -> TransportView?)?
+    var queryLayout: ((Int, [OscSlotMeasure]) -> OscBarLayout?)? {
+        didSet { invalidateSlotLayout() }
+    }
     /// Previous and next item. A button is enabled while its action is set and the
     /// playlist has an item to step to (`playlistSteps`).
     var onPrevious: (() -> Void)? { didSet { updateStepButtons() } }
@@ -35,7 +37,7 @@ final class TransportOverlay: NSView, NSMenuDelegate {
     let autoHide: AutoHide
     let scrim = TransportScrim()
     let panel = PalettePanel(fill: NSColor.fromSRGB(0x161619).withAlphaComponent(0.50),
-                             border: PaletteRole.text.overVideo.withAlphaComponent(0.14), radius: 14)
+                             border: NSColor.white.withAlphaComponent(0.12), radius: 14)
     let scrubber = ScrubberView()
     let elapsedLabel = NSTextField(labelWithString: "00:00")
     let trailingLabel = NSButton(title: "-00:00", target: nil, action: nil)
@@ -46,7 +48,7 @@ final class TransportOverlay: NSView, NSMenuDelegate {
     let muteButton = TransportOverlay.iconButton("speaker.wave.2.fill", "Mute")
     let volumeWick = VolumeWick()
     let volumeSlider = VolumeSliderView()
-    let volumeReadout = NSTextField(labelWithString: "")
+    let volumeReadout = VolumeReadoutField()
     let volumeCapsule = PalettePanel(fill: NSColor.fromSRGB(0x1c1c20).withAlphaComponent(0.76),
                                      border: PaletteRole.borderSubtle.overVideo, radius: 13)
     let fullscreenButton = TransportOverlay.iconButton("arrow.up.left.and.arrow.down.right", "Enter Full Screen")
@@ -73,13 +75,14 @@ final class TransportOverlay: NSView, NSMenuDelegate {
     private var surface: OscSurface?
     private var subtitleClearance: (height: CGFloat, bottom: CGFloat)?
     private var windowObservers: [NSObjectProtocol] = []
+    private var layoutWidth: Int?
 
     init(hideTimer: HideTimer = MainQueueHideTimer()) {
         autoHide = AutoHide(timer: hideTimer)
         super.init(frame: .zero)
         autoHide.onChange = { [weak self] revealed in self?.revealChanged(revealed) }
         buildPanel()
-        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
                                        owner: self, userInfo: nil))
         for view in [scrim, panel, volumeCapsule] { view.isHidden = true }
     }
@@ -95,7 +98,7 @@ final class TransportOverlay: NSView, NSMenuDelegate {
     private func updateSubtitleClearance() {
         guard let subtitleSession, bounds.height > 0 else { return }
         let coversVideo = surface?.hitTestable == true && !panel.isHidden
-        let top = volumeCapsule.isHidden ? panel.frame.maxY : volumeCapsule.frame.maxY
+        let top = volumeCapsule.isHidden ? panel.frame.maxY : capsuleRect.maxY
         guard !coversVideo || panel.frame.height > 0 else { return }
         // Both the panel and the video use view points, including on Retina.
         let bottom = coversVideo ? top - bounds.minY + 8 : 0
@@ -155,11 +158,11 @@ final class TransportOverlay: NSView, NSMenuDelegate {
         volumeSlider.volume = view.volume
         volumeSlider.toolTip = view.volume.readout
         volumeSlider.setAccessibilityValue(view.volume.readout)
-        volumeReadout.stringValue = view.volume.readout
-        volumeReadout.textColor = (view.volume.boosted ? PaletteRole.warning : PaletteRole.text).overVideo
+        volumeReadout.update(view.volume)
         volumeWick.volume = view.volume
         Self.setSymbol(muteButton, view.volume.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
                        view.volume.muted ? "Unmute" : "Mute")
+        muteButton.contentTintColor = (view.volume.muted ? PaletteRole.warning : PaletteRole.text).overVideo
         speedButton.value = view.speed
         let playing = snapshot.status == .playing
         Self.setSymbol(playButton, playing ? "pause.fill" : "play.fill", playing ? "Pause" : "Play")
@@ -198,8 +201,9 @@ final class TransportOverlay: NSView, NSMenuDelegate {
     }
 
     private func returnFocus(onlyScrubber: Bool = false) {
-        guard let window, let focused = window.firstResponder as? NSView,
-              onlyScrubber ? focused === scrubber : focused.isDescendant(of: self) else { return }
+        guard let window, let focused = window.firstResponder as? NSView else { return }
+        let ownsFocus = focused.isDescendant(of: self) || focused.isDescendant(of: volumeCapsule)
+        guard onlyScrubber ? focused === scrubber : ownsFocus else { return }
         _ = window.makeFirstResponder(focusReturn)
     }
 
@@ -210,7 +214,9 @@ final class TransportOverlay: NSView, NSMenuDelegate {
     }
 
     private func hideCursorIfOver() {
-        guard !cursorHidden, pointerInside, window?.isKeyWindow == true, NSApp.isActive else { return }
+        guard !cursorHidden, let window, window.isKeyWindow, NSApp.isActive else { return }
+        let actualPointer = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        guard pointerInside || bounds.contains(actualPointer) else { return }
         NSCursor.hide()
         cursorHidden = true
     }
@@ -254,9 +260,9 @@ final class TransportOverlay: NSView, NSMenuDelegate {
         if overSpeaker && !volumeSuppressed {
             openVolume()
         } else if !volumeCapsule.isHidden {
-            if volumeCapsule.frame.insetBy(dx: 0, dy: -10).contains(local) {
+            if capsuleRect.insetBy(dx: 0, dy: -10).contains(local) {
                 volumeClose.cancel()
-            } else if !volumeSlider.isPressed {
+            } else if !volumeSlider.isPressed && volumeReadout.currentEditor() == nil {
                 scheduleVolumeClose()
             }
         }
@@ -267,7 +273,7 @@ final class TransportOverlay: NSView, NSMenuDelegate {
         volumeSuppressed = false
         showCursor()
         setPinned(false, by: .pointer)
-        if !volumeSlider.isPressed { scheduleVolumeClose() }
+        if !volumeSlider.isPressed && volumeReadout.currentEditor() == nil { scheduleVolumeClose() }
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
@@ -307,11 +313,13 @@ final class TransportOverlay: NSView, NSMenuDelegate {
         switch event.type {
         case .scrollWheel:
             return scrolled(event, at: point)
+        case .mouseMoved:
+            pointerMoved(to: point)
         case .leftMouseDown, .rightMouseDown:
             if takesScroll(at: point) { noteActivity() }
             if !volumeCapsule.isHidden {
                 let local = convert(point, from: nil)
-                if !volumeCapsule.frame.contains(local) &&
+                if !capsuleRect.contains(local) &&
                     !muteButton.frame.contains(panel.convert(local, from: self)) {
                     closeVolume()
                 }
@@ -344,20 +352,20 @@ final class TransportOverlay: NSView, NSMenuDelegate {
         guard bounds.contains(convert(point, from: nil)) else { return false }
         guard let root = window?.contentView else { return true }
         guard let hit = root.hitTest(root.superview?.convert(point, from: nil) ?? point) else { return true }
-        return hit === focusReturn || hit.isDescendant(of: self)
+        return hit === focusReturn || hit.isDescendant(of: self) || hit.isDescendant(of: volumeCapsule)
     }
 
     /// Register an existing player action before Full Screen, in canonical order.
-    func addTrailingControl(_ control: NSButton, id: String, collapse: Int,
+    func addTrailingControl(_ control: NSButton, id: String,
                             menuItem: (() -> NSMenuItem)? = nil) {
-        let slot = Slot(id: id, view: control, width: 34, collapse: collapse,
+        let slot = Slot(id: id, view: control, minWidth: 34, required: false,
                         menuItem: menuItem ?? { [weak self, weak control] in
             guard let self, let control else { return NSMenuItem() }
             return self.buttonItem(control)
         })
         slots.insert(slot, at: slots.count - 2)
         panel.addSubview(control)
-        needsLayout = true
+        invalidateSlotLayout()
     }
 
     // MARK: Controls
@@ -529,11 +537,13 @@ final class TransportOverlay: NSView, NSMenuDelegate {
 
     private func closeVolume() {
         volumeClose.cancel()
-        volumeCapsule.isHidden = true
-        volumeSlider.cancelPress()
-        if let focused = window?.firstResponder as? NSView, focused.isDescendant(of: volumeCapsule) {
+        if volumeReadout.currentEditor() != nil {
+            window?.makeFirstResponder(focusReturn)
+        } else if let focused = window?.firstResponder as? NSView, focused.isDescendant(of: volumeCapsule) {
             returnFocus()
         }
+        volumeCapsule.isHidden = true
+        volumeSlider.cancelPress()
         setPinned(false, by: .volume)
         updateSubtitleClearance()
     }
@@ -552,7 +562,7 @@ final class TransportOverlay: NSView, NSMenuDelegate {
             scrim.bottomAnchor.constraint(equalTo: bottomAnchor),
             scrim.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrim.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scrim.heightAnchor.constraint(equalToConstant: 190),
+            scrim.heightAnchor.constraint(equalToConstant: 220),
             panel.centerXAnchor.constraint(equalTo: centerXAnchor),
             panel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
             panel.widthAnchor.constraint(lessThanOrEqualToConstant: 1280),
@@ -560,11 +570,9 @@ final class TransportOverlay: NSView, NSMenuDelegate {
             panel.heightAnchor.constraint(equalToConstant: 52),
             fill,
         ])
-        for label in [elapsedLabel, volumeReadout] {
-            label.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-            label.textColor = PaletteRole.text.overVideo
-            label.alignment = .center
-        }
+        elapsedLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        elapsedLabel.textColor = PaletteRole.text.overVideo
+        elapsedLabel.alignment = .center
         trailingLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         trailingLabel.isBordered = false
         trailingLabel.refusesFirstResponder = true
@@ -582,69 +590,85 @@ final class TransportOverlay: NSView, NSMenuDelegate {
         volumeSlider.onFraction = { [weak self] fraction in self?.volumeDragged(to: fraction) }
         volumeSlider.onRelease = { [weak self] event in self?.pointerMoved(to: event.locationInWindow) }
         volumeSlider.onNudge = { [weak self] delta in self?.dispatch?(.nudgeVolume(delta: delta)) }
+        volumeReadout.onCommit = { [weak self] value in self?.dispatch?(.setVolume(volume: value)) }
+        volumeReadout.onFinish = { [weak self] in
+            guard let self else { return }
+            self.window?.makeFirstResponder(self.focusReturn)
+            if let window = self.window { self.pointerMoved(to: window.mouseLocationOutsideOfEventStream) }
+        }
         volumeCapsule.addSubview(volumeSlider)
         volumeCapsule.addSubview(volumeReadout)
 
-        func slot(_ id: String, _ view: NSView, width: CGFloat = 34, collapse: Int = 0,
+        func slot(_ id: String, _ view: NSView, width: Int = 34, required: Bool = false,
                   menuItem: (() -> NSMenuItem)? = nil) -> Slot {
-            Slot(id: id, view: view, width: width, collapse: collapse, menuItem: menuItem)
+            Slot(id: id, view: view, minWidth: width, required: required, menuItem: menuItem)
         }
         slots = [
             slot("play", playButton), slot("previous", previousButton), slot("next", nextButton),
-            slot("elapsed", elapsedLabel, width: 54),
-            slot("seek", scrubber, width: 156),
-            slot("duration", trailingLabel, width: 62),
+            slot("elapsed", elapsedLabel, width: 54, required: true),
+            slot("timeline", scrubber, width: 56),
+            slot("duration", trailingLabel, width: 62, required: true),
             slot("volume", muteButton),
-            slot("speed", speedButton, width: 68, collapse: 5) { [unowned self] in
+            slot("speed", speedButton, width: 68) { [unowned self] in
                 let item = NSMenuItem(title: "Playback Speed  " + speedButton.value, action: nil, keyEquivalent: "")
                 item.submenu = speedMenu()
                 item.isEnabled = speedButton.isEnabled
                 return item
             },
-            slot("fullscreen", fullscreenButton, collapse: 4) { [unowned self] in buttonItem(fullscreenButton) },
-            slot("more", moreButton),
+            slot("fullscreen", fullscreenButton) { [unowned self] in buttonItem(fullscreenButton) },
+            slot("overflow", moreButton),
         ]
         for slot in slots { panel.addSubview(slot.view) }
         muteButton.addSubview(volumeWick)
     }
 
+    private func invalidateSlotLayout() {
+        layoutWidth = nil
+        needsLayout = true
+    }
+
     private func layoutSlots() {
-        let gap: CGFloat = 6
-        let padding: CGFloat = 10
-        let available = Swift.max(0, panel.bounds.width - 2 * padding)
-        var rowWidth = slots.reduce(-gap) { $0 + $1.width + gap }
-        var folded: Set<String> = []
-        if collapsesSlots {
-            for slot in slots.filter({ $0.collapse > 0 }).sorted(by: { $0.collapse > $1.collapse }) {
-                guard rowWidth > available else { break }
-                folded.insert(slot.id)
-                rowWidth -= slot.width + gap
+        let width = Int(panel.bounds.width.rounded(.down))
+        if width > 0 && width != layoutWidth {
+            let measures = slots.map { OscSlotMeasure(id: $0.id, minWidth: $0.minWidth, required: $0.required) }
+            let plannedWidth = collapsesSlots ? width : max(width, 1280)
+            guard let plan = queryLayout?(plannedWidth, measures),
+                  plan.placements.map(\.id) == slots.map(\.id) else { return }
+            layoutWidth = width
+            collapsed = []
+            for (slot, placement) in zip(slots, plan.placements) {
+                if !placement.visible && window?.firstResponder === slot.view { returnFocus() }
+                slot.view.isHidden = !placement.visible
+                if !placement.visible {
+                    collapsed.append(slot)
+                    continue
+                }
+                let height: CGFloat = slot.view === elapsedLabel ? 16 : 34
+                slot.view.frame = NSRect(x: CGFloat(plan.padStart + placement.x),
+                                         y: (panel.bounds.height - height) / 2,
+                                         width: CGFloat(placement.width), height: height)
             }
+            volumeWick.frame = NSRect(x: 8, y: 3, width: 18, height: 3)
         }
-        collapsed = slots.filter { folded.contains($0.id) }
-        var x = padding
-        for slot in slots {
-            slot.view.isHidden = folded.contains(slot.id)
-            if slot.view.isHidden {
-                if let focused = window?.firstResponder as? NSView, focused === slot.view { returnFocus() }
-                continue
-            }
-            let width = slot.id == "seek" ? Swift.max(14, slot.width + available - rowWidth) : slot.width
-            let height: CGFloat = slot.id == "elapsed" ? 16 : 34
-            slot.view.frame = NSRect(x: x, y: (panel.bounds.height - height) / 2, width: width, height: height)
-            x += width + gap
-        }
-        volumeWick.frame = NSRect(x: 8, y: 3, width: 18, height: 3)
         if !volumeCapsule.isHidden { positionVolume() }
     }
 
+    private var capsuleRect: NSRect { volumeCapsule.convert(volumeCapsule.bounds, to: self) }
+
+    /// The floating capsule may cover part of Up Next at the window floor.
+    func installVolume(in root: NSView, above panel: NSView) {
+        volumeCapsule.removeFromSuperview()
+        root.addSubview(volumeCapsule, positioned: .above, relativeTo: panel)
+    }
+
     private func positionVolume() {
-        let width: CGFloat = 198
+        let width: CGFloat = 206
         let speaker = muteButton.convert(muteButton.bounds, to: self)
         let x = Swift.min(Swift.max(8, speaker.midX - width / 2), bounds.width - width - 8)
-        volumeCapsule.frame = NSRect(x: x, y: panel.frame.maxY + 10, width: width, height: 36)
-        volumeSlider.frame = NSRect(x: 10, y: 3, width: 132, height: 30)
-        volumeReadout.frame = NSRect(x: 145, y: 10, width: 47, height: 16)
+        let frame = NSRect(x: x, y: panel.frame.maxY + 10, width: width, height: 36)
+        volumeCapsule.frame = convert(frame, to: volumeCapsule.superview)
+        volumeSlider.frame = NSRect(x: 8, y: 3, width: 136, height: 30)
+        volumeReadout.frame = NSRect(x: 145, y: 8, width: 54, height: 20)
     }
 
     private static func symbol(_ name: String, _ label: String) -> NSImage? {
@@ -682,6 +706,8 @@ private final class TransportIconButton: NSButton {
     }
 
     required init?(coder: NSCoder) { fatalError("Use init()") }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 26, height: 26) }
 
     override func draw(_ dirtyRect: NSRect) {
         let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 6, yRadius: 6)

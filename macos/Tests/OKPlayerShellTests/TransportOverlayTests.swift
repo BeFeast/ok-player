@@ -189,23 +189,6 @@ final class TransportOverlayTests: XCTestCase {
         XCTAssertEqual(controls.panel.frame.width, 668, accuracy: 0.5, "a narrower window keeps 16 points each side")
     }
 
-    func testTheTimelineStaysInlineAsSecondarySlotsFoldIntoMore() {
-        for width in [CGFloat(900), 440, 900] {
-            overlay.setFrameSize(NSSize(width: width, height: 360))
-            overlay.layoutSubtreeIfNeeded()
-            let elapsed = overlay.elapsedLabel.frame
-            let scrubber = overlay.scrubber.frame
-            XCTAssertEqual(scrubber.midY, elapsed.midY, accuracy: 0.5)
-            XCTAssertGreaterThan(scrubber.minX, elapsed.maxX)
-            if width == 440 {
-                XCTAssertEqual(overlay.collapsed.map(\.id), ["speed", "fullscreen"])
-            } else {
-                XCTAssertLessThan(scrubber.maxX, overlay.trailingLabel.frame.minX)
-                XCTAssertTrue(overlay.collapsed.isEmpty)
-            }
-        }
-    }
-
     func testTheMuteButtonAsksTheSessionToToggleMute() {
         overlay.sessionChanged(snapshot(.playing, duration: 4000))
         overlay.muteButton.performClick(nil)

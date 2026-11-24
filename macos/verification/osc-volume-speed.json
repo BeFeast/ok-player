@@ -18,6 +18,12 @@
       "action": "show_volume"
     },
     {
+      "action": "set_unity"
+    },
+    {
+      "action": "show_volume"
+    },
+    {
       "action": "capture",
       "name": "unity",
       "expect": "volume"

@@ -1,11 +1,13 @@
 //! The session: engine, core state machine, event thread and coalescing queue.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
+use okp_core::osc_overflow;
 use okp_core::player::{
     ChapterInfo, CommandOutcome, CommandReply, CommandResult, EndReason as CoreEndReason,
     PlaybackStatus, PlayerCommand, PlayerError, PlayerErrorKind, PlayerEvent, PropertyChange,
@@ -265,6 +267,33 @@ impl Session {
             Query::Transport { at } => QueryResult::Transport {
                 transport: TransportView::project(&self.snapshot(), *at),
             },
+            Query::OscLayout {
+                width,
+                spacing,
+                padding,
+                slots,
+            } => {
+                let mut ids = HashSet::new();
+                if slots.len() > osc_overflow::OscControlId::CANONICAL_ORDER.len()
+                    || slots
+                        .iter()
+                        .any(|slot| u16::try_from(slot.min_width).is_err() || !ids.insert(slot.id))
+                {
+                    return QueryResult::Rejected {
+                        reason: RejectReason::Malformed,
+                        message: "Invalid OSC slots".to_owned(),
+                    };
+                }
+                QueryResult::OscLayout {
+                    layout: osc_overflow::plan(
+                        slots,
+                        i32::from(*width),
+                        i32::from(*spacing),
+                        i32::from(*padding),
+                        i32::from(*padding),
+                    ),
+                }
+            }
             Query::StatusSurface {} => {
                 let snapshot = self.snapshot();
                 QueryResult::StatusSurface {

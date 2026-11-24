@@ -219,7 +219,7 @@ final class TransportScrim: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draw(_ dirtyRect: NSRect) {
-        let gradient = NSGradient(colors: [.black.withAlphaComponent(0.78), .clear])
+        let gradient = NSGradient(colors: [.black.withAlphaComponent(0.48), .clear])
         gradient?.draw(in: bounds, angle: 90)
     }
 }
@@ -268,5 +268,60 @@ final class TransportTextButton: NSButton {
         PaletteRole.text.overVideo.withAlphaComponent(isHighlighted ? 0.24 : 0.12).setFill()
         NSBezierPath(roundedRect: bounds.insetBy(dx: 0, dy: 3), xRadius: 7, yRadius: 7).fill()
         super.draw(dirtyRect)
+    }
+}
+
+/// Inline numeric entry keeps exact gain changes on the same session command path.
+final class VolumeReadoutField: NSTextField, NSTextFieldDelegate {
+    var onCommit: ((Double) -> Void)?
+    var onFinish: (() -> Void)?
+    private var volume: VolumeView?
+    private var cancelled = false
+
+    init() {
+        super.init(frame: .zero)
+        isEditable = true
+        isSelectable = true
+        isBordered = false
+        drawsBackground = false
+        alignment = .center
+        font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+        focusRingType = .none
+        toolTip = "Enter volume"
+        setAccessibilityLabel("Exact volume")
+        delegate = self
+    }
+
+    required init?(coder: NSCoder) { fatalError("Use init()") }
+
+    func update(_ volume: VolumeView) {
+        self.volume = volume
+        textColor = (volume.muted || volume.boosted ? PaletteRole.warning : PaletteRole.text).overVideo
+        if currentEditor() == nil { stringValue = volume.readout }
+    }
+
+    func controlTextDidBeginEditing(_ notification: Notification) {
+        cancelled = false
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        let plain = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ",", with: ".")
+        let number = plain.hasSuffix("%") ? String(plain.dropLast()) : plain
+        if !cancelled, let value = Double(number), value.isFinite, value != volume?.level { onCommit?(value) }
+        stringValue = volume?.readout ?? ""
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        switch selector {
+        case #selector(NSResponder.cancelOperation(_:)):
+            cancelled = true
+        case #selector(NSResponder.insertNewline(_:)):
+            break
+        default:
+            return false
+        }
+        onFinish?()
+        return true
     }
 }

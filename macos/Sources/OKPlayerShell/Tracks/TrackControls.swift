@@ -87,10 +87,10 @@ final class TrackControls: NSObject, NSPopoverDelegate {
     /// and the readout over the top of `root`.
     func install(in osc: TransportOverlay, over root: NSView) {
         self.osc = osc
-        osc.addTrailingControl(subtitleButton, id: "subtitles", collapse: 2) { [weak self] in
+        osc.addTrailingControl(subtitleButton, id: "subtitles") { [weak self] in
             Self.trackMenuItem("Subtitles", items: self?.menuItems(.subtitle) ?? [])
         }
-        osc.addTrailingControl(audioButton, id: "audio", collapse: 3) { [weak self] in
+        osc.addTrailingControl(audioButton, id: "audio") { [weak self] in
             Self.trackMenuItem("Audio", items: self?.menuItems(.audio) ?? [])
         }
         readout.translatesAutoresizingMaskIntoConstraints = false

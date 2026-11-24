@@ -49,7 +49,11 @@ struct VerificationOptions {
         config.configDir = profile.appendingPathComponent("config").path
         config.cacheDir = profile.appendingPathComponent("cache").path
         if scenarioID == "osc-status" {
-            config.mpvOptions.append(MpvOption(name: "network-timeout", value: "5"))
+            config.mpvOptions += [
+                MpvOption(name: "network-timeout", value: "12"),
+                MpvOption(name: "cache", value: "yes"),
+                MpvOption(name: "cache-pause-wait", value: "1"),
+            ]
         }
         if let spec = try? readScenario(), let languages = spec.preferredSubtitleLanguages {
             config.mpvOptions.append(MpvOption(name: "slang", value: languages))
@@ -94,14 +98,16 @@ struct VerificationScenario: Decodable {
         case sizeOSC = "size_osc", checkMore = "check_more", checkSeek = "check_seek"
         case checkIdle = "check_idle", checkPins = "check_pins"
         case showVolume = "show_volume", checkWheel = "check_wheel", checkSpeedMute = "check_speed_mute"
+        case setUnity = "set_unity"
         case openStall = "open_stall", releaseStall = "release_stall", openFailure = "open_failure"
+        case openBuffer = "open_buffer", releaseBuffer = "release_buffer"
         case checkFailureActions = "check_failure_actions", checkStale = "check_stale"
     }
     enum Expectation: String, Decodable {
         case noCue = "no_cue", clearance, baseMargin = "base_margin"
         case welcome, playing, fullscreen, restored, landscape, portrait, idle, floating, normal, repinned
         case oscRow = "osc_row", oscHidden = "osc_hidden", oscPinned = "osc_pinned"
-        case volume, speed, loading, failure, recovered
+        case volume, speed, loading, buffering, failure, recovered
     }
     let schemaVersion: Int
     let id: String
@@ -287,8 +293,8 @@ final class VerifyRun {
         print("OKP_VERIFY \(step)")
     }
 
-    func pressKey(_ characters: String, code: UInt16) throws {
-        guard let window = app.window, window.makeFirstResponder(app.video),
+    func pressKey(_ characters: String, code: UInt16, focusVideo: Bool = true) throws {
+        guard let window = app.window, !focusVideo || window.makeFirstResponder(app.video),
               let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
                                            timestamp: ProcessInfo.processInfo.systemUptime,
                                            windowNumber: window.windowNumber, context: nil,

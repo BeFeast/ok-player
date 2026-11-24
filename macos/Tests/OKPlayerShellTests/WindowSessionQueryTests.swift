@@ -83,6 +83,25 @@ final class WindowSessionQueryTests: XCTestCase {
                                       minSize: CGSize(width: 420, height: 280)))
     }
 
+    func testTheOSCPlannerKeepsTheTimeLabelsAndFoldsSpeedAtTheFloor() throws {
+        let slots = [
+            OscSlotMeasure(id: "play", minWidth: 34, required: false),
+            OscSlotMeasure(id: "elapsed", minWidth: 54, required: true),
+            OscSlotMeasure(id: "timeline", minWidth: 56, required: false),
+            OscSlotMeasure(id: "duration", minWidth: 62, required: true),
+            OscSlotMeasure(id: "speed", minWidth: 68, required: false),
+            OscSlotMeasure(id: "overflow", minWidth: 34, required: false),
+        ]
+        let wide = try XCTUnwrap(client.oscLayout(width: 760, slots: slots))
+        let floor = try XCTUnwrap(client.oscLayout(width: 330, slots: slots))
+        XCTAssertTrue(wide.placements.allSatisfy(\.visible))
+        XCTAssertEqual(floor.placements.filter { !$0.visible }.map(\.id), ["speed"])
+        let visible = floor.placements.filter(\.visible)
+        XCTAssertEqual(visible.map(\.id), ["play", "elapsed", "timeline", "duration", "overflow"])
+        let last = try XCTUnwrap(visible.last)
+        XCTAssertEqual(floor.padStart + last.x + last.width + floor.padEnd, 330)
+    }
+
     // MARK: Single click versus double click
 
     func testTheSessionClassifiesClicksWithCoresRules() {

@@ -30,7 +30,7 @@
     },
     {
       "action": "capture",
-      "name": "revealed",
+      "name": "panel-pinned",
       "expect": "osc_pinned"
     }
   ]

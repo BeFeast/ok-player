@@ -12,6 +12,7 @@
 use std::path::PathBuf;
 
 use okp_core::app::AppIdentity;
+use okp_core::osc_overflow::{OscLayout, OscSlot};
 use okp_core::player as core;
 use okp_core::playlist::PlaylistItem;
 use okp_core::shortcuts::ShortcutAction;
@@ -327,6 +328,13 @@ pub enum Query {
         #[serde(default)]
         at: Option<f64>,
     },
+    /// Fit measured OSC slots in a pill. Sizes are whole logical units.
+    OscLayout {
+        width: u16,
+        spacing: u16,
+        padding: u16,
+        slots: Vec<OscSlot>,
+    },
     /// What covers the video: a loading or buffering indicator, a failure
     /// card, or nothing ([`StatusSurface`]).
     StatusSurface {},
@@ -387,6 +395,9 @@ pub enum QueryResult {
     },
     Transport {
         transport: TransportView,
+    },
+    OscLayout {
+        layout: OscLayout,
     },
     StatusSurface {
         surface: StatusSurface,

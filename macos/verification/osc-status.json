@@ -28,6 +28,17 @@
       "expect": "recovered"
     },
     {
+      "action": "open_buffer"
+    },
+    {
+      "action": "capture",
+      "name": "buffering",
+      "expect": "buffering"
+    },
+    {
+      "action": "release_buffer"
+    },
+    {
       "action": "open_failure"
     },
     {

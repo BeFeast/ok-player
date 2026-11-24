@@ -118,14 +118,15 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         behaviour.onPinChanged = { [weak self] pinned in self?.pinItem.state = pinned ? .on : .off }
         tracks.install(in: osc, over: root)
-        osc.addTrailingControl(upNext.button, id: "up-next", collapse: 7)
+        osc.addTrailingControl(upNext.button, id: "chapters")
+        osc.installVolume(in: root, above: upNext.panel)
         osc.moreActions = { [weak self] in self?.oscMenuActions() ?? [] }
         osc.collapsesSlots = verification?.control != "slot_collapse_disabled"
         osc.acceptsVolumeWheel = verification?.control != "volume_wheel_disabled"
         video?.contextMenu = { [weak self] in self?.osc.contextMenu() }
         tracks.window = window
         // The status layer's toast goes on top of everything installed so far.
-        statusLayer.install(in: root, below: behaviour.titleStrip, above: videoArea)
+        statusLayer.install(in: root, below: behaviour.titleStrip, above: osc)
         statusLayer.onRetry = { [weak self] source in self?.play(source) }
         statusLayer.onOpenAnother = { [weak self] in self?.openFile() }
         statusLayer.onToast = { [weak self] text in self?.smokeRun?.toastShown(text) }
@@ -136,6 +137,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // pointer movement.
         osc.onRevealChange = { [weak self] revealed in self?.oscRevealChanged(revealed) }
         behaviour.oscVisibilityChanged(osc.isRevealed, animated: false)
+        behaviour.window.acceptsMouseMovedEvents = true
         behaviour.window.onPlayerInput = { [weak self] event in self?.osc.handleWindowInput(event) ?? false }
         behaviour.window.onKeyDown = { [weak self] in self?.keyPressed() }
         behaviour.titleStrip.onPointerActivity = { [weak self] in self?.osc.noteActivity() }
@@ -180,6 +182,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard case .transport(let view)? = client?.query(.transport(at: at)) else { return nil }
             return view
         }
+        osc.queryLayout = { [weak client] width, slots in client?.oscLayout(width: width, slots: slots) }
         tracks.dispatch = { [weak client] command in
             client?.dispatch(command) ?? .rejected(reason: .noActiveMedia, message: "No playback session")
         }

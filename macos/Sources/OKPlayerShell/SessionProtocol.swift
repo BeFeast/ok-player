@@ -165,6 +165,7 @@ enum Query: Codable, Equatable {
     case playlist
     /// What the transport controls show; with `at`, the readout at that position.
     case transport(at: Double? = nil)
+    case oscLayout(width: Int, spacing: Int, padding: Int, slots: [OscSlotMeasure])
     /// What covers the video (Status/StatusProtocol.swift).
     case statusSurface
     /// The file types the Open panel offers (Open/OpenProtocol.swift).
@@ -192,6 +193,7 @@ enum QueryResult: Codable, Equatable {
     case history(result: HistoryQueryResult)
     case playlist(playlist: PlaylistState)
     case transport(transport: TransportView)
+    case oscLayout(layout: OscBarLayout)
     case statusSurface(surface: StatusSurface)
     case openFormats(formats: OpenFormats)
     case openPaths(plan: OpenPlan)

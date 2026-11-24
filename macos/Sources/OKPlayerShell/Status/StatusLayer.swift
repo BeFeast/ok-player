@@ -39,11 +39,11 @@ final class StatusLayer {
         overlay.onAction = { [weak self] action, card in self?.perform(action, card) }
     }
 
-    /// Put the overlay right above the video and the toast above everything, near
+    /// Put the overlay above the playback surface and the toast above everything, near
     /// the top of the window under the title bar.
-    func install(in root: NSView, below strip: NSView? = nil, above video: NSView) {
+    func install(in root: NSView, below strip: NSView? = nil, above playback: NSView) {
         overlay.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(overlay, positioned: .above, relativeTo: video)
+        root.addSubview(overlay, positioned: .above, relativeTo: playback)
         toastView.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(toastView)
         NSLayoutConstraint.activate([

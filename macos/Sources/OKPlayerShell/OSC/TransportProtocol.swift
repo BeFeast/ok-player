@@ -69,3 +69,32 @@ extension OscView {
     /// The idle timeout in seconds.
     var hideAfter: TimeInterval { TimeInterval(hideAfterMs) / 1000 }
 }
+
+/// The AppKit pill's native measurements sent to the core's OSC planner.
+struct OscSlotMeasure: Codable, Equatable {
+    let id: String
+    let minWidth: Int
+    let required: Bool
+}
+
+struct OscBarLayout: Codable, Equatable {
+    struct Placement: Codable, Equatable {
+        let id: String
+        let visible: Bool
+        let x: Int
+        let width: Int
+    }
+
+    let placements: [Placement]
+    let padStart: Int
+    let padEnd: Int
+    let spacing: Int
+}
+
+extension SessionClient {
+    func oscLayout(width: Int, slots: [OscSlotMeasure]) -> OscBarLayout? {
+        guard case .oscLayout(let layout)? = query(.oscLayout(width: width, spacing: 6, padding: 10, slots: slots))
+        else { return nil }
+        return layout
+    }
+}

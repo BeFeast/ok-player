@@ -44,6 +44,9 @@ extension VerifyRun {
         case .showVolume:
             try movePointer(over: osc.muteButton)
             try await wait("speaker hover opened the volume capsule") { !self.osc.volumeCapsule.isHidden }
+        case .setUnity:
+            try await typeVolume("99.5", expecting: 99.5)
+            try await typeVolume("100", expecting: 100)
         case .checkWheel:
             try await checkWheel()
         case .checkSpeedMute:
@@ -59,6 +62,20 @@ extension VerifyRun {
             try await wait("released stream is playing with video and clear status") {
                 self.snapshot.status == .playing && self.snapshot.video != nil &&
                 (self.snapshot.timePos ?? 0) > 0.3 && self.app.statusLayer.display.isClear
+            }
+        case .openBuffer:
+            app.play(try source("buffer.mp4"))
+            try await wait("partially delivered video played and entered buffering") {
+                if case .buffering = self.app.statusLayer.surface {
+                    return (self.snapshot.timePos ?? 0) > 0.3
+                }
+                return false
+            }
+        case .releaseBuffer:
+            let stalled = snapshot.timePos ?? 0
+            try await tellFixture("release-buffer")
+            try await wait("playback progressed after the HTTP body resumed") {
+                self.app.statusLayer.display.isClear && (self.snapshot.timePos ?? 0) > stalled + 0.3
             }
         case .openFailure:
             try await openFailure()
@@ -148,6 +165,22 @@ extension VerifyRun {
             menu.popUp(positioning: nil, at: video.convert(point, from: nil), in: video)
         })
         try movePointer(over: video)
+        app.upNext.button.performClick(nil)
+        try await wait("reopened Up Next for the pinned checkpoint") { self.app.upNext.isShown }
+    }
+
+    private func typeVolume(_ text: String, expecting level: Double) async throws {
+        try movePointer(over: osc.muteButton)
+        let field = osc.volumeReadout
+        field.selectText(nil)
+        guard let editor = field.currentEditor() as? NSTextView else {
+            throw VerifyError("Exact volume field did not enter editing")
+        }
+        editor.insertText(text, replacementRange: editor.selectedRange())
+        try pressKey("\r", code: 36, focusVideo: false)
+        try await wait("observed typed volume \(text)%") {
+            abs((self.snapshot.volume ?? -1) - level) < 0.05
+        }
     }
 
     private func checkWheel() async throws {
@@ -280,7 +313,7 @@ extension VerifyRun {
             let row = live.allSatisfy { panel.bounds.contains($0.view.frame) &&
                 abs($0.view.frame.midY - osc.scrubber.frame.midY) < 0.5 }
             let nonoverlap = zip(live, live.dropFirst()).allSatisfy { $0.0.view.frame.maxX <= $0.1.view.frame.minX }
-            if !visible || !hit || !row || !nonoverlap || live.last?.id != "more" ||
+            if !visible || !hit || !row || !nonoverlap || live.last?.id != "overflow" ||
                 osc.scrubber.frame.minX <= osc.elapsedLabel.frame.maxX ||
                 osc.scrubber.frame.maxX >= osc.trailingLabel.frame.minX ||
                 (name == "default" ? !osc.collapsed.isEmpty : osc.collapsed.isEmpty) {
@@ -289,12 +322,15 @@ extension VerifyRun {
         case .oscHidden:
             if visible || hit || !osc.cursorHidden { failures.append("osc_idle_and_pins:\(name)") }
         case .oscPinned:
-            if !visible || !hit || osc.cursorHidden { failures.append("osc_idle_and_pins:\(name)") }
+            if !visible || !hit || osc.cursorHidden || !app.upNext.isShown {
+                failures.append("osc_idle_and_pins:\(name)")
+            }
         case .volume:
-            let capsule = osc.volumeCapsule.frame
+            let capsule = osc.volumeCapsule.convert(osc.volumeCapsule.bounds, to: osc)
             if !visible || osc.volumeCapsule.isHidden || capsule.minY <= panel.frame.maxY ||
                 !osc.bounds.contains(capsule) || osc.volumeSlider.accessibilityRole() != .slider ||
                 abs((osc.transport?.volume.unityFraction ?? 0) - 100.0 / 130.0) > 0.001 ||
+                (name == "unity" && osc.transport?.volume.level != 100) ||
                 (name == "boost" && osc.transport?.volume.boosted != true && !options.negativeControl) {
                 failures.append("osc_volume_speed:\(name)")
             }
@@ -302,6 +338,10 @@ extension VerifyRun {
             if snapshot.speed != 1.5 || !toast { failures.append("osc_volume_speed:\(name)") }
         case .loading:
             if !progress || failed || !app.statusLayer.overlay.progressLabel.stringValue.contains("Opening") {
+                failures.append("osc_status:\(name)")
+            }
+        case .buffering:
+            if !progress || failed || !app.statusLayer.overlay.progressLabel.stringValue.contains("Buffering") {
                 failures.append("osc_status:\(name)")
             }
         case .failure:

@@ -62,8 +62,8 @@ def read_scenario(path):
                "size_window", "close_media", "double_click",
                "small_work_area", "open_portrait", "resize_edges", "pin", "unpin", "overlap_window",
                "size_osc", "check_more", "check_seek", "check_idle", "check_pins", "show_volume",
-               "check_wheel", "check_speed_mute", "open_stall", "release_stall", "open_failure",
-               "check_failure_actions", "check_stale"}
+               "check_wheel", "check_speed_mute", "set_unity", "open_stall", "release_stall", "open_failure",
+               "check_failure_actions", "check_stale", "open_buffer", "release_buffer"}
     if (spec["schema_version"] != 1 or spec["id"] != path.stem
             or spec["appearances"] != ["light", "dark"] or not spec["steps"]):
         raise ValueError("Unsupported scenario ID, schema or appearances")
@@ -78,7 +78,7 @@ def read_scenario(path):
             if (step.get("expect") not in {"no_cue", "clearance", "base_margin", "welcome", "playing",
                                            "fullscreen", "restored", "landscape", "portrait", "idle",
                                            "floating", "normal", "repinned", "osc_row", "osc_hidden", "osc_pinned",
-                                           "volume", "speed", "loading", "failure", "recovered"}
+                                           "volume", "speed", "loading", "buffering", "failure", "recovered"}
                     or not step.get("name", "").replace("-", "").isalnum()):
                 raise ValueError("Invalid capture checkpoint")
         if step["action"] == "check_subtitle_menu":
@@ -169,7 +169,7 @@ def http_fixture(video, enabled):
         return
 
     body = video.read_bytes()
-    release = {name: Event() for name in ("release-stall", "release-stale", "allow-retry")}
+    release = {name: Event() for name in ("release-stall", "release-buffer", "release-stale", "allow-retry")}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -189,9 +189,10 @@ def http_fixture(video, enabled):
                 release["release-stale"].wait(20)
                 self.send_error(404)
                 return
-            elif path != "failure.mp4" or not release["allow-retry"].is_set():
-                self.send_error(404)
-                return
+            elif path != "buffer.mp4":
+                if path != "failure.mp4" or not release["allow-retry"].is_set():
+                    self.send_error(404)
+                    return
 
             start = 0
             end = len(body) - 1
@@ -212,7 +213,15 @@ def http_fixture(video, enabled):
             self.send_header("Content-Length", str(end - start + 1))
             self.end_headers()
             try:
-                self.wfile.write(body[start:end + 1])
+                if path == "buffer.mp4":
+                    # Let mpv open and play an initial portion before the
+                    # server stops delivering bytes. Hold all ranges after it.
+                    boundary = min(end + 1, max(start, len(body) // 22))
+                    self.wfile.write(body[start:boundary])
+                    if boundary < end + 1 and release["release-buffer"].wait(20):
+                        self.wfile.write(body[boundary:end + 1])
+                else:
+                    self.wfile.write(body[start:end + 1])
             except (BrokenPipeError, ConnectionResetError):
                 pass
 

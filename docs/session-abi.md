@@ -233,6 +233,14 @@ runs the action again. Every other action runs once per physical press (core
 
 ## Transport controls
 
+The `osc_layout {width, spacing, padding, slots}` query arranges measured slots
+using the core's adaptive OSC policy. Each input slot carries its canonical
+`id`, its `min_width`, and an optional `required` flag. Measures use the shell's
+whole logical units. The result at `result.osc_layout.layout` lists placements
+in input order with visibility, content-relative x, allocated width, and the
+effective spacing and padding. An omitted button remains available through the
+shell's More menu.
+
 The `transport` query answers what the transport controls show for the
 current snapshot, computed with the core's rules so a shell does not repeat
 them. A shell asks for it after each drained batch.
