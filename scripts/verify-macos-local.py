@@ -690,22 +690,25 @@ def run_update_appearance(executable, scenario, video, profile, output, folder, 
                "filename": ARCHIVE, "sha256": digest(package), "size": package.stat().st_size}
     provenance = package.with_name("provenance.json")
     provenance.write_text(json.dumps(content, sort_keys=True, separators=(",", ":")) + "\n")
-    gnupg = work / "gnupg"
-    gnupg.mkdir(mode=0o700)
-    gpg = ("gpg", "--homedir", gnupg, "--batch", "--pinentry-mode", "loopback", "--passphrase", "")
-    command(*gpg, "--quick-generate-key", "OK Player fixture <test@example.invalid>", "ed25519", "sign", "1d")
-    fingerprints = command(*gpg, "--with-colons", "--fingerprint", capture_output=True, text=True).stdout
-    fingerprint = next(line.split(":")[9] for line in fingerprints.splitlines() if line.startswith("fpr:"))
     pubkey = work / "fixture.asc"
-    command(*gpg, "--armor", "--output", pubkey, "--export", fingerprint)
-    release = {**content, "schema": 1, "platform": "macos-arm64", "channel": "beta", "key": key,
-               "fingerprint": fingerprint, "provenance_sha256": digest(provenance)}
-    latest.write_text(json.dumps(release, sort_keys=True, separators=(",", ":")) + "\n")
-    manifest_sig = latest.parent / "manifests" / (digest(latest) + ".sig")
-    manifest_sig.parent.mkdir()
-    command(*gpg, "--output", manifest_sig, "--detach-sign", latest)
-    command(*gpg, "--output", package.with_suffix(".zip.sig"), "--detach-sign", package, timeout=120)
-    command("gpgconf", "--homedir", gnupg, "--kill", "all")
+    # Darwin's Unix socket path must also fit gpg-agent's socket suffixes.
+    # Keep the GnuPG home outside the deeper per-appearance fixture directory.
+    with tempfile.TemporaryDirectory(prefix="okp-gpg-") as gnupg:
+        gpg = ("gpg", "--homedir", gnupg, "--batch", "--pinentry-mode", "loopback", "--passphrase", "")
+        try:
+            command(*gpg, "--quick-generate-key", "OK Player fixture <test@example.invalid>", "ed25519", "sign", "1d")
+            fingerprints = command(*gpg, "--with-colons", "--fingerprint", capture_output=True, text=True).stdout
+            fingerprint = next(line.split(":")[9] for line in fingerprints.splitlines() if line.startswith("fpr:"))
+            command(*gpg, "--armor", "--output", pubkey, "--export", fingerprint)
+            release = {**content, "schema": 1, "platform": "macos-arm64", "channel": "beta", "key": key,
+                       "fingerprint": fingerprint, "provenance_sha256": digest(provenance)}
+            latest.write_text(json.dumps(release, sort_keys=True, separators=(",", ":")) + "\n")
+            manifest_sig = latest.parent / "manifests" / (digest(latest) + ".sig")
+            manifest_sig.parent.mkdir()
+            command(*gpg, "--output", manifest_sig, "--detach-sign", latest)
+            command(*gpg, "--output", package.with_suffix(".zip.sig"), "--detach-sign", package, timeout=120)
+        finally:
+            subprocess.run(["gpgconf", "--homedir", gnupg, "--kill", "all"], check=False)
 
     if negative_control:
         corrupt = bytearray(manifest_sig.read_bytes())
