@@ -73,6 +73,8 @@ ACTION_CONTROLS = {
     "command-keyboard": ("text_priority_disabled", {"keyboard:text_priority"}),
     "compact-mini": ("compact_snap_disabled", {"compact_mini:corner_snap"}),
     "compact-mini-floor": ("compact_clearance_disabled", {"compact_mini_floor:clearance"}),
+    "welcome-resume-shelf": ("history_poster_disabled", {"welcome_resume_shelf:poster"}),
+    "history-page": ("history_pagination_disabled", {"history_page:pagination"}),
 }
 CONTROLS = {
     **TRACK_CONTROLS,
@@ -83,6 +85,7 @@ CONTROLS = {
     **{scenario: entry[0] for scenario, entry in ACTION_CONTROLS.items()},
 }
 OPEN_FIXTURE = "open-preview.mp4"
+HISTORY_FIXTURE = "history-preview.mkv"
 FIXTURE_SUBTITLES = {
     "subtitle-lift.mp4": (".srt",),
     "A Serious Man (2009) {tmdb-12573}.mp4": (".en.hi.srt", ".he.srt", ".ru.hi.srt"),
@@ -128,7 +131,9 @@ def read_scenario(path):
                "open_queue", "open_queue_url", "show_queue", "check_queue_jump", "preview_queue_move",
                "check_queue_edit", "open_queue_menu", "check_queue_actions", "check_queue_add",
                "enter_mini", "drag_mini", "resize_mini", "restore_mini", "wheel_mini", "seek_mini",
-               "idle_mini", "accessible_mini", "feedback_open", "feedback_send"}
+               "idle_mini", "accessible_mini", "feedback_open", "feedback_send",
+               "history_play", "history_arrow", "history_footer", "history_search", "history_clear",
+               "history_back", "history_resume", "history_more", "history_compact"}
     if path.stem == SETTINGS:
         actions.update({"settings_shortcut", "settings_context", "settings_legacy", "settings_search",
                         "settings_resize", "settings_system", "settings_light", "settings_auto",
@@ -158,7 +163,8 @@ def read_scenario(path):
                                            "context_welcome", "context_video", "context_results", "context_empty",
                                            "keyboard_playback", "settings_light", "settings_auto", "track_panel",
                                            "open_evidence", "about_identity", "about_footer", "queue_panel", "mini_hover",
-                                           "mini_floor", "mini_hidden", "mini_accessible", "feedback_attached"}
+                                           "mini_floor", "mini_hidden", "mini_accessible", "feedback_attached",
+                                           "history_evidence"}
                     or not step.get("name", "").replace("-", "").isalnum()):
                 raise ValueError("Invalid capture checkpoint")
         if step["action"] == "check_subtitle_menu":
@@ -168,7 +174,7 @@ def read_scenario(path):
                 raise ValueError("Subtitle menu check needs labels and an expected selected item")
     if spec["fixture"] not in {*FIXTURE_SUBTITLES, "01-h264-1080p24-tone.mp4", "landscape-4k.mp4",
                                "04-mkv-2audio-2subs.mkv", "mini-landscape.mp4", "welcome-return.mp4",
-                               OPEN_FIXTURE, "S01E01.mp4"}:
+                               OPEN_FIXTURE, "S01E01.mp4", HISTORY_FIXTURE}:
         raise ValueError("Unknown scenario fixture")
     return spec
 
@@ -193,6 +199,15 @@ def fixture(ffmpeg, temporary, spec, receipt):
         os.link(video, next_clip)
         receipt["fixture"].update({video.name: digest(video), "broken/invalid.mp4": digest(broken),
                                    "next/second.mp4": digest(next_clip)})
+    elif video.name == HISTORY_FIXTURE:
+        sources = [(video, "testsrc2=s=640x360:r=24:d=18"),
+                   (temporary / "history-dark.mkv", "color=c=black:s=640x360:r=24:d=18")]
+        for path, source in sources:
+            command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i", source,
+                    "-c:v", "libx264", "-preset", "ultrafast", "-threads", "1", "-pix_fmt", "yuv420p",
+                    "-map_metadata", "-1", "-fflags", "+bitexact", "-flags", "+bitexact", str(path))
+            receipt["fixture"][path.name] = digest(path)
     elif video.name == OPEN_FIXTURE:
         command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
                 "-f", "lavfi", "-i", "testsrc2=s=640x360:r=24:d=18", "-c:v", "libx264",

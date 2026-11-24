@@ -57,6 +57,14 @@ pub enum HistoryQuery {
         /// labels are local to it.
         utc_offset_seconds: i32,
     },
+    /// A growing prefix of the History results, including unavailable media.
+    /// The order is identical across limits (newest first, then history key).
+    PageWindow {
+        #[serde(default)]
+        search: String,
+        utc_offset_seconds: i32,
+        limit: u32,
+    },
 }
 
 /// The answer to a history query, in `{"result":{"history":{"result":{...}}}}`.
@@ -77,7 +85,7 @@ pub enum HistoryQueryResult {
         unreadable_copy: Option<String>,
         /// The line under the page title, e.g. "Everything you’ve opened · kept forever".
         summary: String,
-        /// The line after the last entry.
+        /// The line after the last entry. Empty while more matching rows remain.
         end_cap: String,
         /// Non-empty day groups, newest first.
         sections: Vec<HistorySection>,
@@ -118,6 +126,9 @@ pub struct HistoryEntry {
     pub updated_at_unix: i64,
     /// Where opening it starts (seconds), or `null` for the start.
     pub resume_from: Option<f64>,
+    /// Omitted in older replies and for available media.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

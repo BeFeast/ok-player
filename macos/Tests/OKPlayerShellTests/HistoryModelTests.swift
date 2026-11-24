@@ -161,7 +161,7 @@ final class HistoryModelTests: XCTestCase {
         XCTAssertTrue(session.queries.isEmpty)
 
         model.refresh()
-        XCTAssertEqual(session.queries, [.page(search: "", utcOffsetSeconds: 7200)])
+        XCTAssertEqual(session.queries, [.pageWindow(search: "", utcOffsetSeconds: 7200, limit: 24)])
         let sections = try HistoryFixtures.pageSections()
         XCTAssertEqual(model.content, .sections(sections))
         XCTAssertEqual(sections.map(\.header), ["EARLIER"])
@@ -181,9 +181,9 @@ final class HistoryModelTests: XCTestCase {
         model.setSearch("severance")
         model.setSearch("severance")
         XCTAssertEqual(session.queries, [
-            .page(search: "", utcOffsetSeconds: 7200),
-            .page(search: "sev", utcOffsetSeconds: 7200),
-            .page(search: "severance", utcOffsetSeconds: 7200),
+            .pageWindow(search: "", utcOffsetSeconds: 7200, limit: 24),
+            .pageWindow(search: "sev", utcOffsetSeconds: 7200, limit: 24),
+            .pageWindow(search: "severance", utcOffsetSeconds: 7200, limit: 24),
         ], "the session filters; an unchanged search is not asked again")
         XCTAssertEqual(model.search, "severance")
     }
@@ -342,12 +342,12 @@ final class HistoryModelTests: XCTestCase {
         session.answer = { query in
             switch query {
             case .welcomeShelf: return shelf
-            case .page: return page
+            case .page, .pageWindow: return page
             }
         }
         let history = HistoryIntegration(session: session.link, open: { _, _ in }, openFile: {}, reveal: { _ in })
         let shelfQueries = { self.session.count { if case .welcomeShelf = $0 { return true } else { return false } } }
-        let pageQueries = { self.session.count { if case .page = $0 { return true } else { return false } } }
+        let pageQueries = { self.session.count { if case .pageWindow = $0 { return true } else { return false } } }
         let changed = EventBatch(schemaVersion: 1, events: [.history(event: .changed)])
         let unrelated = EventBatch(schemaVersion: 1, events: [.snapshotChanged(changes: [.volume(value: 40)]),
                                                               .history(event: .resumed(position: 3))])

@@ -494,6 +494,8 @@ enum HistoryQuery: Codable, Equatable {
     /// Every entry for the History page, newest first and grouped by day, keeping
     /// those whose title, folder or location contains `search` (empty keeps all).
     case page(search: String = "", utcOffsetSeconds: Int32)
+    /// A growing prefix, including unavailable files, in the same stable order.
+    case pageWindow(search: String, utcOffsetSeconds: Int32, limit: UInt32)
 }
 
 enum HistoryState: String, Codable, CaseIterable {
@@ -525,6 +527,8 @@ struct HistoryEntry: Codable, Equatable {
     var updatedAtUnix: Int64
     /// Where opening it starts, or `nil` for the start.
     var resumeFrom: Double?
+    /// Replies omit this flag when the source is available.
+    var available: Bool? = nil
 }
 
 /// One day group of the History page.

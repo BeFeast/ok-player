@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "id": "welcome-resume-shelf",
+  "fixture": "history-preview.mkv",
+  "appearances": [
+    "light",
+    "dark"
+  ],
+  "steps": [
+    {
+      "action": "history_play"
+    },
+    {
+      "action": "capture",
+      "name": "shelf",
+      "expect": "history_evidence"
+    },
+    {
+      "action": "history_arrow"
+    },
+    {
+      "action": "capture",
+      "name": "from-arrow",
+      "expect": "history_evidence"
+    },
+    {
+      "action": "history_back"
+    },
+    {
+      "action": "capture",
+      "name": "shelf-restored",
+      "expect": "history_evidence"
+    },
+    {
+      "action": "history_resume"
+    },
+    {
+      "action": "capture",
+      "name": "shelf-after-resume",
+      "expect": "history_evidence"
+    }
+  ]
+}

@@ -181,6 +181,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let config: SessionConfig
             if let verification {
                 config = verification.config(shellCommands: commands.shellCommands)
+                if verification.isHistoryScenario { try verification.prepareHistory() }
             } else if smoke {
                 config = try SmokeHistory.config(fixture: smokePath, shellCommands: commands.shellCommands)
             } else {

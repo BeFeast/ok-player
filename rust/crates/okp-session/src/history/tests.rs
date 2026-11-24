@@ -1119,6 +1119,69 @@ fn fixed_now() -> i64 {
 }
 
 #[test]
+fn history_windows_keep_the_same_prefix_and_report_missing_rows() {
+    let root = unique_temp_dir("okp-session-history-window");
+    let data = root.path().join("data");
+    fs::create_dir(&data).unwrap();
+    let missing = root.path().join("a-missing.mkv");
+    let local = root.path().join("b-present.mkv");
+    fs::write(&local, b"media").unwrap();
+    let paths = [missing, local];
+    let mut history = History::default();
+    for path in &paths {
+        history.files.insert(
+            path.to_str().unwrap().to_owned(),
+            FileEntry {
+                position: 20.0,
+                duration: 90.0,
+                updated_at_unix: fixed_now(),
+                ..FileEntry::default()
+            },
+        );
+    }
+    fs::write(history_path(&data), serde_json::to_vec(&history).unwrap()).unwrap();
+    let harness = Harness::with_store(
+        HistoryStore::open_path_with_clock(history_path(&data), fixed_now),
+        &data,
+    );
+    let page = |search: &str, limit| {
+        let result = harness.session.query(&crate::protocol::Query::History {
+            query: HistoryQuery::PageWindow {
+                search: search.to_owned(),
+                utc_offset_seconds: 0,
+                limit,
+            },
+        });
+        match result {
+            crate::protocol::QueryResult::History {
+                result:
+                    HistoryQueryResult::Page {
+                        sections, end_cap, ..
+                    },
+            } => (
+                sections
+                    .into_iter()
+                    .flat_map(|section| section.entries)
+                    .collect::<Vec<_>>(),
+                end_cap,
+            ),
+            answer => panic!("unexpected history window: {answer:?}"),
+        }
+    };
+    let (first, end) = page("", 1);
+    assert!(end.is_empty());
+    assert_eq!(first[0].source.location, paths[0].to_str().unwrap());
+    assert_eq!(first[0].available, Some(false));
+    assert_eq!(first[0].resume_from, None);
+    let (all, end) = page("", 2);
+    assert_eq!(&all[..1], first);
+    assert_eq!(all[1].source.location, paths[1].to_str().unwrap());
+    assert_eq!(all[1].resume_from, Some(20.0));
+    assert!(!end.is_empty());
+    assert_eq!(page(" PRESENT ", 1).0, all[1..]);
+}
+
+#[test]
 fn the_history_page_groups_entries_by_local_day_and_searches() {
     let root = unique_temp_dir("okp-session-history-page");
     let media = root.path().join("Shows").join("Season 01");

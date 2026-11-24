@@ -11,8 +11,12 @@
 mod c_text;
 
 #[cfg(feature = "live-mpv")]
+mod history_poster;
+#[cfg(feature = "live-mpv")]
 mod session;
 
+#[cfg(feature = "live-mpv")]
+pub use history_poster::*;
 #[cfg(feature = "live-mpv")]
 pub use session::*;
 

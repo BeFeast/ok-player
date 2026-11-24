@@ -55,6 +55,7 @@ enum HistoryOpening: Equatable {
 extension HistoryEntry: Identifiable {
     /// The source is the entry's identity in the history file.
     var id: String { "\(source.kind.rawValue):\(source.location)" }
+    var isAvailable: Bool { available != false }
 }
 
 /// The Welcome view's Continue watching shelf: the session's `welcome_shelf` answer.
@@ -76,6 +77,8 @@ final class ContinueWatchingModel {
     @ObservationIgnored var onOpenFile: () -> Void = {}
     /// The History button beside the cards.
     @ObservationIgnored var onShowHistory: () -> Void = {}
+    @ObservationIgnored var onShowSettings: () -> Void = {}
+    @ObservationIgnored var onPrivacyChanged: (Bool) -> Void = { _ in }
 
     /// `open` opens a source with that `resume_from`.
     init(session: HistorySessionLink, open: @escaping (MediaSource, Double?) -> Void) {
@@ -93,6 +96,7 @@ final class ContinueWatchingModel {
         case .success(.welcomeShelf(let privateSession, let entries)):
             self.entries = entries
             self.privateSession = privateSession
+            onPrivacyChanged(privateSession)
             problem = nil
         case .success(let other):
             entries = []
@@ -111,6 +115,7 @@ final class ContinueWatchingModel {
     func openFile() { onOpenFile() }
 
     func showHistory() { onShowHistory() }
+    func showSettings() { onShowSettings() }
 }
 
 /// The History window: the session's `page` answer for the search field's text.
@@ -141,33 +146,53 @@ final class HistoryPageModel {
     private(set) var readFailure: String?
     /// What the last action could not do.
     private(set) var notice: String?
+    var hasMore: Bool {
+        if case .sections = content { return endCap.isEmpty }
+        return false
+    }
 
     private let session: HistorySessionLink
     private let opener: (MediaSource, Double?) -> Void
     private let revealer: (URL) -> Void
+    private let pageSize: UInt32
+    private var limit: UInt32
+    @ObservationIgnored var allowsPagination = true
+    @ObservationIgnored var onBack: () -> Void = {}
+    @ObservationIgnored var onShowSettings: () -> Void = {}
+    @ObservationIgnored var onPrivacyChanged: (Bool) -> Void = { _ in }
 
     /// `open` opens a source with that `resume_from`; `reveal` shows a local file in
     /// Finder.
     init(session: HistorySessionLink, open: @escaping (MediaSource, Double?) -> Void,
-         reveal: @escaping (URL) -> Void) {
+         reveal: @escaping (URL) -> Void, pageSize: UInt32 = 24) {
         self.session = session
         opener = open
         revealer = reveal
+        self.pageSize = pageSize
+        limit = pageSize
     }
 
     func setSearch(_ text: String) {
         guard text != search else { return }
         search = text
+        limit = pageSize
+        refresh()
+    }
+
+    func loadMore() {
+        guard hasMore, allowsPagination, limit <= UInt32.max - pageSize else { return }
+        limit += pageSize
         refresh()
     }
 
     /// Ask the session for the page again, for the current search.
     func refresh() {
         let search = self.search
-        let query = HistoryQuery.page(search: search, utcOffsetSeconds: session.utcOffsetSeconds())
+        let query = HistoryQuery.pageWindow(search: search, utcOffsetSeconds: session.utcOffsetSeconds(), limit: limit)
         switch session.history(query) {
         case .success(.page(let privateSession, let readFailed, let unreadableCopy, let summary, let endCap, let sections)):
             self.privateSession = privateSession
+            onPrivacyChanged(privateSession)
             self.summary = summary
             self.endCap = endCap
             readFailure = readFailed ? Self.readFailureText(unreadableCopy: unreadableCopy) : nil
@@ -192,6 +217,7 @@ final class HistoryPageModel {
     }
 
     func open(_ entry: HistoryEntry, _ opening: HistoryOpening) {
+        guard entry.isAvailable else { return }
         notice = nil
         opener(entry.source, opening.resumeFrom)
     }
@@ -212,7 +238,7 @@ final class HistoryPageModel {
 
     /// Only a local file has a place in Finder.
     func canReveal(_ entry: HistoryEntry) -> Bool {
-        entry.source.kind == .local
+        entry.source.kind == .local && entry.isAvailable
     }
 
     func reveal(_ entry: HistoryEntry) {

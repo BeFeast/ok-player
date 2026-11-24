@@ -30,6 +30,8 @@ struct VerificationOptions {
         case "welcome-return": "inactive_video_visible"
         case "open-files-folders": "folder_picker_files_enabled"
         case "open-drag-drop": "welcome_drop_highlight_disabled"
+        case "welcome-resume-shelf": "history_poster_disabled"
+        case "history-page": "history_pagination_disabled"
         case "context-idle-and-playback": "context_clamp_disabled"
         case "command-keyboard": "text_priority_disabled"
         case "about-identity": "about_copy_disabled"
@@ -136,6 +138,9 @@ struct VerificationScenario: Decodable {
         case waitForChromeHide = "wait_for_chrome_hide", advancePlaylist = "advance_playlist"
         case waitForEOF = "wait_for_eof", closeMediaShortcut = "close_media_shortcut"
         case openAnother = "open_another"
+        case historyPlay = "history_play", historyArrow = "history_arrow", historyFooter = "history_footer"
+        case historySearch = "history_search", historyClear = "history_clear", historyBack = "history_back"
+        case historyResume = "history_resume", historyMore = "history_more", historyCompact = "history_compact"
         case checkContextIdle = "check_context_idle", checkContextSearch = "check_context_search"
         case checkContextEmpty = "check_context_empty"
         case checkContextPages = "check_context_pages", checkContextCorners = "check_context_corners"
@@ -161,6 +166,7 @@ struct VerificationScenario: Decodable {
         case settingsLight = "settings_light", settingsAuto = "settings_auto"
         case trackPanel = "track_panel", queuePanel = "queue_panel"
         case openEvidence = "open_evidence"
+        case historyEvidence = "history_evidence"
         case contextWelcome = "context_welcome", contextVideo = "context_video"
         case contextEmpty = "context_empty", keyboardPlayback = "keyboard_playback"
         case contextResults = "context_results"
@@ -205,6 +211,7 @@ final class VerifyRun {
     private var hiddenCueBottom: CGFloat?
     private var compositorStatus = "not_probed"
     private var subtitleMenu: [String: [String]]?
+    var initialShelfBounds: [String: CGRect]?
 
     init(app: PlayerApp, options: VerificationOptions) {
         self.app = app
@@ -258,6 +265,7 @@ final class VerifyRun {
                 else if scenario.id.hasPrefix("queue-") { try await performQueueStep(step) }
                 else if scenario.id.hasSuffix("-switcher") { try await performTrackStep(step) }
                 else if scenario.id == "welcome-return" { try await performWelcomeReturnStep(step) }
+                else if options.isHistoryScenario { try await performHistoryStep(step) }
                 else if scenario.id.hasPrefix("open-") || scenario.id == "welcome-first-run" {
                     try await performOpenStep(step)
                 }

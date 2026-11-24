@@ -254,6 +254,10 @@ impl HistoryStore {
         })
     }
 
+    pub fn search_including_missing(&self, query: &str) -> Vec<HistoryItem> {
+        okp_core::recents_shelf::search(&self.data, query)
+    }
+
     /// Remove one exact local-or-URL identity and persist it atomically. If `active` is true,
     /// every later incidental write for that source is suppressed until an explicit reopen.
     /// A failed save restores both the record and the session guard.
@@ -460,7 +464,7 @@ fn write_atomically(
     result
 }
 
-fn is_history_path_listable(path: &str) -> bool {
+pub(super) fn is_history_path_listable(path: &str) -> bool {
     path.contains("://")
         || okp_core::network_path::is_network(path, |_| None)
         || Path::new(path).is_file()

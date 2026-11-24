@@ -1,53 +1,68 @@
 import AppKit
 import SwiftUI
 
-// The History window's content: search, the private-session switch and banner, and
-// the session's day groups with the row actions, or the loading, error, empty and
-// no-match states. A SwiftUI island bound to a `HistoryPageModel`.
-
 struct HistoryView: View {
     let model: HistoryPageModel
+    let posters: HistoryPosters
+    var onBounds: ([String: CGRect]) -> Void = { _ in }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            if model.privateSession {
-                banner("Private session: new opens aren’t recorded. Your existing history is still here.",
-                       symbol: "eye.slash", role: .info)
+        VStack(spacing: 0) {
+            VStack(spacing: 0) {
+                header
+                if model.privateSession {
+                    banner("Private session: new opens aren’t recorded. Your existing history is still here.",
+                           symbol: "eye.slash", role: .info)
+                }
+                if let readFailure = model.readFailure {
+                    banner(readFailure, symbol: "exclamationmark.triangle", role: .warning)
+                }
+                if let notice = model.notice {
+                    banner(notice, symbol: "exclamationmark.circle", role: .danger)
+                }
+                Rectangle().fill(PaletteRole.borderSubtle.swiftUI).frame(height: 1)
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            if let readFailure = model.readFailure {
-                banner(readFailure, symbol: "exclamationmark.triangle", role: .warning)
-            }
-            if let notice = model.notice {
-                banner(notice, symbol: "exclamationmark.circle", role: .danger)
-            }
-            Rectangle().fill(PaletteRole.borderSubtle.swiftUI).frame(height: 1)
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: 740)
+            .padding(.horizontal, 24)
+            .padding(.top, 22)
+            HistoryFooter(privateSession: model.privateSession, returnsToWelcome: true,
+                          navigate: model.onBack, settings: model.onShowSettings)
         }
-        .frame(minWidth: 460, idealWidth: 640, maxWidth: .infinity, minHeight: 360, idealHeight: 560, maxHeight: .infinity)
-        .background(PaletteRole.canvas.swiftUI)
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .tint(PaletteRole.accent.swiftUI)
+        .coordinateSpace(name: "history-surface")
+        .onPreferenceChange(HistoryBoundsKey.self, perform: onBounds)
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("History")
-                        .font(.title2.weight(.semibold))
-                        .foregroundStyle(PaletteRole.text.swiftUI)
-                    if !model.summary.isEmpty {
-                        Text(model.summary)
-                            .font(.callout)
-                            .foregroundStyle(PaletteRole.textMuted.swiftUI)
-                    }
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 11) {
+                Button(action: model.onBack) {
+                    Image(systemName: "chevron.left")
+                        .frame(width: 32, height: 42)
+                        .background(PaletteRole.surfaceRaised.swiftUI, in: RoundedRectangle(cornerRadius: 8))
                 }
-                Spacer(minLength: 8)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back to Continue watching")
+                .help("Back to Continue watching")
+                .historyBounds("back")
+                Text("History")
+                    .font(.system(size: 30, weight: .semibold))
+                Spacer(minLength: 4)
                 Toggle("Private session", isOn: Binding(get: { model.privateSession },
                                                         set: { model.setPrivate($0) }))
                     .toggleStyle(.switch)
-                    .help("While on, nothing new is recorded and nothing remembered is applied")
+                    .controlSize(.small)
+                    .help("While on, new activity is not recorded")
+                    .fixedSize()
+            }
+            .foregroundStyle(PaletteRole.text.swiftUI)
+            if !model.summary.isEmpty {
+                Text(model.summary)
+                    .font(.callout)
+                    .foregroundStyle(PaletteRole.textMuted.swiftUI)
             }
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
@@ -56,12 +71,23 @@ struct HistoryView: View {
                 TextField("Search history", text: Binding(get: { model.search }, set: { model.setSearch($0) }))
                     .textFieldStyle(.plain)
                     .foregroundStyle(PaletteRole.text.swiftUI)
+                    .historyBounds("search")
+                if !model.search.isEmpty {
+                    Button { model.setSearch("") } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(PaletteRole.textMuted.swiftUI)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear search")
+                    .help("Clear search")
+                    .historyBounds("clear")
+                }
             }
             .padding(8)
             .background(PaletteRole.surface.swiftUI, in: RoundedRectangle(cornerRadius: 6))
             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(PaletteRole.border.swiftUI))
         }
-        .padding(16)
+        .padding(.bottom, 12)
     }
 
     private func banner(_ text: String, symbol: String, role: PaletteRole) -> some View {
@@ -77,7 +103,6 @@ struct HistoryView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(RoundedRectangle(cornerRadius: 8).fill(PaletteRole.surfaceRaised.swiftUI))
-        .padding(.horizontal, 16)
         .padding(.bottom, 10)
     }
 
@@ -95,30 +120,45 @@ struct HistoryView: View {
             HistoryStateCard(symbol: "magnifyingglass", title: "No matches",
                              message: "Nothing in your history matches “\(search)”.")
         case .sections(let sections):
-            list(sections)
+            rows(sections).id(model.search)
         }
     }
 
-    private func list(_ sections: [HistorySection]) -> some View {
-        List {
-            ForEach(sections, id: \.bucket) { section in
-                Section(section.header) {
+    private func rows(_ sections: [HistorySection]) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(sections, id: \.bucket) { section in
+                    Text(section.header)
+                        .font(.caption.weight(.semibold))
+                        .tracking(1)
+                        .foregroundStyle(PaletteRole.textMuted.swiftUI)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 18)
+                        .padding(.bottom, 6)
+                        .accessibilityAddTraits(.isHeader)
                     ForEach(section.entries) { entry in
-                        HistoryRow(entry: entry, model: model)
-                            .listRowBackground(PaletteRole.surface.swiftUI)
+                        HistoryRow(entry: entry, model: model, posters: posters)
+                            .historyBounds(entry.id)
                     }
                 }
-            }
-            if !model.endCap.isEmpty {
-                Text(model.endCap)
-                    .font(.caption)
-                    .foregroundStyle(PaletteRole.textMuted.swiftUI)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
+                Group {
+                    if model.hasMore {
+                        Button("Show more", action: model.loadMore)
+                            .historyBounds("show-more")
+                    } else if !model.endCap.isEmpty {
+                        Text(model.endCap)
+                            .font(.caption)
+                            .foregroundStyle(PaletteRole.textMuted.swiftUI)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .overlay(alignment: .top) {
+                    Rectangle().fill(PaletteRole.borderSubtle.swiftUI).frame(height: 1)
+                }
+                .padding(.top, 18)
             }
         }
-        .listStyle(.inset)
-        .scrollContentBackground(.hidden)
     }
 }
 
@@ -136,6 +176,7 @@ struct HistoryStateCard: View {
                 .foregroundStyle(PaletteRole.textMuted.swiftUI)
                 .frame(width: 54, height: 54)
                 .background(Circle().fill(PaletteRole.surfaceRaised.swiftUI))
+                .accessibilityHidden(true)
             Text(title)
                 .font(.headline)
                 .foregroundStyle(PaletteRole.text.swiftUI)
@@ -153,71 +194,71 @@ struct HistoryStateCard: View {
     }
 }
 
-/// One remembered entry. A click resumes it; the menu and the context menu hold
-/// Resume, Play from Start, Remove from History and Reveal in Finder.
 struct HistoryRow: View {
     let entry: HistoryEntry
     let model: HistoryPageModel
+    let posters: HistoryPosters
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Button { model.open(entry, .resume) } label: {
                 HStack(spacing: 12) {
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(PaletteRole.surfaceRaised.swiftUI)
-                        .overlay(Image(systemName: "play.fill")
-                            .font(.system(size: 12))
-                            .foregroundStyle(PaletteRole.textMuted.swiftUI))
-                        .overlay(alignment: .bottom) {
-                            if entry.state == .progress { WatchedBar(fraction: entry.progress) }
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .frame(width: 64, height: 36)
-                        .accessibilityHidden(true)
+                    HistoryPoster(entry: entry, posters: posters, privateSession: model.privateSession,
+                                  width: 64, height: 36)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(entry.title)
+                            .font(.callout)
                             .foregroundStyle(PaletteRole.text.swiftUI)
                             .lineLimit(1)
-                            .truncationMode(.tail)
                         Text(entry.location)
                             .font(.caption)
                             .foregroundStyle(PaletteRole.textMuted.swiftUI)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
-                    Spacer(minLength: 8)
+                    Spacer(minLength: 4)
                     VStack(alignment: .trailing, spacing: 3) {
                         Text(entry.whenLabel)
                             .font(.caption)
                             .foregroundStyle(PaletteRole.textMuted.swiftUI)
-                        Text(historyStateText(entry))
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(entry.state == .finished ? PaletteRole.success.swiftUI
-                                                                       : PaletteRole.text.swiftUI)
+                        Text(entry.isAvailable ? historyStateText(entry) : "Missing")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle((entry.state == .progress && entry.isAvailable
+                                               ? PaletteRole.link : PaletteRole.textMuted).swiftUI)
                     }
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 }
                 .contentShape(Rectangle())
             }
+            .disabled(!entry.isAvailable)
             .buttonStyle(.plain)
             .help(entry.source.location)
             Menu {
                 actions
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Image(systemName: "ellipsis")
+                    .rotationEffect(.degrees(90))
+                    .foregroundStyle(PaletteRole.text.swiftUI)
             }
             .menuStyle(.button)
             .buttonStyle(.borderless)
             .menuIndicator(.hidden)
             .fixedSize()
+            .accessibilityLabel("Actions for \(entry.title)")
             .help("History actions")
+            .historyBounds("actions:\(entry.id)")
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, 12)
+        .frame(height: 64)
         .contextMenu { actions }
     }
 
     @ViewBuilder private var actions: some View {
         Button("Resume") { model.open(entry, .resume) }
+            .disabled(!entry.isAvailable)
         Button("Play from Start") { model.open(entry, .fromStart) }
+            .disabled(!entry.isAvailable)
         Divider()
         Button("Remove from History") { model.remove(entry) }
         Button("Reveal in Finder") { model.reveal(entry) }

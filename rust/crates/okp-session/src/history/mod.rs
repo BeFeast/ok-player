@@ -603,9 +603,21 @@ impl SessionHistory {
             HistoryQuery::Page {
                 search,
                 utc_offset_seconds,
+            }
+            | HistoryQuery::PageWindow {
+                search,
+                utc_offset_seconds,
+                ..
             } => {
                 let now_local = local_datetime(now, *utc_offset_seconds);
-                let items = self.store.search(search);
+                let (items, limit) = if let HistoryQuery::PageWindow { limit, .. } = query {
+                    (
+                        self.store.search_including_missing(search),
+                        (*limit).max(1) as usize,
+                    )
+                } else {
+                    (self.store.search(search), usize::MAX)
+                };
                 let sections = [
                     history_format::HistoryBucket::Today,
                     history_format::HistoryBucket::Yesterday,
@@ -616,13 +628,21 @@ impl SessionHistory {
                 .filter_map(|bucket| {
                     let entries: Vec<HistoryEntry> = items
                         .iter()
+                        .take(limit)
                         .filter(|item| {
                             history_format::bucket_for(
                                 local_datetime(item.updated_at_unix, *utc_offset_seconds),
                                 now_local,
                             ) == bucket
                         })
-                        .map(|item| self.entry(item, now_local, *utc_offset_seconds))
+                        .map(|item| {
+                            let mut entry = self.entry(item, now_local, *utc_offset_seconds);
+                            if limit != usize::MAX && !store::is_history_path_listable(&item.path) {
+                                entry.available = Some(false);
+                                entry.resume_from = None;
+                            }
+                            entry
+                        })
                         .collect();
                     (!entries.is_empty()).then(|| HistorySection {
                         bucket: bucket.into(),
@@ -641,7 +661,11 @@ impl SessionHistory {
                         .unreadable_copy()
                         .map(|path| path.to_string_lossy().into_owned()),
                     summary: history_format::retention_summary(retention),
-                    end_cap: history_format::retention_end_cap(retention),
+                    end_cap: if items.len() > limit {
+                        String::new()
+                    } else {
+                        history_format::retention_end_cap(retention)
+                    },
                     sections,
                 }
             }
@@ -674,6 +698,7 @@ impl SessionHistory {
             } else {
                 self.store.resume_position_for_source(&source)
             },
+            available: None,
         }
     }
 }

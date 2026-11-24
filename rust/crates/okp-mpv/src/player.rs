@@ -17,6 +17,9 @@ use thiserror::Error;
 use crate::ffi;
 use crate::pump::EventPump;
 
+mod poster;
+pub use poster::{POSTER_HEIGHT, POSTER_WIDTH, decode_history_poster, history_poster_key};
+
 const AUDIO_NORMALIZATION_FILTER_LABEL: &str = "@okpnorm";
 const AUDIO_NORMALIZATION_FILTER: &str = "@okpnorm:dynaudnorm";
 const AUDIO_DEVICE_AUTO: &str = "auto";

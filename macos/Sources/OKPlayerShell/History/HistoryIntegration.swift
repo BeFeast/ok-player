@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The idle Welcome view in the player window and the History window, both bound to
+/// The idle Welcome and History surfaces, both bound to
 /// the session's history (docs/session-abi.md, "Watch history"). The app tells it
 /// when the welcome view is due and hands it every drained batch; the session's
 /// `history.changed` and `history.private_session` events refresh whichever of the
@@ -12,32 +12,47 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
     /// The Welcome view's hosting view, hidden until `setWelcomeShown(true)`.
     let welcomeView = NSView()
     let firstRun = WelcomeFirstRun()
-    private let shelfView: NSView
+    let shelfView: NSView
+    let historyPane: NSView
+    let posters: HistoryPosters
     private(set) var showsWelcome = false
-    /// The History window is open.
     private(set) var showsHistory = false
+    private(set) var showsInlineHistory = false
+    private(set) var shelfBounds: [String: CGRect] = [:]
+    private(set) var pageBounds: [String: CGRect] = [:]
+    var onInlineHistoryChanged: (Bool) -> Void = { _ in }
     private var historyWindow: NSWindow?
 
     /// `open` opens a source with that `resume_from`, `openFile` runs the Open panel,
     /// and `reveal` shows a local file in Finder.
     init(session: HistorySessionLink, open: @escaping (MediaSource, Double?) -> Void,
          openFile: @escaping () -> Void,
+         openSettings: @escaping () -> Void = {},
+         posters: HistoryPosters = HistoryPosters(),
+         pageSize: UInt32 = 24,
          reveal: @escaping (URL) -> Void = { NSWorkspace.shared.activateFileViewerSelecting([$0]) }) {
         let welcome = ContinueWatchingModel(session: session, open: open)
         self.welcome = welcome
-        page = HistoryPageModel(session: session, open: open, reveal: reveal)
-        var host: NSView?
-        MainActor.assumeIsolated {
-            let hosting = NSHostingView(rootView: WelcomeView(model: welcome))
-            // The player gives the shelf its size so it can show fewer cards at
-            // narrow widths and anchor populated history to the top.
-            hosting.sizingOptions = []
-            host = hosting
+        self.posters = posters
+        let page = HistoryPageModel(session: session, open: open, reveal: reveal, pageSize: pageSize)
+        self.page = page
+        let hosts = MainActor.assumeIsolated {
+            let shelf = NSHostingView(rootView: WelcomeView(model: welcome, posters: posters))
+            let history = NSHostingView(rootView: HistoryView(model: page, posters: posters))
+            shelf.sizingOptions = []
+            history.sizingOptions = []
+            return (shelf, history)
         }
-        shelfView = host ?? NSView()
+        shelfView = hosts.0
+        historyPane = hosts.1
         super.init()
+        MainActor.assumeIsolated {
+            hosts.0.rootView.onBounds = { [weak self] in self?.shelfBounds = $0 }
+            hosts.1.rootView.onBounds = { [weak self] in self?.pageBounds = $0 }
+        }
         welcomeView.isHidden = true
-        for view in [firstRun, shelfView] {
+        historyPane.isHidden = true
+        for view in [firstRun, shelfView, historyPane] {
             view.translatesAutoresizingMaskIntoConstraints = false
             welcomeView.addSubview(view)
             NSLayoutConstraint.activate([
@@ -50,6 +65,11 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
         welcome.onOpenFile = openFile
         firstRun.openButton.onOpen = { [weak welcome] in welcome?.openFile() }
         welcome.onShowHistory = { [weak self] in self?.showHistory() }
+        welcome.onShowSettings = openSettings
+        welcome.onPrivacyChanged = posters.setPrivate
+        page.onPrivacyChanged = posters.setPrivate
+        page.onBack = { [weak self] in self?.hideHistory() }
+        page.onShowSettings = openSettings
     }
 
     /// Whether the player window shows the Welcome view: nothing is loaded or being
@@ -84,6 +104,7 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
         showsWelcome = shown
         welcomeView.isHidden = !shown
         if shown { refreshWelcome() }
+        else if showsInlineHistory { hideHistory() }
     }
 
     func setDropActive(_ active: Bool) {
@@ -97,9 +118,10 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
     }
 
     private func displayWelcome() {
-        firstRun.isHidden = !welcome.isFirstRun
+        firstRun.isHidden = showsInlineHistory || !welcome.isFirstRun
         firstRun.showProblem(welcome.problem)
-        shelfView.isHidden = welcome.isFirstRun
+        shelfView.isHidden = showsInlineHistory || welcome.isFirstRun
+        historyPane.isHidden = !showsInlineHistory
     }
 
     /// A drained batch: a history change refreshes what is on screen.
@@ -128,12 +150,34 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
         showHistory()
     }
 
-    /// Open the History window, or bring it to the front, with a fresh page.
+    /// Replace the idle shelf in place. While playing, File > History leaves
+    /// playback visible and opens a separate window.
     func showHistory() {
+        if showsWelcome {
+            if historyWindow?.isVisible == true { historyWindow?.close() }
+            historyShown()
+            showsInlineHistory = true
+            displayWelcome()
+            onInlineHistoryChanged(true)
+            welcomeView.window?.makeKeyAndOrderFront(nil)
+            return
+        }
         let window = historyWindow ?? makeHistoryWindow()
         historyWindow = window
         historyShown()
         window.makeKeyAndOrderFront(nil)
+    }
+
+    func hideHistory() {
+        if showsInlineHistory {
+            showsInlineHistory = false
+            showsHistory = false
+            _ = welcomeView.window?.makeFirstResponder(nil)
+            displayWelcome()
+            onInlineHistoryChanged(false)
+        } else if historyWindow?.isVisible == true {
+            historyWindow?.close()
+        }
     }
 
     /// The History window opened: it lists the session's page from now on.
@@ -151,7 +195,8 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
         var made: NSWindow?
         let model = page
         MainActor.assumeIsolated {
-            let hosting = NSHostingController(rootView: HistoryView(model: model))
+            let hosting = NSHostingController(rootView: HistoryView(model: model, posters: posters)
+                .background(PaletteRole.canvas.swiftUI))
             hosting.sizingOptions = [.minSize]
             made = NSWindow(contentViewController: hosting)
         }
@@ -161,6 +206,7 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.isReleasedWhenClosed = false
         window.setContentSize(NSSize(width: 640, height: 560))
+        window.contentMinSize = NSSize(width: 380, height: 340)
         window.delegate = self
         if rememberFrame { _ = window.setFrameAutosaveName("OKPlayerHistory") }
         return window
@@ -213,13 +259,25 @@ extension HistoryIntegration {
     /// `app.play` and bring the player window forward.
     convenience init(app: PlayerApp) {
         let noSession = DispatchResult.rejected(reason: .noActiveMedia, message: "There is no playback session.")
+        let config = app.verification?.config(shellCommands: []) ?? SessionConfig.forApp()
+        let posterDirectory = app.smoke ? nil : URL(fileURLWithPath: config.cacheDir, isDirectory: true)
+            .appendingPathComponent("history-posters-v1", isDirectory: true)
         self.init(session: HistorySessionLink(query: { [weak app] query in app?.client?.query(query) },
                                               dispatch: { [weak app] command in app?.client?.dispatch(command) ?? noSession }),
                   open: { [weak app] source, resumeFrom in
+                      app?.history.hideHistory()
                       app?.play(source, resumeFrom: resumeFrom)
                       app?.window?.makeKeyAndOrderFront(nil)
                   },
-                  openFile: { [weak app] in app?.openFile() })
+                  openFile: { [weak app] in app?.openFile() },
+                  openSettings: { [weak app] in app?.showSettings() },
+                  posters: HistoryPosters(directory: posterDirectory,
+                                          canDecode: app.verification?.control != "history_poster_disabled"),
+                  pageSize: app.verification?.scenarioID == "history-page" ? 6 : 24)
+        page.allowsPagination = app.verification?.control != "history_pagination_disabled"
+        onInlineHistoryChanged = { [weak app] history in
+            app?.dropTarget?.usesInlineHighlight = !history && app?.history.showsWelcome == true
+        }
     }
 }
 
@@ -228,7 +286,7 @@ extension PlayerApp {
     func updateWelcome(_ snapshot: SessionSnapshot) {
         let scanning = client?.store.playlist.scanning ?? false
         history.setWelcomeShown(HistoryIntegration.welcomeDue(snapshot, scanning: scanning, errorShown: errorShown))
-        dropTarget?.usesInlineHighlight = history.showsWelcome
+        dropTarget?.usesInlineHighlight = history.showsWelcome && !history.showsInlineHistory
         if history.showsWelcome { prompt.isHidden = true }
     }
 }

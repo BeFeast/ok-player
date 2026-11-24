@@ -40,6 +40,8 @@ func historyStateText(_ entry: HistoryEntry) -> String {
 
 struct WelcomeView: View {
     let model: ContinueWatchingModel
+    let posters: HistoryPosters
+    var onBounds: ([String: CGRect]) -> Void = { _ in }
 
     static let cardWidth: CGFloat = 194
 
@@ -52,7 +54,12 @@ struct WelcomeView: View {
                 .padding(.bottom, 12)
                 .frame(maxWidth: .infinity)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) { footer }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            HistoryFooter(privateSession: model.privateSession, returnsToWelcome: false,
+                          navigate: model.showHistory, settings: model.showSettings)
+        }
+        .coordinateSpace(name: "history-surface")
+        .onPreferenceChange(HistoryBoundsKey.self, perform: onBounds)
     }
 
     private var shelf: some View {
@@ -66,9 +73,10 @@ struct WelcomeView: View {
             }
             // As many cards as the width takes, newest first.
             ViewThatFits(in: .horizontal) {
-                cards(3)
-                cards(2)
-                cards(1)
+                cards(3, width: Self.cardWidth)
+                cards(2, width: Self.cardWidth)
+                cards(1, width: Self.cardWidth)
+                cards(1, width: 134)
             }
             HStack(spacing: 14) {
                 Button { model.openFile() } label: {
@@ -97,27 +105,12 @@ struct WelcomeView: View {
         }
     }
 
-    private var footer: some View {
-        ZStack(alignment: .leading) {
-            Text(model.privateSession ? "Private session" : "Recording history")
-                .font(.caption)
-                .foregroundStyle((model.privateSession ? PaletteRole.textMuted : PaletteRole.link).swiftUI)
-                .frame(maxWidth: .infinity)
-            Button { model.showHistory() } label: {
-                Label("History", systemImage: "clock.arrow.circlepath")
-                    .foregroundStyle(PaletteRole.textMuted.swiftUI)
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 24)
-        }
-        .frame(height: 42)
-        .overlay(alignment: .top) { Rectangle().fill(PaletteRole.borderSubtle.swiftUI).frame(height: 1) }
-    }
-
-    private func cards(_ count: Int) -> some View {
+    private func cards(_ count: Int, width: CGFloat) -> some View {
         HStack(alignment: .center, spacing: 14) {
             ForEach(model.entries.prefix(count)) { entry in
-                ContinueWatchingCard(entry: entry, width: Self.cardWidth) { model.resume(entry) }
+                ContinueWatchingCard(entry: entry, posters: posters, privateSession: model.privateSession,
+                                     width: width) { model.resume(entry) }
+                    .historyBounds(entry.id)
             }
             Button { model.showHistory() } label: {
                 Image(systemName: "chevron.right")
@@ -129,48 +122,44 @@ struct WelcomeView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("History")
+            .accessibilityLabel("Open History")
             .help("History")
+            .historyBounds("shelf-arrow")
         }
     }
 }
 
-/// One Continue watching card: a placeholder tile (no posters yet) with the state,
-/// the watched bar, the title and when it was last opened. A click resumes it.
+/// One Continue watching card. A click resumes it through the shared session.
 struct ContinueWatchingCard: View {
     let entry: HistoryEntry
+    let posters: HistoryPosters
+    let privateSession: Bool
     let width: CGFloat
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 6) {
-                ZStack(alignment: .bottomTrailing) {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(PaletteRole.surfaceRaised.swiftUI)
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(PaletteRole.borderSubtle.swiftUI))
-                        .overlay(Image(systemName: "play.fill")
-                            .font(.system(size: 22))
-                            .foregroundStyle(PaletteRole.textMuted.swiftUI))
-                    Text(historyStateText(entry))
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(PaletteRole.text.swiftUI)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(PaletteRole.surface.swiftUI))
-                        .padding(6)
-                }
-                .frame(width: width, height: width * 9 / 16)
-                WatchedBar(fraction: entry.progress)
+            VStack(alignment: .leading, spacing: 4) {
+                HistoryPoster(entry: entry, posters: posters, privateSession: privateSession,
+                              width: width, height: width * 9 / 16)
+                    .overlay(alignment: .bottomTrailing) {
+                        Text(historyStateText(entry))
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 4))
+                            .padding(6)
+                    }
                 Text(entry.title)
-                    .font(.body.weight(.medium))
+                    .font(.callout.weight(.medium))
                     .foregroundStyle(PaletteRole.text.swiftUI)
                     .lineLimit(1)
-                    .truncationMode(.tail)
-                Text(entry.whenLabel)
+                Text(entry.location)
                     .font(.caption)
                     .foregroundStyle(PaletteRole.textMuted.swiftUI)
                     .lineLimit(1)
+                    .truncationMode(.middle)
             }
             .frame(width: width, alignment: .leading)
             .contentShape(Rectangle())

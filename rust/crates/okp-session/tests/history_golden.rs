@@ -148,6 +148,7 @@ fn every_history_query_and_its_answer_match_their_fixtures() {
                 when_label: "Today 21:14".to_owned(),
                 updated_at_unix: 1_699_990_000,
                 resume_from: Some(1325.5),
+                available: None,
             }],
         }),
     );
@@ -177,6 +178,7 @@ fn every_history_query_and_its_answer_match_their_fixtures() {
                     when_label: "12 Jun".to_owned(),
                     updated_at_unix: 1_686_528_000,
                     resume_from: None,
+                    available: None,
                 }],
             }],
         }),

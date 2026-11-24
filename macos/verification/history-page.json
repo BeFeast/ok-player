@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "id": "history-page",
+  "fixture": "history-preview.mkv",
+  "appearances": [
+    "light",
+    "dark"
+  ],
+  "steps": [
+    {
+      "action": "history_play"
+    },
+    {
+      "action": "history_footer"
+    },
+    {
+      "action": "capture",
+      "name": "history",
+      "expect": "history_evidence"
+    },
+    {
+      "action": "history_search"
+    },
+    {
+      "action": "capture",
+      "name": "search",
+      "expect": "history_evidence"
+    },
+    {
+      "action": "history_clear"
+    },
+    {
+      "action": "history_more"
+    },
+    {
+      "action": "capture",
+      "name": "pagination",
+      "expect": "history_evidence"
+    },
+    {
+      "action": "history_back",
+      "name": "footer"
+    },
+    {
+      "action": "capture",
+      "name": "back-to-welcome",
+      "expect": "history_evidence"
+    },
+    {
+      "action": "history_footer"
+    },
+    {
+      "action": "history_compact"
+    },
+    {
+      "action": "capture",
+      "name": "compact",
+      "expect": "history_evidence"
+    },
+    {
+      "action": "history_back"
+    }
+  ]
+}
