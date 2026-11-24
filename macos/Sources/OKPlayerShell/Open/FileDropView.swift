@@ -8,6 +8,10 @@ import AppKit
 /// Accepted drags accent the Welcome target while idle and frame the video
 /// during playback. Both presentations use the same router decision.
 final class FileDropView: NSView {
+    private let content: NSView
+    private var contentEdges: [NSLayoutConstraint] = []
+    private var sizesCompactContent = false
+
     /// Whether dropping these files would do anything.
     var accepts: ([URL]) -> Bool = { _ in false }
     /// Opens dropped files; returns whether anything was opened.
@@ -23,20 +27,41 @@ final class FileDropView: NSView {
     let highlight = DropHighlightView()
 
     init(content: NSView) {
+        self.content = content
         super.init(frame: .zero)
         for view in [content, highlight] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
-            NSLayoutConstraint.activate([
+            let edges = [
                 view.topAnchor.constraint(equalTo: topAnchor), view.bottomAnchor.constraint(equalTo: bottomAnchor),
                 view.leadingAnchor.constraint(equalTo: leadingAnchor), view.trailingAnchor.constraint(equalTo: trailingAnchor),
-            ])
+            ]
+            if view === content { contentEdges = edges }
+            NSLayoutConstraint.activate(edges)
         }
         highlight.isHidden = true
         registerForDraggedTypes([.fileURL])
     }
 
     required init?(coder: NSCoder) { fatalError("Use init(content:)") }
+
+    /// Compact video sets the window's size. Its canvas contains hidden
+    /// standard controls whose fitting size must stay inside the canvas.
+    func sizeCompactContent(_ compact: Bool) {
+        guard sizesCompactContent != compact else { return }
+        sizesCompactContent = compact
+        if compact {
+            NSLayoutConstraint.deactivate(contentEdges)
+            content.frame = bounds
+        } else {
+            NSLayoutConstraint.activate(contentEdges)
+        }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if sizesCompactContent { content.frame = bounds }
+    }
 
     // AppKit's drag messages; each hands the dragged files to the methods below.
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {

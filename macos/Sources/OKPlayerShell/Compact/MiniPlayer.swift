@@ -126,6 +126,7 @@ final class MiniPlayer: NSObject {
         window.isMiniPlayer = true
         onModeChange?(true)
         changeStyle(of: window, to: .borderless)
+        (window.contentView as? FileDropView)?.sizeCompactContent(true)
         window.minSize = NSSize(width: 1, height: 1)
         window.collectionBehavior.remove(.fullScreenPrimary)
         window.collectionBehavior.insert(.fullScreenNone)
@@ -161,6 +162,7 @@ final class MiniPlayer: NSObject {
         NSCursor.arrow.set()
         window.isMiniPlayer = false
         changeStyle(of: window, to: standard.style)
+        (window.contentView as? FileDropView)?.sizeCompactContent(false)
         window.collectionBehavior = standard.behavior
         window.backgroundColor = standard.background
         window.isOpaque = standard.opaque

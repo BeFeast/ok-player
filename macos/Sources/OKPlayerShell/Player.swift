@@ -255,10 +255,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         pin.state = pinItem.state
         let close = NSMenuItem(title: "Close Media", action: #selector(closeMedia), keyEquivalent: "")
         for item in [pin, close] { item.target = self }
-        let mini = NSMenuItem.playerCommand("mini-player", title: "Mini-Player", keyEquivalent: nil)
-        mini.target = self
-        mini.isEnabled = commands.row("mini-player")?.enabled == true
-        return [mini, pin, close]
+        return [pin, close]
     }
 
     func play(_ path: String) {
