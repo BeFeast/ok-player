@@ -17,6 +17,13 @@ extension VerifyRun {
             try await wait("restored Welcome via Command-W") {
                 self.snapshot.source == nil && self.app.history.showsWelcome
             }
+        case .advancePlaylist:
+            let next = options.fixture.deletingLastPathComponent().appendingPathComponent("next/second.mp4")
+            guard app.open([options.fixture, next]) else { throw VerifyError("Could not open the two-item queue") }
+            try await wait("EOF advances to the next item without closing playback") {
+                self.snapshot.status == .playing && self.snapshot.source?.location == next.path
+                    && !self.app.history.showsWelcome
+            }
         case .openAnother:
             let invalid = options.fixture.deletingLastPathComponent().appendingPathComponent("broken/invalid.mp4")
             app.play(invalid.path)
@@ -78,7 +85,7 @@ extension VerifyRun {
             throw VerifyError("Cannot capture the Welcome window", blocked: true)
         }
         let bitmap = NSBitmapImageRep(cgImage: image)
-        let quietPoints = [0.25, 0.45, 0.65, 0.82, 0.92].flatMap { y in
+        let quietPoints = [0.25, 0.45, 0.65, 0.82, 0.965].flatMap { y in
             [24, width - 25].map { x in (x, Int(Double(height) * y)) }
         }
         var canvasMatches = 0
@@ -101,7 +108,12 @@ extension VerifyRun {
         if fixtureSamples != 0 || canvasMatches != quietPoints.count {
             failures.append("welcome_return:canvas:\(name)")
         }
-        if heading == nil { failures.append("welcome_return:heading:\(name)") }
+        let chromeBottom = app.windowBehaviour?.trafficLights.map {
+            CGFloat(height) - $0.convert($0.bounds, to: root).minY * 2
+        }.max() ?? CGFloat(height)
+        if heading.map({ $0.minY > chromeBottom + 2 && hostRect.maxY <= root.bounds.maxY }) != true {
+            failures.append("welcome_return:heading:\(name)")
+        }
         let file = name + ".png"
         guard let png = bitmap.representation(using: .png, properties: [:]) else {
             throw VerifyError("Cannot encode Welcome PNG", blocked: true)

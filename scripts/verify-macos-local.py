@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SCENARIOS = ROOT / "macos" / "verification"
 ARCHIVE = "ok-player-macos-arm64.zip"
 WINDOW_CONTROLS = {
-    "window-chrome": "title_identity_hidden",
+    "window-chrome": "title_misaligned",
     "window-fullscreen": "video_fullscreen_disabled",
     "window-fit": "initial_fit_disabled",
     "window-float": "floating_level_disabled",
@@ -60,6 +60,10 @@ ACTION_CONTROLS = {
     **OPEN_CONTROLS,
     **ABOUT_CONTROLS,
     **QUEUE_CONTROLS,
+    "window-chrome": ("title_misaligned", {f"window_chrome:alignment:{checkpoint}"
+                                         for checkpoint in ("welcome", "playing", "revealed")}),
+    "welcome-return": ("inactive_video_visible", {f"welcome_return:canvas:{checkpoint}" for checkpoint in
+                       ("after-eof", "after-close-menu", "after-close-shortcut", "after-open-another")}),
     "context-idle-and-playback": ("context_clamp_disabled", {"context:work_area_clamp"}),
     "command-keyboard": ("text_priority_disabled", {"keyboard:text_priority"}),
     "compact-mini": ("compact_snap_disabled", {"compact_mini:corner_snap"}),
@@ -103,7 +107,7 @@ def read_scenario(path):
     actions = {"open", "pause", "seek", "capture", "play_to", "play_until_hidden", "pointer_reveal",
                "enter_fullscreen", "leave_fullscreen", "check_subtitle_menu",
                "size_window", "close_media", "double_click",
-               "wait_for_eof", "close_media_shortcut", "open_another",
+               "wait_for_eof", "close_media_shortcut", "open_another", "wait_for_chrome_hide", "advance_playlist",
                "small_work_area", "open_portrait", "resize_edges", "pin", "unpin", "overlap_window",
                "size_osc", "check_more", "check_seek", "check_idle", "check_pins", "show_volume",
                "check_wheel", "check_speed_mute", "set_unity", "open_stall", "release_stall", "open_failure",
@@ -139,7 +143,7 @@ def read_scenario(path):
         if step["action"] == "size_osc" and not isinstance(step.get("width"), (float, int)):
             raise ValueError("OSC resize requires a numeric width")
         if step["action"] == "capture":
-            if (step.get("expect") not in {"no_cue", "clearance", "base_margin", "welcome", "playing",
+            if (step.get("expect") not in {"no_cue", "clearance", "base_margin", "welcome", "playing", "chrome_hidden",
                                            "fullscreen", "restored", "landscape", "portrait", "idle",
                                            "floating", "normal", "repinned", "osc_row", "osc_hidden", "osc_pinned",
                                            "volume", "speed", "loading", "buffering", "failure", "recovered",
@@ -176,7 +180,11 @@ def fixture(ffmpeg, temporary, spec, receipt):
         broken = temporary / "broken" / "invalid.mp4"
         broken.parent.mkdir()
         broken.write_text("Invalid media fixture\n", encoding="utf-8")
-        receipt["fixture"].update({video.name: digest(video), "broken/invalid.mp4": digest(broken)})
+        next_clip = temporary / "next" / "second.mp4"
+        next_clip.parent.mkdir()
+        os.link(video, next_clip)
+        receipt["fixture"].update({video.name: digest(video), "broken/invalid.mp4": digest(broken),
+                                   "next/second.mp4": digest(next_clip)})
     elif video.name == OPEN_FIXTURE:
         command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
                 "-f", "lavfi", "-i", "testsrc2=s=640x360:r=24:d=18", "-c:v", "libx264",
@@ -664,7 +672,6 @@ def main():
                     expected_failures = {"settings_shell_appearance:light-relaunch"}
                 else:
                     checkpoints = {
-                        "window-chrome": ["welcome", "playing"],
                         "window-fullscreen": ["fullscreen", "restored"],
                         "window-fit": ["fit-4k", "fit-portrait"],
                         "window-float": ["pinned", "pinned-after-fullscreen"],

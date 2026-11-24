@@ -21,14 +21,15 @@ window's minimum size, with room for the control bar under the video so the vide
 view itself has the video's size. The session keeps the one fit each opened source
 is owed and answers the `initial_window_fit` query with okp-core's frame, whichever
 way the file was opened. While video shows, a resize keeps the video view at the
-video's aspect (`windowWillResize(_:to:)`; AppKit's `contentAspectRatio` would lock
-the whole content, bar included). **F**, **Control-Command-F** and a double click on
+video's aspect (`windowWillResize(_:to:)`). **F**, **Control-Command-F** and a double click on
 the video toggle native fullscreen; **Esc** leaves it. A single click on the video
 toggles pause once the double-click interval has passed, so a double click never
-pauses first. The traffic lights and the title strip hide and show with the
-transport controls (`WindowChromeVisibility`); hidden ones take no clicks.
+pauses first. In a normal window the native traffic lights, title and pin float
+over the full-size content. They are always visible on Welcome and hide and show
+with the transport controls during playback (`WindowChromeVisibility`).
 
-While nothing is loaded the window shows the Welcome view, and **File → History…**
+The player returns to Welcome at the end of the queue or when the user closes
+the media (Command-W or **File → Close Media**). **File → History…**
 (Command-Y) opens the History window (see [Welcome and History](#welcome-and-history)).
 
 This preview is for local testing. It does not yet contain the Linux shell's URL
@@ -331,12 +332,19 @@ the generated fixture's SHA-256.
 `window-chrome`, `window-fullscreen`, `window-fit`, and `window-float` cover the
 native title bar and player planes in Light and Dark. They exercise AppKit
 file-open, video double-click and Escape, resize proposals for all four edges,
-Close Media, and the Always on Top control. The float case reads the
+Close Media, and the Always on Top control. The chrome case checks the title's
+alignment with the native traffic lights and that video reaches the top edge both
+before and after auto-hide. The float case reads the
 WindowServer order of two overlapping windows. Each case has a targeted
 `--negative-control` and writes its layout and 2× PNG checkpoints. The standard
 hosted preview runs all four cases, their negative controls, and `subtitle-lift`
 against the same ZIP. In that job the verdicts are under `verify/<scenario>/`
 and `verify/<scenario>-negative/`.
+
+`welcome-return` plays a short, saturated clip and captures the populated Welcome
+after natural EOF, Close Media and recovery through Open Another. Both themes
+must show the canvas through the heading and footer, with no retained video at
+the sampling points. Its negative control keeps the previous video layer visible.
 
 From a checkout with the verifier, run:
 
@@ -447,7 +455,7 @@ Swift side only turns input into commands and keeps the hide timer.
   (`SessionPlaylist`), enabled while the playlist has two items or more.
 - **Auto-hide:** while media plays, the controls and the cursor hide after the
   session's idle timeout (2.5 s) without pointer movement or a key press. The title
-  bar's traffic lights and title strip fade with them (`oscVisibilityChanged`). Paused or loading media
+  bar's traffic lights, title and pin fade with them (`oscVisibilityChanged`). Paused or loading media
   keeps them up, and the pointer over them, an open menu or a scrubber drag holds
   them. Hidden controls take no clicks, and clicks outside the bar always reach the
   video.
@@ -601,9 +609,9 @@ searches and labels the entries with the core's rules; the views only ask, show 
 answer and send commands. Both are asked again on the session's `history.changed`
 and `history.private_session` events while they are on screen.
 
-- **Welcome view.** An `NSHostingView` centred in the player window, between the
-  title strip and the transport controls, shown while nothing is loaded, no folder
-  is being read and no error is up. With an empty history it is a first-run card:
+- **Welcome view.** Presented over the window's theme canvas while nothing is
+  loaded, no folder is being read and no error is up. The content begins below
+  the native titlebar controls. With an empty history it is a first-run card:
   Open… and a drop hint. Otherwise it is the Continue watching shelf from the
   `welcome_shelf` query (three entries, as on Linux): per card the title, the watched
   bar, the state ("30m left", "✓ Finished") and when it was last opened, as many
@@ -720,7 +728,7 @@ counters:
   `okp_session_render_report_swap` returns equals the frames drawn;
 - once playing, the window has the frame the fit gave it, the video view has the
   video's aspect after the fit and after a resize through the window's resize rule,
-  and the title strip has room under the title bar;
+  and the video view fills the content;
 - the transport controls stay up through the paused seconds, hide after the idle
   timeout once playback resumes without pointer activity, take the title bar's
   traffic lights with them, hand the scrubber's keyboard focus back to the video
@@ -754,7 +762,7 @@ counters:
 Its `OKP_SMOKE` line also reports those counts, the pixel format, the
 volume and track count from the session snapshot, the time readout the controls
 showed, and the fitted size, the video view's size after the fit and after the
-resize, the aspect and the title strip height; a second `OKP_SMOKE` line reports the
+resize, and the aspect. A second `OKP_SMOKE` line reports the
 status steps and the toast's text. The failure card is captured as
 `snapshots/status-light.png` and `status-dark.png`. The smoke also captures the Dock and Finder icons at 512px using AppKit as
 `snapshots/dock-icon-512.png` and `snapshots/finder-icon-512.png`. The complete app is copied

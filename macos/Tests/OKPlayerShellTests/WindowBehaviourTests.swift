@@ -231,22 +231,22 @@ final class WindowBehaviourTests: XCTestCase {
     func testTheTrafficLightsAndTheTitleFollowTheOSCInAWindow() {
         var chrome = WindowChromeState(hasMedia: true)
         XCTAssertTrue(chrome.trafficLightsVisible)
-        XCTAssertTrue(chrome.titleStripVisible)
+        XCTAssertTrue(chrome.titleChromeVisible)
         chrome.oscVisible = false
         XCTAssertFalse(chrome.trafficLightsVisible)
-        XCTAssertFalse(chrome.titleStripVisible)
+        XCTAssertFalse(chrome.titleChromeVisible)
     }
 
     func testIdleChromeRemainsUsableWhenTheTransportIsHidden() {
         let chrome = WindowChromeState(oscVisible: false)
         XCTAssertTrue(chrome.trafficLightsVisible)
-        XCTAssertTrue(chrome.titleStripVisible)
+        XCTAssertTrue(chrome.titleChromeVisible)
     }
 
     func testFullscreenLeavesTheTitleBarToTheSystem() {
         let chrome = WindowChromeState(oscVisible: false, fullscreen: true)
         XCTAssertTrue(chrome.trafficLightsVisible, "the system shows them with its title bar")
-        XCTAssertFalse(chrome.titleStripVisible)
-        XCTAssertFalse(WindowChromeState(oscVisible: true, fullscreen: true).titleStripVisible)
+        XCTAssertFalse(chrome.titleChromeVisible)
+        XCTAssertFalse(WindowChromeState(oscVisible: true, fullscreen: true).titleChromeVisible)
     }
 }

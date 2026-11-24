@@ -287,14 +287,26 @@ final class VideoView: NSView {
     let videoLayer: VideoLayer
     /// A primary-button release on the video, with AppKit's click count.
     var onClick: ((Int) -> Void)?
-    /// The current media has video. Only then does a resize redraw the frame.
-    var hasVideo = false
+    /// The layer can retain a presented frame after libmpv stops producing
+    /// frames. Hide it when there is no video, leaving the view available for
+    /// layout and keyboard focus.
+    var hasVideo = false {
+        didSet {
+            guard oldValue != hasVideo else { return }
+            videoLayer.isHidden = hidesInactiveVideo && !hasVideo
+            if hasVideo { redraw() }
+        }
+    }
+    var hidesInactiveVideo = true {
+        didSet { videoLayer.isHidden = hidesInactiveVideo && !hasVideo }
+    }
     private var frameLink: CADisplayLink?
     private var tornDown = false
 
     init(surface: GLSurface) {
         videoLayer = VideoLayer(surface: surface)
         super.init(frame: .zero)
+        videoLayer.isHidden = true
         // Layer-hosting: the layer is set before `wantsLayer`, and AppKit never
         // asks it to draw.
         layer = videoLayer

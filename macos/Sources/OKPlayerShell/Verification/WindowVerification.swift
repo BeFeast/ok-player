@@ -64,6 +64,10 @@ extension VerifyRun {
             }
         case .leaveFullscreen:
             if controller.window.isInFullscreen { try await perform(step) }
+        case .waitForChromeHide:
+            try await wait("playing with the OSC auto-hidden") {
+                self.snapshot.status == .playing && !self.app.osc.isRevealed
+            }
         case .pointerReveal, .pause:
             try await perform(step)
         case .closeMedia:
@@ -130,39 +134,51 @@ extension VerifyRun {
         guard let screen = window.screen else {
             throw VerifyError("The player lost its display at \(name)", blocked: true)
         }
-        let strip = controller.titleStrip
-        let titleRect = strip.label.convert(strip.label.bounds, to: root)
+        let title = controller.titleChrome
+        let titleRect = title.label.convert(title.label.bounds, to: root)
         let videoRect = video.convert(video.bounds, to: root)
         let hasVideo = snapshot.video != nil
-        let chromeVisible = viewVisible(strip.identity)
+        let chromeVisible = viewVisible(title) && viewVisible(title.label)
         var facts: [String: Any] = [
             "name": name, "fullscreen": window.isInFullscreen, "fullscreen_entries": fullscreenEntries,
             "window_frame_points": dimensions(window.frame), "video_plane_points": dimensions(videoRect),
-            "title_frame_points": dimensions(titleRect), "title": strip.title, "title_visible": chromeVisible,
+            "title_frame_points": dimensions(titleRect), "title": title.title, "title_visible": chromeVisible,
             "pin_visible": viewVisible(controller.pinButton), "pinned": controller.isPinned,
             "window_level": window.level.rawValue, "playback": snapshot.status.rawValue,
             "time_seconds": snapshot.timePos ?? -1, "swap_count": swaps, "render_scale": 2,
         ]
         switch expected {
-        case .welcome, .playing:
+        case .welcome, .playing, .chromeHidden:
             let lights = controller.trafficLights
-            let lightsRight = lights.map { $0.convert($0.bounds, to: root).maxX }.max() ?? 0
+            let lightRects = lights.map { $0.convert($0.bounds, to: root) }
+            let lightsRight = lightRects.map(\.maxX).max() ?? 0
+            let offset = lightRects.map { abs($0.midY - titleRect.midY) }.max() ?? .infinity
             let pin = controller.pinButton.convert(controller.pinButton.bounds, to: root)
             let visiblePin = viewVisible(controller.pinButton) && controller.pinButton.isEnabled
             let mediaTitle = snapshot.title ?? options.fixture.lastPathComponent
-            let span = videoRect.minX == root.bounds.minX && videoRect.maxX == root.bounds.maxX &&
-                videoRect.minY == root.bounds.minY && abs(videoRect.maxY - (root.bounds.maxY - TitleStripView.height)) < 1
-            let onScreen = screen.visibleFrame.contains(window.frame)
-            if !onScreen || !chromeVisible || lights.count != 3 || !lights.allSatisfy(viewVisible) || !visiblePin ||
-                titleRect.minX <= lightsRight || titleRect.minX >= 125 || titleRect.maxX > pin.minX + 1 ||
-                strip.hasMedia != hasVideo || strip.title != (expected == .welcome ? "OK Player" : mediaTitle) ||
-                !span || (expected == .welcome ? !app.history.showsWelcome : !hasVideo) {
+            let onscreen = screen.visibleFrame.contains(window.frame)
+            let playback = expected != .welcome
+            let expectsChrome = expected != .chromeHidden
+            let oscVisible = viewVisible(app.osc.panel)
+            if !onscreen || !sameFrame(videoRect, root.bounds) || !window.titlebarAppearsTransparent ||
+                !window.styleMask.contains(.fullSizeContentView) || lights.count != 3 ||
+                title.hasMedia != playback || title.title != (playback ? mediaTitle : "OK Player") ||
+                (playback ? (!hasVideo || oscVisible != expectsChrome) : !app.history.showsWelcome) {
                 failures.append("window_chrome:\(name)")
             }
-            facts["reference_viewport_points"] = [1280, 800]
-            facts["native_lights"] = lights.count
+            if expectsChrome {
+                if !chromeVisible || !lights.allSatisfy(viewVisible) || !visiblePin ||
+                    titleRect.minX <= lightsRight || titleRect.maxX > pin.minX || offset > 1 {
+                    failures.append("window_chrome:alignment:\(name)")
+                }
+            } else if chromeVisible || visiblePin || lights.contains(where: viewVisible) ||
+                        !title.isHidden || !controller.pinButton.isHidden || !lights.allSatisfy(\.isHidden) {
+                failures.append("window_chrome:auto_hide")
+            }
+            facts["native_lights"] = lightRects.map(dimensions)
+            facts["title_center_offset_points"] = offset.isFinite ? offset : nil
             facts["pin_frame_points"] = dimensions(pin)
-            facts["playback_strip"] = strip.hasMedia
+            facts["osc_visible"] = oscVisible
         case .fullscreen, .restored:
             let fullscreen = expected == .fullscreen
             let screenFrame = screen.frame
@@ -229,7 +245,17 @@ extension VerifyRun {
             facts["capture"] = "app_composite_2x"
         }
         let file = options.output.appendingPathComponent(name + ".png")
-        guard let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        if options.scenarioID == "window-chrome", expected != .welcome {
+            // The fixture paints a red marker at the video's top-left. Sample
+            // it above the native buttons, well inside the rounded corner.
+            let pixel = bitmap.colorAt(x: 46, y: 10)?.usingColorSpace(.sRGB)
+            let videoAtTop = pixel.map { $0.redComponent > 0.6 && max($0.greenComponent, $0.blueComponent) < 0.35 }
+                ?? false
+            facts["video_visible_at_top_edge"] = videoAtTop
+            if !videoAtTop { failures.append("window_chrome:top_edge:\(name)") }
+        }
+        guard let png = bitmap.representation(using: .png, properties: [:]) else {
             throw VerifyError("Could not encode window PNG", blocked: true)
         }
         try png.write(to: file)

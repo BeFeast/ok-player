@@ -19,7 +19,7 @@ GITHUB = "BeFeast/ok-player"
 FULL_SHA = re.compile(r"[0-9a-f]{40}")
 CONTROLS = {
     "subtitle-lift": "subtitle_clearance_disabled",
-    "window-chrome": "title_identity_hidden",
+    "window-chrome": "title_misaligned",
     "window-fullscreen": "video_fullscreen_disabled",
     "window-fit": "initial_fit_disabled",
     "window-float": "floating_level_disabled",
@@ -34,6 +34,7 @@ CONTROLS = {
     "queue-single": "queue_add_disabled",
     "subtitle-switcher": "track_pin_disabled",
     "welcome-first-run": "welcome_focus_disabled",
+    "welcome-return": "inactive_video_visible",
     "open-files-folders": "folder_picker_files_enabled",
     "open-drag-drop": "welcome_drop_highlight_disabled",
     "context-idle-and-playback": "context_clamp_disabled",

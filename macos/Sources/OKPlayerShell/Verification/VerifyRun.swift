@@ -15,7 +15,7 @@ struct VerificationOptions {
         guard negativeControl else { return "none" }
         return switch scenarioID {
         case "subtitle-lift": "subtitle_clearance_disabled"
-        case "window-chrome": "title_identity_hidden"
+        case "window-chrome": "title_misaligned"
         case "window-fullscreen": "video_fullscreen_disabled"
         case "window-fit": "initial_fit_disabled"
         case "window-float": "floating_level_disabled"
@@ -26,6 +26,7 @@ struct VerificationOptions {
         case "settings-shell-appearance": "appearance_persistence_disabled"
         case "audio-switcher", "subtitle-switcher": "track_pin_disabled"
         case "welcome-first-run": "welcome_focus_disabled"
+        case "welcome-return": "inactive_video_visible"
         case "open-files-folders": "folder_picker_files_enabled"
         case "open-drag-drop": "welcome_drop_highlight_disabled"
         case "context-idle-and-playback": "context_clamp_disabled"
@@ -130,6 +131,7 @@ struct VerificationScenario: Decodable {
         case finderOpen = "finder_open", cancelPlaybackOpen = "cancel_playback_open"
         case badDrop = "bad_drop", dragEnter = "drag_enter", dragExit = "drag_exit"
         case dropMixed = "drop_mixed", dropSubtitle = "drop_subtitle"
+        case waitForChromeHide = "wait_for_chrome_hide", advancePlaylist = "advance_playlist"
         case waitForEOF = "wait_for_eof", closeMediaShortcut = "close_media_shortcut"
         case openAnother = "open_another"
         case checkContextIdle = "check_context_idle", checkContextSearch = "check_context_search"
@@ -149,6 +151,7 @@ struct VerificationScenario: Decodable {
     }
     enum Expectation: String, Decodable {
         case noCue = "no_cue", clearance, baseMargin = "base_margin"
+        case chromeHidden = "chrome_hidden"
         case welcome, playing, fullscreen, restored, landscape, portrait, idle, floating, normal, repinned
         case oscRow = "osc_row", oscHidden = "osc_hidden", oscPinned = "osc_pinned"
         case volume, speed, loading, buffering, failure, recovered

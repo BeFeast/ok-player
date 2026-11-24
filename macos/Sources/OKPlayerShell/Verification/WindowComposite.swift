@@ -20,14 +20,13 @@ extension VerifyRun {
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
         PlayerCanvas.drawCanvas(in: root.bounds, appearance: root.effectiveAppearance)
         NSGraphicsContext.restoreGraphicsState()
-        if let frame {
+        if let frame, !video.isHiddenOrHasHiddenAncestor, !video.videoLayer.isHidden {
             context.draw(frame, in: video.convert(video.bounds, to: root))
         }
-        // The video and OSC both begin below the title plane. The Welcome view
-        // covers the idle video, while the side panel and toast sit above the OSC.
+        // The title floats over the content. The side panel and toast sit above the OSC.
         var planes: [NSView] = [app.osc.scrim, app.osc.panel, app.miniPlayer.controls,
                                 app.statusLayer.overlay, app.prompt,
-                                app.history.welcomeView, controller.titleStrip, app.upNext.panel,
+                                app.history.welcomeView, controller.titleChrome.label, app.upNext.panel,
                                 app.osc.volumeCapsule, app.tracks.panel, app.statusLayer.toastView] + controller.trafficLights + [controller.pinButton]
         if let dropTarget = app.dropTarget { planes.append(dropTarget.highlight) }
         if app.commandPopover.isShown { planes.append(app.commandPopover) }

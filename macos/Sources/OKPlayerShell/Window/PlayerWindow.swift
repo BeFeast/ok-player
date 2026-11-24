@@ -98,11 +98,10 @@ class PlayerWindow: NSWindow {
 /// okp-core's, asked through the session (`WindowRules`).
 final class PlayerWindowController: NSObject, WindowChromeVisibility {
     let window: PlayerWindow
-    let titleStrip = TitleStripView()
+    let titleChrome = TitleChrome()
     let pinButton = NSButton()
     private let pinAccessory = NSTitlebarAccessoryViewController()
     private(set) var isPinned = false
-    private var stripHeight: NSLayoutConstraint?
     private var idleFrame: CGRect?
     private var normalFrame: CGRect?
     private var fullscreenTransition = false
@@ -115,7 +114,6 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     var dismissTransient: (() -> Bool)?
     /// Optional work area supplied by hosted verification.
     var verificationWorkArea: CGRect?
-    var showTitleIdentity = true
     var applyInitialFit = true
     var allowVideoFullscreen = true
     var applyFloatingLevel = true
@@ -159,6 +157,8 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
         pinButton.target = self
         pinButton.action = #selector(togglePin)
         accessoryView.addSubview(pinButton)
+        titleChrome.pinButton = pinButton
+        titleChrome.trafficLights = { [weak self] in self?.trafficLights ?? [] }
         pinAccessory.view = accessoryView
         pinAccessory.layoutAttribute = .right
         window.addTitlebarAccessoryViewController(pinAccessory)
@@ -178,21 +178,16 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
 
     deinit { NotificationCenter.default.removeObserver(self) }
 
-    /// Lay the title strip over the top of `root` (call it after `videoArea` is
-    /// added, so the strip is above it), and take the clicks of `videoArea` when
-    /// it is the video view. The fit and the resize keep `videoArea`, not the
-    /// whole content, at the video's aspect.
+    /// Put the title over the full-window content and connect playback clicks.
     func install(in root: NSView, videoArea: NSView) {
         self.videoArea = videoArea
-        titleStrip.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(titleStrip)
-        let height = titleStrip.heightAnchor.constraint(equalToConstant: TitleStripView.height)
-        stripHeight = height
+        titleChrome.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(titleChrome)
         NSLayoutConstraint.activate([
-            height,
-            titleStrip.topAnchor.constraint(equalTo: root.topAnchor),
-            titleStrip.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            titleStrip.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            titleChrome.topAnchor.constraint(equalTo: root.topAnchor),
+            titleChrome.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            titleChrome.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            titleChrome.trailingAnchor.constraint(equalTo: root.trailingAnchor),
         ])
         (videoArea as? VideoView)?.onClick = { [weak self] clickCount in
             self?.clicks?.released(clickCount: clickCount)
@@ -236,18 +231,18 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
     func sessionChanged(_ snapshot: SessionSnapshot) {
         if let source = snapshot.source {
             if !chrome.hasMedia && !chrome.fullscreen { idleFrame = window.frame }
-            titleStrip.title = snapshot.title ?? (source.location as NSString).lastPathComponent
+            titleChrome.title = snapshot.title ?? (source.location as NSString).lastPathComponent
         } else if chrome.hasMedia {
-            titleStrip.title = "OK Player"
+            titleChrome.title = "OK Player"
         }
         let hasMedia = snapshot.source != nil
         if chrome.hasMedia != hasMedia {
             chrome.hasMedia = hasMedia
-            titleStrip.hasMedia = hasMedia
+            titleChrome.hasMedia = hasMedia
             if !hasMedia { lastFit = nil }
             applyChrome(animated: false)
         }
-        let name = hasMedia ? "\(titleStrip.title) — OK Player" : "OK Player"
+        let name = hasMedia ? "\(titleChrome.title) — OK Player" : "OK Player"
         if window.title != name { window.title = name }
         aspect = VideoAreaAspect.lock(for: snapshot.video)
         if !hasMedia { restoreIdleFrame() }
@@ -392,23 +387,21 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
             .compactMap { window.standardWindowButton($0) }
     }
 
-    /// Show or hide the traffic lights and the title strip. Hidden ones are
+    /// Show or hide the traffic lights, title and pin. Hidden ones are
     /// `isHidden`, not only transparent: a transparent button still takes clicks.
     private func applyChrome(animated: Bool) {
         chromeChanges += 1
         let change = chromeChanges
-        stripHeight?.constant = chrome.fullscreen || window.isMiniPlayer ? 0 : TitleStripView.height
         updatePin()
         pinAccessory.isHidden = chrome.fullscreen || window.isMiniPlayer
         let showLights = chrome.trafficLightsVisible
-        let showStrip = chrome.titleStripVisible
+        let showTitle = chrome.titleChromeVisible && !window.isMiniPlayer
         let lights = trafficLights
-        let identity = titleStrip.identity
-        titleStrip.isHidden = chrome.fullscreen || window.isMiniPlayer
+        titleChrome.needsLayout = true
         let views: [(NSView, Bool)] = lights.map { ($0 as NSView, showLights) }
-            + [(pinButton, showStrip), (identity, showStrip && showTitleIdentity)]
-        if !showStrip, window.firstResponder === pinButton { window.makeFirstResponder(videoArea) }
-        pinButton.isEnabled = showStrip && canTogglePin
+            + [(pinButton, showTitle), (titleChrome, showTitle)]
+        if !showTitle, window.firstResponder === pinButton { window.makeFirstResponder(videoArea) }
+        pinButton.isEnabled = showTitle && canTogglePin
         for (view, show) in views where show { view.isHidden = false }
         guard animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
             for (view, show) in views {
@@ -472,7 +465,7 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
 extension PlayerWindowController {
     /// What is wrong with the window after a file with `video` opened, or nil
     /// when the fit sized it, the video view has the video's aspect, a resize
-    /// keeps that aspect, and the title strip has room under the title bar.
+    /// keeps that aspect, and the video reaches every edge of the content.
     /// Leaves the window at the resized size.
     func smokeFitFailure(video: VideoGeometry?) -> String? {
         guard let video else { return "The session reported no video size" }
@@ -486,7 +479,7 @@ extension PlayerWindowController {
         let proposed = NSSize(width: window.frame.width + 160, height: window.frame.height + 20)
         window.setFrame(NSRect(origin: window.frame.origin, size: windowWillResize(to: proposed)), display: true)
         if let failure = smokeVideoAreaFailure(expected, after: "a resize") { return failure }
-        guard titleStrip.frame.height > 0 else { return "The title strip has no height under the title bar" }
+        guard videoChrome == .zero else { return "The video does not fill the window content" }
         return nil
     }
 
@@ -502,14 +495,13 @@ extension PlayerWindowController {
         return nil
     }
 
-    /// `fit=WxH video_area=WxH,WxH aspect=W:H title_strip=H` for the smoke line:
+    /// `fit=WxH video_area=WxH,WxH aspect=W:H` for the smoke line:
     /// the fitted content, the video view after the fit and after a resize.
     var smokeFitSummary: String {
         let fit = lastFit.map { "\(Int($0.width))x\(Int($0.height))" } ?? "none"
         let areas = smokeVideoAreas.map { "\(Int($0.width))x\(Int($0.height))" }.joined(separator: ",")
         let lock = aspect.map { "\(Int($0.width)):\(Int($0.height))" } ?? "none"
-        return "fit=\(fit) video_area=\(areas.isEmpty ? "none" : areas) aspect=\(lock) "
-            + "title_strip=\(Int(titleStrip.frame.height))"
+        return "fit=\(fit) video_area=\(areas.isEmpty ? "none" : areas) aspect=\(lock)"
     }
 
     /// Press F on the video view to enter fullscreen and Escape to leave it,

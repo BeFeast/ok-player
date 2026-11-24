@@ -219,7 +219,7 @@ final class PlayerWindowControllerTests: XCTestCase {
         XCTAssertEqual(controller.lastFit, fit)
         window.contentView?.layoutSubtreeIfNeeded()
         XCTAssertEqual(video.bounds.size, CGSize(width: 640, height: 360), "the video view has the video's size")
-        XCTAssertEqual(controller.titleStrip.title, "clip.mp4")
+        XCTAssertEqual(controller.titleChrome.title, "clip.mp4")
 
         // Every batch with video asks; the session has no second fit for the source.
         controller.sessionChanged(playing(wide))
@@ -280,14 +280,14 @@ final class PlayerWindowControllerTests: XCTestCase {
             XCTAssertTrue(button.isHidden, "a transparent button would still take the click")
             XCTAssertEqual(button.alphaValue, 0)
         }
-        XCTAssertTrue(controller.titleStrip.identity.isHidden)
+        XCTAssertTrue(controller.titleChrome.isHidden)
 
         controller.oscVisibilityChanged(true, animated: false)
         for button in trafficLights {
             XCTAssertFalse(button.isHidden)
             XCTAssertEqual(button.alphaValue, 1)
         }
-        XCTAssertFalse(controller.titleStrip.identity.isHidden)
+        XCTAssertFalse(controller.titleChrome.isHidden)
     }
 
     func testAFadeOutHidesTheLightsWhenItEndsUnlessTheOSCCameBack() throws {
@@ -305,6 +305,6 @@ final class PlayerWindowControllerTests: XCTestCase {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { settled.fulfill() }
         wait(for: [settled], timeout: 3)
         XCTAssertFalse(close.isHidden, "the fade-out that ended after the OSC came back leaves the lights")
-        XCTAssertFalse(controller.titleStrip.identity.isHidden)
+        XCTAssertFalse(controller.titleChrome.isHidden)
     }
 }

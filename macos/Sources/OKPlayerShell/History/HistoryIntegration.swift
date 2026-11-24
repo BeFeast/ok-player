@@ -12,7 +12,7 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
     /// The Welcome view's hosting view, hidden until `setWelcomeShown(true)`.
     let welcomeView = NSView()
     let firstRun = WelcomeFirstRun()
-    private let shelfView: NSView
+    let shelfView: NSView
     private(set) var showsWelcome = false
     /// The History window is open.
     private(set) var showsHistory = false
@@ -59,14 +59,14 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
     }
 
     /// The first-run view is centred and the populated shelf is top-aligned.
-    func install(in root: NSView, below strip: NSView) {
+    func install(in root: NSView) {
         let host = welcomeView
         host.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(host, positioned: .below, relativeTo: strip)
+        root.addSubview(host)
         NSLayoutConstraint.activate([
             host.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             host.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            host.topAnchor.constraint(equalTo: strip.bottomAnchor),
+            host.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor),
             host.bottomAnchor.constraint(equalTo: root.bottomAnchor),
         ])
     }

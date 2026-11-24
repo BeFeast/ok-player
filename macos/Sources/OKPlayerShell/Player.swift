@@ -69,12 +69,12 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSWindow.allowsAutomaticWindowTabbing = false
         let menuBar = MenuBar(commands: commands, openRecent: system.makeOpenRecentItem(),
                               history: history.makeMenuItem(), closeMedia: closeMediaItem, pinPlayer: pinItem,
-                              aboutTarget: self)
+                              playerTarget: self)
         self.menuBar = menuBar
         menuBar.install()
         let behaviour = PlayerWindowController(contentRect: NSRect(x: 0, y: 0, width: 960, height: 580))
         windowBehaviour = behaviour; window = behaviour.window
-        behaviour.showTitleIdentity = verification?.control != "title_identity_hidden"
+        if verification?.control == "title_misaligned" { behaviour.titleChrome.verificationOffset = 5 }
         behaviour.allowVideoFullscreen = verification?.control != "video_fullscreen_disabled"
         behaviour.applyInitialFit = verification?.control != "initial_fit_disabled"
         behaviour.applyFloatingLevel = verification?.control != "floating_level_disabled"
@@ -87,10 +87,11 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let surface = GLSurface.make()
         let videoArea: NSView = surface.map { VideoView(surface: $0) as NSView } ?? NSView()
         video = videoArea as? VideoView
-        // The normal title strip reserves its own plane. Fullscreen removes that inset.
+        video?.hidesInactiveVideo = verification?.control != "inactive_video_visible"
         for view in [videoArea, osc] {
             view.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(view)
             NSLayoutConstraint.activate([
+                view.topAnchor.constraint(equalTo: root.topAnchor),
                 view.bottomAnchor.constraint(equalTo: root.bottomAnchor),
                 view.leadingAnchor.constraint(equalTo: root.leadingAnchor), view.trailingAnchor.constraint(equalTo: root.trailingAnchor)
             ])
@@ -104,13 +105,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             prompt.centerXAnchor.constraint(equalTo: root.centerXAnchor), prompt.centerYAnchor.constraint(equalTo: root.centerYAnchor),
             prompt.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 12)
         ])
+        history.install(in: root)
         behaviour.install(in: root, videoArea: videoArea)
-        for view in [videoArea, osc] {
-            view.topAnchor.constraint(equalTo: behaviour.titleStrip.bottomAnchor).isActive = true
-        }
-        history.install(in: root, below: behaviour.titleStrip)
         history.firstRun.openButton.allowsKeyFocus = verification?.control != "welcome_focus_disabled"
-        upNext.install(in: root, below: behaviour.titleStrip, above: osc.panel)
+        upNext.install(in: root, above: osc.panel)
         upNext.onVisibilityChange = { [weak self] visible in
             guard let self, !["panel_pin_disabled", "queue_pin_disabled"].contains(self.verification?.control ?? "") else { return }
             self.osc.setPinned(visible, by: .panel)
@@ -144,7 +142,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         miniPlayer.toast = { [weak self] readout in self?.statusLayer.show(toast: readout) }
         tracks.window = window
         // The status layer's toast goes on top of everything installed so far.
-        statusLayer.install(in: root, below: behaviour.titleStrip, above: miniPlayer.controls)
+        statusLayer.install(in: root, above: miniPlayer.controls)
         installCommandPopover(in: root, behaviour: behaviour)
         statusLayer.onRetry = { [weak self] source in self?.play(source) }
         statusLayer.onOpenAnother = { [weak self] in self?.openFile() }
@@ -164,7 +162,6 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return trackInput || self.osc.handleWindowInput(event)
         }
         behaviour.window.onKeyDown = { [weak self] in self?.keyPressed() }
-        behaviour.titleStrip.onPointerActivity = { [weak self] in self?.osc.noteActivity() }
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         guard let video else { fail("No OpenGL pixel format is available for video"); return }
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
@@ -325,9 +322,15 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if batch.events.contains(.shutdown) { fail("The playback engine stopped"); return }
         statusLayer.sessionChanged(shown)
         let snapshot = client.store.snapshot
+        video?.hasVideo = snapshot.source != nil && snapshot.video != nil && snapshot.status != .ended
+        // The session has processed any playlist advance before publishing
+        // the snapshot. A pending scan may still find the next item.
+        if snapshot.status == .ended, snapshot.endReason == .eof, !playlist.state.scanning {
+            let result = client.dispatch(.close)
+            if case .accepted = result { return }
+        }
         miniPlayer.sessionChanged(snapshot)
         windowBehaviour?.sessionChanged(snapshot)
-        video?.hasVideo = snapshot.video != nil
         if snapshot.source == nil { upNext.hide() }
         refreshCommandPopover(batch)
         osc.sessionChanged(snapshot)
@@ -385,6 +388,15 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc func closeMedia() { client?.dispatch(.close) }
+
+    @objc func closeKeyWindow(_ sender: Any?) {
+        guard let keyWindow = NSApp.keyWindow else { return }
+        if keyWindow === window, window.attachedSheet == nil, client?.store.snapshot.source != nil {
+            closeMedia()
+        } else {
+            keyWindow.performClose(sender)
+        }
+    }
     @objc func togglePlayerPin() {
         osc.noteActivity()
         windowBehaviour?.togglePin()

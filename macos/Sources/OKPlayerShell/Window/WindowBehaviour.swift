@@ -96,11 +96,11 @@ struct WindowChromeState: Equatable {
     var hasMedia = false
 
     var trafficLightsVisible: Bool { !hasMedia || oscVisible || fullscreen }
-    var titleStripVisible: Bool { (!hasMedia || oscVisible) && !fullscreen }
+    var titleChromeVisible: Bool { (!hasMedia || oscVisible) && !fullscreen }
 }
 
 extension CGRect {
-    /// Keep the entire frame on the active work area, including the title strip.
+    /// Keep the entire frame on the active work area, including the title controls.
     func fitted(inside area: CGRect) -> CGRect {
         let width = min(self.width, area.width)
         let height = min(self.height, area.height)

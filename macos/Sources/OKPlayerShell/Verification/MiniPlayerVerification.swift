@@ -186,7 +186,7 @@ extension VerifyRun {
         let ratio = CGFloat(geometry.width) / CGFloat(geometry.height)
         if !app.miniPlayer.isActive || !window.styleMask.isEmpty || window.level != .floating ||
             window.windowNumber != original.id || window.isOpaque || app.client !== original.client ||
-            snapshot.source != original.media || !app.osc.isHidden || app.windowBehaviour?.titleStrip.isHidden != true ||
+            snapshot.source != original.media || !app.osc.isHidden || app.windowBehaviour?.titleChrome.isHidden != true ||
             abs(size.width - size.height * ratio) > 2 || abs(min(size.width, size.height) - (hover ? 270 : 160)) > 1 ||
             controls.revealed == hidden || controls.isHidden != hidden {
             failures.append("compact_mini:geometry_\(name)")

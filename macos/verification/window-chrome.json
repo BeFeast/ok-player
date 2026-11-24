@@ -29,6 +29,10 @@
       "action": "capture",
       "name": "playing",
       "expect": "playing"
-    }
+    },
+    {"action": "wait_for_chrome_hide"},
+    {"action": "capture", "name": "auto-hidden", "expect": "chrome_hidden"},
+    {"action": "pointer_reveal"},
+    {"action": "capture", "name": "revealed", "expect": "playing"}
   ]
 }

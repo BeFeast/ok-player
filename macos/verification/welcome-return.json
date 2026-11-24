@@ -13,8 +13,13 @@
     {"action": "close_media"},
     {"action": "capture", "name": "after-close-menu", "expect": "welcome"},
     {"action": "open"},
+    {"action": "open"},
+    {"action": "close_media_shortcut"},
+    {"action": "capture", "name": "after-close-shortcut", "expect": "welcome"},
     {"action": "open_another"},
     {"action": "close_media"},
-    {"action": "capture", "name": "after-open-another", "expect": "welcome"}
+    {"action": "capture", "name": "after-open-another", "expect": "welcome"},
+    {"action": "advance_playlist"},
+    {"action": "close_media"}
   ]
 }
