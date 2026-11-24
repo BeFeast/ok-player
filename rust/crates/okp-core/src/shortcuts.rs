@@ -632,7 +632,8 @@ pub fn default_bindings() -> Vec<ShortcutBinding> {
     default_bindings_on(Platform::Linux)
 }
 
-/// A platform's full default binding table, in [`SHORTCUT_ACTIONS`] order.
+/// A platform's default binding table, in editor order. Each action's primary
+/// chord precedes its optional secondary chord.
 pub fn default_bindings_on(platform: Platform) -> Vec<ShortcutBinding> {
     shortcut_actions_on(platform)
         .flat_map(|action| {

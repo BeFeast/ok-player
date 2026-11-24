@@ -226,9 +226,15 @@ extension VerifyRun {
         try await wait("session queued a second clip") { client.store.playlist.items.count == 2 }
 
         try pressKey("\u{f72d}", code: 121)
-        try await wait("Page Down played the next item") { client.store.playlist.currentIndex == 1 && self.snapshot.status == .playing }
+        try await wait("Page Down played the next item") {
+            client.store.playlist.currentIndex == 1 &&
+                self.snapshot.source == source && self.snapshot.status == .playing
+        }
         try pressKey("\u{f72c}", code: 116)
-        try await wait("Page Up played the previous item") { client.store.playlist.currentIndex == 0 && self.snapshot.status == .playing }
+        try await wait("Page Up played the previous item") {
+            client.store.playlist.currentIndex == 0 &&
+                self.snapshot.source?.location == self.options.fixture.path && self.snapshot.status == .playing
+        }
 
         try pressKey("k", code: 40, modifiers: [.command, .shift])
         try await wait("the chapter shortcut opened Up Next") { self.app.upNext.isShown }

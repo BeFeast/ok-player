@@ -63,7 +63,10 @@ final class PlayerInputRouter {
 
         guard event.window == nil || event.window === window else { return false }
         let point = event.window == nil ? window.convertPoint(fromScreen: event.locationInWindow) : event.locationInWindow
-        if event.type == .scrollWheel { return context.isShown && !context.contains(windowPoint: point) }
+        if event.type == .scrollWheel {
+            dismissedByLeftClick = false
+            return context.isShown && !context.contains(windowPoint: point)
+        }
 
         let mouseUp: NSEvent.EventType
         switch event.type {
@@ -74,13 +77,11 @@ final class PlayerInputRouter {
         }
         // A second release belonging to the click that dismissed the popover
         // must also stay out of the video click arbiter.
-        if event.type == .leftMouseDown {
-            if dismissedByLeftClick && event.clickCount > 1 {
-                consumedMouseButton = mouseUp
-                return true
-            }
-            dismissedByLeftClick = false
+        if event.type == .leftMouseDown, dismissedByLeftClick, event.clickCount > 1 {
+            consumedMouseButton = mouseUp
+            return true
         }
+        dismissedByLeftClick = false
         if context.isShown {
             guard !context.contains(windowPoint: point) else { return false }
             context.dismiss()

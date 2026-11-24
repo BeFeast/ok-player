@@ -864,6 +864,19 @@ mod tests {
             .unwrap();
         assert_eq!(open_file.primary.label(), "Cmd+O");
         assert_eq!(open_file.secondary, None);
+        let play_pause = table
+            .iter()
+            .find(|row| row.action == ShortcutAction::PlayPause)
+            .unwrap();
+        assert_eq!(play_pause.primary.label(), "Space");
+        assert_eq!(
+            play_pause
+                .secondary
+                .as_ref()
+                .map(ShortcutChord::label)
+                .as_deref(),
+            Some("K")
+        );
         assert!(
             !table.iter().any(|row| row.primary.modifiers().ctrl),
             "no Ctrl chord survives on macOS"

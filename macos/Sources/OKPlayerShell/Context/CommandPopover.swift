@@ -28,7 +28,10 @@ final class CommandPopover: PalettePanel, NSSearchFieldDelegate {
     var currentPage: CommandMenu { page }
     var entries: [CommandSurfaceEntry] { model?.entries ?? [] }
     var searchText: String { search.stringValue }
-    var isSearching: Bool { search.currentEditor() === window?.firstResponder && search.currentEditor() != nil }
+    var isSearching: Bool {
+        guard let editor = search.currentEditor() else { return false }
+        return editor === window?.firstResponder
+    }
     var showsEmptyResult: Bool {
         rows.contains { ($0 as? NSTextField)?.stringValue == "No matching commands" }
     }
@@ -114,12 +117,10 @@ final class CommandPopover: PalettePanel, NSSearchFieldDelegate {
 
     @discardableResult
     func dismiss() -> Bool {
-        guard let window, isShown else { return false }
-        let restore = isSearching || (window.firstResponder as? NSView)?.isDescendant(of: self) == true
-        let previous = previousResponder
-        if restore {
+        guard isShown else { return false }
+        if let window, isSearching || (window.firstResponder as? NSView)?.isDescendant(of: self) == true {
             var restored = false
-            if let responder = previous as? NSView, responder.window === window, !responder.isHiddenOrHasHiddenAncestor {
+            if let responder = previousResponder as? NSView, responder.window === window, !responder.isHiddenOrHasHiddenAncestor {
                 restored = window.makeFirstResponder(responder)
             }
             if !restored { window.makeFirstResponder(focusReturn) }
@@ -321,7 +322,8 @@ final class CommandPopover: PalettePanel, NSSearchFieldDelegate {
     }
 
     private func reposition() {
-        guard let model, let host, let shadowHost, let window = host.window else { return }
+        guard isShown else { return }
+        guard let model, let host, let shadowHost, let window = host.window else { dismiss(); return }
         let work = window.screen.map { host.convert(window.convertFromScreen($0.visibleFrame), from: nil) }
         let area = (work.map { host.bounds.intersection($0) } ?? host.bounds).insetBy(dx: 8, dy: 8)
         guard area.width > 0, area.height > 0 else { dismiss(); return }
