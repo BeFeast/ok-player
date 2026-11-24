@@ -441,10 +441,11 @@ final class VerifyRun {
         var observed: VideoEvidence?
         // A seek can swap video before libmpv has updated the subtitle plane.
         // Retry missing glyphs, independent of their clearance relative to the OSC.
-        for attempt in 0..<8 {
+        let attempts = 24
+        for attempt in 0..<attempts {
             observed = video.videoLayer.verificationFrame(width: frameWidth, height: frameHeight)
             if let observed, observed.videoPresent, expectation == .noCue || observed.glyphPixels > 100 { break }
-            if attempt < 7 { try await Task.sleep(nanoseconds: 130_000_000) }
+            if attempt + 1 < attempts { try await Task.sleep(nanoseconds: 130_000_000) }
         }
         guard let frame = observed, frame.videoPresent else {
             throw VerifyError("Genuine 2× libmpv capture is unavailable at \(name)", blocked: true)

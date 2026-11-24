@@ -256,8 +256,9 @@ extension VerifyRun {
             abs(rect.width - 316) > 0.5 || rect.height <= 0 {
             failures.append("queue_panel:geometry")
         }
-        guard let frame = video.videoLayer.verificationFrame(width: Int(video.bounds.width * 2),
-                                                             height: Int(video.bounds.height * 2)), frame.hasPicture else {
+        let frameWidth = Int((video.bounds.width * 2).rounded())
+        let frameHeight = Int((video.bounds.height * 2).rounded())
+        guard let frame = try await captureVideoFrame(video, width: frameWidth, height: frameHeight) else {
             throw VerifyError("No decoded 2× video frame for the queue", blocked: true)
         }
         let width = Int((root.bounds.width * 2).rounded())
