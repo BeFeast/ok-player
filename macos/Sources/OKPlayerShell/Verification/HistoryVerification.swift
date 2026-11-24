@@ -69,6 +69,9 @@ extension VerifyRun {
             }
         case .historySearch:
             try await clickHistory("search")
+            try await wait("History search has a live field editor") {
+                self.app.window.firstResponder is NSTextView
+            }
             guard let editor = app.window.firstResponder as? NSTextView else {
                 throw VerifyError("The visible search field did not take text input")
             }
@@ -151,6 +154,16 @@ extension VerifyRun {
                 }
             }
             try await closeHistoryMedia()
+        }
+        try await wait("the latest played row is on disk") {
+            let url = self.options.profile.appendingPathComponent("data/history.json")
+            guard let document = try? Data(contentsOf: url),
+                  let root = (try? JSONSerialization.jsonObject(with: document)) as? [String: Any],
+                  let files = root["files"] as? [String: [String: Any]],
+                  let position = files[self.options.historyFile("Episode 3").path]?["position"] as? Double else {
+                return false
+            }
+            return abs(position - 7) < 0.12
         }
         app.window.setContentSize(CGSize(width: 1120, height: 780))
         let shelf = app.history.welcome.entries
@@ -235,7 +248,7 @@ extension VerifyRun {
         }
         // Controls that enter a tracking loop consume the up event from AppKit.
         NSApp.postEvent(try event(.leftMouseUp), atStart: true)
-        app.window.sendEvent(try event(.leftMouseDown))
+        NSApp.postEvent(try event(.leftMouseDown), atStart: true)
     }
 
     private func captureHistory(_ name: String) async throws {

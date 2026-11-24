@@ -133,6 +133,9 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
             }
         }
         guard changed else { return }
+        for case .history(.privateSession(let enabled)) in batch.events {
+            posters.setPrivate(enabled)
+        }
         if showsWelcome { refreshWelcome() }
         if showsHistory { page.refresh() }
     }

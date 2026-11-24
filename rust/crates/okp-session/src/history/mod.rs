@@ -610,14 +610,16 @@ impl SessionHistory {
                 ..
             } => {
                 let now_local = local_datetime(now, *utc_offset_seconds);
-                let (items, limit) = if let HistoryQuery::PageWindow { limit, .. } = query {
-                    (
-                        self.store.search_including_missing(search),
-                        (*limit).max(1) as usize,
-                    )
-                } else {
-                    (self.store.search(search), usize::MAX)
-                };
+                let (items, has_more, include_missing) =
+                    if let HistoryQuery::PageWindow { limit, .. } = query {
+                        let limit = (*limit).max(1) as usize;
+                        let mut items = self.store.search_including_missing(search);
+                        let has_more = items.len() > limit;
+                        items.truncate(limit);
+                        (items, has_more, true)
+                    } else {
+                        (self.store.search(search), false, false)
+                    };
                 let sections = [
                     history_format::HistoryBucket::Today,
                     history_format::HistoryBucket::Yesterday,
@@ -628,7 +630,6 @@ impl SessionHistory {
                 .filter_map(|bucket| {
                     let entries: Vec<HistoryEntry> = items
                         .iter()
-                        .take(limit)
                         .filter(|item| {
                             history_format::bucket_for(
                                 local_datetime(item.updated_at_unix, *utc_offset_seconds),
@@ -637,7 +638,7 @@ impl SessionHistory {
                         })
                         .map(|item| {
                             let mut entry = self.entry(item, now_local, *utc_offset_seconds);
-                            if limit != usize::MAX && !store::is_history_path_listable(&item.path) {
+                            if include_missing && !store::is_history_path_listable(&item.path) {
                                 entry.available = Some(false);
                                 entry.resume_from = None;
                             }
@@ -661,7 +662,7 @@ impl SessionHistory {
                         .unreadable_copy()
                         .map(|path| path.to_string_lossy().into_owned()),
                     summary: history_format::retention_summary(retention),
-                    end_cap: if items.len() > limit {
+                    end_cap: if has_more {
                         String::new()
                     } else {
                         history_format::retention_end_cap(retention)

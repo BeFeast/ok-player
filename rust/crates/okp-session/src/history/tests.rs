@@ -1139,6 +1139,14 @@ fn history_windows_keep_the_same_prefix_and_report_missing_rows() {
             },
         );
     }
+    history.files.insert(
+        "https://example.invalid/older.mkv".to_owned(),
+        FileEntry {
+            duration: 90.0,
+            updated_at_unix: fixed_now() - 3 * 86_400,
+            ..FileEntry::default()
+        },
+    );
     fs::write(history_path(&data), serde_json::to_vec(&history).unwrap()).unwrap();
     let harness = Harness::with_store(
         HistoryStore::open_path_with_clock(history_path(&data), fixed_now),
@@ -1173,12 +1181,17 @@ fn history_windows_keep_the_same_prefix_and_report_missing_rows() {
     assert_eq!(first[0].source.location, paths[0].to_str().unwrap());
     assert_eq!(first[0].available, Some(false));
     assert_eq!(first[0].resume_from, None);
-    let (all, end) = page("", 2);
-    assert_eq!(&all[..1], first);
-    assert_eq!(all[1].source.location, paths[1].to_str().unwrap());
-    assert_eq!(all[1].resume_from, Some(20.0));
+    let (second, end) = page("", 2);
+    assert!(end.is_empty());
+    assert_eq!(&second[..1], first);
+    assert_eq!(second.len(), 2, "the limit spans every day bucket");
+    assert_eq!(second[1].source.location, paths[1].to_str().unwrap());
+    assert_eq!(second[1].resume_from, Some(20.0));
+    let (all, end) = page("", 3);
+    assert_eq!(&all[..2], second);
+    assert_eq!(all[2].title, "older");
     assert!(!end.is_empty());
-    assert_eq!(page(" PRESENT ", 1).0, all[1..]);
+    assert_eq!(page(" PRESENT ", 1).0, second[1..]);
 }
 
 #[test]

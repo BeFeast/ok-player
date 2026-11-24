@@ -538,7 +538,7 @@ same document the Linux build writes (`okp_core::history::History`), so the
 file moves between the two. Writes go to a temporary file that is flushed and
 renamed over the old one; a shell never touches the file. The session writes
 it on a thread of its own, so `dispatch`, `query` and `drain_events` never
-wait for the disk. Two calls do: `okp_session_free`, which waits for the last
+wait for those writes. Two calls do: `okp_session_free`, which waits for the last
 save, and `history.remove`, which waits for its own write to answer.
 
 What the session does on its own:
@@ -570,7 +570,7 @@ What the session does on its own:
 |---|---|
 | Command | `{"command":{"history":{"action":{...}}}}`: `set_private {enabled}`, `remove {source}` (the media is untouched; removing the media that plays stops recording it until it is opened again) |
 | Reply | `{"result":{"history":{"result":{...}}}}`: `done {}`, `unchanged {}` or `failed {message}` (the file could not be written; nothing changed) |
-| Query | `{"query":{"history":{"query":{...}}}}`: `welcome_shelf {limit, utc_offset_seconds}`, `page {search, utc_offset_seconds}` (`search` may be left out) |
+| Query | `{"query":{"history":{"query":{...}}}}`: `welcome_shelf {limit, utc_offset_seconds}`, `page {search, utc_offset_seconds}` or `page_window {search, utc_offset_seconds, limit}` (`search` may be left out) |
 | Query reply | `{"result":{"history":{"result":{...}}}}`: `welcome_shelf {private_session, entries}` or `page {private_session, read_failed, unreadable_copy, summary, end_cap, sections}`; a section is `{bucket, header, entries}`, newest first |
 | Event | `{"history":{"event":{...}}}`: `resumed {position}`, `changed {}` (query again), `private_session {enabled}`, `save_failed {message}` (once until a save succeeds) |
 
@@ -579,7 +579,12 @@ An entry carries `source`, `title`, `location` (the folder breadcrumb),
 `barely`), `state_label`, `when_label`, `updated_at_unix` and `resume_from`
 (where opening it starts, `null` for the start). Days and `when` labels are
 local to the `utc_offset_seconds` the shell passes: its current offset, applied
-to every entry. Entries for local files that no longer exist are left out.
+to every entry. `welcome_shelf` and `page` omit files unavailable at session
+startup. `page_window` includes unavailable files and marks them with
+`available: false` and a null resume position. It filters by search, takes the
+global prefix in newest-first order (history key breaks ties) and then groups
+the results. Increase the limit to extend a page. The `end_cap` is empty
+until all matching rows are included.
 
 History events are discrete: they keep their order among the `error` events.
 The golden documents for this group are in
