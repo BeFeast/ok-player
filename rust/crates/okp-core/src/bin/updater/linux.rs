@@ -1,7 +1,7 @@
 use super::*;
 use std::io::Read;
 use std::os::fd::{FromRawFd, OwnedFd};
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt, symlink};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, PermissionsExt, symlink};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
@@ -192,8 +192,10 @@ impl Installation {
         ] {
             command.env_remove(name);
         }
+        if !fs::metadata("/dev/fuse").is_ok_and(|info| info.file_type().is_char_device()) {
+            command.env("APPIMAGE_EXTRACT_AND_RUN", "1");
+        }
         command
-            .env("APPIMAGE_EXTRACT_AND_RUN", "1")
             .env("OKP_MANAGED_APPIMAGE", "1")
             .env_remove("OKP_SKIP_UPDATE_CHECK");
         if let Some(path) = receipt {
