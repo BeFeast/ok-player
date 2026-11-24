@@ -128,6 +128,9 @@ int main(void) {
                                       text=True) as helper:
                     line = helper.stdout.readline()
                     if line == "ready\n":
+                        stages = list(self.work.glob(".okp-update-*"))
+                        self.assertEqual(len(stages), 1)
+                        self.assertEqual(stages[0].stat().st_mode & 0o777, 0o700)
                         helper.stdin.write("relaunch\n")
                         helper.stdin.flush()
                         player.terminate()
