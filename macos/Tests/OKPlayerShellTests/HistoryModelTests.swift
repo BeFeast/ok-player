@@ -306,6 +306,22 @@ final class HistoryModelTests: XCTestCase {
 
     // MARK: Islands
 
+    func testOnlyAnExhaustedSuccessfulEOFClosesForWelcome() {
+        var snapshot = SessionSnapshot()
+        snapshot.source = MediaSource(kind: .local, location: "/media/movie.mp4")
+        snapshot.status = .ended
+        snapshot.endReason = .eof
+        XCTAssertTrue(HistoryIntegration.shouldCloseAtEOF(snapshot, scanning: false, errorShown: false))
+        XCTAssertFalse(HistoryIntegration.shouldCloseAtEOF(snapshot, scanning: true, errorShown: false))
+        XCTAssertFalse(HistoryIntegration.shouldCloseAtEOF(snapshot, scanning: false, errorShown: true))
+
+        snapshot.status = .opening
+        XCTAssertFalse(HistoryIntegration.shouldCloseAtEOF(snapshot, scanning: false, errorShown: false))
+        snapshot.status = .ended
+        snapshot.endReason = .error
+        XCTAssertFalse(HistoryIntegration.shouldCloseAtEOF(snapshot, scanning: false, errorShown: false))
+    }
+
     func testTheWelcomeViewIsDueOnlyWhileNothingIsLoadedReadOrFailed() {
         let idle = SessionSnapshot()
         var playing = SessionSnapshot()
@@ -315,7 +331,7 @@ final class HistoryModelTests: XCTestCase {
         ended.status = .ended
         XCTAssertTrue(HistoryIntegration.welcomeDue(idle, scanning: false, errorShown: false))
         XCTAssertFalse(HistoryIntegration.welcomeDue(playing, scanning: false, errorShown: false))
-        XCTAssertFalse(HistoryIntegration.welcomeDue(ended, scanning: false, errorShown: false), "the last frame stays")
+        XCTAssertFalse(HistoryIntegration.welcomeDue(ended, scanning: false, errorShown: false), "the ended source is still loaded")
         XCTAssertFalse(HistoryIntegration.welcomeDue(idle, scanning: true, errorShown: false), "a folder is being read")
         XCTAssertFalse(HistoryIntegration.welcomeDue(idle, scanning: false, errorShown: true), "the error stays up")
     }

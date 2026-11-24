@@ -58,6 +58,13 @@ final class HistoryIntegration: NSObject, NSWindowDelegate {
         snapshot.source == nil && !scanning && !errorShown
     }
 
+    /// The session attempts playlist advance before publishing its settled
+    /// snapshot. An unfinished scan can still find a successor, and an engine
+    /// can report EOF with a playback failure that needs the error card.
+    static func shouldCloseAtEOF(_ snapshot: SessionSnapshot, scanning: Bool, errorShown: Bool) -> Bool {
+        snapshot.status == .ended && snapshot.endReason == .eof && !scanning && !errorShown
+    }
+
     /// The first-run view is centred and the populated shelf is top-aligned.
     func install(in root: NSView) {
         let host = welcomeView

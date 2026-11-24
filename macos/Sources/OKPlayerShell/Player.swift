@@ -323,9 +323,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusLayer.sessionChanged(shown)
         let snapshot = client.store.snapshot
         video?.hasVideo = snapshot.source != nil && snapshot.video != nil && snapshot.status != .ended
-        // The session has processed any playlist advance before publishing
-        // the snapshot. A pending scan may still find the next item.
-        if snapshot.status == .ended, snapshot.endReason == .eof, !playlist.state.scanning {
+        if HistoryIntegration.shouldCloseAtEOF(snapshot, scanning: playlist.state.scanning, errorShown: errorShown) {
             let result = client.dispatch(.close)
             if case .accepted = result { return }
         }
