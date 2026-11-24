@@ -59,8 +59,11 @@ final class TitleChrome: NSView {
             trailing = bounds.maxX - 44
         }
         let size = label.intrinsicContentSize
+        // Leave room for the cell's text insets and fractional glyph widths.
+        let textWidth = ceil(label.attributedStringValue.size().width) + 12
+        let width = min(max(size.width, textWidth), max(0, trailing - leading - 8))
         label.frame = CGRect(x: leading, y: center - size.height / 2 + verificationOffset,
-                             width: min(size.width, max(0, trailing - leading - 8)), height: size.height)
+                             width: width, height: size.height)
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
