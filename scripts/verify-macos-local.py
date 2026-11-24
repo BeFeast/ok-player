@@ -20,6 +20,10 @@ WINDOW_CONTROLS = {
     "window-float": "floating_level_disabled",
 }
 CONTROLS = {"subtitle-lift": "subtitle_clearance_disabled", **WINDOW_CONTROLS}
+FIXTURE_SUBTITLES = {
+    "subtitle-lift.mp4": (".srt",),
+    "A Serious Man (2009) {tmdb-12573}.mp4": (".en.hi.srt", ".he.srt", ".ru.hi.srt"),
+}
 # Keep both lines active across the exact seeks and the real OSC timeout.
 SIDECAR = """1
 00:00:02,000 --> 00:00:17,500
@@ -44,7 +48,8 @@ def command(*args, **kwargs):
 def read_scenario(path):
     spec = json.loads(path.read_text())
     actions = {"open", "pause", "seek", "capture", "play_to", "play_until_hidden", "pointer_reveal",
-               "enter_fullscreen", "leave_fullscreen", "size_window", "close_media", "double_click",
+               "enter_fullscreen", "leave_fullscreen", "check_subtitle_menu",
+               "size_window", "close_media", "double_click",
                "small_work_area", "open_portrait", "resize_edges", "pin", "unpin", "overlap_window"}
     if (spec["schema_version"] != 1 or spec["id"] != path.stem
             or spec["appearances"] != ["light", "dark"] or not spec["steps"]):
@@ -60,7 +65,12 @@ def read_scenario(path):
                                            "floating", "normal", "repinned"}
                     or not step.get("name", "").replace("-", "").isalnum()):
                 raise ValueError("Invalid capture checkpoint")
-    if spec["fixture"] not in {"subtitle-lift.mp4", "01-h264-1080p24-tone.mp4", "landscape-4k.mp4"}:
+        if step["action"] == "check_subtitle_menu":
+            labels = step["subtitle_labels"]
+            if (not isinstance(labels, list) or not all(isinstance(label, str) for label in labels)
+                    or step["selected_subtitle"] not in labels):
+                raise ValueError("Subtitle menu check needs labels and an expected selected item")
+    if spec["fixture"] not in {*FIXTURE_SUBTITLES, "01-h264-1080p24-tone.mp4", "landscape-4k.mp4"}:
         raise ValueError("Unknown scenario fixture")
     return spec
 
@@ -69,10 +79,11 @@ def fixture(ffmpeg, temporary, spec, receipt):
     video = temporary / spec["fixture"]
     version = command(ffmpeg, "-version", capture_output=True, text=True).stdout.splitlines()[0]
     receipt["fixture"] = {"ffmpeg_version": version, "ffmpeg_sha256": digest(Path(ffmpeg))}
-    if spec["id"] == "subtitle-lift":
-        subtitles = video.with_suffix(".srt")
-        subtitles.write_text(SIDECAR, encoding="utf-8")
-        receipt["fixture"][subtitles.name] = digest(subtitles)
+    if video.name in FIXTURE_SUBTITLES:
+        for suffix in FIXTURE_SUBTITLES[video.name]:
+            subtitle = video.with_suffix(suffix)
+            subtitle.write_text(SIDECAR, encoding="utf-8")
+            receipt["fixture"][subtitle.name] = digest(subtitle)
         command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
                 "-f", "lavfi", "-i", "color=c=0x303030:s=640x360:r=24:d=18",
                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-threads", "1",

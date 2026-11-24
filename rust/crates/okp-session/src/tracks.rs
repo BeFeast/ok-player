@@ -349,7 +349,7 @@ mod tests {
                 "Director's Commentary · ENG · 2.0 · AC3"
             ]
         );
-        assert_eq!(labels(&view.subtitles), ["Off", "en · SRT · EXT"]);
+        assert_eq!(labels(&view.subtitles), ["Off", "en · SRT · External"]);
         assert_eq!(
             view.subtitles.iter().map(|row| row.id).collect::<Vec<_>>(),
             [None, Some(1)],

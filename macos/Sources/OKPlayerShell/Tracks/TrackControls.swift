@@ -583,7 +583,7 @@ extension TrackControls {
         guard failuresShown >= 1 else { return "The missing subtitle file's error did not reach the readout" }
         guard let view = query?() else { return "The session answered no tracks view" }
         guard !view.audio.isEmpty else { return "No audio track is listed" }
-        guard let added = view.subtitles.first(where: { $0.selected && $0.id != nil }), added.label.hasSuffix("EXT") else {
+        guard let added = view.subtitles.first(where: { $0.selected && $0.id != nil }), added.label.hasSuffix("External") else {
             return "The added subtitle is not the selected external track: \(view.subtitles.map(\.label))"
         }
         guard view.subtitleScale.label == "110%", let reported = view.subtitleScale.reported, abs(reported - 1.1) < 0.001

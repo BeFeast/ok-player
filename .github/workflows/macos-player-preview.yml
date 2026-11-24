@@ -340,7 +340,7 @@ jobs:
           else
             status=0
             window_scenarios=(window-chrome window-fullscreen window-fit window-float)
-            for scenario in subtitle-lift "${window_scenarios[@]}"; do
+            for scenario in subtitle-lift tagged-sidecars "${window_scenarios[@]}"; do
               verify "$scenario" "$OKP_MACOS_OUTPUT/verify/$scenario" || status=1
             done
             for scenario in "${window_scenarios[@]}"; do

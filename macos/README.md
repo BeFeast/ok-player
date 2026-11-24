@@ -536,7 +536,7 @@ from the session's command registry and shortcut table (`docs/session-abi.md`,
 `Sources/OKPlayerShell/Tracks/` adds two buttons at the front of the transport
 controls' trailing group, Audio and Subtitles. Each opens a popover listing the
 tracks with the labels the session's `tracks` query gives them (core
-`track_label`: name, language, channels, codec, `EXT` for a file loaded beside the
+`track_label`: name, language, channels, codec, `External` for a file loaded beside the
 media) and checks the one that plays; choosing one sends `select_track`. The
 subtitle popover starts with Off and ends with **Add Subtitle File…** and the
 delay and size rows, each with the session's readout and a step down and up.
@@ -547,8 +547,8 @@ delay and size rows, each with the session's readout and a step down and up.
   A file the session refuses, or one libmpv cannot read (an `error` event with the
   request's id), shows "Could not load the subtitle file" as a toast and playback
   goes on; that error is not toasted again as the session's raw message.
-- Subtitle files named after the media (`movie.srt`, `movie.en.srt`) load with it;
-  libmpv finds them (`sub-auto=exact`).
+- Same-stem subtitles beside the media load with it. For example,
+  `movie.en.hi.srt` appears as `English (SDH) · SRT · External`.
 - **Z** / **Shift+Z** move subtitles 50 ms later / earlier and **]** / **[** make them
   10 % larger / smaller (0.25-4). The keys come from the session's shortcut table,
   the session runs them, and the new value (`Subtitle delay: +50 ms`, `Subtitle size:

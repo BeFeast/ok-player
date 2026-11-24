@@ -42,7 +42,14 @@ struct VerificationOptions {
         config.dataDir = profile.appendingPathComponent("data").path
         config.configDir = profile.appendingPathComponent("config").path
         config.cacheDir = profile.appendingPathComponent("cache").path
+        if let spec = try? readScenario(), let languages = spec.preferredSubtitleLanguages {
+            config.mpvOptions.append(MpvOption(name: "slang", value: languages))
+        }
         return config
+    }
+
+    func readScenario() throws -> VerificationScenario {
+        try SessionJSON.makeDecoder().decode(VerificationScenario.self, from: Data(contentsOf: scenario))
     }
 
     func write(_ result: [String: Any]) throws {
@@ -63,11 +70,14 @@ struct VerificationScenario: Decodable {
         let seconds: Double?
         let name: String?
         let expect: Expectation?
+        let subtitleLabels: [String]?
+        let selectedSubtitle: String?
     }
     enum Action: String, Decodable {
         case open, pause, seek, capture
         case playTo = "play_to", playUntilHidden = "play_until_hidden", pointerReveal = "pointer_reveal"
         case enterFullscreen = "enter_fullscreen", leaveFullscreen = "leave_fullscreen"
+        case checkSubtitleMenu = "check_subtitle_menu"
         case sizeWindow = "size_window", closeMedia = "close_media", doubleClick = "double_click"
         case smallWorkArea = "small_work_area", openPortrait = "open_portrait", resizeEdges = "resize_edges"
         case pin, unpin, overlapWindow = "overlap_window"
@@ -78,6 +88,7 @@ struct VerificationScenario: Decodable {
     }
     let schemaVersion: Int
     let id: String
+    let preferredSubtitleLanguages: String?
     let steps: [Step]
 }
 
@@ -105,6 +116,7 @@ final class VerifyRun {
     private var visibleCueBottom: CGFloat?
     private var hiddenCueBottom: CGFloat?
     private var compositorStatus = "not_probed"
+    private var subtitleMenu: [String: [String]]?
 
     init(app: PlayerApp, options: VerificationOptions) {
         self.app = app
@@ -121,7 +133,7 @@ final class VerifyRun {
         ]
         var code: Int32 = 0
         do {
-            let scenario = try SessionJSON.makeDecoder().decode(VerificationScenario.self, from: Data(contentsOf: options.scenario))
+            let scenario = try options.readScenario()
             guard scenario.schemaVersion == 1, scenario.id == options.scenarioID else {
                 throw VerifyError("Unsupported scenario or schema")
             }
@@ -143,8 +155,8 @@ final class VerifyRun {
             result["window_backing_scale"] = app.window.backingScaleFactor
             compositorStatus = CGPreflightScreenCaptureAccess() ? "available" : "permission_unavailable"
             for step in scenario.steps {
-                if scenario.id == "subtitle-lift" { try await perform(step) }
-                else { try await performWindowStep(step) }
+                if scenario.id.hasPrefix("window-") { try await performWindowStep(step) }
+                else { try await perform(step) }
             }
             result["status"] = failures.isEmpty ? "passed" : "failed"
             code = failures.isEmpty ? 0 : 1
@@ -156,6 +168,7 @@ final class VerifyRun {
         result["checkpoints"] = observations
         result["assertion_failures"] = failures
         result["compositor"] = compositorStatus
+        result["subtitle_menu"] = subtitleMenu
         do {
             try options.write(result)
         } catch {
@@ -228,6 +241,17 @@ final class VerifyRun {
                 throw VerifyError("Capture lacks its name or expectation")
             }
             try await capture(name, expecting: expectation)
+        case .checkSubtitleMenu:
+            guard let expectedLabels = step.subtitleLabels, let expectedSelected = step.selectedSubtitle else {
+                throw VerifyError("Subtitle menu check lacks labels or selection")
+            }
+            let items = app.tracks.menuItems(.subtitle).prefix { !$0.isSeparatorItem }
+            let labels = items.map(\.title)
+            let selected = items.filter { $0.state == .on }.map(\.title)
+            subtitleMenu = ["labels": labels, "selected": selected]
+            if labels != expectedLabels || selected != [expectedSelected] {
+                failures.append("subtitle_menu")
+            }
         default:
             throw VerifyError("Unsupported subtitle step")
         }

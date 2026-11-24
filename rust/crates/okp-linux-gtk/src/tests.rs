@@ -3587,7 +3587,7 @@ fn track_label_shows_tags_without_a_selection_prefix() {
         codec: None,
         audio_channels: None,
     };
-    assert_eq!(track_label(&subtitle), "English (SDH) · SRT · EXT");
+    assert_eq!(track_label(&subtitle), "English (SDH) · SRT · External");
 
     let audio = Track {
         id: 1,
@@ -4299,14 +4299,14 @@ fn subtitle_track_label_distinguishes_webvtt_srt_and_native_styled_sources() {
         codec: Some("webvtt".to_owned()),
         audio_channels: None,
     };
-    assert_eq!(track_label(&webvtt), "English · WebVTT · EXT");
+    assert_eq!(track_label(&webvtt), "English · WebVTT · External");
 
     let srt = Track {
         id: 4,
         codec: Some("subrip".to_owned()),
         ..webvtt.clone()
     };
-    assert_eq!(track_label(&srt), "English · SRT · EXT");
+    assert_eq!(track_label(&srt), "English · SRT · External");
 
     let embedded = Track {
         id: 5,
@@ -4331,7 +4331,7 @@ fn subtitle_track_label_distinguishes_webvtt_srt_and_native_styled_sources() {
     };
     assert_eq!(
         track_label(&external_ssa),
-        "English · SSA · Native style · EXT"
+        "English · SSA · Native style · External"
     );
 }
 
@@ -4364,7 +4364,7 @@ fn subtitle_track_label_names_and_flags_image_tracks() {
         codec: Some("dvd_subtitle".to_owned()),
         ..pgs.clone()
     };
-    assert_eq!(track_label(&vobsub), "fre · VobSub · Image · EXT");
+    assert_eq!(track_label(&vobsub), "fre · VobSub · Image · External");
 
     // A neighbouring SRT track keeps its text label with no Image flag.
     let srt = Track {

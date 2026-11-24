@@ -466,6 +466,7 @@ fn drain_events(shared: &Arc<PumpShared>, started: Option<i64>) -> (Lifecycle, R
 
         match event.event_id {
             ffi::MPV_EVENT_NONE => break,
+            ffi::MPV_EVENT_HOOK => crate::sidecar_subtitles::handle_hook(&shared.reader, event),
             ffi::MPV_EVENT_SHUTDOWN => {
                 lifecycle.push(MpvEvent::Shutdown);
                 shared.running.store(false, Ordering::Release);

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "tagged-sidecars",
+  "fixture": "A Serious Man (2009) {tmdb-12573}.mp4",
+  "appearances": ["light", "dark"],
+  "preferred_subtitle_languages": "heb,en",
+  "steps": [
+    {"action": "open"},
+    {
+      "action": "check_subtitle_menu",
+      "subtitle_labels": [
+        "Off",
+        "English (SDH) · SRT · External",
+        "Hebrew · SRT · External",
+        "Russian (SDH) · SRT · External"
+      ],
+      "selected_subtitle": "Hebrew · SRT · External"
+    }
+  ]
+}

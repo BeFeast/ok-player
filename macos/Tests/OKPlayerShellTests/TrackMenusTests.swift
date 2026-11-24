@@ -24,7 +24,7 @@ final class TrackMenusTests: XCTestCase {
 
     func testTheSubtitlesMenuStartsWithOffAndEndsWithAddSubtitleFile() {
         let items = TrackMenus.subtitleItems(view)
-        XCTAssertEqual(items.map(\.title), ["Off", "English SDH · PGS · Image · Default", "en · SRT · EXT", "",
+        XCTAssertEqual(items.map(\.title), ["Off", "English SDH · PGS · Image · Default", "en · SRT · External", "",
                                             "Add Subtitle File…"])
         XCTAssertEqual(items.map(\.checked), [false, false, true, false, false])
         XCTAssertEqual(items[0].action, .select(kind: .subtitle, id: nil), "Off turns subtitles off")

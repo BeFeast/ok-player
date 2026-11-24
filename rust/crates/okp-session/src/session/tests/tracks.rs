@@ -84,7 +84,7 @@ fn the_tracks_query_labels_the_loaded_files_tracks_with_the_core_rules() {
         rows(&view.subtitles),
         [
             (None, "Off".to_owned(), false),
-            (Some(1), "en · SRT · EXT".to_owned(), true),
+            (Some(1), "en · SRT · External".to_owned(), true),
         ]
     );
     assert_eq!(view.subtitle_delay.label, "0 ms");

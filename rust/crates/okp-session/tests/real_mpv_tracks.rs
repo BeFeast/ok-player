@@ -11,8 +11,8 @@ use std::path::Path;
 use common::{engine_lock, headless_config, wait_for, write_media_fixture};
 use okp_session::Session;
 use okp_session::protocol::{
-    Command, DispatchResult, Event, MediaSource, Query, QueryResult, SourceKind, Status, TrackKind,
-    TracksView,
+    Command, DispatchResult, Event, MediaSource, MpvOption, Query, QueryResult, SourceKind, Status,
+    TrackKind, TracksView,
 };
 use okp_test_fixtures::unique_temp_dir;
 
@@ -75,11 +75,11 @@ fn subtitle_files_named_after_the_media_load_with_it_and_an_added_one_is_selecte
         session.snapshot().tracks
     );
     let view = tracks(&session);
-    // The labels are the core's for whatever libmpv reports: its titles for
-    // external files differ between versions, the codec and source do not.
+    assert_eq!(view.subtitles[1].label, "Subtitles · SRT · External");
+    assert_eq!(view.subtitles[2].label, "English · SRT · External");
     for row in &view.subtitles[1..] {
         assert!(
-            row.label.ends_with(" · SRT · EXT"),
+            row.label.ends_with(" · SRT · External"),
             "{:?} is not marked as an external SRT",
             row.label
         );
@@ -122,7 +122,7 @@ fn subtitle_files_named_after_the_media_load_with_it_and_an_added_one_is_selecte
             let selected: Vec<_> = view.subtitles.iter().filter(|row| row.selected).collect();
             selected.len() == 1
                 && selected[0].id.is_some_and(|id| !stem_ids.contains(&id))
-                && selected[0].label.ends_with(" · SRT · EXT")
+                && selected[0].label.ends_with(" · SRT · External")
         }),
         "the added file is not the selected subtitle: {:?}",
         tracks(&session).subtitles
@@ -136,7 +136,7 @@ fn subtitle_files_named_after_the_media_load_with_it_and_an_added_one_is_selecte
         wait_for(|| tracks(&session).subtitles[0].selected),
         "subtitles Off is not selected after turning them off"
     );
-    // Selecting a file that sub-auto already loaded reuses that track.
+    // Selecting a discovered file reuses that track.
     accepted(session.dispatch(&Command::AddSubtitle {
         path: root.path().join("movie.srt").to_string_lossy().into_owned(),
     }));
@@ -160,6 +160,70 @@ fn subtitle_files_named_after_the_media_load_with_it_and_an_added_one_is_selecte
     drop(session);
     added.close().expect("fixture directory is removed");
     root.close().expect("fixture directory is removed");
+}
+
+#[test]
+fn tagged_sidecars_supply_real_mpv_titles_languages_and_preferred_selection() {
+    let _engine = engine_lock();
+    let root = unique_temp_dir("okp-session-tagged-sidecars");
+    let stem = "A Serious Man (2009) {tmdb-12573}";
+    let movie = root.path().join(format!("{stem}.mp4"));
+    fs::rename(write_media_fixture(root.path()), &movie).unwrap();
+    for suffix in ["en.hi.srt", "he.srt", "ru.hi.srt", "extended.en.srt"] {
+        fs::write(root.path().join(format!("{stem}.{suffix}")), CUE).unwrap();
+    }
+    fs::write(root.path().join("movie.nfo"), "<movie/>").unwrap();
+    let mut config = headless_config(root.path());
+    config.mpv_options.push(MpvOption {
+        name: "slang".to_owned(),
+        value: "rus,en".to_owned(),
+    });
+    let session = Session::new(&config).expect("libmpv starts");
+    open(&session, &movie);
+    let snapshot = session.snapshot();
+    let subtitles: Vec<_> = snapshot
+        .tracks
+        .iter()
+        .filter(|track| track.kind == TrackKind::Subtitle)
+        .collect();
+    let reported: Vec<_> = subtitles
+        .iter()
+        .map(|track| {
+            (
+                track.title.as_deref(),
+                track.lang.as_deref(),
+                track.external,
+                track.selected,
+            )
+        })
+        .collect();
+    assert_eq!(
+        reported,
+        [
+            (Some("English (SDH)"), Some("en"), true, false),
+            (Some("Hebrew"), Some("he"), true, false),
+            (Some("Russian (SDH)"), Some("rus"), true, true),
+        ]
+    );
+    let view = tracks(&session);
+    let labels: Vec<_> = view
+        .subtitles
+        .iter()
+        .map(|row| row.label.as_str())
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "Off",
+            "English (SDH) · SRT · External",
+            "Hebrew · SRT · External",
+            "Russian (SDH) · SRT · External",
+        ]
+    );
+    assert!(view.subtitles[3].selected);
+
+    open(&session, &common::tone_fixture(root.path()));
+    assert_eq!(subtitle_count(&session), 0);
 }
 
 #[test]

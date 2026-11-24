@@ -110,7 +110,7 @@ final class TrackControlsTests: XCTestCase {
         let bar = MenuBar(commands: commands, openRecent: nil)
         bar.rebuild()
         let subtitles = try submenu(of: .subtitles, in: bar)
-        XCTAssertEqual(subtitles.items.map(\.title), ["Off", "English SDH · PGS · Image · Default", "en · SRT · EXT", "",
+        XCTAssertEqual(subtitles.items.map(\.title), ["Off", "English SDH · PGS · Image · Default", "en · SRT · External", "",
                                                       "Add Subtitle File…"])
         XCTAssertEqual(subtitles.items.map(\.state), [.off, .off, .on, .off, .off])
         XCTAssertTrue(subtitles.items[3].isSeparatorItem)

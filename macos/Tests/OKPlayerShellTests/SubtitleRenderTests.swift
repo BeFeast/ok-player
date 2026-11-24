@@ -14,6 +14,57 @@ final class SubtitleRenderTests: XCTestCase {
         try checkSubtitles(file: "subtitle-embedded.mkv", external: false, backingScale: 1)
     }
 
+    func testTaggedSidecarsAppearInSubtitleMenuAndPreferredLanguageIsSelected() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let fixtures = env["OKP_MACOS_SUBTITLE_FIXTURES"] else {
+            throw XCTSkip("The hosted macOS workflow generates the video fixture")
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stem = "A Serious Man (2009) {tmdb-12573}"
+        let media = root.appendingPathComponent("\(stem).mp4")
+        let fixture = URL(fileURLWithPath: fixtures).appendingPathComponent("subtitle-sidecar.mp4")
+        try FileManager.default.copyItem(at: fixture, to: media)
+        for suffix in ["en.hi.srt", "he.srt", "ru.hi.srt"] {
+            let file = root.appendingPathComponent("\(stem).\(suffix)")
+            try "1\n00:00:02,000 --> 00:00:04,000\nA line\n\n".write(to: file, atomically: true, encoding: .utf8)
+        }
+        var config = SessionConfig.forApp()
+        config.dataDir = root.appendingPathComponent("data").path
+        config.configDir = root.appendingPathComponent("config").path
+        config.cacheDir = root.appendingPathComponent("cache").path
+        config.mpvOptions += [
+            MpvOption(name: "vo", value: "null"),
+            MpvOption(name: "ao", value: "null"),
+            MpvOption(name: "pause", value: "yes"),
+            MpvOption(name: "slang", value: "heb,en"),
+        ]
+        let client = try SessionClient(config: config)
+        defer { client.close() }
+        let result = client.dispatch(.open(source: MediaSource(kind: .local, location: media.path)))
+        guard case .accepted = result else { return XCTFail("Open failed: \(result)") }
+        let snapshot = try XCTUnwrap(waitFor(client) { snapshot in
+            snapshot.status == .paused ? snapshot : nil
+        })
+        let subtitles = snapshot.tracks.filter { $0.kind == .subtitle }
+        XCTAssertEqual(subtitles.map(\.lang), ["en", "heb", "ru"])
+        XCTAssertTrue(subtitles.allSatisfy(\.external))
+        XCTAssertEqual(subtitles.filter(\.selected).map(\.lang), ["heb"])
+
+        _ = NSApplication.shared
+        let controls = TrackControls()
+        controls.query = {
+            guard case .tracks(let tracks)? = client.query(.tracks) else { return nil }
+            return tracks
+        }
+        let items = controls.menuItems(.subtitle).prefix { !$0.isSeparatorItem }
+        XCTAssertEqual(items.map(\.title), [
+            "Off", "English (SDH) · SRT · External", "Hebrew · SRT · External", "Russian (SDH) · SRT · External",
+        ])
+        XCTAssertEqual(items.filter { $0.state == .on }.map(\.title), ["Hebrew · SRT · External"])
+    }
+
     private func checkSubtitles(file: String, external: Bool, backingScale: GLsizei) throws {
         let env = ProcessInfo.processInfo.environment
         guard let fixtures = env["OKP_MACOS_SUBTITLE_FIXTURES"] else {
@@ -72,7 +123,7 @@ final class SubtitleRenderTests: XCTestCase {
         XCTAssertEqual(checked.count, 1)
         XCTAssertEqual((checked.first?.representedObject as? TrackActionBox)?.action,
                        .select(kind: .subtitle, id: track.id))
-        if external { XCTAssertTrue(checked.first?.title.hasSuffix("EXT") == true) }
+        if external { XCTAssertTrue(checked.first?.title.hasSuffix("External") == true) }
 
         let timer = ManualHideTimer()
         let osc = TransportOverlay(hideTimer: timer)

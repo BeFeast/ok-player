@@ -284,7 +284,7 @@ and after it changed the delay or the size.
 |---|---|
 | `audio` | the audio tracks in libmpv's order, each `{id, label, selected}`; empty without loaded media |
 | `subtitles` | `Off` (`id: null`, selected while no subtitle track is) first, then the subtitle tracks the same way |
-| `label` | the one-line descriptor: name (title, else language, else `Track N`), language, channels and codec for audio; format, `Image`, `Native style` and `EXT` or `Default` for subtitles (`track_label`) |
+| `label` | the one-line descriptor: name (title, else language, else `Track N`), language, channels and codec for audio; format, `Image`, `Native style` and `External` or `Default` for subtitles (`track_label`) |
 | `subtitle_delay` | `{value, label, reported}`: seconds and `+250 ms` / `0 ms` (`subtitle_delay::format_label`) |
 | `subtitle_scale` | `{value, label, reported}`: the size factor and `110%` |
 | `adjustable` | media is `playing` or `paused`, so a file can be added and the delay and size changed |
@@ -305,9 +305,10 @@ off.
   hundredth, and is forwarded as a `set_subtitle_scale`. Both need loaded media
   and a finite value. The size holds across files and is not part of the
   snapshot: `tracks` reports it.
-- Subtitle files named after the media load with it: `movie.srt`,
-  `movie.en.srt` and the other languages next to `movie.mkv` (libmpv
-  `sub-auto=exact`, which okp-mpv sets). They are listed as external tracks.
+- Same-stem subtitles beside the media load as external tracks. For example,
+  `movie.en.hi.srt` next to `movie.mkv` appears as
+  `English (SDH) · SRT · External`. Language and flags can appear in either
+  order, and libmpv gets the language before it selects a track.
 
 libmpv reports the delay and the size asynchronously. Until it does, the
 values asked for lead: delay and size keys pressed faster than its reports all
