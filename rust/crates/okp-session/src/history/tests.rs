@@ -72,7 +72,7 @@ impl Harness {
         let script = Arc::new(Script::default());
         let history = SessionHistory::with_store(store);
         let writer = history.probe().expect("the history is kept in a file");
-        let session = Session::start(Box::new(ScriptedEngine(Arc::clone(&script))), history);
+        let session = Session::start(Box::new(ScriptedEngine(Arc::clone(&script))), history, None);
         Self {
             session,
             script,

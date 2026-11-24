@@ -94,9 +94,15 @@ pub(crate) fn save_theme(
         AppearanceSelection::Light => AppearanceTheme::Light,
         AppearanceSelection::Auto => AppearanceTheme::Auto,
     };
-    match store.save_appearance_theme(theme) {
-        Ok(true) => DispatchResult::Applied {},
-        Ok(false) => DispatchResult::NoOp {},
+    match SettingsStore::edit_appearance_at(store.path().to_owned(), theme) {
+        Ok((updated, changed)) => {
+            *store = updated;
+            if changed {
+                DispatchResult::Applied {}
+            } else {
+                DispatchResult::NoOp {}
+            }
+        }
         Err(error) => DispatchResult::Rejected {
             reason: RejectReason::Unavailable,
             message: format!("Could not save the app theme: {error}"),

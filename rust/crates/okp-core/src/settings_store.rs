@@ -475,16 +475,16 @@ impl SettingsStore {
             return Ok(());
         }
 
-        self.write_document(&self.data)?;
+        Self::write_document(&self.path, &self.data)?;
         self.dirty = false;
         Ok(())
     }
 
-    /// Apply a profile edit as a single write. Work from the current document so
-    /// the edit keeps unrelated values, including fields from other shells.
-    /// Failed writes leave the last valid theme available to the caller.
-    pub fn save_appearance_theme(&mut self, theme: AppearanceTheme) -> io::Result<bool> {
-        let (mut data, mut raw) = match fs::read_to_string(&self.path) {
+    /// Edit only the on-disk theme and return a new, clean view of the profile.
+    /// Other members of a canonical document are preserved, including fields
+    /// from other shells. An existing store is untouched on error.
+    pub fn edit_appearance_at(path: PathBuf, theme: AppearanceTheme) -> io::Result<(Self, bool)> {
+        let (mut data, mut raw) = match fs::read_to_string(&path) {
             Ok(json) => {
                 let data = Settings::load(&json).ok_or_else(|| {
                     io::Error::new(io::ErrorKind::InvalidData, "unrecognized settings document")
@@ -505,23 +505,24 @@ impl SettingsStore {
                 // Keep all other sections and members of the canonical document.
                 raw["version"] = data.version.into();
                 raw["appearance"]["theme"] = theme.as_setting().into();
-                self.write_document(&raw)?;
+                Self::write_document(&path, &raw)?;
             } else {
                 // A fresh profile or the legacy Windows dialect.
-                self.write_document(&data)?;
+                Self::write_document(&path, &data)?;
             }
         }
-        if self.dirty {
-            self.data.appearance = data.appearance;
-        } else {
-            self.data = data;
-        }
-        Ok(changed)
+        Ok((
+            Self {
+                path,
+                data,
+                dirty: false,
+            },
+            changed,
+        ))
     }
 
-    fn write_document(&self, data: &impl serde::Serialize) -> io::Result<()> {
-        let parent = self
-            .path
+    fn write_document(path: &Path, data: &impl serde::Serialize) -> io::Result<()> {
+        let parent = path
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
@@ -529,7 +530,7 @@ impl SettingsStore {
         let json = serde_json::to_vec_pretty(data).map_err(io::Error::other)?;
         let mut staging = tempfile::NamedTempFile::new_in(parent)?;
         staging.write_all(&json)?;
-        staging.persist(&self.path).map_err(|error| error.error)?;
+        staging.persist(path).map_err(|error| error.error)?;
         Ok(())
     }
 }
@@ -630,10 +631,17 @@ mod tests {
             r#"{"version":1,"appearance":{"theme":" Dark ","accent_source":"System","future":"keep"},"audio":{"device":"auto"},"custom":{"rate":7}}"#,
         )
         .unwrap();
-        let mut store = SettingsStore::open_at(path.clone());
+        let store = SettingsStore::open_at(path.clone());
         assert_eq!(store.appearance_theme(), AppearanceTheme::Dark);
-        assert!(store.save_appearance_theme(AppearanceTheme::Light).unwrap());
-        assert!(!store.save_appearance_theme(AppearanceTheme::Light).unwrap());
+        let (store, changed) =
+            SettingsStore::edit_appearance_at(path.clone(), AppearanceTheme::Light).unwrap();
+        assert!(changed);
+        assert_eq!(store.appearance_theme(), AppearanceTheme::Light);
+        assert!(
+            !SettingsStore::edit_appearance_at(path.clone(), AppearanceTheme::Light)
+                .unwrap()
+                .1
+        );
         let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved["version"], crate::settings::SETTINGS_VERSION);
         assert_eq!(saved["appearance"]["accent_source"], "System");
@@ -644,7 +652,11 @@ mod tests {
             SettingsStore::open_at(path.clone()).appearance_theme(),
             AppearanceTheme::Light,
         );
-        assert!(store.save_appearance_theme(AppearanceTheme::Auto).unwrap());
+        assert!(
+            SettingsStore::edit_appearance_at(path.clone(), AppearanceTheme::Auto)
+                .unwrap()
+                .1
+        );
         assert_eq!(
             SettingsStore::open_at(path).appearance_theme(),
             AppearanceTheme::Auto,
@@ -655,11 +667,11 @@ mod tests {
     fn a_failed_appearance_edit_keeps_the_last_valid_theme_and_the_newer_profile() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        let mut store = SettingsStore::open_at(path.clone());
-        store.save_appearance_theme(AppearanceTheme::Light).unwrap();
+        let (store, _) =
+            SettingsStore::edit_appearance_at(path.clone(), AppearanceTheme::Light).unwrap();
         let newer = r#"{"version":65535,"appearance":{"theme":"Auto"}}"#;
         fs::write(&path, newer).unwrap();
-        assert!(store.save_appearance_theme(AppearanceTheme::Auto).is_err());
+        assert!(SettingsStore::edit_appearance_at(path.clone(), AppearanceTheme::Auto).is_err());
         assert_eq!(store.appearance_theme(), AppearanceTheme::Light);
         assert_eq!(fs::read_to_string(path).unwrap(), newer);
     }

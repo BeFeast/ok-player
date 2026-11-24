@@ -153,11 +153,13 @@ impl Session {
         validate_config(config)?;
         let commands = CommandRegistry::new(config.app.platform, &config.shell_commands)?;
         let engine = MpvEngine::new(config)?;
-        let mut session = Self::start(Box::new(engine), SessionHistory::open(&config.data_dir));
+        let settings = SettingsStore::open_at(config.config_dir.join("settings.json"));
+        let mut session = Self::start(
+            Box::new(engine),
+            SessionHistory::open(&config.data_dir),
+            Some(settings),
+        );
         session.commands = commands;
-        session.settings = Mutex::new(Some(SettingsStore::open_at(
-            config.config_dir.join("settings.json"),
-        )));
         Ok(session)
     }
 
@@ -174,10 +176,15 @@ impl Session {
         Self::start(
             engine,
             SessionHistory::with_store(crate::history::HistoryStore::in_memory()),
+            None,
         )
     }
 
-    pub(crate) fn start(engine: Box<dyn Engine>, history: SessionHistory) -> Self {
+    pub(crate) fn start(
+        engine: Box<dyn Engine>,
+        history: SessionHistory,
+        settings: Option<SettingsStore>,
+    ) -> Self {
         let signal = Arc::new(Signal::default());
         let listener_signal = Arc::clone(&signal);
         engine.set_listener(Some(Arc::new(move || listener_signal.notify())));
@@ -218,7 +225,7 @@ impl Session {
             shared,
             thread: Some(thread),
             commands: CommandRegistry::default(),
-            settings: Mutex::new(None),
+            settings: Mutex::new(settings),
         }
     }
 

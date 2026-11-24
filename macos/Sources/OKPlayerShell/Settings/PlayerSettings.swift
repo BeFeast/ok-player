@@ -13,14 +13,15 @@ final class PlayerSettings {
         self.client = client
         if case .settings(let state)? = client.query(.settings) { theme = state.theme }
         applyAppearance()
+        window?.showTheme(theme, problem: nil)
     }
 
     func show(rememberFrame: Bool) {
         guard let client, case .settings(let state)? = client.query(.settings) else { return }
         if window == nil {
             let made = SettingsWindow(state: state)
-            made.search = { [weak client] text in
-                guard case .settingsSearch(let hits)? = client?.query(.settingsSearch(text: text)) else { return [] }
+            made.search = { [weak self] text in
+                guard case .settingsSearch(let hits)? = self?.client?.query(.settingsSearch(text: text)) else { return [] }
                 return hits
             }
             made.onSelectTheme = { [weak self] choice in self?.selectTheme(choice) }
