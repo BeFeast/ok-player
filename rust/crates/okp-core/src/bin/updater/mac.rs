@@ -137,7 +137,9 @@ impl Installation {
         let candidate = stage.join(APP_NAME);
         require_owned_directory(&candidate)?;
         validate_bundle(&candidate, &release.build.to_string(), &release.source)?;
-        validate_signature(&candidate, &self.requirement)?;
+        validate_signature(&candidate, &self.requirement).map_err(|error| {
+            format!("The update does not satisfy the installed code-signing requirement: {error}")
+        })?;
 
         // Keep the quarantine decision for the user's installed bundle. Fresh
         // update downloads are admitted by the detached signature and codesign.

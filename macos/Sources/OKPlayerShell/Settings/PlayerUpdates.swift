@@ -216,7 +216,7 @@ final class PlayerUpdates: NSObject {
 
     static var restartedFixture: URL? {
         let environment = ProcessInfo.processInfo.environment
-        guard environment["OKP_UPDATE_RESTART_RECEIPT"] != nil,
+        guard environment["OKP_UPDATE_RESTART_RECEIPT"] != nil || environment["OKP_UPDATE_RESTART_ERROR"] != nil,
               let profile = environment["OKP_VERIFY_UPDATE_RESTART_PROFILE"] else { return nil }
         let temporary = URL(fileURLWithPath: NSTemporaryDirectory()).resolvingSymlinksInPath().path
         guard Bundle.main.bundleURL.resolvingSymlinksInPath().path.hasPrefix(temporary + "/") else { return nil }
@@ -225,17 +225,25 @@ final class PlayerUpdates: NSObject {
 
     static func confirmStartup() {
         let environment = ProcessInfo.processInfo.environment
-        guard let path = environment["OKP_UPDATE_RESTART_RECEIPT"],
-              let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+        guard let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
               let source = Bundle.main.object(forInfoDictionaryKey: "OKPSourceSHA") as? String else { return }
-        try? Data("\(build)\n\(source)\n".utf8).write(
-            to: URL(fileURLWithPath: path), options: [.withoutOverwriting]
-        )
-        if let fixture = restartedFixture {
-            let result: [String: Any] = ["pid": getpid(), "build": build, "source_sha": source]
+        let fixture = restartedFixture
+        let path = environment["OKP_UPDATE_RESTART_RECEIPT"]
+        let rollback = environment["OKP_UPDATE_RESTART_ERROR"]
+        let crash = fixture != nil && path != nil && environment["OKP_VERIFY_UPDATE_FAIL_STARTUP"] == "1"
+        if let path, !crash {
+            try? Data("\(build)\n\(source)\n".utf8).write(
+                to: URL(fileURLWithPath: path), options: [.withoutOverwriting]
+            )
+        }
+        if let fixture {
+            var result: [String: Any] = ["pid": getpid(), "build": build, "source_sha": source]
+            result["error"] = rollback
+            let filename = crash ? "startup-refusal.json" : (rollback == nil ? "restarted.json" : "rollback.json")
             if let bytes = try? JSONSerialization.data(withJSONObject: result) {
-                try? bytes.write(to: fixture.appendingPathComponent("restarted.json"), options: .atomic)
+                try? bytes.write(to: fixture.appendingPathComponent(filename), options: .atomic)
             }
+            if crash { exit(42) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { NSApp.terminate(nil) }
         }
     }

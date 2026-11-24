@@ -128,7 +128,7 @@ def main():
                 raise ValueError("The downloaded ZIP embeds a different source SHA")
             if {case["appearance"] for case in result["appearances"]} != {"light", "dark"}:
                 raise ValueError("The hosted verdict is missing an appearance")
-            for appearance in result["appearances"]:
+            for appearance in [*result["appearances"], *result.get("additional_controls", [])]:
                 for checkpoint in appearance["checkpoints"]:
                     png = verdict.parent / checkpoint["png"]
                     if not png.is_relative_to(verdict.parent) or ".." in png.parts:

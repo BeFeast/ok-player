@@ -1,6 +1,7 @@
 use super::*;
 use okp_core::signed_updates::{CHECK_INTERVAL, Channel, FOCUS_THROTTLE, Platform, Release};
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime};
 
@@ -306,15 +307,31 @@ impl AppImageUpdates {
         let mut command = self.command("install", view.channel);
         command
             .arg(&offer.sha256)
-            .arg(std::process::id().to_string())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .arg(std::process::id().to_string());
+        let root = self.root.clone();
         drop(view);
         self.work(
             "Downloading and verifying update…",
             move || {
-                let mut child = command.spawn().map_err(|error| error.to_string())?;
+                // A child from the AppImage itself could lose its image when
+                // the old runtime unmounts. Execute a private copy from the
+                // managed filesystem before handing off the existing process.
+                let detached = tempfile::Builder::new()
+                    .permissions(std::fs::Permissions::from_mode(0o700))
+                    .tempdir_in(root)
+                    .map_err(|error| error.to_string())?;
+                let executable = detached.path().join("okp-updater");
+                std::fs::copy(command.get_program(), &executable)
+                    .map_err(|error| error.to_string())?;
+                let mut child = Command::new(executable)
+                    .args(command.get_args())
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .map_err(|error| error.to_string())?;
+                // spawn returns after exec, so Linux retains the open inode.
+                drop(detached);
                 let mut line = String::new();
                 BufReader::new(child.stdout.take().expect("piped stdout"))
                     .read_line(&mut line)

@@ -56,6 +56,10 @@ extension VerifyRun {
         while updates.installing && Date() < timeout {
             try await Task.sleep(nanoseconds: 100_000_000)
         }
+        if ProcessInfo.processInfo.environment["OKP_VERIFY_UPDATE_WRONG_CERTIFICATE"] == "1",
+           updates.problem?.contains("does not satisfy the installed code-signing requirement") == true {
+            return
+        }
         throw VerifyError(updates.problem ?? "The staged build did not relaunch.")
     }
 }

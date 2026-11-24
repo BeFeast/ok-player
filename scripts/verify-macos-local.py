@@ -617,9 +617,9 @@ def run_process(executable, scenario, video, profile, output, folder, appearance
 
 
 @contextmanager
-def update_signing_identity(work):
+def update_signing_identity(work, use_hosted=True):
     script = ROOT / "scripts/macos-signing-identity.sh"
-    if os.environ.get("OKP_SIGNING_MODE") == "self-signed":
+    if use_hosted and os.environ.get("OKP_SIGNING_MODE") == "self-signed":
         yield os.environ.copy()
         return
     config = work / "test-signing.cnf"
@@ -656,7 +656,8 @@ subjectKeyIdentifier = hash
         command("bash", script, "cleanup", exported["OKP_CODESIGN_KEYCHAIN"])
 
 
-def run_update_appearance(executable, scenario, video, profile, output, folder, appearance, negative_control):
+def run_update_appearance(executable, scenario, video, profile, output, folder, appearance, negative_control,
+                          control="update"):
     work = profile / "update"
     work.mkdir(mode=0o700)
     app = work / "OK Player.app"
@@ -673,11 +674,23 @@ def run_update_appearance(executable, scenario, video, profile, output, folder, 
     info.write_bytes(plistlib.dumps(metadata))
     source = metadata["OKPSourceSHA"]
 
+    def sign_bundle(copy, env):
+        binaries = sorted((copy / "Contents/MacOS").iterdir()) + sorted((copy / "Contents/Frameworks").glob("*.dylib"))
+        command("bash", ROOT / "scripts/macos-signing-identity.sh", "sign", *binaries, copy, env=env, timeout=120)
+        command("codesign", "--verify", "--deep", "--strict", copy)
+
     with update_signing_identity(work) as env:
-        for copy in (app, candidate):
-            binaries = sorted((copy / "Contents/MacOS").iterdir()) + sorted((copy / "Contents/Frameworks").glob("*.dylib"))
-            command("bash", ROOT / "scripts/macos-signing-identity.sh", "sign", *binaries, copy, env=env, timeout=120)
-            command("codesign", "--verify", "--deep", "--strict", copy)
+        sign_bundle(app, env)
+        if control == "wrong-certificate":
+            other = work / "identity"
+            other.mkdir(mode=0o700)
+            with update_signing_identity(other, use_hosted=False) as other_env:
+                sign_bundle(candidate, other_env)
+        else:
+            sign_bundle(candidate, env)
+    quarantine = "0081;00000000;OKPlayerVerification;"
+    if not negative_control and control == "update":
+        command("xattr", "-w", "com.apple.quarantine", quarantine, app)
 
     feed = work / "feed"
     latest = feed / "ok-player/macos/beta/latest.json"
@@ -736,6 +749,8 @@ def run_update_appearance(executable, scenario, video, profile, output, folder, 
                                      "OKP_VERIFY_UPDATE_PORT": str(server.server_port),
                                      "OKP_VERIFY_UPDATE_KEY": str(pubkey),
                                      "OKP_VERIFY_UPDATE_RESTART_PROFILE": str(profile),
+                                     "OKP_VERIFY_UPDATE_FAIL_STARTUP": str(int(control == "rollback")),
+                                     "OKP_VERIFY_UPDATE_WRONG_CERTIFICATE": str(int(control == "wrong-certificate")),
                                  })
             if result["status"] != "passed":
                 return result
@@ -748,19 +763,39 @@ def run_update_appearance(executable, scenario, video, profile, output, folder, 
                         or any(path.startswith("/ok-player/macos/builds/") for path in requests)):
                     raise ValueError("Bad manifest reached download or changed the installed app")
                 result["refused_before_download"] = True
-            else:
-                deadline = time.monotonic() + 80
-                while time.monotonic() < deadline and (not restarted.is_file() or list(work.glob(".okp-update-*"))):
-                    time.sleep(0.1)
-                running = json.loads(restarted.read_text())
+            elif control == "wrong-certificate":
                 observed = plistlib.loads((app / "Contents/Info.plist").read_bytes())
-                if (running["pid"] == result["pid"] or running["build"] != build
-                        or observed["CFBundleVersion"] != build or running["source_sha"] != source
+                if (observed["CFBundleVersion"] != prior or restarted.exists()
+                        or "staged_build" in result or f"/{key}" not in requests):
+                    raise ValueError("The wrong certificate was not refused before replacement")
+                result["refused_certificate"] = True
+            else:
+                receipt = profile / "rollback.json" if control == "rollback" else restarted
+                deadline = time.monotonic() + 80
+                while time.monotonic() < deadline and (not receipt.is_file() or list(work.glob(".okp-update-*"))):
+                    time.sleep(0.1)
+                running = json.loads(receipt.read_text())
+                observed = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+                expected = prior if control == "rollback" else build
+                if (running["pid"] == result["pid"] or running["build"] != expected
+                        or observed["CFBundleVersion"] != expected or running["source_sha"] != source
                         or result["staged_sha256"] != content["sha256"]
                         or f"/{key}" not in requests or f"/{key}.sig" not in requests
                         or list(work.glob(".okp-update-*"))):
                     raise ValueError("The verified bundle did not replace or relaunch the installed app")
-                result["restarted"] = running
+                if control == "rollback":
+                    refusal = json.loads((profile / "startup-refusal.json").read_text())
+                    if (refusal["build"] != build or refusal["source_sha"] != source
+                            or refusal["pid"] in {running["pid"], result["pid"]}
+                            or "before confirming startup" not in running["error"]):
+                        raise ValueError("The candidate did not fail and relaunch the previous build")
+                    result.update(rolled_back=running, failed_startup=refusal)
+                else:
+                    observed_quarantine = command("xattr", "-p", "com.apple.quarantine", app,
+                                                  capture_output=True, text=True).stdout.strip()
+                    if observed_quarantine != quarantine:
+                        raise ValueError("The installed app's quarantine attribute was lost")
+                    result.update(restarted=running, quarantine_preserved=True)
             (folder / "requests.json").write_text(json.dumps(requests, indent=2) + "\n")
             return result
         finally:
@@ -884,6 +919,20 @@ def main():
                         check_about_copy(result, receipt["about_expected"])
                 receipt["appearances"].append(result)
             states = {result["status"] for result in receipt["appearances"]}
+            if spec["id"] == UPDATES and not args.negative_control and states == {"passed"}:
+                receipt["additional_controls"] = []
+                for case in ("wrong-certificate", "rollback"):
+                    profile, folder = temporary / case, output / case
+                    folder.mkdir()
+                    for directory in ("data", "config", "cache", "pictures"):
+                        (profile / directory).mkdir(parents=True)
+                    result = run_update_appearance(executable, scenario, video, profile, output, folder,
+                                                   "light", False, control=case)
+                    if result.get("source_sha") != receipt["bundle_source_sha"]:
+                        result.update(status="error", error="Update control ran a different source SHA")
+                    result["update_control"] = case
+                    receipt["additional_controls"].append(result)
+                    states.add(result["status"])
             receipt["status"] = next((state for state in ("error", "blocked_environment", "failed") if state in states), "passed")
             if args.negative_control and spec["id"] != UPDATES and receipt["status"] in {"passed", "failed"}:
                 if spec["id"] == "subtitle-lift":

@@ -808,5 +808,7 @@ back. Previous immutable ZIPs also remain available for manual rollback.
 Run `scripts/verify-macos updates-status --sha <Forgejo SHA>` on a published
 source SHA. The scenario isolates the installation and update feed, changes the
 candidate bundle build from N to N+1 and re-signs it, then records the staged
-digest and the relaunched process in light and dark. Add `--negative-control`
+digest, quarantine attribute and relaunched process in light and dark. It
+also checks refusal of a different signing certificate and rollback after the
+candidate exits before startup confirmation. Add `--negative-control`
 for the separate run with a corrupt manifest signature.
