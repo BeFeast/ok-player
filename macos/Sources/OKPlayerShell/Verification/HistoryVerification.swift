@@ -141,12 +141,11 @@ extension VerifyRun {
         let more: [(String, Double)] = [("Barely started", 0.4), ("Episode 1", 3), ("Episode 2", 4)]
         let sequence = options.scenarioID == "history-page" ? common : more + common
         for (index, record) in sequence.enumerated() {
-            if index > 0 {
-                let second = floor(Date().timeIntervalSince1970)
-                try await wait("next history clock tick establishes recency") { Date().timeIntervalSince1970 >= second + 1 }
-            }
+            if index > 0 { try await nextHistorySecond() }
             let (title, seconds) = record
             let path = options.historyFile(title).path
+            // Replacing a source saves its position through the session's normal
+            // open path. Reserve Close Media for the transition back to the shelf.
             app.play(path)
             do {
                 try await wait("\(title) is loaded in libmpv") {
@@ -170,6 +169,7 @@ extension VerifyRun {
                 try await wait("the completed fixture has a saved progress row") {
                     self.snapshot.status == .paused && (self.savedHistory(title)?["position"] as? Double ?? 0) > 0
                 }
+                try await nextHistorySecond()
                 _ = app.client?.dispatch(.setPaused(paused: false))
                 try await wait("the completed fixture resumes playing") { self.snapshot.status == .playing }
             } else {
@@ -177,19 +177,20 @@ extension VerifyRun {
             }
             _ = app.client?.dispatch(.seek(seconds: seconds, mode: .absolute, precision: .exact))
             if finishes {
-                try await wait("fixture reaches actual EOF") {
-                    self.snapshot.status == .ended && self.snapshot.endReason == .eof
-                }
-                try await wait("the completed fixture is marked finished on disk") {
-                    self.savedHistory(title)?["finished"] as? Bool == true
+                try await wait("the completed fixture reaches EOF and is marked finished on disk") {
+                    guard self.savedHistory(title)?["finished"] as? Bool == true else { return false }
+                    let ended = self.snapshot.status == .ended && self.snapshot.endReason == .eof
+                    let returnedToWelcome = self.snapshot.source == nil && self.app.history.showsWelcome
+                    return ended || returnedToWelcome
                 }
             } else {
                 try await wait("\(title) renders at \(seconds) s") {
                     abs((self.snapshot.timePos ?? -1) - seconds) < 0.12
                 }
             }
-            try await closeHistoryMedia()
         }
+        try await nextHistorySecond()
+        try await closeHistoryMedia()
         try await wait("the latest played row is on disk") {
             guard let position = self.savedHistory("Episode 3")?["position"] as? Double else { return false }
             return abs(position - 7) < 0.12
@@ -223,8 +224,13 @@ extension VerifyRun {
         return files[options.historyFile(title).path]
     }
 
+    private func nextHistorySecond() async throws {
+        let second = floor(Date().timeIntervalSince1970)
+        try await wait("next history clock tick establishes recency") { Date().timeIntervalSince1970 >= second + 1 }
+    }
+
     private func closeHistoryMedia() async throws {
-        app.closeMedia()
+        if snapshot.source != nil { app.closeMedia() }
         try await wait("closed playback and restored idle Welcome") {
             self.snapshot.source == nil && self.app.history.showsWelcome
         }

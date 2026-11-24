@@ -60,11 +60,16 @@ OPEN_CONTROLS = {
     "open-files-folders": ("folder_picker_files_enabled", {"open_files_folders:folder-filter"}),
     "open-drag-drop": ("welcome_drop_highlight_disabled", {"open_drag_drop:welcome-accent"}),
 }
+HISTORY_CONTROLS = {
+    "welcome-resume-shelf": ("history_poster_disabled", {"welcome_resume_shelf:poster"}),
+    "history-page": ("history_pagination_disabled", {"history_page:pagination"}),
+}
 ACTION_CONTROLS = {
     **TRANSPORT_CONTROLS,
     **OPEN_CONTROLS,
     **ABOUT_CONTROLS,
     **QUEUE_CONTROLS,
+    **HISTORY_CONTROLS,
     "window-chrome": ("title_misaligned", {f"window_chrome:alignment:{checkpoint}"
                                          for checkpoint in ("welcome", "playing", "revealed")}),
     "welcome-return": ("inactive_video_visible", {f"welcome_return:canvas:{checkpoint}" for checkpoint in
@@ -73,8 +78,6 @@ ACTION_CONTROLS = {
     "command-keyboard": ("text_priority_disabled", {"keyboard:text_priority"}),
     "compact-mini": ("compact_snap_disabled", {"compact_mini:corner_snap"}),
     "compact-mini-floor": ("compact_clearance_disabled", {"compact_mini_floor:clearance"}),
-    "welcome-resume-shelf": ("history_poster_disabled", {"welcome_resume_shelf:poster"}),
-    "history-page": ("history_pagination_disabled", {"history_page:pagination"}),
 }
 CONTROLS = {
     **TRACK_CONTROLS,
@@ -972,7 +975,7 @@ def main():
                 if not all(expected_failures <= set(result["assertion_failures"])
                            for result in receipt["appearances"]):
                     receipt.update(status="error", error="Negative control did not expose all expected failures in both themes")
-                if spec["id"] in {SETTINGS, *ABOUT_CONTROLS, *QUEUE_CONTROLS} and any(
+                if spec["id"] in {SETTINGS, *ABOUT_CONTROLS, *QUEUE_CONTROLS, *HISTORY_CONTROLS} and any(
                     set(result["assertion_failures"]) != expected_failures for result in receipt["appearances"]
                 ):
                     receipt.update(status="error", error="Negative control failed unrelated assertions")
