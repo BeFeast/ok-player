@@ -78,6 +78,8 @@ pub mod track_label;
 pub mod track_tags;
 pub mod update_lifecycle;
 pub mod update_selection;
+#[cfg(feature = "signed-updates")]
+pub mod signed_updates;
 pub mod velopack_artifacts;
 pub mod video_click;
 pub mod video_geometry;

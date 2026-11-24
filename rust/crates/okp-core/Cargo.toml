@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+signed-updates = ["dep:sequoia-openpgp"]
+
 [dependencies]
 base64 = "0.22.1"
 libc.workspace = true
@@ -17,6 +20,11 @@ tempfile.workspace = true
 ureq.workspace = true
 uuid = { version = "1.23.4", features = ["serde", "v4"] }
 zip.workspace = true
+sequoia-openpgp = { version = "2.4.2", default-features = false, features = ["crypto-rust", "allow-experimental-crypto", "allow-variable-time-crypto"], optional = true }
+
+[[bin]]
+name = "okp-updater"
+required-features = ["signed-updates"]
 
 [dev-dependencies]
 okp-test-fixtures = { path = "../okp-test-fixtures" }
