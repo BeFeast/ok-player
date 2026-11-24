@@ -239,11 +239,23 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
         let proposed = contentSize(forFrameSize: frameSize)
         let minimum = contentSize(forFrameSize: window.minSize)
         let maximum = workArea.map { contentSize(forFrameSize: $0.size) }
-        let size = aspect.map { VideoAreaAspect.constrain(proposed: proposed,
-                                             current: contentSize(forFrameSize: window.frame.size),
-                                             video: $0, chrome: videoChrome,
-                                             minimum: minimum, maximum: maximum) } ?? proposed
+        let size: CGSize
+        if let aspect {
+            size = VideoAreaAspect.constrain(proposed: proposed, current: contentSize(forFrameSize: window.frame.size),
+                                             video: aspect, chrome: videoChrome, minimum: minimum, maximum: maximum)
+        } else if let maximum {
+            size = CGSize(width: min(proposed.width, maximum.width), height: min(proposed.height, maximum.height))
+        } else {
+            size = proposed
+        }
         return window.frameRect(forContentRect: NSRect(origin: .zero, size: size)).size
+    }
+
+    /// AppKit chooses the frame origin from the edge being dragged. After the
+    /// gesture, keep the resulting title and controls on the active display.
+    func windowDidEndLiveResize() {
+        guard !chrome.fullscreen, !fullscreenTransition else { return }
+        restore(window.frame)
     }
 
     /// Carry out a window command; returns whether it did anything.
@@ -311,6 +323,7 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
         titleStrip.isHidden = chrome.fullscreen
         let views: [(NSView, Bool)] = lights.map { ($0 as NSView, showLights) }
             + [(pinButton, showStrip), (identity, showStrip && showTitleIdentity)]
+        if !showStrip, window.firstResponder === pinButton { window.makeFirstResponder(videoArea) }
         pinButton.isEnabled = showStrip
         for (view, show) in views where show { view.isHidden = false }
         guard animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {

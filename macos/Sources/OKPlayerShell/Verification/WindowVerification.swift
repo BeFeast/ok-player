@@ -84,8 +84,8 @@ extension VerifyRun {
                 var rect = CGRect(origin: original.origin, size: size)
                 if index == 0 { rect.origin.x = original.maxX - size.width }
                 if index == 3 { rect.origin.y = original.maxY - size.height }
-                rect = rect.fitted(inside: area)
                 app.window.setFrame(rect, display: true)
+                app.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification, object: app.window))
                 root.layoutSubtreeIfNeeded()
                 if !area.contains(app.window.frame) || !videoFitsAspect(video, controller: controller) {
                     failures.append("window_fit:edge_\(index)")
@@ -163,12 +163,14 @@ extension VerifyRun {
             let fillsScreen = sameFrame(window.frame, screenFrame) && sameFrame(videoRect, root.bounds)
             let restored = preFullscreenFrame.map { sameFrame(window.frame, $0) } ?? false
             let progressing = snapshot.status == .playing && (snapshot.timePos ?? 0) > (preFullscreenTime ?? 0)
+            let oscVisible = viewVisible(app.osc.panel)
             if window.isInFullscreen != fullscreen || fullscreenEntries != 1 || !progressing ||
-                (fullscreen ? (!fillsScreen || chromeVisible || viewVisible(controller.pinButton)) : !restored) {
+                (fullscreen ? (!fillsScreen || chromeVisible || viewVisible(controller.pinButton) || !oscVisible) : !restored) {
                 failures.append("window_fullscreen:\(name)")
             }
             facts["screen_frame_points"] = dimensions(screenFrame)
             facts["normal_frame_restored"] = restored
+            facts["osc_visible"] = oscVisible
         case .landscape, .portrait:
             guard let area = controller.verificationWorkArea, let geometry = snapshot.video else {
                 throw VerifyError("Fit checkpoint lacks a work area or video geometry")

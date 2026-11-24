@@ -308,6 +308,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         windowBehaviour?.windowWillResize(to: frameSize) ?? frameSize
     }
+    func windowDidEndLiveResize(_ notification: Notification) { windowBehaviour?.windowDidEndLiveResize() }
     func windowDidFailToEnterFullScreen(_ window: NSWindow) { windowBehaviour?.fullscreenFailed() }
     func windowDidFailToExitFullScreen(_ window: NSWindow) { windowBehaviour?.fullscreenFailed() }
 
