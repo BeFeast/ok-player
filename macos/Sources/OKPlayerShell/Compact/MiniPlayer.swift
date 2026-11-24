@@ -9,7 +9,7 @@ final class MiniPlayer: NSObject {
     var showCommands: ((NSPoint) -> Void)?
     var toast: ((String) -> Void)?
     var accessibilityOverride: MiniPlayerAccessibility? {
-        didSet { accessibilityChanged() }
+        didSet { updateAccessibility() }
     }
     var snapsToCorners = true
     var liftsSubtitles = true
@@ -35,6 +35,7 @@ final class MiniPlayer: NSObject {
         let behavior: NSWindow.CollectionBehavior
         let background: NSColor
         let opaque: Bool
+        let shadow: Bool
     }
 
     private struct Edges: OptionSet {
@@ -80,7 +81,7 @@ final class MiniPlayer: NSObject {
             button.action = action
         }
         NSWorkspace.shared.notificationCenter.addObserver(
-            self, selector: #selector(accessibilityChanged),
+            self, selector: #selector(accessibilityChanged(_:)),
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
     }
 
@@ -114,7 +115,7 @@ final class MiniPlayer: NSObject {
         let frame = session.compactPlacement(of: proposed, inside: area, snap: true) ?? proposed
         standard = StandardWindow(frame: window.frame, minimum: window.minSize, style: window.styleMask,
                                   behavior: window.collectionBehavior, background: window.backgroundColor ?? .windowBackgroundColor,
-                                  opaque: window.isOpaque)
+                                  opaque: window.isOpaque, shadow: window.hasShadow)
         aspectVideo = video
         window.isMiniPlayer = true
         onModeChange?(true)
@@ -124,6 +125,7 @@ final class MiniPlayer: NSObject {
         window.collectionBehavior.insert(.fullScreenNone)
         window.isOpaque = false
         window.backgroundColor = .clear
+        window.hasShadow = true
         setRounded(true, in: root)
         controller.miniPlayerChanged()
         window.setFrame(frame, display: true, animate: !controls.accessibility.reduceMotion)
@@ -156,6 +158,7 @@ final class MiniPlayer: NSObject {
         window.collectionBehavior = standard.behavior
         window.backgroundColor = standard.background
         window.isOpaque = standard.opaque
+        window.hasShadow = standard.shadow
         window.minSize = standard.minimum
         setRounded(false, in: root)
         controller?.miniPlayerChanged()
@@ -191,7 +194,9 @@ final class MiniPlayer: NSObject {
         return rect.isNull ? 0 : rect.width * rect.height
     }
 
-    @objc private func accessibilityChanged() {
+    @objc private func accessibilityChanged(_ notification: Notification) { updateAccessibility() }
+
+    private func updateAccessibility() {
         controls.accessibility = accessibilityOverride ?? .system
     }
 
@@ -202,6 +207,10 @@ final class MiniPlayer: NSObject {
     func setContextShown(_ shown: Bool) {
         guard isActive, shown != contextPin else { return }
         contextPin = shown
+        if shown && pointerPin {
+            pointerPin = false
+            autoHide.unpin()
+        }
         if shown { autoHide.pin() } else { autoHide.unpin() }
     }
 

@@ -80,6 +80,14 @@ final class MiniPlayerControls: NSView {
         onLayout?()
     }
 
+    override func draw(_ dirtyRect: NSRect) {
+        guard !usesSolidMaterial,
+              let fade = NSGradient(starting: NSColor.black.withAlphaComponent(0.5), ending: .clear) else { return }
+        for surface in surfaces {
+            fade.draw(in: surface.frame.insetBy(dx: -24, dy: -28), relativeCenterPosition: .zero)
+        }
+    }
+
     func update(_ view: TransportView, title name: String, playing: Bool) {
         title.stringValue = name
         if elapsed.stringValue != view.elapsed {
@@ -104,6 +112,7 @@ final class MiniPlayerControls: NSView {
     }
 
     private func updateMaterial() {
+        needsDisplay = true
         for view in surfaces { view.accessibility = accessibility }
         let text = accessibility.increaseContrast ? NSColor.labelColor : PaletteRole.text.overVideo
         [expand, play, closeMedia, mute, more].forEach { $0.contentTintColor = text }

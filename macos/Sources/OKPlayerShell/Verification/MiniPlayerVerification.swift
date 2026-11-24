@@ -93,7 +93,8 @@ extension VerifyRun {
             try await perform(step)
             if !controls.revealed { failures.append("compact_mini_floor:paused_controls") }
         case .playTo:
-            try await perform(step)
+            if snapshot.status == .paused { try await perform(step) }
+            else { try await performWindowStep(step) }
         case .idleMini:
             try pressKey(" ", code: 49)
             // Activity leaves the controls over the video until the real timeout.

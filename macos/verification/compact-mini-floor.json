@@ -7,6 +7,7 @@
     {"action": "open"},
     {"action": "enter_mini"},
     {"action": "resize_mini"},
+    {"action": "play_to", "seconds": 2.35},
     {"action": "pause"},
     {"action": "seek_mini", "seconds": 4.0},
     {"action": "capture", "name": "mini-floor-paused", "expect": "mini_floor"},

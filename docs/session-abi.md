@@ -136,7 +136,7 @@ different versions do not talk at all.
 
 ## Window queries
 
-Three queries answer window questions with okp-core's rules, so every shell
+Window queries use okp-core's rules, so every shell
 sizes its window and reads clicks on the video the same way.
 
 - `window_fit {video, backing_scale, visible_frame, min_size, chrome}` gives the
@@ -166,6 +166,15 @@ sizes its window and reads clicks on the video the same way.
   every batch with a video size; only the first answer for a source resizes
   the window. A shell in fullscreen asks too and drops the frame, so a later
   exit from fullscreen is not refitted.
+- `compact_window_size {video, maximum, proposed, current}` returns
+  `result.compact_window_size.size`. With both resize measurements omitted it
+  sizes the shorter edge to 270 points. During resize the axis with the larger
+  change leads. The shorter edge stops at 160 points unless keeping the video
+  on the display requires a smaller window.
+- `compact_window_placement {frame, visible_frame, snap}` returns
+  `result.window_fit.frame`, preserving the saved rectangle where it fits.
+  With `snap` enabled it first settles a frame released near a corner at the
+  16-point inset. Both compact geometry queries read no session state.
 - `video_click {press_count}` says what a primary-button release with that
   click count on the video means: `result.video_click.intent` is
   `schedule_play_pause` (toggle pause once the double-click interval passes
@@ -193,7 +202,9 @@ change.
 
 `command_surface {fullscreen, page, query}` answers with
 `result.command_surface.surface`, including `preferred_width` and
-`max_height` in points. An empty query returns the curated `page`. A
+`max_height` in points. `compact_command_surface {page, query}` returns the
+same document with the compact window's command state and width. An empty
+query returns the curated `page`. A
 nonempty query searches labels, keywords and platform shortcuts across all
 pages. Entries are `command {row}`, `page {page, label}`, `group {label}`
 for search groups, or `separator {}`.

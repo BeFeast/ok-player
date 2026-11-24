@@ -341,11 +341,11 @@ pub enum Query {
     CommandSurface {
         #[serde(default)]
         fullscreen: bool,
-        #[serde(default)]
-        mini_player: bool,
         page: CommandMenu,
         query: String,
     },
+    /// The same command surface projected into a compact window.
+    CompactCommandSurface { page: CommandMenu, query: String },
     /// Every bindable action with its chords on this platform.
     ShortcutTable {},
     /// The actions whose key repeats while held; every other action runs once
@@ -410,7 +410,8 @@ pub enum QueryResult {
     Snapshot {
         snapshot: SessionSnapshot,
     },
-    /// The answer to `window_fit` and `initial_window_fit`; `null` when there
+    /// The answer to `window_fit`, `initial_window_fit` and
+    /// `compact_window_placement`; `null` when there
     /// is nothing to fit.
     WindowFit {
         frame: Option<WindowRect>,

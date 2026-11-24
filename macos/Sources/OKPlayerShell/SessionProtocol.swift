@@ -159,7 +159,8 @@ enum Query: Codable, Equatable {
     /// Every registry command, resolved against the session state and the window
     /// state only the shell knows. Query it when a menu opens.
     case commandRegistry(fullscreen: Bool = false, miniPlayer: Bool = false)
-    case commandSurface(fullscreen: Bool, miniPlayer: Bool = false, page: CommandMenu, query: String)
+    case commandSurface(fullscreen: Bool, page: CommandMenu, query: String)
+    case compactCommandSurface(page: CommandMenu, query: String)
     /// Every bindable action with its chords on the config's platform.
     case shortcutTable
     /// The actions whose key repeats while held; every other one runs once per press.

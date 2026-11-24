@@ -7,9 +7,11 @@ extension PlayerApp {
         context.focusReturn = video
         context.clampsToWindow = verification?.control != "context_clamp_disabled"
         context.query = { [weak self, weak behaviour] page, query in
-            guard let self, let behaviour, case .commandSurface(let surface)? = self.client?.query(
-                .commandSurface(fullscreen: behaviour.window.isInFullscreen, miniPlayer: self.miniPlayer.isActive,
-                                page: page, query: query)) else { return nil }
+            guard let self, let behaviour else { return nil }
+            let request: Query = self.miniPlayer.isActive
+                ? .compactCommandSurface(page: page, query: query)
+                : .commandSurface(fullscreen: behaviour.window.isInFullscreen, page: page, query: query)
+            guard case .commandSurface(let surface)? = self.client?.query(request) else { return nil }
             return surface
         }
         context.onVisibilityChange = { [weak self] shown in

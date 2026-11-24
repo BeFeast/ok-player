@@ -18,7 +18,7 @@ use okp_core::settings_store::SettingsStore;
 use okp_mpv::{EndFileReason, EntryEvent, MpvEvent, error_description};
 
 use crate::coalesce::Coalescer;
-use crate::commands::{CommandRegistry, Invocation, WindowState};
+use crate::commands::{CommandMenu, CommandRegistry, Invocation, WindowState};
 use crate::engine::{Engine, MpvEngine, Observation};
 use crate::history::{HistoryAction, HistoryActionResult, Report, SessionHistory};
 use crate::machine::SessionMachine;
@@ -413,25 +413,24 @@ impl Session {
             },
             Query::CommandSurface {
                 fullscreen,
-                mini_player,
                 page,
                 query,
-            } => {
-                let snapshot = self.snapshot();
-                let playlist_items = lock(&self.shared.state).playlist.len();
-                QueryResult::CommandSurface {
-                    surface: self.commands.surface(
-                        &snapshot,
-                        WindowState {
-                            fullscreen: *fullscreen,
-                            mini_player: *mini_player,
-                        },
-                        playlist_items,
-                        *page,
-                        query,
-                    ),
-                }
-            }
+            } => self.command_surface(
+                WindowState {
+                    fullscreen: *fullscreen,
+                    mini_player: false,
+                },
+                *page,
+                query,
+            ),
+            Query::CompactCommandSurface { page, query } => self.command_surface(
+                WindowState {
+                    fullscreen: false,
+                    mini_player: true,
+                },
+                *page,
+                query,
+            ),
             Query::OpenFormats {} => QueryResult::OpenFormats {
                 formats: OpenFormats::current(),
             },
@@ -441,6 +440,16 @@ impl Session {
             Query::RepeatingShortcuts {} => QueryResult::RepeatingShortcuts {
                 actions: self.commands.repeating_shortcuts(),
             },
+        }
+    }
+
+    fn command_surface(&self, window: WindowState, page: CommandMenu, query: &str) -> QueryResult {
+        let snapshot = self.snapshot();
+        let playlist_items = lock(&self.shared.state).playlist.len();
+        QueryResult::CommandSurface {
+            surface: self
+                .commands
+                .surface(&snapshot, window, playlist_items, page, query),
         }
     }
 
