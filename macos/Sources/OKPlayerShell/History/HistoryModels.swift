@@ -168,8 +168,9 @@ final class HistoryPageModel {
         self.session = session
         opener = open
         revealer = reveal
-        self.pageSize = pageSize
-        limit = pageSize
+        let size = max(1, pageSize)
+        self.pageSize = size
+        limit = size
     }
 
     func setSearch(_ text: String) {

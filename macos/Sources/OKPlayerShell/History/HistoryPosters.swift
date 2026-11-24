@@ -33,7 +33,8 @@ final class HistoryPosters: @unchecked Sendable {
 
     private func fingerprint(_ path: String) -> String? {
         var key = [CChar](repeating: 0, count: 17)
-        guard path.withCString({ okp_history_poster_key($0, &key) }) else { return nil }
+        let length = UInt(key.count)
+        guard path.withCString({ okp_history_poster_key($0, &key, length) }) else { return nil }
         return String(cString: key)
     }
 
