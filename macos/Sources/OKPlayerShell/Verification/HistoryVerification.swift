@@ -93,6 +93,7 @@ extension VerifyRun {
         case .historyMore:
             let first = historyRows.map(\.id)
             guard first.count == 6, history.page.hasMore else { throw VerifyError("Incorrect first History page") }
+            try await activateHistory("scroll-history-end")
             try await activateHistory("show-more")
             do {
                 try await wait("Show more appends rows and reaches the end of history") {
@@ -106,6 +107,7 @@ extension VerifyRun {
             }
         case .historyCompact:
             app.window.setContentSize(CGSize(width: 442, height: 580))
+            try await activateHistory("scroll-history-top")
             try await wait("compact History keeps navigation and row actions in bounds") {
                 self.historyGeometryFits()
             }
@@ -146,9 +148,15 @@ extension VerifyRun {
             let (title, seconds) = record
             let path = options.historyFile(title).path
             app.play(path)
-            try await wait("\(title) is loaded in libmpv") {
-                self.snapshot.source?.location == path && self.snapshot.video != nil
-                    && (self.snapshot.status == .playing || self.snapshot.status == .paused)
+            do {
+                try await wait("\(title) is loaded in libmpv") {
+                    self.snapshot.source?.location == path && (self.snapshot.duration ?? 0) > 0
+                        && (self.snapshot.status == .playing || self.snapshot.status == .paused)
+                }
+            } catch {
+                let duration = snapshot.duration.map { String($0) } ?? "unavailable"
+                throw VerifyError("\(error.localizedDescription). Playback state: \(snapshot.status.rawValue), "
+                                  + "duration: \(duration).")
             }
             let finishes = title == "Finished"
             _ = app.client?.dispatch(.setPaused(paused: !finishes))

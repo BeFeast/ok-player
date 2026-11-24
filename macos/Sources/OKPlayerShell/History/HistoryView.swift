@@ -123,8 +123,17 @@ struct HistoryView: View {
     }
 
     private func rows(_ sections: [HistorySection]) -> some View {
+        ScrollViewReader { scroll in
+            scrollRows(sections)
+                .historyBounds("scroll-history-top", action: { scroll.scrollTo("history-top", anchor: .top) })
+                .historyBounds("scroll-history-end", action: { scroll.scrollTo("history-end", anchor: .bottom) })
+        }
+    }
+
+    private func scrollRows(_ sections: [HistorySection]) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
+                Color.clear.frame(height: 0).id("history-top").accessibilityHidden(true)
                 ForEach(sections, id: \.bucket) { section in
                     Text(section.header)
                         .font(.caption.weight(.semibold))
@@ -154,6 +163,7 @@ struct HistoryView: View {
                     Rectangle().fill(PaletteRole.borderSubtle.swiftUI).frame(height: 1)
                 }
                 .padding(.top, 18)
+                .id("history-end")
             }
         }
     }
@@ -274,6 +284,8 @@ private struct HistorySearchField: NSViewRepresentable {
         field.setAccessibilityLabel("Search history")
         field.font = .systemFont(ofSize: NSFont.systemFontSize)
         field.textColor = PaletteRole.text.color
+        field.isEditable = true
+        field.isSelectable = true
         field.isBezeled = false
         field.drawsBackground = false
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)

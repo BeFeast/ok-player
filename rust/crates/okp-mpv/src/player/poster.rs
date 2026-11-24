@@ -48,7 +48,9 @@ pub fn decode_history_poster(path: &str, duration: f64) -> Option<Vec<u8>> {
         ("demuxer-lavf-o", "protocol_whitelist=file"),
     ]
     .map(|(name, value)| (name.to_owned(), value.to_owned()));
-    let mut decoder = Mpv::new_uninitialized().ok()?;
+    // A poster job runs after the primary engine has set LC_NUMERIC.
+    // Creating a worker decoder must avoid mutating the process locale.
+    let mut decoder = Mpv::create_uninitialized_handle().ok()?;
     decoder
         .configure_before_initialize("no", "libmpv", &options)
         .ok()?;

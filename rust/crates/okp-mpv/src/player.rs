@@ -1399,7 +1399,10 @@ impl Mpv {
         unsafe {
             libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
         }
+        Self::create_uninitialized_handle()
+    }
 
+    fn create_uninitialized_handle() -> Result<Self, MpvError> {
         let handle = NonNull::new(unsafe { ffi::mpv_create() }).ok_or(MpvError::NullHandle)?;
         let this = Self {
             handle,
