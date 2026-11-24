@@ -369,19 +369,27 @@ extension VerifyRun {
             failures.append("command_capture:\(name)")
         }
 
-        var frame: CGImage?
-        if wantsVideo {
-            let evidence = video.videoLayer.verificationFrame(width: Int((video.bounds.width * 2).rounded()),
-                                                              height: Int((video.bounds.height * 2).rounded()))
-            guard let evidence, evidence.videoPresent else {
-                throw VerifyError("Real video was unavailable at \(name)", blocked: true)
-            }
-            frame = evidence.image
-        }
         let compositor = await captureCompositor(width: Int((root.bounds.width * 2).rounded()),
                                                  height: Int((root.bounds.height * 2).rounded()))
-        guard let image = compositor ?? windowComposite(root: root, video: video, frame: frame),
-              let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
+        let image: CGImage
+        if let compositor {
+            image = compositor
+        } else {
+            var frame: CGImage?
+            if wantsVideo {
+                let evidence = video.videoLayer.verificationFrame(width: Int((video.bounds.width * 2).rounded()),
+                                                                  height: Int((video.bounds.height * 2).rounded()))
+                guard let evidence, evidence.hasPicture else {
+                    throw VerifyError("Real video was unavailable at \(name)", blocked: true)
+                }
+                frame = evidence.image
+            }
+            guard let composite = windowComposite(root: root, video: video, frame: frame) else {
+                throw VerifyError("Could not compose the 2× command screenshot", blocked: true)
+            }
+            image = composite
+        }
+        guard let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
             throw VerifyError("Could not encode the 2× command screenshot", blocked: true)
         }
         let file = options.output.appendingPathComponent(name + ".png")
@@ -391,6 +399,7 @@ extension VerifyRun {
             "capture": compositor == nil ? "app_composite_2x" : "window_compositor_2x",
             "context_visible": visible, "search_focused": context.isSearching, "playback": snapshot.status.rawValue,
             "window_frame_points": dimensions(window.frame), "render_scale": 2, "swap_count": swaps,
+            "png_pixels": [image.width, image.height],
         ]
         if visible {
             facts["context_frame_points"] = dimensions(context.frameInWindow)

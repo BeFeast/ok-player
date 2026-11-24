@@ -6,9 +6,9 @@
   "steps": [
     { "action": "open" },
     { "action": "check_playback_keys" },
-    { "action": "capture", "name": "keyboard-playback", "expect": "keyboard_playback" },
     { "action": "check_queue_keys" },
     { "action": "check_escape_priority" },
+    { "action": "capture", "name": "keyboard-playback", "expect": "keyboard_playback" },
     { "action": "check_text_priority" }
   ]
 }
