@@ -22,15 +22,22 @@ extension PlayerApp {
         }
         inputRouter.protectsTextInput = verification?.control != "text_priority_disabled"
         inputRouter.dismissTransient = { [weak behaviour] in behaviour?.dismissTransient?() == true }
-        inputRouter.canOpenContext = { [weak self, weak behaviour, weak root] point in
+        inputRouter.canOpenContext = { [weak self, weak behaviour, weak root] event, point in
             guard let self, let behaviour, let root, let parent = root.superview else { return false }
             let local = root.convert(point, from: nil)
             guard root.bounds.contains(local) else { return false }
             let hit = root.hitTest(parent.convert(point, from: nil))
             // Controls, title chrome and the queue retain their own input.
             let interactive = [behaviour.titleStrip, self.osc.panel, self.osc.volumeCapsule, self.upNext.panel]
-            return !interactive.contains { hit?.isDescendant(of: $0) == true }
-                && !(hit is NSControl) && hit?.menu == nil
+            guard !interactive.contains(where: { hit?.isDescendant(of: $0) == true }),
+                  !(hit is NSControl) else { return false }
+            var candidate = hit
+            while let view = candidate {
+                if view.menu(for: event) != nil { return false }
+                if view === root { break }
+                candidate = view.superview
+            }
+            return true
         }
     }
 

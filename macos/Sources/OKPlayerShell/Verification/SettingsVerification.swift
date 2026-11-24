@@ -20,13 +20,8 @@ extension VerifyRun {
             app.window.makeKeyAndOrderFront(nil)
             let welcome = app.history.welcomeView
             let background = welcome.convert(NSPoint(x: 12, y: welcome.bounds.midY), to: nil)
-            let click = try settingsContextClick(at: background)
-            guard !welcome.isHidden, let player = app.windowBehaviour?.window,
-                  let menu = player.settingsMenu(for: click),
-                  let item = menu.items.firstIndex(where: { $0.playerCommandID == "open-settings" }) else {
-                throw VerifyError("The player context menu has no Settings action")
-            }
-            menu.performActionForItem(at: item)
+            guard !welcome.isHidden else { throw VerifyError("Welcome was not visible") }
+            try openSettingsFromContext(at: background)
             checkSettings(app.settings.window === before && before.isVisible
                           && NSApp.windows.filter { $0 is SettingsWindow && $0.isVisible }.count == 1,
                           "single_window")
@@ -127,12 +122,7 @@ extension VerifyRun {
             self.snapshot.status == .playing && self.swaps > before
         }
         guard let video = app.video else { throw VerifyError("Playback has no video view") }
-        let click = try settingsContextClick(at: video.convert(NSPoint(x: video.bounds.midX, y: video.bounds.midY), to: nil))
-        guard let menu = video.menu(for: click),
-              let item = menu.items.firstIndex(where: { $0.playerCommandID == "open-settings" }) else {
-            throw VerifyError("The playback context menu has no Settings action")
-        }
-        menu.performActionForItem(at: item)
+        try openSettingsFromContext(at: video.convert(NSPoint(x: video.bounds.midX, y: video.bounds.midY), to: nil))
         checkSettings(app.settings.window === settings && settings.isVisible, "playback_context")
         settings.close()
         app.window.makeKeyAndOrderFront(nil)
@@ -145,14 +135,18 @@ extension VerifyRun {
                       "fixed_over_video_appearance")
     }
 
-    private func settingsContextClick(at point: NSPoint) throws -> NSEvent {
-        guard let click = NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [],
-                                             timestamp: ProcessInfo.processInfo.systemUptime,
-                                             windowNumber: app.window.windowNumber, context: nil,
-                                             eventNumber: 0, clickCount: 1, pressure: 1) else {
-            throw VerifyError("Could not make a native context click")
+    private func openSettingsFromContext(at point: NSPoint) throws {
+        try clickCommandSurface(at: point, right: true)
+        let context = app.commandPopover
+        guard context.isSearching, let editor = app.window.firstResponder as? NSTextView else {
+            throw VerifyError("The player context menu did not open with search focused")
         }
-        return click
+        editor.insertText("Settings...", replacementRange: editor.selectedRange())
+        guard context.entries.contains(where: { entry in
+            guard case .command(let row) = entry else { return false }
+            return row.id == "open-settings" && row.available && row.enabled
+        }) else { throw VerifyError("The player context menu has no enabled Settings command") }
+        try pressKey("\r", code: 36, focusVideo: false)
     }
 
     private func captureSettings(_ name: String, expected: VerificationScenario.Expectation) async throws {

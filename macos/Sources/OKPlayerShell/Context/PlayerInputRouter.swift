@@ -7,7 +7,7 @@ final class PlayerInputRouter {
     let commands: PlayerCommands
     let context: CommandPopover
     var dismissTransient: (() -> Bool)?
-    var canOpenContext: ((NSPoint) -> Bool)?
+    var canOpenContext: ((NSEvent, NSPoint) -> Bool)?
     var protectsTextInput = true
     private var consumedMouseButton: NSEvent.EventType?
     private var dismissedByLeftClick = false
@@ -93,7 +93,7 @@ final class PlayerInputRouter {
         let mods = ShortcutModifiers(flags: event.modifierFlags)
         let contextClick = event.type == .rightMouseDown
             || (event.type == .leftMouseDown && mods == ShortcutModifiers(ctrl: true))
-        guard contextClick, window.attachedSheet == nil, canOpenContext?(point) == true,
+        guard contextClick, window.attachedSheet == nil, canOpenContext?(event, point) == true,
               context.show(at: point) else { return false }
         consumedMouseButton = mouseUp
         return true
