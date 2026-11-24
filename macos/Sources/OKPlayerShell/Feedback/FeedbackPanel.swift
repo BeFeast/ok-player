@@ -233,15 +233,13 @@ final class FeedbackPanel: NSObject, NSWindowDelegate {
         status.stringValue = "Sending…"
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = Result { try client.submit(report, token: previous) }
-            let saved: FeedbackForm.Draft?
-            if case .failure = result { saved = try? client.form().draft } else { saved = nil }
             DispatchQueue.main.async {
-                self?.finished(result, saved: saved)
+                self?.finished(result)
             }
         }
     }
 
-    private func finished(_ result: Result<FeedbackIssue, Error>, saved: FeedbackForm.Draft?) {
+    private func finished(_ result: Result<FeedbackIssue, Error>) {
         sending = false
         cancel.isEnabled = true
         sendButton.isEnabled = true
@@ -253,8 +251,8 @@ final class FeedbackPanel: NSObject, NSWindowDelegate {
             sendButton.title = "Open Issue"
             sendButton.keyEquivalent = ""
         case .failure(let error):
-            if let saved, saved.message == error.localizedDescription {
-                token = saved.token
+            if let saved = (error as? FeedbackClient.Failure)?.retryToken {
+                token = saved
             }
             setControls(enabled: true)
             discard.isHidden = token == nil

@@ -52,12 +52,14 @@ struct FeedbackClient: Sendable {
 
     struct Failure: LocalizedError {
         var message: String
+        var retryToken: String? = nil
         var errorDescription: String? { message }
     }
 
     private struct Response<Value: Decodable>: Decodable {
         let value: Value?
         let error: String?
+        let retryToken: String?
     }
 
     private struct Submission: Encodable {
@@ -88,7 +90,9 @@ struct FeedbackClient: Sendable {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let response = try decoder.decode(Response<Value>.self, from: data)
-        guard let value = response.value else { throw Failure(message: response.error ?? "Could not read feedback.") }
+        guard let value = response.value else {
+            throw Failure(message: response.error ?? "Could not read feedback.", retryToken: response.retryToken)
+        }
         return value
     }
 }

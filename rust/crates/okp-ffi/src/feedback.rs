@@ -1,5 +1,5 @@
 //! JSON bridge for the shared feedback outbox.
-use okp_core::feedback::{Outbox, Submission};
+use okp_core::feedback::{Outbox, SendFailure, Submission};
 use serde_json::{Value, json};
 use std::{
     ffi::{CStr, CString, c_char},
@@ -33,15 +33,18 @@ pub unsafe extern "C" fn okp_feedback_submit(
     test_port: u16,
     submission: *const c_char,
 ) -> *mut c_char {
-    let result = (|| {
+    let result = (|| -> Result<_, SendFailure> {
         let directory = unsafe { input(directory) }?;
         let data: Submission = serde_json::from_str(unsafe { input(submission) }?)
             .map_err(|_| "Could not read the feedback form.")?;
-        outbox(directory, test_port)
-            .submit(data.token, data.report)
-            .map(|receipt| json!(receipt))
+        outbox(directory, test_port).submit(data.token, data.report)
     })();
-    output(result)
+    match result {
+        Ok(receipt) => output(Ok(json!(receipt))),
+        Err(failure) => {
+            into_c_string(json!({ "error": failure.message, "retry_token": failure.token }))
+        }
+    }
 }
 
 /// Discard the pending report identified by the form's token.
@@ -100,6 +103,10 @@ fn output(value: Result<Value, &'static str>) -> *mut c_char {
         Ok(value) => json!({ "value": value }),
         Err(error) => json!({ "error": error }),
     };
+    into_c_string(response)
+}
+
+fn into_c_string(response: Value) -> *mut c_char {
     CString::new(response.to_string())
         .expect("JSON escapes interior NULs")
         .into_raw()

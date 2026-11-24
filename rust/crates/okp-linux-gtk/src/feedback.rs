@@ -1,5 +1,5 @@
 use super::*;
-use okp_core::feedback::{self, Diagnostics, Kind, Metadata, Outbox, Playback, Report};
+use okp_core::feedback::{Diagnostics, Kind, Metadata, Outbox, Playback, Report, SendFailure};
 
 pub(crate) fn open(parent: &gtk::ApplicationWindow, state: &Rc<RefCell<PlayerState>>) {
     if let Some(window) = state.borrow().feedback_window.upgrade() {
@@ -14,7 +14,7 @@ pub(crate) fn open(parent: &gtk::ApplicationWindow, state: &Rc<RefCell<PlayerSta
         .parent()
         .filter(|dir| !dir.as_os_str().is_empty());
     let Some(path) = path else {
-        show_error(parent, feedback::LOCAL_ERROR);
+        show_error(parent, "Could not locate the feedback settings directory.");
         return;
     };
     let outbox = Arc::new(Outbox::new(path));
@@ -219,6 +219,7 @@ pub(crate) fn open(parent: &gtk::ApplicationWindow, state: &Rc<RefCell<PlayerSta
     });
     send.connect_clicked({
         let (send, discard, close) = (send.downgrade(), discard.downgrade(), close.downgrade());
+        let text = text.buffer();
         move |_| {
             let (Some(send), Some(discard), Some(close)) =
                 (send.upgrade(), discard.upgrade(), close.upgrade())
@@ -233,7 +234,7 @@ pub(crate) fn open(parent: &gtk::ApplicationWindow, state: &Rc<RefCell<PlayerSta
             close.set_sensitive(false);
             discard.set_sensitive(false);
             status.set_text("Sending…");
-            let buffer = text.buffer();
+            let buffer = &text;
             let report = Report {
                 text: buffer
                     .text(&buffer.start_iter(), &buffer.end_iter(), true)
@@ -261,32 +262,26 @@ pub(crate) fn open(parent: &gtk::ApplicationWindow, state: &Rc<RefCell<PlayerSta
                 controls.clone(),
             );
             glib::spawn_future_local(async move {
-                let result = gtk::gio::spawn_blocking(move || {
-                    let result = outbox.submit(previous, report);
-                    let saved = match result {
-                        Err(feedback::STALE | feedback::BUSY) | Ok(_) => None,
-                        Err(_) => outbox
-                            .form()
-                            .ok()
-                            .and_then(|form| form.draft.map(|draft| draft.token)),
-                    };
-                    (result, saved)
-                })
-                .await
-                .unwrap_or((Err(feedback::UNCERTAIN), None));
+                let result = gtk::gio::spawn_blocking(move || outbox.submit(previous, report))
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(SendFailure::from(
+                            "Sending was interrupted. Reopen Feedback to check the saved report.",
+                        ))
+                    });
                 busy.set(false);
                 close.set_sensitive(true);
                 match result {
-                    (Ok(receipt), _) => {
+                    Ok(receipt) => {
                         status.set_text("Feedback sent.");
                         link.set_uri(&receipt.issue_url);
                         link.set_visible(true);
                         send.set_visible(false);
                         discard.set_visible(false);
                     }
-                    (Err(message), saved) => {
-                        status.set_text(message);
-                        if let Some(id) = saved {
+                    Err(failure) => {
+                        status.set_text(failure.message);
+                        if let Some(id) = failure.token {
                             token.set(Some(id));
                             discard.set_visible(true);
                             send.set_label("Retry");

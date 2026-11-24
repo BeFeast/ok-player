@@ -140,6 +140,22 @@ pub struct Receipt {
     pub issue_url: String,
 }
 
+#[derive(Debug)]
+pub struct SendFailure {
+    pub message: &'static str,
+    /// Present only when this attempt saved a pending report.
+    pub token: Option<Uuid>,
+}
+
+impl From<&'static str> for SendFailure {
+    fn from(message: &'static str) -> Self {
+        Self {
+            message,
+            token: None,
+        }
+    }
+}
+
 pub struct Outbox {
     path: PathBuf,
     endpoint: String,
@@ -180,16 +196,19 @@ impl Outbox {
         self.save(&state)
     }
 
-    pub fn submit(&self, token: Option<Uuid>, report: Report) -> Result<Receipt, &'static str> {
+    pub fn submit(&self, token: Option<Uuid>, report: Report) -> Result<Receipt, SendFailure> {
         let screenshot = report.screenshot_bytes()?;
         if report.text.chars().count() > 10_000 || report.text.contains('\0') {
             return Err(
-                "The description must contain at most 10,000 characters and no NUL characters.",
+                "The description must contain at most 10,000 characters and no NUL characters."
+                    .into(),
             );
         }
         let name = report.reporter_name.trim();
         if name.chars().count() > 128 || name.chars().any(char::is_control) {
-            return Err("The name must contain at most 128 characters and no control characters.");
+            return Err(
+                "The name must contain at most 128 characters and no control characters.".into(),
+            );
         }
         let meta =
             serde_json::to_vec(&report.meta).map_err(|_| "Could not prepare system details.")?;
@@ -200,7 +219,7 @@ impl Outbox {
         let _lock = self.lock()?;
         let mut state = self.read()?;
         if state.draft.as_ref().map(|draft| draft.token) != token {
-            return Err(STALE);
+            return Err(STALE.into());
         }
         let install_id = *state.install_id.get_or_insert_with(Uuid::new_v4);
         state.reporter_name = name.to_owned();
@@ -211,8 +230,9 @@ impl Outbox {
             log.as_deref(),
             install_id,
         );
+        let token = Uuid::new_v4();
         state.draft = Some(Draft {
-            token: Uuid::new_v4(),
+            token,
             report,
             message: UNCERTAIN.into(),
         });
@@ -227,8 +247,12 @@ impl Outbox {
                 if let Some(draft) = &mut state.draft {
                     draft.message = message.into();
                 }
-                self.save(&state)?;
-                Err(message)
+                // The durable pre-send snapshot already has the same retry token.
+                let _ = self.save(&state);
+                Err(SendFailure {
+                    message,
+                    token: Some(token),
+                })
             }
         }
     }
@@ -406,13 +430,11 @@ mod tests {
         }
     }
 
+    type Request = (String, Vec<u8>);
+
     fn fixture(
         responses: Vec<(&'static str, &'static str)>,
-    ) -> (
-        u16,
-        mpsc::Receiver<(String, Vec<u8>)>,
-        thread::JoinHandle<()>,
-    ) {
+    ) -> (u16, mpsc::Receiver<Request>, thread::JoinHandle<()>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         let (sender, receiver) = mpsc::channel();
@@ -517,9 +539,16 @@ mod tests {
 
         let reopened = Outbox::loopback(dir.path(), port);
         let draft = reopened.form().unwrap().draft.unwrap();
-        assert_eq!(draft.message, error);
+        assert_eq!(draft.message, error.message);
+        assert_eq!(Some(draft.token), error.token);
         assert_eq!(draft.report.text, report.text);
-        assert_eq!(reopened.submit(None, report).err(), Some(STALE));
+        assert_eq!(
+            reopened
+                .submit(None, report)
+                .err()
+                .map(|error| error.message),
+            Some(STALE)
+        );
         assert!(requests.try_recv().is_err());
         let receipt = reopened.submit(Some(draft.token), draft.report).unwrap();
         assert_eq!(receipt.issue_number, 17);
@@ -542,7 +571,10 @@ mod tests {
         assert!(outbox.submit(None, report.clone()).is_err());
         assert!(outbox.form().unwrap().draft.is_none());
         report.text = String::new();
-        assert_eq!(outbox.submit(None, report).err(), Some(UNCERTAIN));
+        assert_eq!(
+            outbox.submit(None, report).err().map(|error| error.message),
+            Some(UNCERTAIN)
+        );
         let draft = outbox.form().unwrap().draft.unwrap();
         assert_eq!(draft.message, UNCERTAIN);
         outbox.discard(draft.token).unwrap();
