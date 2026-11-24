@@ -284,8 +284,7 @@ extension VerifyRun {
                     (onPage ? history.pageBounds : history.shelfBounds)["poster:\(first)"] != nil
                 }
             } catch {
-                if onPage { throw error }
-                failures.append("welcome_resume_shelf:poster")
+                failures.append(onPage ? "history_page:poster" : "welcome_resume_shelf:poster")
             }
             let dark = history.welcome.entries.first(where: { $0.title == "Dark fallback" })?.id ?? ""
             let bounds = onPage ? history.pageBounds : history.shelfBounds

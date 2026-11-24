@@ -44,13 +44,20 @@ pub fn decode_history_poster(path: &str, duration: f64) -> Option<Vec<u8>> {
         ("panscan", "1"),
         ("osd-level", "0"),
         ("autoload-files", "no"),
-        ("load-scripts", "no"),
-        ("ytdl", "no"),
         ("access-references", "no"),
         ("demuxer-lavf-o", "protocol_whitelist=file"),
     ]
     .map(|(name, value)| (name.to_owned(), value.to_owned()));
-    let mut decoder = Mpv::new_with_options("no", &options).ok()?;
+    let mut decoder = Mpv::new_uninitialized().ok()?;
+    decoder
+        .configure_before_initialize("no", "libmpv", &options)
+        .ok()?;
+    // The bundled macOS mpv has no scripting support and omits these options.
+    // Disable them only on builds that expose them.
+    for name in ["load-scripts", "ytdl"] {
+        decoder.set_option_if_supported(name, "no").ok()?;
+    }
+    let mut decoder = decoder.initialize().ok()?;
     decoder.create_software_render_context().ok()?;
     let deadline = Instant::now() + Duration::from_secs(6);
     let mut candidate = vec![0; POSTER_WIDTH * POSTER_HEIGHT * 4];
