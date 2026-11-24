@@ -22,8 +22,9 @@ extension VerifyRun {
             menu.update()
             menu.performActionForItem(at: index)
             try await wait("Window menu switched to the floating Mini-Player") {
-                mini.isActive && self.swaps > before
+                mini.isActive && self.swaps > before && abs(min(window.frame.width, window.frame.height) - 270) <= 1
             }
+            window.contentView?.layoutSubtreeIfNeeded()
             if !(snapshot.timePos.map { $0 >= position } ?? false) {
                 failures.append("compact_mini:enter_playback")
             }
@@ -51,11 +52,13 @@ extension VerifyRun {
             miniChecks.append(["name": "corner-snap", "frame_points": dimensions(frame),
                                "work_area_points": dimensions(area)])
         case .resizeMini:
+            let original = window.frame
             let origin = window.frame.origin
             let start = window.convertPoint(fromScreen: CGPoint(x: origin.x + 3, y: origin.y + window.frame.height * 0.62))
             try miniMouse(.leftMouseDown, at: start)
             try miniMouse(.leftMouseDragged, at: CGPoint(x: start.x + window.frame.width - 60, y: start.y))
             try miniMouse(.leftMouseUp, at: start)
+            print("OKP_VERIFY Mini resize from \(original) to \(window.frame), AppKit minimum \(window.minSize)")
             try await wait("Mini-Player resize obeyed the short-edge floor") {
                 abs(min(window.frame.width, window.frame.height) - 160) <= 1
             }

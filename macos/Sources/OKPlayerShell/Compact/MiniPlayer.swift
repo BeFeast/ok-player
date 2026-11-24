@@ -125,8 +125,8 @@ final class MiniPlayer: NSObject {
         aspectVideo = video
         window.isMiniPlayer = true
         onModeChange?(true)
-        window.minSize = NSSize(width: 1, height: 1)
         changeStyle(of: window, to: .borderless)
+        window.minSize = NSSize(width: 1, height: 1)
         window.collectionBehavior.remove(.fullScreenPrimary)
         window.collectionBehavior.insert(.fullScreenNone)
         window.isOpaque = false
@@ -321,8 +321,9 @@ final class MiniPlayer: NSObject {
     }
 
     func handle(_ event: NSEvent) -> Bool {
-        guard isActive, let window, let root, let host = root.superview else { return false }
-        let point = event.window == nil ? window.convertPoint(fromScreen: event.locationInWindow) : event.locationInWindow
+        guard isActive, let window, let root, let video, let host = root.superview else { return false }
+        let point = event.windowNumber == window.windowNumber ? event.locationInWindow
+            : window.convertPoint(fromScreen: event.locationInWindow)
         let screenPoint = window.convertPoint(toScreen: point)
         let edges = resizeEdges(at: root.convert(point, from: nil), in: root.bounds)
         switch event.type {
@@ -346,7 +347,8 @@ final class MiniPlayer: NSObject {
             }
         case .leftMouseDown:
             noteActivity()
-            guard root.hitTest(host.convert(point, from: nil)) === video else { return false }
+            let edgeGrab = !edges.isEmpty && controls.interactive(at: point) == nil
+            guard edgeGrab || root.hitTest(host.convert(point, from: nil)) === video else { return false }
             window.makeKey()
             window.makeFirstResponder(video)
             drag = Drag(start: screenPoint, frame: window.frame, edges: edges)
