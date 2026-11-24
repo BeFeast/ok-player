@@ -16,6 +16,7 @@ live-mpv = ["dep:okp-session"]
 [dependencies]
 okp-core = { path = "../okp-core" }
 okp-session = { path = "../okp-session", optional = true }
+serde_json.workspace = true
 
 [build-dependencies]
 cbindgen = "0.29"

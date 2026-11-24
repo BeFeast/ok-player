@@ -138,6 +138,7 @@ struct VerificationScenario: Decodable {
         case checkContextEmpty = "check_context_empty"
         case checkContextPages = "check_context_pages", checkContextCorners = "check_context_corners"
         case checkPlaybackKeys = "check_playback_keys", checkQueueKeys = "check_queue_keys"
+        case feedbackOpen = "feedback_open", feedbackSend = "feedback_send"
         case checkEscapePriority = "check_escape_priority", checkTextPriority = "check_text_priority"
         case aboutPlayback = "about_playback", aboutMenu = "about_menu", aboutRail = "about_rail", aboutCopy = "about_copy"
         case aboutResize = "about_resize", aboutFooter = "about_footer", aboutClose = "about_close"
@@ -164,6 +165,7 @@ struct VerificationScenario: Decodable {
         case aboutIdentity = "about_identity", aboutFooter = "about_footer"
         case miniHover = "mini_hover", miniFloor = "mini_floor", miniHidden = "mini_hidden"
         case miniAccessible = "mini_accessible"
+        case feedbackAttached = "feedback_attached"
     }
     let schemaVersion: Int
     let id: String
@@ -260,6 +262,7 @@ final class VerifyRun {
                     try await performCommandStep(step)
                 }
                 else if scenario.id.hasPrefix("compact-mini") { try await performMiniStep(step) }
+                else if scenario.id == "feedback-dialog" { try await performFeedbackStep(step) }
                 else { try await perform(step) }
             }
             result["status"] = failures.isEmpty ? "passed" : "failed"

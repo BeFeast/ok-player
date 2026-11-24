@@ -958,6 +958,10 @@ pub(crate) fn dispatch_player_command_action(
             popover.popdown();
             open_clear_history_dialog(parent, Rc::clone(state), Rc::clone(status_toast));
         }
+        Id::SendFeedback => {
+            popover.popdown();
+            crate::feedback::open(parent, state);
+        }
         Id::OpenSettings => {
             popover.popdown();
             open_settings_window(parent, Rc::clone(state), Rc::clone(status_toast));

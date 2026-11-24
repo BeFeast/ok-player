@@ -66,6 +66,7 @@ use velopack::{
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 mod about;
+mod feedback;
 mod branding;
 mod chrome_icons;
 mod compact_mode;
@@ -309,6 +310,7 @@ struct PlayerState {
     save_video: SaveVideoSession,
     settings: settings::SettingsStore,
     screenshot_jobs: screenshots::ScreenshotJobs,
+    feedback_window: glib::WeakRef<gtk::Window>,
     linux_update: LinuxUpdateSession,
     linux_update_views: Vec<LinuxUpdateView>,
     /// About's copy of the update status. Refreshed from the same projection

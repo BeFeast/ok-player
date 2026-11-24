@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "feedback-dialog",
+  "fixture": "open-preview.mp4",
+  "appearances": ["light", "dark"],
+  "steps": [
+    { "action": "open" },
+    { "action": "pause" },
+    { "action": "feedback_open" },
+    { "action": "capture", "name": "feedback-attached", "expect": "feedback_attached" },
+    { "action": "feedback_send" }
+  ]
+}

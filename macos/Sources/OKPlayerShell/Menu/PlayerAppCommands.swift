@@ -42,6 +42,9 @@ extension PlayerApp: PlayerCommandResponder, NSMenuItemValidation {
         }
         commands.register("open-file") { [weak self] in self?.openFile() }
         commands.register("open-folder") { [weak self] in self?.openFolder() }
+        commands.register("send-feedback") { [weak self] in
+            MainActor.assumeIsolated { self?.showFeedback() }
+        }
         commands.register("open-settings") { [weak self] in self?.showSettings() }
         commands.register("fullscreen") { [weak self] in _ = self?.windowBehaviour?.perform(.toggleFullscreen) }
         commands.register("escape-fullscreen") { [weak self] in _ = self?.windowBehaviour?.perform(.exitFullscreen) }

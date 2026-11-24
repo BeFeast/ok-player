@@ -123,6 +123,7 @@ pub enum PlayerCommandId {
     PrivateSession,
     ClearHistory,
     OpenSettings,
+    SendFeedback,
 }
 
 impl PlayerCommandId {
@@ -176,6 +177,7 @@ impl PlayerCommandId {
             Self::PrivateSession => "private-session",
             Self::ClearHistory => "clear-history",
             Self::OpenSettings => "open-settings",
+            Self::SendFeedback => "send-feedback",
         }
     }
 }
@@ -237,6 +239,7 @@ pub const PLAYER_COMMAND_MENU_TOP_LEVEL: &[PlayerCommandMenuEntry] = &[
     PlayerCommandMenuEntry::Separator,
     PlayerCommandMenuEntry::Command(PlayerCommandId::CloseMedia),
     PlayerCommandMenuEntry::Command(PlayerCommandId::OpenSettings),
+    PlayerCommandMenuEntry::Command(PlayerCommandId::SendFeedback),
 ];
 
 /// Stable first-level labels. Search results and second-level pages retain the
@@ -252,6 +255,7 @@ pub const fn player_command_menu_top_level_label(id: PlayerCommandId) -> Option<
         PlayerCommandId::Fullscreen => Some("Fullscreen"),
         PlayerCommandId::CloseMedia => Some("Close Media"),
         PlayerCommandId::OpenSettings => Some("Settings..."),
+        PlayerCommandId::SendFeedback => Some("Send Feedback…"),
         _ => None,
     }
 }
@@ -719,6 +723,13 @@ const COMMANDS: &[PlayerCommandSpec] = &[
         &["preferences", "configuration", "options"],
         Some(ShortcutAction::OpenSettings),
     ),
+    command(
+        PlayerCommandId::SendFeedback,
+        PlayerCommandGroup::Settings,
+        "Send Feedback…",
+        &["report bug", "feature request", "support"],
+        None,
+    ),
 ];
 
 const fn command(
@@ -813,6 +824,7 @@ fn resolve_command(
         | Id::OpenPlaylist
         | Id::ClearHistory
         | Id::OpenSettings
+        | Id::SendFeedback
         | Id::PrivateSession => true,
         Id::AddToQueue | Id::PlayNext | Id::OpenFileLocation | Id::AddBookmark => {
             context.has_local_media
@@ -919,6 +931,7 @@ mod tests {
                 PlayerCommandMenuEntry::Separator,
                 PlayerCommandMenuEntry::Command(PlayerCommandId::CloseMedia),
                 PlayerCommandMenuEntry::Command(PlayerCommandId::OpenSettings),
+                PlayerCommandMenuEntry::Command(PlayerCommandId::SendFeedback),
             ]
         );
         assert_eq!(
@@ -931,6 +944,7 @@ mod tests {
                 PlayerCommandId::Fullscreen,
                 PlayerCommandId::CloseMedia,
                 PlayerCommandId::OpenSettings,
+                PlayerCommandId::SendFeedback,
             ]
             .map(|id| player_command_menu_top_level_label(id).unwrap()),
             [
@@ -942,6 +956,7 @@ mod tests {
                 "Fullscreen",
                 "Close Media",
                 "Settings...",
+                "Send Feedback…",
             ]
         );
     }

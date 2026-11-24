@@ -53,7 +53,7 @@ extension VerifyRun {
             }
         }
         if titles != ["Play / Pause", "Subtitles", "Audio", "Chapters", "Screenshot", "Fullscreen", "-",
-                      "Video", "Playback", "Window", "Tools / Advanced", "-", "Close Media", "Settings..."] {
+                      "Video", "Playback", "Window", "Tools / Advanced", "-", "Close Media", "Settings...", "Send Feedback…"] {
             failures.append("context:curated_order")
         }
         if !context.isSearching || contextRow("play-pause")?.enabled != false {
@@ -96,7 +96,7 @@ extension VerifyRun {
         }
         editor.selectAll(nil)
         try pressKey("\u{7f}", code: 51, focusVideo: false)
-        if !context.searchText.isEmpty || context.entries.count != 14 { failures.append("context:clear_search") }
+        if !context.searchText.isEmpty || context.entries.count != 15 { failures.append("context:clear_search") }
         if toEmptyResult {
             editor.insertText("no command 93827", replacementRange: editor.selectedRange())
             if !context.showsEmptyResult || !context.entries.isEmpty { failures.append("context:empty_search") }

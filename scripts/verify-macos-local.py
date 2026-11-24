@@ -2,6 +2,8 @@
 """Exercise the relocated macOS preview and save a verdict even when AppKit fails."""
 import argparse
 from contextlib import contextmanager
+from email import policy
+from email.parser import BytesParser
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -13,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 from threading import Event, Thread
+from uuid import UUID
 
 ROOT = Path(__file__).resolve().parent.parent
 SCENARIOS = ROOT / "macos" / "verification"
@@ -122,7 +125,7 @@ def read_scenario(path):
                "open_queue", "open_queue_url", "show_queue", "check_queue_jump", "preview_queue_move",
                "check_queue_edit", "open_queue_menu", "check_queue_actions", "check_queue_add",
                "enter_mini", "drag_mini", "resize_mini", "restore_mini", "wheel_mini", "seek_mini",
-               "idle_mini", "accessible_mini"}
+               "idle_mini", "accessible_mini", "feedback_open", "feedback_send"}
     if path.stem == SETTINGS:
         actions.update({"settings_shortcut", "settings_context", "settings_legacy", "settings_search",
                         "settings_resize", "settings_system", "settings_light", "settings_auto",
@@ -150,7 +153,7 @@ def read_scenario(path):
                                            "context_welcome", "context_video", "context_results", "context_empty",
                                            "keyboard_playback", "settings_light", "settings_auto", "track_panel",
                                            "open_evidence", "about_identity", "about_footer", "queue_panel", "mini_hover",
-                                           "mini_floor", "mini_hidden", "mini_accessible"}
+                                           "mini_floor", "mini_hidden", "mini_accessible", "feedback_attached"}
                     or not step.get("name", "").replace("-", "").isalnum()):
                 raise ValueError("Invalid capture checkpoint")
         if step["action"] == "check_subtitle_menu":
@@ -502,6 +505,61 @@ def http_fixture(video, enabled):
             thread.join()
 
 
+@contextmanager
+def feedback_fixture(folder, appearance):
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_POST(self):
+            try:
+                assert self.path == "/api/feedback/ok-player"
+                assert "Authorization" not in self.headers and "Cookie" not in self.headers
+                length = int(self.headers["Content-Length"])
+                assert 0 < length < 9 * 1024 * 1024
+                data = self.rfile.read(length)
+                mime = BytesParser(policy=policy.default).parsebytes(
+                    f"Content-Type: {self.headers['Content-Type']}\r\n\r\n".encode() + data
+                )
+                parts = {part.get_param("name", header="content-disposition"): part.get_payload(decode=True)
+                         for part in mime.iter_parts()}
+                assert set(parts) == {"text", "kind", "meta", "install_id", "screenshot", "log"}
+                assert parts["text"].decode() == f"OK Player verifier — {appearance}"
+                assert parts["kind"] == b"bug" and UUID(parts["install_id"].decode()).version == 4
+                meta = json.loads(parts["meta"])
+                assert set(meta) == {"version", "build", "source", "os", "os_version", "arch", "channel"}
+                assert meta["os"] == "macOS" and meta["arch"] == "aarch64" and len(meta["source"]) == 40
+                assert json.loads(parts["log"])["playback"] == "paused"
+                assert parts["screenshot"].startswith(b"\x89PNG\r\n\x1a\n")
+                requests.append({
+                    "source_sha": meta["source"], "build": meta["build"], "issue_number": 123,
+                    "screenshot_sha256": hashlib.sha256(parts["screenshot"]).hexdigest(),
+                })
+                payload = json.dumps({
+                    "issue_number": 123, "issue_url": "https://git.oklabs.uk/BeFeast/ok-player/issues/123",
+                }).encode()
+            except (AssertionError, KeyError, TypeError, ValueError):
+                self.send_error(400)
+                return
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_port}/"
+        finally:
+            server.shutdown()
+            thread.join()
+            (folder / "feedback-loopback.json").write_text(json.dumps(requests, indent=2))
+
+
 def run_process(executable, scenario, video, profile, output, folder, appearance, negative_control, phase=None):
     env = {key: value for key, value in os.environ.items() if not key.startswith("DYLD_")}
     env.update({"TZ": "UTC", "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8"})
@@ -512,7 +570,9 @@ def run_process(executable, scenario, video, profile, output, folder, appearance
         argv.append("--verify-negative-control")
     if phase:
         argv.append(f"--verify-phase={phase}")
-    with http_fixture(video, scenario.stem in {"osc-status", "queue-single"}) as url, (folder / "app.log").open("w") as log:
+    fixture_server = (feedback_fixture(folder, appearance) if scenario.stem == "feedback-dialog"
+                      else http_fixture(video, scenario.stem in {"osc-status", "queue-single"}))
+    with fixture_server as url, (folder / "app.log").open("w") as log:
         if url:
             argv.append(f"--verify-http-fixture={url}")
         try:
@@ -534,6 +594,12 @@ def run_process(executable, scenario, video, profile, output, folder, appearance
                     if step["action"] == "capture" and step.get("phase") == phase]
         if [point["name"] for point in result["checkpoints"]] != expected:
             return {**result, "status": "error", "error": "App did not return every checkpoint"}
+        if scenario.stem == "feedback-dialog":
+            requests = json.loads((folder / "feedback-loopback.json").read_text())
+            if (len(requests) != 1 or requests[0]["source_sha"] != result.get("source_sha")
+                    or requests[0]["screenshot_sha256"] != digest(folder / "attached-player.png")):
+                return {**result, "status": "error", "error": "Feedback did not deliver the attached PNG exactly once"}
+            result["feedback_loopback"] = requests[0]
         for checkpoint in result["checkpoints"]:
             path = folder / checkpoint["png"]
             checkpoint["png"] = path.relative_to(output).as_posix()

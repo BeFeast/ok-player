@@ -60,6 +60,7 @@ pub(crate) struct AboutDeferredLabels {
 }
 
 pub(crate) fn settings_about_section(
+    parent: &gtk::ApplicationWindow,
     state: Rc<RefCell<PlayerState>>,
     status_toast: Rc<StatusToast>,
 ) -> gtk::Box {
@@ -86,6 +87,17 @@ pub(crate) fn settings_about_section(
         &about_footer(Rc::clone(&snapshot), status_toast),
         SettingsFooterSite::Page,
     );
+
+    let feedback = gtk::Button::with_label("Send Feedback…");
+    feedback.set_halign(gtk::Align::Start);
+    let player = parent.downgrade();
+    let feedback_state = Rc::clone(&state);
+    feedback.connect_clicked(move |_| {
+        if let Some(player) = player.upgrade() {
+            crate::feedback::open(&player, &feedback_state);
+        }
+    });
+    sheet.append(&feedback);
 
     let (sender, receiver) = mpsc::channel::<AboutDeferredFields>();
     std::thread::spawn(move || {

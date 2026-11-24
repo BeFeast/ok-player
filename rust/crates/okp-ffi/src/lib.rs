@@ -16,6 +16,9 @@ mod session;
 #[cfg(feature = "live-mpv")]
 pub use session::*;
 
+mod feedback;
+pub use feedback::*;
+
 use std::ffi::{CStr, c_char};
 use std::path::PathBuf;
 

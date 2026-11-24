@@ -201,7 +201,7 @@ enum MenuBarLayout {
                     .command("fit-window-to-media"), .command("mini-player"), .others, .separator,
                     .standard(.bringAllToFront)]
         case .help:
-            return [.others]
+            return [.command("send-feedback"), .others]
         }
     }
 

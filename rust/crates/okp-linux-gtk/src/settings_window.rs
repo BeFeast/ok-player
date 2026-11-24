@@ -27,9 +27,11 @@ impl SettingsPageBuilder {
         };
 
         let content = match page {
-            SettingsPage::About => {
-                settings_about_section(Rc::clone(&self.state), Rc::clone(&self.status_toast))
-            }
+            SettingsPage::About => settings_about_section(
+                &parent,
+                Rc::clone(&self.state),
+                Rc::clone(&self.status_toast),
+            ),
             SettingsPage::Appearance => {
                 let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
                 page.add_css_class("okp-settings-page");

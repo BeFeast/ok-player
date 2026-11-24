@@ -54,6 +54,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// The registry commands of the menu bar and the window keys (Menu/).
     let commands = PlayerCommands()
     let settings = PlayerSettings()
+    var feedback: FeedbackPanel?
     lazy var commandPopover = CommandPopover(commands: commands)
     lazy var inputRouter = PlayerInputRouter(commands: commands, context: commandPopover)
     var menuBar: MenuBar?
