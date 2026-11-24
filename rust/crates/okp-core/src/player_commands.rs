@@ -5,6 +5,7 @@
 //! association, enabled/checked state, surface policy, and filtering stay in
 //! the portable core so an overflow popover and a context menu cannot drift.
 
+use crate::app::Platform;
 use crate::playlist::RepeatMode;
 use crate::shortcuts::ShortcutAction;
 use crate::video_geometry::{VideoAspect, VideoGeometry, VideoGeometryAction};
@@ -315,6 +316,15 @@ pub struct PlayerCommandSpec {
     pub keywords: &'static [&'static str],
     pub shortcut: Option<ShortcutAction>,
     pub surfaces: PlayerCommandSurfacePolicy,
+}
+
+impl PlayerCommandSpec {
+    pub fn shortcut_on(self, platform: Platform) -> Option<ShortcutAction> {
+        if self.id == PlayerCommandId::ChaptersUpNext && platform == Platform::MacOs {
+            return Some(ShortcutAction::ChaptersUpNext);
+        }
+        self.shortcut
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -755,19 +765,23 @@ pub fn filter_player_commands(
 
     commands
         .iter()
-        .filter(|command| {
-            let spec = COMMANDS
-                .iter()
-                .find(|spec| spec.id == command.id)
-                .expect("resolved command must come from the registry");
-            command.label.to_lowercase().contains(&query)
-                || spec
-                    .keywords
-                    .iter()
-                    .any(|keyword| keyword.to_lowercase().contains(&query))
-        })
+        .filter(|command| player_command_matches(command.id, &command.label, &query))
         .cloned()
         .collect()
+}
+
+/// Match a localized surface label and the registry's search keywords against a
+/// trimmed, lowercase query.
+pub fn player_command_matches(id: PlayerCommandId, label: &str, query: &str) -> bool {
+    label.to_lowercase().contains(query)
+        || COMMANDS
+            .iter()
+            .find(|spec| spec.id == id)
+            .is_some_and(|spec| {
+                spec.keywords
+                    .iter()
+                    .any(|keyword| keyword.to_lowercase().contains(query))
+            })
 }
 
 pub fn dispatch_player_command(

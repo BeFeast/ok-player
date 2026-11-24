@@ -18,7 +18,9 @@ use okp_core::playlist::PlaylistItem;
 use okp_core::shortcuts::ShortcutAction;
 use serde::{Deserialize, Serialize};
 
-pub use crate::commands::{CommandGroup, CommandMenu, RegistryCommand, ShortcutRow};
+pub use crate::commands::{
+    CommandGroup, CommandMenu, CommandSurface, CommandSurfaceEntry, RegistryCommand, ShortcutRow,
+};
 pub use crate::history::{
     HistoryAction, HistoryActionResult, HistoryBucket, HistoryEntry, HistoryEvent, HistoryQuery,
     HistoryQueryResult, HistorySection, HistoryState,
@@ -320,6 +322,13 @@ pub enum Query {
         #[serde(default)]
         mini_player: bool,
     },
+    /// Search the player commands or return a curated command page.
+    CommandSurface {
+        #[serde(default)]
+        fullscreen: bool,
+        page: CommandMenu,
+        query: String,
+    },
     /// Every bindable action with its chords on this platform.
     ShortcutTable {},
     /// The actions whose key repeats while held; every other action runs once
@@ -390,6 +399,9 @@ pub enum QueryResult {
     },
     CommandRegistry {
         commands: Vec<RegistryCommand>,
+    },
+    CommandSurface {
+        surface: CommandSurface,
     },
     ShortcutTable {
         shortcuts: Vec<ShortcutRow>,

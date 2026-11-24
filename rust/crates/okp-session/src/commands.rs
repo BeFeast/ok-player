@@ -17,13 +17,15 @@
 
 use okp_core::app::Platform;
 use okp_core::player_commands::{
-    PLAYER_COMMAND_MENU_TOP_LEVEL, PlayerCommandContext, PlayerCommandGroup, PlayerCommandId,
-    PlayerCommandMenuEntry, PlayerCommandMenuPage, PlayerCommandSurface, player_command_registry,
+    PLAYER_COMMAND_MENU_TOP_LEVEL, PLAYER_COMMAND_SURFACE_MAX_HEIGHT,
+    PLAYER_COMMAND_SURFACE_PREFERRED_WIDTH, PlayerCommandContext, PlayerCommandGroup,
+    PlayerCommandId, PlayerCommandMenuEntry, PlayerCommandMenuPage, PlayerCommandSurface,
+    player_command_matches, player_command_menu_top_level_label, player_command_registry,
     resolve_player_commands,
 };
 use okp_core::shortcuts::{
-    SHORTCUT_ACTIONS, ShortcutAction, ShortcutBinding, ShortcutChord, chords_for_action_on,
-    default_bindings_on, default_chord_for_action_on,
+    PortableKeyNames, ShortcutAction, ShortcutBinding, ShortcutChord, chords_for_action_on,
+    default_bindings_on, default_chord_for_action_on, parse_chord, shortcut_actions_on,
 };
 use serde::{Deserialize, Serialize};
 
@@ -81,6 +83,46 @@ pub enum CommandMenu {
     Playback,
     Window,
     ToolsAdvanced,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum CommandSurfaceEntry {
+    Command { row: RegistryCommand },
+    Page { page: CommandMenu, label: String },
+    Separator {},
+}
+
+/// A curated page or a search of the same player commands, in registry order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandSurface {
+    pub entries: Vec<CommandSurfaceEntry>,
+    pub preferred_width: i32,
+    pub max_height: i32,
+}
+
+impl CommandMenu {
+    fn page(self) -> Option<PlayerCommandMenuPage> {
+        match self {
+            Self::TopLevel => None,
+            Self::Video => Some(PlayerCommandMenuPage::Video),
+            Self::Playback => Some(PlayerCommandMenuPage::Playback),
+            Self::Window => Some(PlayerCommandMenuPage::Window),
+            Self::ToolsAdvanced => Some(PlayerCommandMenuPage::ToolsAdvanced),
+        }
+    }
+}
+
+impl From<PlayerCommandMenuPage> for CommandMenu {
+    fn from(page: PlayerCommandMenuPage) -> Self {
+        match page {
+            PlayerCommandMenuPage::Video => Self::Video,
+            PlayerCommandMenuPage::Playback => Self::Playback,
+            PlayerCommandMenuPage::Window => Self::Window,
+            PlayerCommandMenuPage::ToolsAdvanced => Self::ToolsAdvanced,
+        }
+    }
 }
 
 /// One bindable action of the shortcut table.
@@ -148,6 +190,7 @@ const KEYBOARD_COMMANDS: &[(ShortcutAction, CommandGroup)] = &[
         CommandGroup::TracksSubtitles,
     ),
     (ShortcutAction::EscapeFullscreen, CommandGroup::ViewWindow),
+    (ShortcutAction::ShowCommands, CommandGroup::ViewWindow),
 ];
 
 /// The commands the session runs itself; see [`session_command`].
@@ -187,7 +230,10 @@ impl CommandRegistry {
     /// Fails on an id that is not in the registry, so a misspelt capability
     /// cannot quietly hide a command.
     pub fn new(platform: Platform, shell_commands: &[String]) -> Result<Self, String> {
-        if let Some(unknown) = shell_commands.iter().find(|id| !is_registry_id(id)) {
+        if let Some(unknown) = shell_commands
+            .iter()
+            .find(|id| !is_registry_id(platform, id))
+        {
             return Err(format!(
                 "shell_commands names an unknown command `{unknown}`"
             ));
@@ -216,7 +262,7 @@ impl CommandRegistry {
                 let shortcut = player_command_registry()
                     .iter()
                     .find(|spec| spec.id == command.id)
-                    .and_then(|spec| spec.shortcut);
+                    .and_then(|spec| spec.shortcut_on(self.platform));
                 RegistryCommand {
                     id: id.to_owned(),
                     group: command.group.into(),
@@ -230,38 +276,123 @@ impl CommandRegistry {
                         .map(|action| primary_chord(self.platform, &bindings, action)),
                 }
             });
-        let keyboard = KEYBOARD_COMMANDS.iter().map(|&(action, group)| {
-            let (enabled, checked) = keyboard_state(action, &context, snapshot);
-            RegistryCommand {
-                id: action.id().to_owned(),
-                group,
-                menu: None,
-                label: action.label().to_owned(),
-                available: self.is_available(action.id()),
-                enabled,
-                checked,
-                shortcut: Some(primary_chord(self.platform, &bindings, action)),
-            }
-        });
+        let keyboard = KEYBOARD_COMMANDS
+            .iter()
+            .filter(|&&(action, _)| {
+                action != ShortcutAction::ShowCommands || self.platform == Platform::MacOs
+            })
+            .map(|&(action, group)| {
+                let (enabled, checked) = keyboard_state(action, &context, snapshot);
+                RegistryCommand {
+                    id: action.id().to_owned(),
+                    group,
+                    menu: None,
+                    label: action.label().to_owned(),
+                    available: self.is_available(action.id()),
+                    enabled,
+                    checked,
+                    shortcut: Some(primary_chord(self.platform, &bindings, action)),
+                }
+            });
         player.chain(keyboard).collect()
+    }
+
+    #[must_use]
+    pub fn surface(
+        &self,
+        snapshot: &SessionSnapshot,
+        window: WindowState,
+        playlist_items: usize,
+        page: CommandMenu,
+        query: &str,
+    ) -> CommandSurface {
+        let rows = self.resolve(snapshot, window, playlist_items);
+        let entry = |id: PlayerCommandId, top: bool| {
+            let mut row = rows.iter().find(|row| row.id == id.id())?.clone();
+            if top && let Some(label) = player_command_menu_top_level_label(id) {
+                row.label = label.to_owned();
+            }
+            Some(CommandSurfaceEntry::Command { row })
+        };
+        let query = query.trim().to_lowercase();
+        let entries = if !query.is_empty() {
+            let chord = parse_chord(
+                &query
+                    .replace('⌃', "Ctrl+")
+                    .replace('⌥', "Alt+")
+                    .replace('⇧', "Shift+")
+                    .replace('⌘', "Cmd+")
+                    .replace('←', "Left")
+                    .replace('→', "Right")
+                    .replace('↑', "Up")
+                    .replace('↓', "Down")
+                    .replace('⇞', "PageUp")
+                    .replace('⇟', "PageDown")
+                    .replace('⎋', "Escape"),
+                0,
+                &PortableKeyNames,
+            )
+            .ok();
+            let bindings = default_bindings_on(self.platform);
+            player_command_registry()
+                .iter()
+                .filter_map(|spec| {
+                    let row = rows.iter().find(|row| row.id == spec.id.id())?;
+                    let matches_chord = chord.as_ref().is_some_and(|chord| {
+                        row.shortcut.as_ref() == Some(chord)
+                            || bindings.iter().any(|binding| {
+                                binding.chord == *chord
+                                    && command_for_action(self.platform, binding.action) == row.id
+                            })
+                    });
+                    let top_label =
+                        player_command_menu_top_level_label(spec.id).unwrap_or_default();
+                    (matches_chord
+                        || top_label.to_lowercase().contains(&query)
+                        || player_command_matches(spec.id, &row.label, &query))
+                    .then(|| CommandSurfaceEntry::Command { row: row.clone() })
+                })
+                .collect()
+        } else if let Some(page) = page.page() {
+            page.commands()
+                .iter()
+                .filter_map(|&id| entry(id, false))
+                .collect()
+        } else {
+            PLAYER_COMMAND_MENU_TOP_LEVEL
+                .iter()
+                .filter_map(|item| match *item {
+                    PlayerCommandMenuEntry::Command(id) => entry(id, true),
+                    PlayerCommandMenuEntry::Submenu(page) => Some(CommandSurfaceEntry::Page {
+                        page: page.into(),
+                        label: page.label().to_owned(),
+                    }),
+                    PlayerCommandMenuEntry::Separator => Some(CommandSurfaceEntry::Separator {}),
+                })
+                .collect()
+        };
+        CommandSurface {
+            entries,
+            preferred_width: PLAYER_COMMAND_SURFACE_PREFERRED_WIDTH,
+            max_height: PLAYER_COMMAND_SURFACE_MAX_HEIGHT,
+        }
     }
 
     /// Every bindable action with its chords on this platform and the command it
     /// runs. The session has no user bindings yet, so these are the platform
-    /// defaults: one chord per action.
+    /// defaults, with a secondary chord when the platform supplies one.
     #[must_use]
     pub fn shortcut_table(&self) -> Vec<ShortcutRow> {
         let bindings = default_bindings_on(self.platform);
-        SHORTCUT_ACTIONS
-            .iter()
-            .map(|&action| {
+        shortcut_actions_on(self.platform)
+            .map(|action| {
                 let mut chords = chords_for_action_on(self.platform, &bindings, action).into_iter();
                 let primary = chords
                     .next()
                     .unwrap_or_else(|| default_chord_for_action_on(self.platform, action));
                 ShortcutRow {
                     action,
-                    command: command_for_action(action).to_owned(),
+                    command: command_for_action(self.platform, action).to_owned(),
                     primary,
                     secondary: chords.next(),
                 }
@@ -274,9 +405,7 @@ impl CommandRegistry {
     /// ([`ShortcutAction::repeats_while_held`]).
     #[must_use]
     pub fn repeating_shortcuts(&self) -> Vec<ShortcutAction> {
-        SHORTCUT_ACTIONS
-            .iter()
-            .copied()
+        shortcut_actions_on(self.platform)
             .filter(|action| action.repeats_while_held())
             .collect()
     }
@@ -286,7 +415,7 @@ impl CommandRegistry {
     /// the core state machine like any other, and a shell gates the commands it
     /// carries out on the registry state it queried.
     pub(crate) fn invocation(&self, id: &str, snapshot: &SessionSnapshot) -> Invocation {
-        if !is_registry_id(id) {
+        if !is_registry_id(self.platform, id) {
             return Invocation::Refuse(
                 RejectReason::UnknownCommand,
                 format!("`{id}` is not a registry command"),
@@ -398,6 +527,7 @@ fn keyboard_state(
     let enabled = session_command_enabled(action.id(), snapshot.status).unwrap_or(match action {
         ShortcutAction::PreviousItem | ShortcutAction::NextItem => context.playlist_count > 1,
         ShortcutAction::EscapeFullscreen => context.fullscreen || context.compact_mode,
+        ShortcutAction::ShowCommands => true,
         // Every other keyboard command acts on the open media.
         _ => context.has_media,
     });
@@ -407,20 +537,23 @@ fn keyboard_state(
 
 /// The registry command an action runs: the core command bound to it, or the
 /// keyboard-only command of the same id.
-fn command_for_action(action: ShortcutAction) -> &'static str {
+fn command_for_action(platform: Platform, action: ShortcutAction) -> &'static str {
     player_command_registry()
         .iter()
-        .find(|spec| spec.shortcut == Some(action))
+        .find(|spec| spec.shortcut_on(platform) == Some(action))
         .map_or_else(|| action.id(), |spec| spec.id.id())
 }
 
-fn is_registry_id(id: &str) -> bool {
+fn is_registry_id(platform: Platform, id: &str) -> bool {
     player_command_registry()
         .iter()
         .any(|spec| spec.id.id() == id)
-        || KEYBOARD_COMMANDS
-            .iter()
-            .any(|(action, _)| action.id() == id)
+        || shortcut_actions_on(platform).any(|action| {
+            action.id() == id
+                && KEYBOARD_COMMANDS
+                    .iter()
+                    .any(|(candidate, _)| *candidate == action)
+        })
 }
 
 fn primary_chord(
@@ -439,17 +572,14 @@ fn menu_of(id: PlayerCommandId) -> Option<CommandMenu> {
         return Some(CommandMenu::TopLevel);
     }
     [
-        (PlayerCommandMenuPage::Video, CommandMenu::Video),
-        (PlayerCommandMenuPage::Playback, CommandMenu::Playback),
-        (PlayerCommandMenuPage::Window, CommandMenu::Window),
-        (
-            PlayerCommandMenuPage::ToolsAdvanced,
-            CommandMenu::ToolsAdvanced,
-        ),
+        PlayerCommandMenuPage::Video,
+        PlayerCommandMenuPage::Playback,
+        PlayerCommandMenuPage::Window,
+        PlayerCommandMenuPage::ToolsAdvanced,
     ]
     .into_iter()
-    .find(|(page, _)| page.commands().contains(&id))
-    .map(|(_, menu)| menu)
+    .find(|page| page.commands().contains(&id))
+    .map(CommandMenu::from)
 }
 
 impl From<PlayerCommandGroup> for CommandGroup {
@@ -774,7 +904,7 @@ mod tests {
         // Every bindable action runs exactly one registry command, and every
         // keyboard-only command is an action no core command is bound to.
         let table = registry(Platform::MacOs, &[]).shortcut_table();
-        assert_eq!(table.len(), SHORTCUT_ACTIONS.len());
+        assert_eq!(table.len(), shortcut_actions_on(Platform::MacOs).count());
         for shortcut in &table {
             assert!(unique.contains(shortcut.command.as_str()), "{shortcut:?}");
         }
@@ -783,13 +913,11 @@ mod tests {
             .find(|row| row.action == ShortcutAction::SaveScreenshot)
             .unwrap();
         assert_eq!(save.command, "save-frame");
-        let keyboard_only: Vec<ShortcutAction> = SHORTCUT_ACTIONS
-            .iter()
-            .copied()
+        let keyboard_only: Vec<ShortcutAction> = shortcut_actions_on(Platform::MacOs)
             .filter(|&action| {
                 !player_command_registry()
                     .iter()
-                    .any(|spec| spec.shortcut == Some(action))
+                    .any(|spec| spec.shortcut_on(Platform::MacOs) == Some(action))
             })
             .collect();
         assert_eq!(
@@ -803,6 +931,42 @@ mod tests {
         for id in SESSION_COMMANDS {
             assert!(unique.contains(id), "{id} is a registry command");
         }
+    }
+
+    #[test]
+    fn command_surface_uses_curated_order_live_state_and_searchable_shortcuts() {
+        let mac = registry(Platform::MacOs, &["open-file", "chapters-up-next"]);
+        let idle = SessionSnapshot::default();
+        let state = WindowState::default();
+        let rows = |query| {
+            mac.surface(&idle, state, 0, CommandMenu::TopLevel, query)
+                .entries
+        };
+        let root = rows("");
+        assert_eq!(root.len(), PLAYER_COMMAND_MENU_TOP_LEVEL.len());
+        assert!(matches!(&root[0], CommandSurfaceEntry::Command { row }
+            if row.id == "play-pause" && row.available && !row.enabled));
+        assert!(
+            matches!(&root[7], CommandSurfaceEntry::Page { page: CommandMenu::Video, label }
+            if label == "Video")
+        );
+        for (search, id) in [
+            ("⌘O", "open-file"),
+            ("K", "play-pause"),
+            ("Screenshot", "save-frame"),
+        ] {
+            assert!(rows(search).iter().any(|entry| matches!(entry,
+                CommandSurfaceEntry::Command { row } if row.id == id)));
+        }
+        assert!(rows("nothing like a command").is_empty());
+        let snapshot = playing(SourceKind::Local, "/media/film.mkv");
+        let entries = mac
+            .surface(&snapshot, state, 1, CommandMenu::TopLevel, "")
+            .entries;
+        assert!(matches!(&entries[0], CommandSurfaceEntry::Command { row }
+            if row.id == "play-pause" && row.available && row.enabled));
+        assert!(matches!(&entries[4], CommandSurfaceEntry::Command { row }
+            if row.id == "save-frame" && !row.available));
     }
 
     #[test]

@@ -25,6 +25,7 @@ extension VerifyRun {
                                 app.history.welcomeView, controller.titleStrip, app.upNext.panel,
                                 app.osc.volumeCapsule, app.tracks.panel, app.statusLayer.toastView] + controller.trafficLights + [controller.pinButton]
         if let dropTarget = app.dropTarget { planes.append(dropTarget.highlight) }
+        if app.commandPopover.isShown { planes.append(app.commandPopover) }
         for view in planes where !view.isHiddenOrHasHiddenAncestor && view.alphaValue > 0 && !view.bounds.isEmpty {
             let bounds = view.bounds
             guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(ceil(bounds.width * 2)),

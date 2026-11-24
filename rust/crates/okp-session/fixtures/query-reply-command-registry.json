@@ -14,7 +14,7 @@
         { "id": "playback-speed", "group": "tracks_subtitles", "menu": "playback", "label": "Playback speed", "available": true, "enabled": true, "checked": false, "shortcut": null },
         { "id": "subtitles", "group": "tracks_subtitles", "menu": "top_level", "label": "Subtitles", "available": true, "enabled": true, "checked": false, "shortcut": null },
         { "id": "audio-track", "group": "tracks_subtitles", "menu": "top_level", "label": "Audio track", "available": true, "enabled": true, "checked": false, "shortcut": null },
-        { "id": "chapters-up-next", "group": "tracks_subtitles", "menu": "top_level", "label": "Chapters & Up Next", "available": false, "enabled": true, "checked": false, "shortcut": null },
+        { "id": "chapters-up-next", "group": "tracks_subtitles", "menu": "top_level", "label": "Chapters & Up Next", "available": false, "enabled": true, "checked": false, "shortcut": { "key": "k", "modifiers": { "ctrl": false, "alt": false, "shift": true, "cmd": true }, "label": "Shift+Cmd+K" } },
         { "id": "fit-window-to-media", "group": "view_window", "menu": "window", "label": "Fit window to media", "available": true, "enabled": true, "checked": false, "shortcut": null },
         { "id": "mini-player", "group": "view_window", "menu": "window", "label": "Mini player", "available": false, "enabled": true, "checked": false, "shortcut": null },
         { "id": "fullscreen", "group": "view_window", "menu": "top_level", "label": "Exit fullscreen", "available": true, "enabled": true, "checked": true, "shortcut": { "key": "f", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "F" } },
@@ -67,7 +67,8 @@
         { "id": "subtitle-size-up", "group": "tracks_subtitles", "menu": null, "label": "Subtitle Size Up", "available": true, "enabled": true, "checked": false, "shortcut": { "key": "bracketright", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "]" } },
         { "id": "subtitle-previous-cue", "group": "tracks_subtitles", "menu": null, "label": "Previous Subtitle Cue", "available": false, "enabled": true, "checked": false, "shortcut": { "key": "Left", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": true }, "label": "Cmd+Left" } },
         { "id": "subtitle-next-cue", "group": "tracks_subtitles", "menu": null, "label": "Next Subtitle Cue", "available": false, "enabled": true, "checked": false, "shortcut": { "key": "Right", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": true }, "label": "Cmd+Right" } },
-        { "id": "escape-fullscreen", "group": "view_window", "menu": null, "label": "Exit Fullscreen", "available": true, "enabled": true, "checked": false, "shortcut": { "key": "Escape", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "Escape" } }
+        { "id": "escape-fullscreen", "group": "view_window", "menu": null, "label": "Exit Fullscreen", "available": true, "enabled": true, "checked": false, "shortcut": { "key": "Escape", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "Escape" } },
+        { "id": "show-commands", "group": "view_window", "menu": null, "label": "Show Commands", "available": false, "enabled": true, "checked": false, "shortcut": { "key": "p", "modifiers": { "ctrl": false, "alt": false, "shift": true, "cmd": true }, "label": "Shift+Cmd+P" } }
       ]
     }
   }

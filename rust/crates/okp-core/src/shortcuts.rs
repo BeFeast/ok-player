@@ -59,6 +59,8 @@ pub enum ShortcutAction {
     Fullscreen,
     EscapeFullscreen,
     OpenSettings,
+    ChaptersUpNext,
+    ShowCommands,
 }
 
 impl ShortcutAction {
@@ -93,6 +95,8 @@ impl ShortcutAction {
             Self::Fullscreen => "fullscreen",
             Self::EscapeFullscreen => "escape-fullscreen",
             Self::OpenSettings => "open-settings",
+            Self::ChaptersUpNext => "chapters-up-next",
+            Self::ShowCommands => "show-commands",
         }
     }
 
@@ -127,6 +131,8 @@ impl ShortcutAction {
             Self::Fullscreen => "Fullscreen",
             Self::EscapeFullscreen => "Exit Fullscreen",
             Self::OpenSettings => "Settings",
+            Self::ChaptersUpNext => "Chapters & Up Next",
+            Self::ShowCommands => "Show Commands",
         }
     }
 
@@ -161,6 +167,9 @@ impl ShortcutAction {
             Self::Fullscreen => "F",
             Self::EscapeFullscreen => "Escape",
             Self::OpenSettings => "Ctrl+,",
+            Self::ChaptersUpNext | Self::ShowCommands => {
+                unreachable!("macOS-only actions have no Linux shortcut")
+            }
         }
     }
 
@@ -182,6 +191,8 @@ impl ShortcutAction {
                 Self::SubtitlePreviousCue => "Cmd+Left",
                 Self::SubtitleNextCue => "Cmd+Right",
                 Self::OpenSettings => "Cmd+,",
+                Self::ChaptersUpNext => "Shift+Cmd+K",
+                Self::ShowCommands => "Shift+Cmd+P",
                 _ => self.default_shortcut(),
             },
         }
@@ -189,10 +200,7 @@ impl ShortcutAction {
 
     /// The action for a config identifier, or `None` for an unknown one.
     pub fn by_id(id: &str) -> Option<Self> {
-        SHORTCUT_ACTIONS
-            .iter()
-            .copied()
-            .find(|action| action.id() == id)
+        shortcut_actions_on(Platform::MacOs).find(|action| action.id() == id)
     }
 
     /// Whether a held key runs the action again on every auto-repeat. Steps
@@ -233,7 +241,7 @@ impl<'de> Deserialize<'de> for ShortcutAction {
     }
 }
 
-/// Every bindable action, in the order the Settings editor and config serialisation use.
+/// Bindable actions shared with Linux, in the order its Settings editor uses.
 pub const SHORTCUT_ACTIONS: &[ShortcutAction] = &[
     ShortcutAction::PlayPause,
     ShortcutAction::SeekBack,
@@ -264,6 +272,18 @@ pub const SHORTCUT_ACTIONS: &[ShortcutAction] = &[
     ShortcutAction::EscapeFullscreen,
     ShortcutAction::OpenSettings,
 ];
+
+const MACOS_SHORTCUT_ACTIONS: &[ShortcutAction] =
+    &[ShortcutAction::ChaptersUpNext, ShortcutAction::ShowCommands];
+
+/// Actions with a binding on this platform, in editor order.
+pub fn shortcut_actions_on(platform: Platform) -> impl Iterator<Item = ShortcutAction> {
+    let extra = match platform {
+        Platform::Linux => &[][..],
+        Platform::MacOs => MACOS_SHORTCUT_ACTIONS,
+    };
+    SHORTCUT_ACTIONS.iter().chain(extra).copied()
+}
 
 /// One primary plus at most one secondary chord per action.
 pub const MAX_SHORTCUTS_PER_ACTION: usize = 2;
@@ -500,21 +520,22 @@ pub fn resolved_bindings_from_text_on(
         .iter()
         .map(|(_, chord)| chord.clone())
         .collect::<Vec<_>>();
-    for action in SHORTCUT_ACTIONS {
+    for action in shortcut_actions_on(platform) {
         let action_overrides = overrides
             .iter()
-            .filter(|(override_action, _)| override_action == action)
+            .filter(|(override_action, _)| *override_action == action)
             .map(|(_, chord)| chord.clone())
             .collect::<Vec<_>>();
         if action_overrides.is_empty() {
             continue;
         }
 
-        bindings.retain(|binding| binding.action != *action);
-        bindings.extend(action_overrides.into_iter().map(|chord| ShortcutBinding {
-            action: *action,
-            chord,
-        }));
+        bindings.retain(|binding| binding.action != action);
+        bindings.extend(
+            action_overrides
+                .into_iter()
+                .map(|chord| ShortcutBinding { action, chord }),
+        );
     }
     // These defaults were added after keybinding persistence shipped. An older
     // config may already use Ctrl+Left/Right for another action; keep that
@@ -524,18 +545,20 @@ pub fn resolved_bindings_from_text_on(
         overrides
             .iter()
             .any(|(action, _)| *action == binding.action)
-            || !is_upgrade_shadowable_default(binding.action)
+            || !is_upgrade_shadowable_default(platform, binding)
             || !override_chords.contains(&binding.chord)
     });
     validate_conflicts(&bindings)?;
     Ok(bindings)
 }
 
-fn is_upgrade_shadowable_default(action: ShortcutAction) -> bool {
+fn is_upgrade_shadowable_default(platform: Platform, binding: &ShortcutBinding) -> bool {
     matches!(
-        action,
+        binding.action,
         ShortcutAction::SubtitlePreviousCue | ShortcutAction::SubtitleNextCue
-    )
+    ) || (platform == Platform::MacOs
+        && binding.action == ShortcutAction::PlayPause
+        && binding.chord.key == "k")
 }
 
 /// Serialise bindings back to config text: only actions whose chords differ from the default
@@ -549,10 +572,10 @@ pub fn config_text_from_bindings(bindings: &[ShortcutBinding]) -> String {
 /// [`config_text_from_bindings`] against a platform's defaults.
 pub fn config_text_from_bindings_on(platform: Platform, bindings: &[ShortcutBinding]) -> String {
     let mut lines = Vec::new();
-    for action in SHORTCUT_ACTIONS {
-        let default_chord = default_chord_for_action_on(platform, *action);
-        let chords = chords_for_action_on(platform, bindings, *action);
-        if chords.len() == 1 && chords[0] == default_chord {
+    let defaults = default_bindings_on(platform);
+    for action in shortcut_actions_on(platform) {
+        let chords = chords_for_action_on(platform, bindings, action);
+        if chords == chords_for_action_on(platform, &defaults, action) {
             continue;
         }
 
@@ -611,12 +634,18 @@ pub fn default_bindings() -> Vec<ShortcutBinding> {
 
 /// A platform's full default binding table, in [`SHORTCUT_ACTIONS`] order.
 pub fn default_bindings_on(platform: Platform) -> Vec<ShortcutBinding> {
-    SHORTCUT_ACTIONS
-        .iter()
-        .copied()
-        .map(|action| ShortcutBinding {
-            action,
-            chord: default_chord_for_action_on(platform, action),
+    shortcut_actions_on(platform)
+        .flat_map(|action| {
+            let secondary = match (platform, action) {
+                (Platform::MacOs, ShortcutAction::PlayPause) => Some("K"),
+                _ => None,
+            };
+            let primary = default_chord_for_action_on(platform, action);
+            std::iter::once(primary)
+                .chain(secondary.map(|key| {
+                    parse_chord(key, 0, &PortableKeyNames).expect("default shortcut parses")
+                }))
+                .map(move |chord| ShortcutBinding { action, chord })
         })
         .collect()
 }
@@ -754,7 +783,8 @@ fn parse_config_overrides(
         };
         let action_id = action_id.trim();
         let shortcut = shortcut.trim();
-        let Some(action) = ShortcutAction::by_id(action_id) else {
+        let Some(action) = shortcut_actions_on(platform).find(|action| action.id() == action_id)
+        else {
             return Err(config_error(
                 line_number,
                 &format!("Unknown action `{action_id}`."),
@@ -1480,6 +1510,7 @@ play-pause=Ctrl+P
     fn macos_default_table_uses_cmd_for_menu_commands() {
         let golden = owned(&[
             ("play-pause", "Space"),
+            ("play-pause", "K"),
             ("seek-back", "Left"),
             ("seek-forward", "Right"),
             ("frame-forward", "."),
@@ -1507,6 +1538,8 @@ play-pause=Ctrl+P
             ("fullscreen", "F"),
             ("escape-fullscreen", "Escape"),
             ("open-settings", "Cmd+,"),
+            ("chapters-up-next", "Shift+Cmd+K"),
+            ("show-commands", "Shift+Cmd+P"),
         ]);
 
         assert_eq!(table_labels(&default_bindings_on(Platform::MacOs)), golden);
@@ -1713,7 +1746,7 @@ play-pause=Ctrl+P
         // The Linux table differs from the macOS one exactly where the platforms differ.
         assert_eq!(
             config_text_from_bindings_on(Platform::MacOs, &default_bindings()),
-            "open-file=O\nopen-url=U\nmedia-info=I\nsubtitle-previous-cue=Ctrl+Left\n\
+            "play-pause=Space\nopen-file=O\nopen-url=U\nmedia-info=I\nsubtitle-previous-cue=Ctrl+Left\n\
              subtitle-next-cue=Ctrl+Right\nopen-settings=Ctrl+,"
         );
     }

@@ -2,7 +2,7 @@ import AppKit
 
 /// The bottom transport surface and the input that reveals it over video.
 final class TransportOverlay: NSView, NSMenuDelegate {
-    enum Pin: Hashable { case pointer, scrub, volume, menu, panel, tracks }
+    enum Pin: Hashable { case pointer, scrub, volume, menu, panel, tracks, context }
 
     struct Slot {
         let id: String
@@ -441,21 +441,6 @@ final class TransportOverlay: NSView, NSMenuDelegate {
         let actions = moreActions?() ?? []
         if menu.numberOfItems > 0 && !actions.isEmpty { menu.addItem(.separator()) }
         actions.forEach { menu.addItem($0) }
-        return menu
-    }
-
-    /// The video context menu uses existing commands and stays pinned during tracking.
-    func contextMenu() -> NSMenu? {
-        guard surface?.mapped == true else { return nil }
-        closeVolume()
-        noteActivity()
-        let menu = NSMenu()
-        menu.delegate = self
-        menu.autoenablesItems = false
-        for item in [buttonItem(playButton), buttonItem(muteButton), buttonItem(fullscreenButton)] {
-            menu.addItem(item)
-        }
-        for item in moreActions?() ?? [] { menu.addItem(item) }
         return menu
     }
 

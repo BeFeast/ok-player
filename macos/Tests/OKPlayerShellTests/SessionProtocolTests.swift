@@ -181,7 +181,7 @@ final class SessionProtocolTests: XCTestCase {
         guard case .shortcutTable(let shortcuts) = reply.result else {
             return XCTFail("not a shortcut table reply: \(reply.result)")
         }
-        XCTAssertEqual(shortcuts.count, 28)
+        XCTAssertEqual(shortcuts.count, 30)
         XCTAssertEqual(shortcuts.first { $0.action == "save-screenshot" }, ShortcutRow(
             action: "save-screenshot", command: "save-frame",
             primary: ShortcutChord(key: "c", modifiers: ShortcutModifiers(), label: "C"), secondary: nil))

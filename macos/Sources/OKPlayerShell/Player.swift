@@ -53,6 +53,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// The registry commands of the menu bar and the window keys (Menu/).
     let commands = PlayerCommands()
     let settings = PlayerSettings()
+    lazy var commandPopover = CommandPopover(commands: commands)
+    lazy var inputRouter = PlayerInputRouter(commands: commands, context: commandPopover)
     var menuBar: MenuBar?
     lazy var closeMediaItem = windowMenuItem("Close Media", action: #selector(closeMedia), key: "W")
     lazy var pinItem = windowMenuItem("Always on Top", action: #selector(togglePlayerPin), key: "")
@@ -70,7 +72,6 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menuBar.install()
         let behaviour = PlayerWindowController(contentRect: NSRect(x: 0, y: 0, width: 960, height: 580))
         windowBehaviour = behaviour; window = behaviour.window
-        behaviour.window.settingsContextMenu = makeSettingsContextMenu()
         behaviour.showTitleIdentity = verification?.control != "title_identity_hidden"
         behaviour.allowVideoFullscreen = verification?.control != "video_fullscreen_disabled"
         behaviour.applyInitialFit = verification?.control != "initial_fit_disabled"
@@ -126,13 +127,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         osc.moreActions = { [weak self] in self?.oscMenuActions() ?? [] }
         osc.collapsesSlots = verification?.control != "slot_collapse_disabled"
         osc.acceptsVolumeWheel = verification?.control != "volume_wheel_disabled"
-        video?.contextMenu = { [weak self] in
-            guard let self, let menu = self.osc.contextMenu() else { return nil }
-            return self.makeSettingsContextMenu(in: menu)
-        }
         tracks.window = window
         // The status layer's toast goes on top of everything installed so far.
         statusLayer.install(in: root, below: behaviour.titleStrip, above: osc)
+        installCommandPopover(in: root, behaviour: behaviour)
         statusLayer.onRetry = { [weak self] source in self?.play(source) }
         statusLayer.onOpenAnother = { [weak self] in self?.openFile() }
         statusLayer.onToast = { [weak self] text in self?.smokeRun?.toastShown(text) }
@@ -145,8 +143,9 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         behaviour.oscVisibilityChanged(osc.isRevealed, animated: false)
         behaviour.window.acceptsMouseMovedEvents = true
         behaviour.window.onPlayerInput = { [weak self] event in
-            guard let self else { return false }
-            return self.tracks.handleWindowInput(event) || self.osc.handleWindowInput(event)
+            guard let self, !self.commandPopover.isShown else { return false }
+            let trackInput = event.type != .keyDown && self.tracks.handleWindowInput(event)
+            return trackInput || self.osc.handleWindowInput(event)
         }
         behaviour.window.onKeyDown = { [weak self] in self?.keyPressed() }
         behaviour.titleStrip.onPointerActivity = { [weak self] in self?.osc.noteActivity() }
@@ -300,6 +299,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         windowBehaviour?.sessionChanged(snapshot)
         video?.hasVideo = snapshot.video != nil
         if snapshot.source == nil { upNext.hide() }
+        refreshCommandPopover(batch)
         osc.sessionChanged(snapshot)
         tracks.sessionChanged(snapshot)
         osc.playlistSteps = (previous: playlist.canStep(.previous), next: playlist.canStep(.next))

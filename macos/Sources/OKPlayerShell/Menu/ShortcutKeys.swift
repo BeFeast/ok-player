@@ -2,9 +2,8 @@ import AppKit
 
 // The player window's single-key shortcuts (#880). A key press is named the way
 // the core's shortcut table names keys, and the table (the session's
-// `shortcut_table` query) says which registry command it runs. Only chords
-// without Command are window keys: Command chords are menu key equivalents
-// (`MenuBarLayout`). Nothing here knows a player command by name.
+// `shortcut_table` query) says which registry command it runs. Command chords
+// also supply the menu bar's native key equivalents.
 
 /// A key press as the shortcut table compares it.
 struct KeyPress: Equatable {
@@ -147,10 +146,9 @@ struct ShortcutKeyMap: Equatable {
         self.repeating = Set(repeating)
     }
 
-    /// What `press` does, or nil when it is not a window key: no row binds it,
-    /// or it holds Command, which only menu key equivalents use.
-    func match(_ press: KeyPress) -> ShortcutKeyMatch? {
-        guard !press.modifiers.cmd else { return nil }
+    /// Resolve a window key or, when requested by the input router, a menu chord.
+    func match(_ press: KeyPress, includeCommand: Bool = false) -> ShortcutKeyMatch? {
+        guard includeCommand || !press.modifiers.cmd else { return nil }
         let bound = rows.first { row in
             [row.primary, row.secondary].contains { slot in slot.map { Self.binds($0, press) } ?? false }
         }
@@ -159,9 +157,30 @@ struct ShortcutKeyMap: Equatable {
         return .run(row.command)
     }
 
+    func hints(for command: RegistryCommand) -> [ShortcutChord] {
+        if let row = rows.first(where: { $0.command == command.id }) {
+            return [row.primary, row.secondary].compactMap { $0 }
+        }
+        return [command.shortcut].compactMap { $0 }
+    }
+
     private static func binds(_ chord: ShortcutChord, _ press: KeyPress) -> Bool {
         // The table folds letters to lowercase already; fold again for a hand-written table.
         let key = chord.key.count == 1 ? chord.key.lowercased() : chord.key
         return key == press.key && chord.modifiers == press.modifiers
+    }
+}
+
+extension ShortcutChord {
+    var macOSHint: String {
+        let prefix = (modifiers.ctrl ? "⌃" : "") + (modifiers.alt ? "⌥" : "")
+            + (modifiers.shift ? "⇧" : "") + (modifiers.cmd ? "⌘" : "")
+        let keys = ["Left": "←", "Right": "→", "Up": "↑", "Down": "↓",
+                    "Page_Up": "⇞", "Page_Down": "⇟", "Escape": "⎋"]
+        if key == "space" { return prefix + "Space" }
+        let display = keys[key] ?? KeyNames.keyEquivalent(forKey: key).map {
+            key.hasPrefix("F") ? key : $0.uppercased()
+        } ?? key
+        return prefix + display
     }
 }

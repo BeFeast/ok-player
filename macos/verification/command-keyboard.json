@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "command-keyboard",
+  "fixture": "01-h264-1080p24-tone.mp4",
+  "appearances": ["light", "dark"],
+  "steps": [
+    { "action": "open" },
+    { "action": "check_playback_keys" },
+    { "action": "capture", "name": "keyboard-playback", "expect": "keyboard_playback" },
+    { "action": "check_queue_keys" },
+    { "action": "check_escape_priority" },
+    { "action": "check_text_priority" }
+  ]
+}

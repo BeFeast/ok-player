@@ -152,18 +152,12 @@ extension VerifyRun {
         try await wait("closed popover restored the deadline") { !self.osc.isRevealed }
 
         let point = video.convert(NSPoint(x: video.bounds.midX, y: video.bounds.midY), to: nil)
-        guard let event = NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [],
-                                            timestamp: ProcessInfo.processInfo.systemUptime,
-                                            windowNumber: app.window.windowNumber, context: nil,
-                                            eventNumber: 0, clickCount: 1, pressure: 1),
-              let menu = video.menu(for: event) else {
-            throw VerifyError("AppKit did not offer a playback context menu")
-        }
-        _ = try trackMenu(delay: 2.85, inspect: {
-            if !self.osc.isRevealed { self.failures.append("osc_idle_and_pins:context") }
-        }, open: {
-            menu.popUp(positioning: nil, at: video.convert(point, from: nil), in: video)
-        })
+        try clickCommandSurface(at: point, right: true)
+        guard app.commandPopover.isShown else { throw VerifyError("AppKit did not open the playback command surface") }
+        try await Task.sleep(nanoseconds: idleWait)
+        if !osc.isRevealed { failures.append("osc_idle_and_pins:context") }
+        try pressKey("\u{1b}", code: 53, focusVideo: false)
+        try await wait("closed playback command surface") { !self.app.commandPopover.isShown }
         try movePointer(over: video)
         app.upNext.button.performClick(nil)
         try await wait("reopened Up Next for the pinned checkpoint") { self.app.upNext.isShown }

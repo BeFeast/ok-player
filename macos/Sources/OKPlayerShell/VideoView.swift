@@ -309,10 +309,6 @@ final class VideoView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     // Taking the press keeps the release coming back to this view.
-    var contextMenu: (() -> NSMenu?)?
-
-    override func menu(for event: NSEvent) -> NSMenu? { contextMenu?() }
-
     override func mouseDown(with event: NSEvent) {}
 
     override func mouseUp(with event: NSEvent) {

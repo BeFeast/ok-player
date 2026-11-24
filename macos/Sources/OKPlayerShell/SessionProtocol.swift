@@ -157,6 +157,7 @@ enum Query: Codable, Equatable {
     /// Every registry command, resolved against the session state and the window
     /// state only the shell knows. Query it when a menu opens.
     case commandRegistry(fullscreen: Bool = false, miniPlayer: Bool = false)
+    case commandSurface(fullscreen: Bool, page: CommandMenu, query: String)
     /// Every bindable action with its chords on the config's platform.
     case shortcutTable
     /// The actions whose key repeats while held; every other one runs once per press.
@@ -191,6 +192,7 @@ enum QueryResult: Codable, Equatable {
     case windowFit(frame: WindowRect?)
     case videoClick(intent: VideoClickIntent)
     case commandRegistry(commands: [RegistryCommand])
+    case commandSurface(surface: CommandSurface)
     case shortcutTable(shortcuts: [ShortcutRow])
     /// Shortcut action ids (`ShortcutRow.action`).
     case repeatingShortcuts(actions: [String])
@@ -258,6 +260,18 @@ struct RegistryCommand: Codable, Equatable {
     var checked: Bool
     /// The primary chord bound to it on this platform.
     var shortcut: ShortcutChord?
+}
+
+struct CommandSurface: Codable, Equatable {
+    let entries: [CommandSurfaceEntry]
+    let preferredWidth: Int
+    let maxHeight: Int
+}
+
+enum CommandSurfaceEntry: Codable, Equatable {
+    case command(row: RegistryCommand)
+    case page(page: CommandMenu, label: String)
+    case separator
 }
 
 /// One bindable action of the shortcut table.

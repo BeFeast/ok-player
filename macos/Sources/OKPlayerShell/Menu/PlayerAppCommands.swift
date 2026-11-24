@@ -6,12 +6,18 @@ import AppKit
 extension PlayerApp: PlayerCommandResponder, NSMenuItemValidation {
     /// A registry item of the menu bar, reached through the responder chain.
     @objc func performPlayerCommand(_ sender: Any?) {
+        if let id = (sender as? NSMenuItem)?.playerCommandID, let event = NSApp.currentEvent,
+           let press = KeyPress(event: event),
+           commands.keys.match(press, includeCommand: true) == .heldRepeat(id) { return }
         commands.perform(sender)
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem === closeMediaItem { return client?.store.snapshot.source != nil }
         if menuItem === pinItem { return windowBehaviour?.canTogglePin == true }
+        if let id = menuItem.playerCommandID, let chord = commands.row(id)?.shortcut,
+           chord.modifiers.cmd, PlayerInputRouter.reservesForEditing(chord.key),
+           PlayerInputRouter.isTextInput(NSApp.keyWindow?.firstResponder) { return false }
         return commands.validate(menuItem)
     }
 
@@ -34,6 +40,10 @@ extension PlayerApp: PlayerCommandResponder, NSMenuItemValidation {
         commands.register("escape-fullscreen") { [weak self] in _ = self?.windowBehaviour?.perform(.exitFullscreen) }
         commands.register("previous-item") { [weak self] in _ = self?.playlist.step(.previous) }
         commands.register("next-item") { [weak self] in _ = self?.playlist.step(.next) }
+        commands.register("show-commands") { [weak self] in
+            guard let context = self?.commandPopover else { return }
+            if !context.dismiss() { context.show() }
+        }
         commands.register(PlaybackSpeedMenu(
             transport: { [weak self] in
                 guard case .transport(let view)? = self?.client?.query(.transport(at: nil)) else { return nil }
@@ -65,7 +75,7 @@ extension PlayerApp: PlayerCommandResponder, NSMenuItemValidation {
             },
             keys: ShortcutKeyMap(table: table, repeating: repeating))
         menuBar?.install()
-        windowBehaviour?.window.shortcutKeys = { [weak self] event in self?.commands.handle(event) ?? false }
+        windowBehaviour?.window.inputRouter = inputRouter
     }
 }
 

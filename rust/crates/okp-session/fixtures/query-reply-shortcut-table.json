@@ -3,7 +3,7 @@
   "result": {
     "shortcut_table": {
       "shortcuts": [
-        { "action": "play-pause", "command": "play-pause", "primary": { "key": "space", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "Space" }, "secondary": null },
+        { "action": "play-pause", "command": "play-pause", "primary": { "key": "space", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "Space" }, "secondary": { "key": "k", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "K" } },
         { "action": "seek-back", "command": "seek-back", "primary": { "key": "Left", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "Left" }, "secondary": null },
         { "action": "seek-forward", "command": "seek-forward", "primary": { "key": "Right", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "Right" }, "secondary": null },
         { "action": "frame-forward", "command": "frame-forward", "primary": { "key": "period", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "." }, "secondary": null },
@@ -30,7 +30,9 @@
         { "action": "subtitle-next-cue", "command": "subtitle-next-cue", "primary": { "key": "Right", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": true }, "label": "Cmd+Right" }, "secondary": null },
         { "action": "fullscreen", "command": "fullscreen", "primary": { "key": "f", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "F" }, "secondary": null },
         { "action": "escape-fullscreen", "command": "escape-fullscreen", "primary": { "key": "Escape", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": false }, "label": "Escape" }, "secondary": null },
-        { "action": "open-settings", "command": "open-settings", "primary": { "key": "comma", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": true }, "label": "Cmd+," }, "secondary": null }
+        { "action": "open-settings", "command": "open-settings", "primary": { "key": "comma", "modifiers": { "ctrl": false, "alt": false, "shift": false, "cmd": true }, "label": "Cmd+," }, "secondary": null },
+        { "action": "chapters-up-next", "command": "chapters-up-next", "primary": { "key": "k", "modifiers": { "ctrl": false, "alt": false, "shift": true, "cmd": true }, "label": "Shift+Cmd+K" }, "secondary": null },
+        { "action": "show-commands", "command": "show-commands", "primary": { "key": "p", "modifiers": { "ctrl": false, "alt": false, "shift": true, "cmd": true }, "label": "Shift+Cmd+P" }, "secondary": null }
       ]
     }
   }

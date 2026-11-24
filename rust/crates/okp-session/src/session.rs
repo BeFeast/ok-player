@@ -385,6 +385,26 @@ impl Session {
             Query::ShortcutTable {} => QueryResult::ShortcutTable {
                 shortcuts: self.commands.shortcut_table(),
             },
+            Query::CommandSurface {
+                fullscreen,
+                page,
+                query,
+            } => {
+                let snapshot = self.snapshot();
+                let playlist_items = lock(&self.shared.state).playlist.len();
+                QueryResult::CommandSurface {
+                    surface: self.commands.surface(
+                        &snapshot,
+                        WindowState {
+                            fullscreen: *fullscreen,
+                            ..WindowState::default()
+                        },
+                        playlist_items,
+                        *page,
+                        query,
+                    ),
+                }
+            }
             Query::OpenFormats {} => QueryResult::OpenFormats {
                 formats: OpenFormats::current(),
             },

@@ -45,7 +45,12 @@ OPEN_CONTROLS = {
     "open-files-folders": ("folder_picker_files_enabled", {"open_files_folders:folder-filter"}),
     "open-drag-drop": ("welcome_drop_highlight_disabled", {"open_drag_drop:welcome-accent"}),
 }
-ACTION_CONTROLS = {**TRANSPORT_CONTROLS, **OPEN_CONTROLS}
+ACTION_CONTROLS = {
+    **TRANSPORT_CONTROLS,
+    **OPEN_CONTROLS,
+    "context-idle-and-playback": ("context_clamp_disabled", {"context:work_area_clamp"}),
+    "command-keyboard": ("text_priority_disabled", {"keyboard:text_priority"}),
+}
 CONTROLS = {
     **TRACK_CONTROLS,
     "subtitle-lift": "subtitle_clearance_disabled",
@@ -91,10 +96,14 @@ def read_scenario(path):
                "check_audio_switcher", "check_subtitle_switcher", "check_track_pin",
                "tab_welcome", "cancel_welcome_open", "picker_files", "picker_folder", "picker_playlist",
                "finder_open", "cancel_playback_open", "bad_drop", "drag_enter", "drag_exit",
-               "drop_mixed", "drop_subtitle"}
+               "drop_mixed", "drop_subtitle",
+               "check_context_idle", "check_context_search", "check_context_empty",
+               "check_context_pages", "check_context_corners",
+               "check_playback_keys", "check_queue_keys", "check_escape_priority", "check_text_priority"}
     if path.stem == SETTINGS:
         actions.update({"settings_shortcut", "settings_context", "settings_legacy", "settings_search",
-                        "settings_resize", "settings_system", "settings_light", "settings_auto", "settings_player_input"})
+                        "settings_resize", "settings_system", "settings_light", "settings_auto",
+                        "settings_player_input"})
     if (spec["schema_version"] != 1 or spec["id"] != path.stem
             or spec["appearances"] != ["light", "dark"] or not spec["steps"]):
         raise ValueError("Unsupported scenario ID, schema or appearances")
@@ -112,7 +121,8 @@ def read_scenario(path):
                                            "fullscreen", "restored", "landscape", "portrait", "idle",
                                            "floating", "normal", "repinned", "osc_row", "osc_hidden", "osc_pinned",
                                            "volume", "speed", "loading", "buffering", "failure", "recovered",
-                                           "settings_light", "settings_auto", "track_panel", "open_evidence"}
+                                           "context_welcome", "context_video", "context_results", "context_empty",
+                                           "keyboard_playback", "settings_light", "settings_auto", "track_panel", "open_evidence"}
                     or not step.get("name", "").replace("-", "").isalnum()):
                 raise ValueError("Invalid capture checkpoint")
         if step["action"] == "check_subtitle_menu":

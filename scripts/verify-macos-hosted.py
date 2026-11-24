@@ -33,6 +33,8 @@ CONTROLS = {
     "welcome-first-run": "welcome_focus_disabled",
     "open-files-folders": "folder_picker_files_enabled",
     "open-drag-drop": "welcome_drop_highlight_disabled",
+    "context-idle-and-playback": "context_clamp_disabled",
+    "command-keyboard": "text_priority_disabled",
 }
 
 

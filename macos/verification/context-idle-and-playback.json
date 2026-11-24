@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "context-idle-and-playback",
+  "fixture": "01-h264-1080p24-tone.mp4",
+  "appearances": ["light", "dark"],
+  "steps": [
+    { "action": "size_window" },
+    { "action": "check_context_idle" },
+    { "action": "capture", "name": "welcome-menu", "expect": "context_welcome" },
+    { "action": "check_context_search" },
+    { "action": "capture", "name": "no-results", "expect": "context_empty" },
+    { "action": "check_context_pages" },
+    { "action": "open" },
+    { "action": "check_context_corners" },
+    { "action": "capture", "name": "playback-menu", "expect": "context_video" }
+  ]
+}

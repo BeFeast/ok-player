@@ -177,7 +177,7 @@ enum MenuBarLayout {
                     .command("zoom-in"), .command("zoom-out"), .command("pan-left"), .command("pan-right"),
                     .command("pan-up"), .command("pan-down"), .command("center-image"), .separator,
                     .command("rotate-clockwise"), .command("fill-screen"), .command("deinterlace"),
-                    .command("reset-video"), .separator,
+                    .command("reset-video"), .separator, .command("show-commands"),
                     .others]
         case .playback:
             return [.command("play-pause"), .separator,

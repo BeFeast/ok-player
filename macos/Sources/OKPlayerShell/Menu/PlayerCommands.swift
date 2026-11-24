@@ -141,8 +141,8 @@ final class PlayerCommands {
     /// Handle a key press in the player window; true when the press was taken.
     /// A key that runs nothing now (unbound, unavailable or disabled) is left to
     /// the rest of the window, so Escape outside fullscreen still cancels.
-    func handle(_ press: KeyPress) -> Bool {
-        switch keys.match(press) {
+    func handle(_ press: KeyPress, includeCommand: Bool = false) -> Bool {
+        switch keys.match(press, includeCommand: includeCommand) {
         case nil:
             return false
         case .heldRepeat(let id):

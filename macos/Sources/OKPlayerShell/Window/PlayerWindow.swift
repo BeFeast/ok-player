@@ -13,43 +13,37 @@ class PlayerWindow: NSWindow {
     /// the transport controls count it as activity.
     var onKeyDown: (() -> Void)?
     var onPlayerInput: ((NSEvent) -> Bool)?
+    var inputRouter: PlayerInputRouter?
+    private var dispatchingWindowEvent: NSEvent?
 
     /// The single-key shortcuts (`PlayerCommands.handle`), offered every key press
     /// no view took; returns whether it ran a command.
     var shortcutKeys: ((NSEvent) -> Bool)?
-    var settingsContextMenu: NSMenu?
 
     /// The window is in native fullscreen. (Tests stand in a flagged window.)
     var isInFullscreen: Bool { styleMask.contains(.fullScreen) }
 
     override func sendEvent(_ event: NSEvent) {
-        if let menu = settingsMenu(for: event), let contentView {
-            NSMenu.popUpContextMenu(menu, with: event, for: contentView)
-            return
+        if event.type == .keyDown {
+            onKeyDown?()
+            if inputRouter?.handleKey(event, in: self) == true { return }
+            if inputRouter != nil, handleFullscreenEquivalent(event) { return }
         }
-        if event.type == .keyDown { onKeyDown?() }
-        if onPlayerInput?(event) != true { super.sendEvent(event) }
-    }
-
-    /// The player background menu is available over the video and the Welcome
-    /// host. A contextual menu supplied by a hit view gets first refusal.
-    func settingsMenu(for event: NSEvent) -> NSMenu? {
-        let contextClick = event.type == .rightMouseDown
-            || (event.type == .leftMouseDown && event.modifierFlags.contains(.control))
-        guard contextClick, let settingsContextMenu, let contentView else { return nil }
-        let local = contentView.convert(event.locationInWindow, from: nil)
-        guard contentView.bounds.contains(local) else { return nil }
-        let hitPoint = contentView.convert(local, to: contentView.superview)
-        var hit = contentView.hitTest(hitPoint)
-        while let view = hit {
-            if view.menu(for: event) != nil { return nil }
-            if view === contentView { break }
-            hit = view.superview
-        }
-        return settingsContextMenu
+        if inputRouter?.handlePointer(event, in: self) == true || onPlayerInput?(event) == true { return }
+        let previous = dispatchingWindowEvent
+        dispatchingWindowEvent = event
+        defer { dispatchingWindowEvent = previous }
+        super.sendEvent(event)
     }
 
     override func keyDown(with event: NSEvent) {
+        if let inputRouter {
+            // A key forwarded from a native transient (such as the track
+            // popover) may enter the responder chain without sendEvent.
+            if dispatchingWindowEvent !== event, inputRouter.handleKey(event, in: self) { return }
+            super.keyDown(with: event)
+            return
+        }
         if shortcutKeys?(event) == true { return }
         if let command = WindowKeys.command(forKey: event.charactersIgnoringModifiers, keyCode: event.keyCode,
                                             modifiers: event.modifierFlags, isRepeat: event.isARepeat,
@@ -61,17 +55,24 @@ class PlayerWindow: NSWindow {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if let command = WindowKeys.command(forKeyEquivalent: event.charactersIgnoringModifiers,
-                                            modifiers: event.modifierFlags),
-           onCommand?(command) == true {
-            return true
-        }
+        if event.modifierFlags.contains(.command), inputRouter?.handleKey(event, in: self) == true { return true }
+        if handleFullscreenEquivalent(event) { return true }
         return super.performKeyEquivalent(with: event)
+    }
+
+    private func handleFullscreenEquivalent(_ event: NSEvent) -> Bool {
+        guard attachedSheet == nil else { return false }
+        if let command = WindowKeys.command(forKeyEquivalent: event.charactersIgnoringModifiers,
+                                            modifiers: event.modifierFlags) {
+            return event.isARepeat || onCommand?(command) == true
+        }
+        return false
     }
 
     /// Escape (and Command-period) reach the window as `cancelOperation:` when
     /// no view takes them. In fullscreen that leaves fullscreen.
     override func cancelOperation(_ sender: Any?) {
+        if inputRouter?.cancel(in: self) == true { return }
         _ = onCommand?(.exitFullscreen)
     }
 }

@@ -191,6 +191,14 @@ are enabled while it holds two items or more. The window state is the shell's, s
 `mini_player` in the query. Query when a menu opens; no event announces a
 change.
 
+`command_surface {fullscreen, page, query}` answers with
+`result.command_surface.surface`, including `preferred_width` and
+`max_height` in points. An empty query returns the curated `page`. A
+nonempty query searches labels, keywords and platform shortcuts across all
+pages. Entries are `command {row}`, `page {page, label}` or `separator {}`.
+The root uses `page: "top_level"`. Rows carry the same availability and state
+as the registry, so the context surface can show disabled commands.
+
 The session runs some commands itself: `play-pause`, `close-media`,
 `seek-back`/`seek-forward` (5 s), `volume-down`/`volume-up` (a
 `nudge_volume` of 5 points), `mute` (a `toggle_mute`),
@@ -218,8 +226,8 @@ shell carries out is answered `perform {}`: the shell runs it, gating it on
 the `enabled` state it queried.
 
 `shortcut_table` rows carry `action`, `command` (the registry id to invoke),
-`primary` and `secondary`. The session has no user bindings yet, so these are
-the platform defaults and `secondary` is `null`. A chord is
+`primary` and `secondary`. The session currently returns platform defaults,
+including K as a secondary Play/Pause shortcut on macOS. A chord is
 `{"key", "modifiers": {"ctrl", "alt", "shift", "cmd"}, "label"}`: `key` is
 the canonical key name (`space`, `comma`, `Left`, `o`) and `label` the display
 text (`Shift+Cmd+O`). On macOS menu commands use Cmd chords and in-window keys

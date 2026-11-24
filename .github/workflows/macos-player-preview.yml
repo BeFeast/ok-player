@@ -344,7 +344,7 @@ jobs:
             transport_scenarios=(osc-layout osc-idle-and-pins osc-volume-speed osc-status)
             open_scenarios=(welcome-first-run open-files-folders open-drag-drop)
             controlled_scenarios=("${window_scenarios[@]}" "${transport_scenarios[@]}" "${track_scenarios[@]}"
-                                  settings-shell-appearance "${open_scenarios[@]}")
+                                  settings-shell-appearance "${open_scenarios[@]}" context-idle-and-playback command-keyboard)
             for scenario in subtitle-lift tagged-sidecars "${controlled_scenarios[@]}"; do
               verify "$scenario" "$OKP_MACOS_OUTPUT/verify/$scenario" || status=1
             done

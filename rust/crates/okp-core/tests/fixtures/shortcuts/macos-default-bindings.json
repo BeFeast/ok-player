@@ -13,6 +13,19 @@
     }
   },
   {
+    "action": "play-pause",
+    "chord": {
+      "key": "k",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": false,
+        "cmd": false
+      },
+      "label": "K"
+    }
+  },
+  {
     "action": "seek-back",
     "chord": {
       "key": "Left",
@@ -361,6 +374,32 @@
         "cmd": true
       },
       "label": "Cmd+,"
+    }
+  },
+  {
+    "action": "chapters-up-next",
+    "chord": {
+      "key": "k",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": true,
+        "cmd": true
+      },
+      "label": "Shift+Cmd+K"
+    }
+  },
+  {
+    "action": "show-commands",
+    "chord": {
+      "key": "p",
+      "modifiers": {
+        "ctrl": false,
+        "alt": false,
+        "shift": true,
+        "cmd": true
+      },
+      "label": "Shift+Cmd+P"
     }
   }
 ]

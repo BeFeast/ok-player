@@ -28,6 +28,8 @@ struct VerificationOptions {
         case "welcome-first-run": "welcome_focus_disabled"
         case "open-files-folders": "folder_picker_files_enabled"
         case "open-drag-drop": "welcome_drop_highlight_disabled"
+        case "context-idle-and-playback": "context_clamp_disabled"
+        case "command-keyboard": "text_priority_disabled"
         default: "unsupported_control"
         }
     }
@@ -121,6 +123,11 @@ struct VerificationScenario: Decodable {
         case finderOpen = "finder_open", cancelPlaybackOpen = "cancel_playback_open"
         case badDrop = "bad_drop", dragEnter = "drag_enter", dragExit = "drag_exit"
         case dropMixed = "drop_mixed", dropSubtitle = "drop_subtitle"
+        case checkContextIdle = "check_context_idle", checkContextSearch = "check_context_search"
+        case checkContextEmpty = "check_context_empty"
+        case checkContextPages = "check_context_pages", checkContextCorners = "check_context_corners"
+        case checkPlaybackKeys = "check_playback_keys", checkQueueKeys = "check_queue_keys"
+        case checkEscapePriority = "check_escape_priority", checkTextPriority = "check_text_priority"
     }
     enum Expectation: String, Decodable {
         case noCue = "no_cue", clearance, baseMargin = "base_margin"
@@ -130,6 +137,9 @@ struct VerificationScenario: Decodable {
         case settingsLight = "settings_light", settingsAuto = "settings_auto"
         case trackPanel = "track_panel"
         case openEvidence = "open_evidence"
+        case contextWelcome = "context_welcome", contextVideo = "context_video"
+        case contextEmpty = "context_empty", keyboardPlayback = "keyboard_playback"
+        case contextResults = "context_results"
     }
     let schemaVersion: Int
     let id: String
@@ -214,7 +224,11 @@ final class VerifyRun {
                 else if scenario.id.hasSuffix("-switcher") { try await performTrackStep(step) }
                 else if scenario.id.hasPrefix("open-") || scenario.id == "welcome-first-run" {
                     try await performOpenStep(step)
-                } else { try await perform(step) }
+                }
+                else if scenario.id == "context-idle-and-playback" || scenario.id == "command-keyboard" {
+                    try await performCommandStep(step)
+                }
+                else { try await perform(step) }
             }
             result["status"] = failures.isEmpty ? "passed" : "failed"
             code = failures.isEmpty ? 0 : 1
@@ -328,16 +342,18 @@ final class VerifyRun {
         print("OKP_VERIFY \(step)")
     }
 
-    func pressKey(_ characters: String, code: UInt16, focusVideo: Bool = true) throws {
+    func pressKey(_ characters: String, code: UInt16, focusVideo: Bool = true,
+                  modifiers: NSEvent.ModifierFlags = [], repeat isRepeat: Bool = false,
+                  throughApplication: Bool = false) throws {
         guard let window = app.window, !focusVideo || window.makeFirstResponder(app.video),
-              let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+              let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
                                            timestamp: ProcessInfo.processInfo.systemUptime,
                                            windowNumber: window.windowNumber, context: nil,
                                            characters: characters, charactersIgnoringModifiers: characters,
-                                           isARepeat: false, keyCode: code) else {
+                                           isARepeat: isRepeat, keyCode: code) else {
             throw VerifyError("Cannot deliver a key event to the video responder")
         }
-        window.sendEvent(event)
+        if throughApplication { NSApp.sendEvent(event) } else { window.sendEvent(event) }
     }
 
     func seek(_ timestamp: Double) throws {
