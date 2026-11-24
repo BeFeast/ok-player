@@ -15,14 +15,14 @@ extension VerifyRun {
             initialFrame = window.frame
             app.application(NSApp, open: [options.fixture])
             try await wait("the covered audio file is playing") {
-                self.snapshot.status == .playing && self.snapshot.audioMetadata != nil && self.snapshot.timePos != nil
+                self.snapshot.status == .playing && music.audioMetadata != nil && self.snapshot.timePos != nil
             }
             if !music.isActive {
                 failures.append("compact_music:auto_entry")
                 try toggleMusicFromMenu()
             }
             try await wait("artwork for the active track arrived") { controls.artwork.hasImage }
-            if snapshot.video != nil || window.frame == initialFrame || !app.osc.isHidden ||
+            if !controls.switchToVideo.isHidden || window.frame == initialFrame || !app.osc.isHidden ||
                 controls.title.stringValue != "Blue Hour" || controls.detail.stringValue != "OK Player · Compact Sessions" {
                 failures.append("compact_music:artwork_and_metadata")
             }
@@ -73,7 +73,7 @@ extension VerifyRun {
             try await wait("playing before the queue advances") { self.snapshot.status == .playing }
             controls.next.performClick(nil)
             try await wait("the compact Next button played the queued audio fixture") {
-                self.snapshot.source?.location == plain.path && self.snapshot.audioMetadata != nil &&
+                self.snapshot.source?.location == plain.path && music.audioMetadata != nil &&
                     self.snapshot.status == .playing
             }
             if !music.isActive {
@@ -122,6 +122,9 @@ extension VerifyRun {
         case .capture:
             guard let name = step.name, let expected = step.expect else {
                 throw VerifyError("Missing Music checkpoint")
+            }
+            if expected == .musicQueue {
+                try await wait("the queue notice cleared before capturing") { self.app.statusLayer.toastView.isHidden }
             }
             try await captureMusic(name, expected: expected, window: window, video: video)
         case .closeMedia:

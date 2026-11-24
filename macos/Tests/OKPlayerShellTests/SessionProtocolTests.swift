@@ -100,6 +100,7 @@ final class SessionProtocolTests: XCTestCase {
 
     static let queries: [String: Query] = [
         "query-snapshot.json": .snapshot,
+        "query-audio-metadata.json": .audioMetadata,
         "query-command-registry.json": .commandRegistry(fullscreen: true, miniPlayer: false),
         "query-shortcut-table.json": .shortcutTable,
         "history/query-page.json": .history(query: .page(search: "severance", utcOffsetSeconds: -18000)),
@@ -107,11 +108,20 @@ final class SessionProtocolTests: XCTestCase {
         "playlist-query.json": .playlist,
     ]
 
+    func testAudioMetadataReply() throws {
+        let name = "query-reply-audio-metadata.json"
+        let reply = try GoldenFixtures.decode(QueryReply.self, name)
+        XCTAssertEqual(reply, QueryReply(schemaVersion: SessionJSON.schemaVersion, result: .audioMetadata(
+            source: MediaSource(kind: .local, location: "/Users/example/Music/Blue Hour.mp3"),
+            value: AudioMetadata(title: "Blue Hour", artist: "OK Player", album: "Compact Sessions"))))
+        XCTAssertEqual(try GoldenFixtures.encodedObject(reply), try GoldenFixtures.object(name))
+    }
+
     func testEveryFixtureIsCoveredHere() throws {
         let names = try GoldenFixtures.names()
         let covered = Set(Self.commands.keys).union(Self.replies.keys).union(Self.queries.keys).union([
             "config.json", "enums.json", "events-batch.json", "events-empty.json",
-            "query-reply-snapshot.json", "query-reply-rejected.json",
+            "query-reply-snapshot.json", "query-reply-rejected.json", "query-reply-audio-metadata.json",
             "query-reply-command-registry.json", "query-reply-shortcut-table.json",
             "history/enums.json", "history/events.json",
             "history/query-reply-page.json", "history/query-reply-welcome-shelf.json",
@@ -314,7 +324,7 @@ final class SessionProtocolTests: XCTestCase {
         store.apply(batch)
         let snapshot = store.snapshot
         XCTAssertEqual(snapshot.status, .ended)
-        XCTAssertEqual(snapshot.source, MediaSource(kind: .url, location: "https://example.com/a.mp3"))
+        XCTAssertEqual(snapshot.source, MediaSource(kind: .url, location: "https://example.com/a.mp4"))
         XCTAssertNil(snapshot.timePos, "a change to null clears the field")
         XCTAssertEqual(snapshot.duration, 61)
         XCTAssertEqual(snapshot.volume, 70)
@@ -325,9 +335,7 @@ final class SessionProtocolTests: XCTestCase {
                                                title: nil, lang: "deu")])
         XCTAssertEqual(snapshot.chapters, [])
         XCTAssertEqual(snapshot.endReason, .eof)
-        XCTAssertEqual(snapshot.title, "a.mp3")
-        XCTAssertEqual(snapshot.audioMetadata, AudioMetadata(title: "Blue Hour", artist: "OK Player",
-                                                            album: "Compact Sessions"))
+        XCTAssertEqual(snapshot.title, "a.mp4")
         XCTAssertNil(snapshot.video)
         XCTAssertTrue(snapshot.buffering)
         XCTAssertEqual(snapshot.cacheAhead, 3.5)

@@ -366,11 +366,11 @@ The documents are pinned by `rust/crates/okp-session/fixtures/tracks/`.
 
 ## Audio presentation
 
-A loaded source with audio and no video tracks other than attached pictures has
-an `audio_metadata` snapshot field, containing optional `title`, `artist`, and
-`album` tags. An untagged audio file still has this field. Other sources omit
-it, and the field clears on open and close. An attached picture by itself
-does not produce `video` geometry for the shell.
+The `audio_metadata` query returns the current published source and a `value`
+containing optional `title`, `artist`, and `album` tags. The value exists for
+loaded media with audio and no video tracks other than attached pictures,
+including untagged audio. It is null while opening and for video. The source
+lets the shell match this answer to the file shown by its last drained batch.
 
 ## Events
 

@@ -8,6 +8,8 @@ final class CompactMusic: NSObject {
     var automaticallyEnters = true
     var showCommands: ((NSPoint) -> Void)?
     var onModeChange: ((Bool) -> Void)?
+    var leaveMiniPlayer: (() -> Void)?
+    private(set) var audioMetadata: AudioMetadata?
     var onQueueToggle: (() -> Void)?
     var accessibilityOverride: MiniPlayerAccessibility? {
         didSet { updateAccessibility() }
@@ -18,6 +20,7 @@ final class CompactMusic: NSObject {
     private var standard: (frame: CGRect, minimum: CGSize)?
     private var snapshot = SessionSnapshot()
     private var suppressedForSource = false
+    private var awaitingPresentation = false
     private var artworkTask: Task<Void, Never>?
     private let autoHide = AutoHide()
     private var pointerPin = false
@@ -81,6 +84,8 @@ final class CompactMusic: NSObject {
     func sessionChanged(_ updated: SessionSnapshot) {
         let newLoad = snapshot.source != updated.source || (updated.status == .opening && snapshot.status != .opening)
         if newLoad {
+            audioMetadata = nil
+            awaitingPresentation = updated.source != nil
             suppressedForSource = false
             scrub.cancel()
             view.volume.cancelPress()
@@ -89,12 +94,18 @@ final class CompactMusic: NSObject {
             view.artwork.show(nil)
         }
         snapshot = updated
+        if awaitingPresentation, updated.status != .opening,
+           case .audioMetadata(let source, let metadata)? = session?.query(.audioMetadata),
+           source == updated.source {
+            audioMetadata = metadata
+            awaitingPresentation = false
+        }
         if updated.source == nil || updated.endReason == .error ||
-            (updated.video != nil && updated.audioMetadata == nil && (newLoad || awaitingNewSource)) {
+            (updated.video != nil && !awaitingPresentation && audioMetadata == nil && (newLoad || awaitingNewSource)) {
             leave()
         }
         if newLoad { awaitingNewSource = isActive }
-        if updated.audioMetadata != nil { awaitingNewSource = false }
+        if audioMetadata != nil { awaitingNewSource = false }
 
         enterAutomatically()
         if isActive, artworkTask == nil { loadArtwork() }
@@ -153,17 +164,20 @@ final class CompactMusic: NSObject {
         if row.id == Self.commandID {
             row.enabled = row.enabled && canToggle
             row.checked = isActive
-        } else if isActive, row.id == "mini-player" {
+        } else if row.id == "mini-player", isActive || audioMetadata != nil {
             row.enabled = false
         }
         return row
     }
 
-    @objc private func windowAvailable() { enterAutomatically() }
+    @objc private func windowAvailable(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in self?.enterAutomatically() }
+    }
 
     private func enterAutomatically() {
-        guard automaticallyEnters, !suppressedForSource, !isActive, snapshot.audioMetadata != nil, canToggle else { return }
-        enter()
+        guard automaticallyEnters, !suppressedForSource, !isActive, audioMetadata != nil else { return }
+        if controller?.window.isMiniPlayer == true { leaveMiniPlayer?() }
+        if canToggle { enter() }
     }
 
     private func enter() {
@@ -219,7 +233,7 @@ final class CompactMusic: NSObject {
     }
 
     private func loadArtwork() {
-        guard let source = snapshot.source, snapshot.audioMetadata != nil else { return }
+        guard let source = snapshot.source, audioMetadata != nil else { return }
         artworkTask = Task { @MainActor [weak self] in
             let artwork = await EmbeddedMusicArtwork.load(source)
             guard !Task.isCancelled, let self, self.isActive, self.snapshot.source == source else { return }
@@ -230,7 +244,7 @@ final class CompactMusic: NSObject {
 
     private var accessibility: MiniPlayerAccessibility { accessibilityOverride ?? .system }
 
-    @objc private func accessibilityChanged() { updateAccessibility() }
+    @objc private func accessibilityChanged(_ notification: Notification) { updateAccessibility() }
 
     private func updateAccessibility() {
         view.reduceTransparency = accessibility.reduceTransparency || accessibility.increaseContrast
@@ -242,10 +256,10 @@ final class CompactMusic: NSObject {
         guard isActive, let source = snapshot.source,
               case .transport(let transport)? = session?.query(.transport(
                 at: scrub.dragPosition(duration: snapshot.duration))) else { return }
-        let audio = snapshot.audioMetadata
+        let audio = audioMetadata
         let title = nonempty(audio?.title) ?? snapshot.title ?? (source.location as NSString).lastPathComponent
         let detail = [nonempty(audio?.artist), nonempty(audio?.album)].compactMap { $0 }.joined(separator: " · ")
-        view.show(title: title, detail: detail, hasVideo: snapshot.video != nil)
+        view.show(title: title, detail: detail, hasVideo: audioMetadata == nil && snapshot.video != nil)
         let playing = snapshot.status == .playing
         view.play.isEnabled = playing || snapshot.status == .paused
         view.showTransport(transport, playing: playing, canStep: (session?.store.playlist.items.count ?? 0) > 1)

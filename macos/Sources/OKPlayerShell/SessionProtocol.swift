@@ -149,6 +149,7 @@ struct DispatchReply: Codable, Equatable {
 
 enum Query: Codable, Equatable {
     case snapshot
+    case audioMetadata
     /// See `SessionClient.windowFit` and `SessionClient.initialWindowFit`.
     case windowFit(video: WindowSize, backingScale: Double, visibleFrame: WindowRect, minSize: WindowSize?,
                    chrome: WindowSize?)
@@ -194,6 +195,7 @@ struct QueryEnvelope: Codable, Equatable {
 
 enum QueryResult: Codable, Equatable {
     case snapshot(snapshot: SessionSnapshot)
+    case audioMetadata(source: MediaSource?, value: AudioMetadata?)
     case windowFit(frame: WindowRect?)
     case compactWindowSize(size: WindowSize?)
     case videoClick(intent: VideoClickIntent)
@@ -352,7 +354,6 @@ struct SessionSnapshot: Codable, Equatable {
     var endReason: EndReason?
     var title: String?
     var video: VideoGeometry?
-    var audioMetadata: AudioMetadata?
     var buffering = false
     var cacheAhead: Double?
 
@@ -373,7 +374,6 @@ struct SessionSnapshot: Codable, Equatable {
         case .endReason(let value): endReason = value
         case .title(let value): title = value
         case .video(let value): video = value
-        case .audioMetadata(let value): audioMetadata = value
         case .buffering(let value): buffering = value
         case .cacheAhead(let value): cacheAhead = value
         }
@@ -395,7 +395,6 @@ enum SnapshotChange: Codable, Equatable {
     case endReason(value: EndReason?)
     case title(value: String?)
     case video(value: VideoGeometry?)
-    case audioMetadata(value: AudioMetadata?)
     case buffering(value: Bool)
     case cacheAhead(value: Double?)
 }

@@ -53,6 +53,8 @@ const CHECKED: &[&str] = &[
     "reply-failed.json",
     "reply-perform.json",
     "query-snapshot.json",
+    "query-audio-metadata.json",
+    "query-reply-audio-metadata.json",
     "query-reply-snapshot.json",
     "query-reply-rejected.json",
     "query-window-fit.json",
@@ -242,6 +244,31 @@ fn every_reply_matches_its_fixture() {
 }
 
 #[test]
+fn audio_metadata_query_and_reply_match_their_fixtures() {
+    golden(
+        "query-audio-metadata.json",
+        QueryEnvelope {
+            schema_version: SCHEMA_VERSION,
+            query: Query::AudioMetadata {},
+        },
+    );
+    golden(
+        "query-reply-audio-metadata.json",
+        QueryReply {
+            schema_version: SCHEMA_VERSION,
+            result: QueryResult::AudioMetadata {
+                source: Some(local("/Users/example/Music/Blue Hour.mp3")),
+                value: Some(AudioMetadata {
+                    title: Some("Blue Hour".to_owned()),
+                    artist: Some("OK Player".to_owned()),
+                    album: Some("Compact Sessions".to_owned()),
+                }),
+            },
+        },
+    );
+}
+
+#[test]
 fn the_snapshot_query_and_its_replies_match_their_fixtures() {
     golden(
         "query-snapshot.json",
@@ -303,7 +330,6 @@ fn the_snapshot_query_and_its_replies_match_their_fixtures() {
                         height: 800,
                         display_aspect: 2.4,
                     }),
-                    audio_metadata: None,
                     buffering: false,
                     cache_ahead: Some(20.0),
                 },
@@ -540,7 +566,6 @@ fn change_name(change: &SnapshotChange) -> &'static str {
         SnapshotChange::EndReason { .. } => "end_reason",
         SnapshotChange::Title { .. } => "title",
         SnapshotChange::Video { .. } => "video",
-        SnapshotChange::AudioMetadata { .. } => "audio_metadata",
         SnapshotChange::Buffering { .. } => "buffering",
         SnapshotChange::CacheAhead { .. } => "cache_ahead",
     }
@@ -555,7 +580,7 @@ fn every_event_and_snapshot_change_matches_the_batch_fixture() {
         SnapshotChange::Source {
             value: Some(MediaSource {
                 kind: SourceKind::Url,
-                location: "https://example.com/a.mp3".to_owned(),
+                location: "https://example.com/a.mp4".to_owned(),
             }),
         },
         SnapshotChange::TimePos { value: None },
@@ -580,21 +605,14 @@ fn every_event_and_snapshot_change_matches_the_batch_fixture() {
             value: Some(EndReason::Eof),
         },
         SnapshotChange::Title {
-            value: Some("a.mp3".to_owned()),
+            value: Some("a.mp4".to_owned()),
         },
         SnapshotChange::Video { value: None },
-        SnapshotChange::AudioMetadata {
-            value: Some(AudioMetadata {
-                title: Some("Blue Hour".to_owned()),
-                artist: Some("OK Player".to_owned()),
-                album: Some("Compact Sessions".to_owned()),
-            }),
-        },
         SnapshotChange::Buffering { value: true },
         SnapshotChange::CacheAhead { value: Some(3.5) },
     ];
     let names: BTreeSet<_> = changes.iter().map(change_name).collect();
-    assert_eq!(names.len(), 16, "the batch fixture lists every change once");
+    assert_eq!(names.len(), 15, "the batch fixture lists every change once");
 
     golden(
         "events-batch.json",

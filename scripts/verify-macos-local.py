@@ -283,7 +283,8 @@ def music_fixtures(ffmpeg, audio, provenance):
     extras.mkdir()
     plain = extras / "music-no-art.mp3"
     video = extras / "music-video.mp4"
-    cover = extras / "cover.jpg"
+    cover = audio.parent / "assets" / "cover.jpg"
+    cover.parent.mkdir()
     original = os.environ.get("OKP_VERIFY_MUSIC_TONE")
     if original:
         command(*prefix, "-i", original, "-map", "0:a:0", "-map_metadata", "-1", "-c:a", "copy", str(plain))
@@ -1011,7 +1012,7 @@ def main():
                 if not all(expected_failures <= set(result["assertion_failures"])
                            for result in receipt["appearances"]):
                     receipt.update(status="error", error="Negative control did not expose all expected failures in both themes")
-                if spec["id"] in {SETTINGS, *ABOUT_CONTROLS, *QUEUE_CONTROLS, *HISTORY_CONTROLS} and any(
+                if spec["id"] in {SETTINGS, *ABOUT_CONTROLS, *QUEUE_CONTROLS, *HISTORY_CONTROLS, "compact-music"} and any(
                     set(result["assertion_failures"]) != expected_failures for result in receipt["appearances"]
                 ):
                     receipt.update(status="error", error="Negative control failed unrelated assertions")

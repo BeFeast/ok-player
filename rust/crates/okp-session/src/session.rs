@@ -78,6 +78,7 @@ struct State {
     /// The engine's pause flag as last observed. Pause is applied optimistically
     /// on dispatch, so only a change in the engine's report may override it.
     observed_paused: Option<bool>,
+    audio_metadata: Option<AudioMetadata>,
     /// The engine's id for the current load, when it reports one. Events of an
     /// older load are about media the shell has already replaced.
     load: Option<i64>,
@@ -198,6 +199,7 @@ impl Session {
                 queue: Coalescer::new(),
                 armed: true,
                 observed_paused: None,
+                audio_metadata: None,
                 load: None,
                 pending_tracks: Vec::new(),
                 pending_subtitles: None,
@@ -341,6 +343,13 @@ impl Session {
                     view: lock(&self.shared.state)
                         .playlist
                         .queue_view(snapshot.title.as_deref()),
+                }
+            }
+            Query::AudioMetadata {} => {
+                let state = lock(&self.shared.state);
+                QueryResult::AudioMetadata {
+                    source: state.queue.published().source.clone(),
+                    value: state.audio_metadata.clone(),
                 }
             }
             Query::WindowFit {
@@ -655,6 +664,15 @@ impl State {
         }
         self.advance_playlist(engine);
         let current = self.project(&observation);
+        self.audio_metadata = observation
+            .audio_metadata
+            .as_ref()
+            .filter(|_| is_loaded(self.machine.machine().status()) && !self.end_failed)
+            .map(|audio| AudioMetadata {
+                title: audio.title.clone(),
+                artist: audio.artist.clone(),
+                album: audio.album.clone(),
+            });
         self.fit.observe(current.video.as_ref());
         let held = self.queue.observe(&current, now);
         // A history change waiting for its timed save wakes the thread too.
@@ -1143,20 +1161,11 @@ impl State {
             },
             video: observation
                 .video
-                .filter(|_| loaded && observation.audio_metadata.is_none())
+                .filter(|_| loaded)
                 .map(|video| VideoGeometry {
                     width: video.width,
                     height: video.height,
                     display_aspect: f64::from(video.width) / f64::from(video.height),
-                }),
-            audio_metadata: observation
-                .audio_metadata
-                .as_ref()
-                .filter(|_| loaded)
-                .map(|audio| AudioMetadata {
-                    title: audio.title.clone(),
-                    artist: audio.artist.clone(),
-                    album: audio.album.clone(),
                 }),
             buffering: !idle && observation.buffering,
             cache_ahead: observation.playback.cache_duration.filter(|_| loaded),

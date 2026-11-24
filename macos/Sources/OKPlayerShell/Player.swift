@@ -152,6 +152,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         music.install(in: root, video: videoArea, controller: behaviour)
         music.automaticallyEnters = verification?.control != "music_auto_entry_disabled"
         music.showCommands = { [weak self] point in self?.commandPopover.show(at: point) }
+        music.leaveMiniPlayer = { [weak self] in self?.miniPlayer.restore() }
         music.onQueueToggle = { [weak self] in _ = self?.upNext.toggle() }
         behaviour.onExitCompactMusic = { [weak self] in self?.music.restoreStandard() }
         music.onModeChange = { [weak self] active in
@@ -365,14 +366,17 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if batch.events.contains(.shutdown) { fail("The playback engine stopped"); return }
         statusLayer.sessionChanged(shown)
         let snapshot = client.store.snapshot
-        video?.hasVideo = snapshot.source != nil && snapshot.video != nil && snapshot.status != .ended
         if HistoryIntegration.shouldCloseAtEOF(snapshot, scanning: playlist.state.scanning, errorShown: errorShown) {
+            video?.hasVideo = false
             let result = client.dispatch(.close)
             if case .accepted = result { return }
         }
-        miniPlayer.sessionChanged(snapshot)
         music.sessionChanged(snapshot)
-        windowBehaviour?.sessionChanged(snapshot, standardFrame: music.savedFrame)
+        var presented = snapshot
+        if music.audioMetadata != nil { presented.video = nil }
+        miniPlayer.sessionChanged(presented)
+        windowBehaviour?.sessionChanged(presented, standardFrame: music.savedFrame)
+        video?.hasVideo = presented.source != nil && presented.video != nil && presented.status != .ended
         if snapshot.source == nil { upNext.hide() }
         refreshCommandPopover(batch)
         osc.sessionChanged(snapshot)
