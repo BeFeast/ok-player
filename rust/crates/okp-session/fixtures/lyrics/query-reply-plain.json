@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "result": {
+    "lyrics": {
+      "lyrics": {
+        "source": {
+          "kind": "local",
+          "location": "/Users/example/Music/Plain Song.flac"
+        },
+        "generation": 3,
+        "header": "LYRICS · NOT SYNCED",
+        "state": "plain",
+        "message": null,
+        "lines": [
+          {
+            "time_seconds": 0.0,
+            "text": "Wander down the boulevard",
+            "is_gap": false
+          },
+          {
+            "time_seconds": 0.0,
+            "text": "Counting every falling star",
+            "is_gap": false
+          }
+        ],
+        "active_index": null
+      }
+    }
+  }
+}

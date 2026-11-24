@@ -372,6 +372,19 @@ loaded media with audio and no video tracks other than attached pictures,
 including untagged audio. It is null while opening and for video. The source
 lets the shell match this answer to the file shown by its last drained batch.
 
+The `lyrics {at}` query (`at` optional) returns `result.lyrics.lyrics` for local
+sidecar `.lrc` lyrics discovered and parsed by `okp-core` off the caller and
+event threads: `source`, monotonic `generation`, canonical `header` (`LYRICS` or
+`LYRICS · NOT SYNCED`), `state` (`unavailable`, `loading`, `synced`, `plain`,
+`missing`, `invalid`), optional fallback `message`, renderable `lines`
+(`{time_seconds, text, is_gap}`), and `active_index` at `at` or the published
+`time_pos` (synced only). An accepted `open` or `close` advances `generation`,
+cancels any in-flight sidecar read, and clears previous track lyrics immediately
+so stale results never follow a track switch. A discrete `lyrics_changed {}`
+event announces when the session's local lyrics state updates.
+
+The documents are pinned by `rust/crates/okp-session/fixtures/lyrics/`.
+
 ## Events
 
 A batch holds at most one `snapshot_changed` event, first, and then at most one

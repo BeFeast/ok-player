@@ -24,9 +24,8 @@ pub(crate) struct LyricsSurface {
 #[derive(Default)]
 struct LyricsRenderState {
     loaded_key: RefCell<Option<String>>,
-    lines: RefCell<Vec<lrc::LrcLine>>,
+    lyrics: RefCell<okp_core::lyrics::LocalLyrics>,
     rows: RefCell<Vec<gtk::Widget>>,
-    has_timings: Cell<bool>,
     active: Cell<Option<usize>>,
     // The visual smoke hook (`OKP_OPEN_LYRICS_ON_STARTUP`) freezes the poll on fixture lyrics; the
     // freeze releases the moment real audio media loads, so an inherited env var can never pin the
@@ -129,10 +128,8 @@ impl LyricsSurface {
         self.reveal();
         let key = path.to_string_lossy().into_owned();
         if self.state.loaded_key.borrow().as_deref() != Some(key.as_str()) {
-            let document = okp_core::lyrics::read_sidecar(&path)
-                .map(|text| lrc::parse(Some(&text)))
-                .unwrap_or_default();
-            self.rebuild(&document, state);
+            let lyrics = okp_core::lyrics::load_sidecar(&path);
+            self.rebuild(lyrics, state);
             self.state.loaded_key.replace(Some(key));
         }
 
@@ -153,51 +150,48 @@ impl LyricsSurface {
             return;
         }
         self.state.loaded_key.replace(None);
+        self.state
+            .lyrics
+            .replace(okp_core::lyrics::LocalLyrics::missing());
         self.state.active.set(None);
     }
 
     /// Replace the rendered sheet from a freshly parsed document. Clears the old rows, resets the
-    /// highlight, and picks the header/body for the synced / plain / empty case.
-    fn rebuild(&self, document: &lrc::LrcDocument, state: &Rc<RefCell<PlayerState>>) {
+    /// highlight, and picks the header/body for the synced / plain / fallback case.
+    fn rebuild(&self, lyrics: okp_core::lyrics::LocalLyrics, state: &Rc<RefCell<PlayerState>>) {
         clear_list_box_children(&self.list);
         self.state.rows.borrow_mut().clear();
-        self.state.lines.borrow_mut().clear();
         self.state.active.set(None);
-        self.state.has_timings.set(document.has_timings);
+        self.header.set_text(lyrics.header());
 
-        if document.is_empty() {
-            self.header.set_text("LYRICS");
+        if let Some(message) = lyrics.fallback_message() {
             self.list.set_valign(gtk::Align::Center);
-            self.list.append(&lyrics_empty_row());
+            self.list.append(&lyrics_empty_row(message));
+            self.state.lyrics.replace(lyrics);
             return;
         }
 
         self.list.set_valign(gtk::Align::Start);
-        if document.has_timings {
-            self.header.set_text("LYRICS");
-            let mut rows = Vec::with_capacity(document.lines.len());
-            for line in &document.lines {
+        if lyrics.status == okp_core::lyrics::LocalLyricsStatus::Synced {
+            let mut rows = Vec::with_capacity(lyrics.document.lines.len());
+            for line in &lyrics.document.lines {
                 let row = synced_lyric_row(line, state);
                 self.list.append(&row);
                 rows.push(row);
             }
             self.state.rows.replace(rows);
-            self.state.lines.replace(document.lines.clone());
         } else {
-            self.header.set_text("LYRICS · NOT SYNCED");
-            for line in &document.lines {
+            for line in &lyrics.document.lines {
                 self.list.append(&plain_lyric_row(&line.text));
             }
         }
+        self.state.lyrics.replace(lyrics);
     }
 
     /// Move the active-line highlight to the line at `position` (synced sheets only). No-op for
     /// plain lyrics and the empty state, which carry no per-line highlight.
     fn update_highlight(&self, position: f64) {
-        if !self.state.has_timings.get() {
-            return;
-        }
-        let index = lrc::active_index(&self.state.lines.borrow(), position);
+        let index = self.state.lyrics.borrow().active_index(position);
         if index == self.state.active.get() {
             return;
         }
@@ -223,7 +217,10 @@ impl LyricsSurface {
             LyricsPreviewMode::Empty => (lrc::LrcDocument::default(), 0.0),
         };
         self.reveal();
-        self.rebuild(&document, state);
+        self.rebuild(
+            okp_core::lyrics::LocalLyrics::from_document(document),
+            state,
+        );
         self.state
             .loaded_key
             .replace(Some(LYRICS_PREVIEW_KEY.to_owned()));
@@ -254,8 +251,8 @@ fn observed_position(state: &Rc<RefCell<PlayerState>>) -> f64 {
 /// An empty line is a carried instrumental gap — render a quiet rest glyph rather than a blank,
 /// clickable-looking row.
 fn synced_lyric_row(line: &lrc::LrcLine, state: &Rc<RefCell<PlayerState>>) -> gtk::Widget {
-    let is_gap = line.text.trim().is_empty();
-    let label = gtk::Label::new(Some(if is_gap { "♪" } else { line.text.as_str() }));
+    let (display_text, is_gap) = okp_core::lyrics::LocalLyrics::display_line_text(line);
+    let label = gtk::Label::new(Some(display_text));
     label.set_wrap(true);
     label.set_justify(gtk::Justification::Center);
     label.set_max_width_chars(48);
@@ -286,7 +283,7 @@ fn plain_lyric_row(text: &str) -> gtk::Widget {
     label.upcast()
 }
 
-fn lyrics_empty_row() -> gtk::Widget {
+fn lyrics_empty_row(message: &str) -> gtk::Widget {
     let row = gtk::Box::new(gtk::Orientation::Vertical, 8);
     row.add_css_class("okp-lyrics-empty");
     row.set_halign(gtk::Align::Center);
@@ -297,7 +294,7 @@ fn lyrics_empty_row() -> gtk::Widget {
     icon.set_pixel_size(30);
     row.append(&icon);
 
-    let label = gtk::Label::new(Some("No lyrics found for this track"));
+    let label = gtk::Label::new(Some(message));
     label.add_css_class("okp-lyrics-empty-text");
     label.set_justify(gtk::Justification::Center);
     label.set_wrap(true);

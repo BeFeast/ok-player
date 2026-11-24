@@ -79,6 +79,7 @@ ACTION_CONTROLS = {
     "compact-mini": ("compact_snap_disabled", {"compact_mini:corner_snap"}),
     "compact-mini-floor": ("compact_clearance_disabled", {"compact_mini_floor:clearance"}),
     "compact-music": ("music_auto_entry_disabled", {"compact_music:auto_entry"}),
+    "lyrics-sidecar": ("lyrics_active_highlight_disabled", {"lyrics_sidecar:active_highlight"}),
 }
 CONTROLS = {
     **TRACK_CONTROLS,
@@ -139,7 +140,9 @@ def read_scenario(path):
                "history_play", "history_arrow", "history_footer", "history_search", "history_clear",
                "history_back", "history_resume", "history_more", "history_compact",
                "music_pause", "music_idle", "music_seek", "music_queue",
-               "music_next", "music_round_trip", "open_music_video", "music_video_round_trip"}
+               "music_next", "music_round_trip", "open_music_video", "music_video_round_trip",
+               "lyrics_advance", "lyrics_seek_back", "lyrics_click_row",
+               "lyrics_switch_plain", "lyrics_switch_malformed", "lyrics_switch_missing"}
     if path.stem == SETTINGS:
         actions.update({"settings_shortcut", "settings_context", "settings_legacy", "settings_search",
                         "settings_resize", "settings_system", "settings_light", "settings_auto",
@@ -157,7 +160,7 @@ def read_scenario(path):
             raise ValueError("Settings steps require a relaunch phase")
         if step["action"] not in actions:
             raise ValueError(f"Unsupported action {step['action']!r}")
-        if step["action"] in {"seek", "seek_mini", "music_seek", "play_to"} and not isinstance(step.get("seconds"), (float, int)):
+        if step["action"] in {"seek", "seek_mini", "music_seek", "lyrics_advance", "lyrics_seek_back", "play_to"} and not isinstance(step.get("seconds"), (float, int)):
             raise ValueError("Seek and playback targets require numeric seconds")
         if step["action"] == "size_osc" and not isinstance(step.get("width"), (float, int)):
             raise ValueError("OSC resize requires a numeric width")
@@ -171,7 +174,8 @@ def read_scenario(path):
                                            "open_evidence", "about_identity", "about_footer", "queue_panel", "mini_hover",
                                            "mini_floor", "mini_hidden", "mini_accessible", "feedback_attached",
                                            "history_evidence", "music_artwork",
-                                           "music_hidden", "music_queue", "music_placeholder", "music_video"}
+                                           "music_hidden", "music_queue", "music_placeholder", "music_video",
+                                           "lyrics_synced", "lyrics_plain", "lyrics_missing"}
                     or not step.get("name", "").replace("-", "").isalnum()):
                 raise ValueError("Invalid capture checkpoint")
         if step["action"] == "check_subtitle_menu":
@@ -181,7 +185,7 @@ def read_scenario(path):
                 raise ValueError("Subtitle menu check needs labels and an expected selected item")
     if spec["fixture"] not in {*FIXTURE_SUBTITLES, "01-h264-1080p24-tone.mp4", "landscape-4k.mp4",
                                "04-mkv-2audio-2subs.mkv", "mini-landscape.mp4", "welcome-return.mp4",
-                               "music-with-art.mp3", OPEN_FIXTURE, "S01E01.mp4", HISTORY_FIXTURE}:
+                               "music-with-art.mp3", "lyrics-synced.mp3", OPEN_FIXTURE, "S01E01.mp4", HISTORY_FIXTURE}:
         raise ValueError("Unknown scenario fixture")
     return spec
 
@@ -192,6 +196,8 @@ def fixture(ffmpeg, temporary, spec, receipt):
     receipt["fixture"] = {"ffmpeg_version": version, "ffmpeg_sha256": digest(Path(ffmpeg))}
     if spec["id"] == "compact-music":
         music_fixtures(ffmpeg, video, receipt["fixture"])
+    elif spec["id"] == "lyrics-sidecar":
+        lyrics_fixtures(ffmpeg, video, receipt["fixture"])
     elif video.name == "S01E01.mp4":
         video = queue_fixtures(ffmpeg, temporary, spec["id"], receipt["fixture"])
     elif video.name == "04-mkv-2audio-2subs.mkv":
@@ -305,6 +311,75 @@ def music_fixtures(ffmpeg, audio, provenance):
             "-i", str(plain), "-map", "0:v", "-map", "1:a", "-shortest", "-c:a", "aac",
             "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", str(video))
     for path in (audio, plain, cover, video):
+        provenance[str(path.relative_to(audio.parent))] = digest(path)
+
+
+def lyrics_fixtures(ffmpeg, audio, provenance):
+    prefix = [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error"]
+    extras = audio.parent / "extras"
+    extras.mkdir()
+    base = extras / "lyrics-missing.mp3"
+    plain = extras / "lyrics-plain.mp3"
+    malformed = extras / "lyrics-malformed.mp3"
+    cover = audio.parent / "assets" / "lyrics-cover.jpg"
+    cover.parent.mkdir()
+    command(*prefix, "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=30",
+            "-c:a", "libmp3lame", "-b:a", "64k", "-fflags", "+bitexact", str(base))
+    command(*prefix, "-f", "lavfi", "-i", "color=c=0x163065:s=512x512:r=1",
+            "-vf", "drawbox=x=48:y=48:w=416:h=416:c=0x2563eb:t=14,"
+                   "drawbox=x=112:y=112:w=288:h=288:c=0x0ea5e9:t=fill",
+            "-frames:v", "1", "-threads", "1", str(cover))
+    command(*prefix, "-i", str(base), "-i", str(cover), "-map", "0:a", "-map", "1:v",
+            "-c", "copy", "-id3v2_version", "3", "-disposition:v:0", "attached_pic",
+            "-metadata", "title=Neon Skyline", "-metadata", "artist=The Wander Club",
+            "-metadata", "album=Sidecar Sessions", "-metadata:s:v:0", "comment=Cover (front)", str(audio))
+    command(*prefix, "-i", str(base), "-c", "copy", "-id3v2_version", "3",
+            "-metadata", "title=Boulevard Nights", "-metadata", "artist=The Wander Club",
+            "-metadata", "album=Plain Sessions", str(plain))
+    command(*prefix, "-i", str(base), "-c", "copy", "-id3v2_version", "3",
+            "-metadata", "title=Static Signal", "-metadata", "artist=The Wander Club",
+            "-metadata", "album=Malformed Test", str(malformed))
+
+    synced_lrc = audio.with_suffix(".lrc")
+    synced_lrc.write_text(
+        "[ti:Neon Skyline]\n"
+        "[ar:The Wander Club]\n"
+        "[al:Sidecar Sessions]\n"
+        "[bad:tag]ignored malformed line\n"
+        "[00:00.20]City lights blur into the rain\n"
+        "[00:01.00]Every window holds a name\n"
+        "[00:02.00]We were chasing something bright\n"
+        "[00:03.00]A neon skyline out of sight\n"
+        "[00:04.00]Hold the night a little longer\n"
+        "[00:05.00]Every heartbeat pulling stronger\n"
+        "[00:06.00]Down the avenue we go\n"
+        "[00:07.00]Where the quiet rivers flow\n"
+        "[00:08.00]\n"
+        "[00:09.00]Signals glowing through the mist\n"
+        "[00:10.50]Names we never crossed or missed\n"
+        "[00:12.00]Footsteps echo down the lane\n"
+        "[00:13.50]Silver ribbons in the rain\n"
+        "[00:15.00]Keep the radio on low\n"
+        "[00:16.50]Watch the midnight traffic slow\n"
+        "[00:18.00]Every corner turns to gold\n"
+        "[00:20.00]Stories waiting to be told\n"
+        "[00:22.00]Until the morning skies unfold\n",
+        encoding="utf-8",
+    )
+    plain_lrc = plain.with_suffix(".lrc")
+    plain_lrc.write_text(
+        "Wander down the boulevard\n"
+        "Counting every falling star\n"
+        "Nothing here but you and me\n"
+        "And the hum of the city endlessly\n"
+        "Quiet lights along the shore\n"
+        "Echoes fading from before\n",
+        encoding="utf-8",
+    )
+    malformed_lrc = malformed.with_suffix(".lrc")
+    malformed_lrc.write_bytes(b"\xff\xfe\x00\x01corrupt-lrc-bytes")
+
+    for path in (audio, synced_lrc, plain, plain_lrc, malformed, malformed_lrc, base, cover):
         provenance[str(path.relative_to(audio.parent))] = digest(path)
 
 
@@ -1012,7 +1087,8 @@ def main():
                 if not all(expected_failures <= set(result["assertion_failures"])
                            for result in receipt["appearances"]):
                     receipt.update(status="error", error="Negative control did not expose all expected failures in both themes")
-                if spec["id"] in {SETTINGS, *ABOUT_CONTROLS, *QUEUE_CONTROLS, *HISTORY_CONTROLS, "compact-music"} and any(
+                if spec["id"] in {SETTINGS, *ABOUT_CONTROLS, *QUEUE_CONTROLS, *HISTORY_CONTROLS,
+                                  "compact-music", "lyrics-sidecar"} and any(
                     set(result["assertion_failures"]) != expected_failures for result in receipt["appearances"]
                 ):
                     receipt.update(status="error", error="Negative control failed unrelated assertions")

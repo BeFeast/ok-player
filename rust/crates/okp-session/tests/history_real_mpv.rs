@@ -36,7 +36,8 @@ impl Store {
                 Event::Error { .. }
                 | Event::Shutdown {}
                 | Event::PlaylistChanged { .. }
-                | Event::Notice { .. } => {}
+                | Event::Notice { .. }
+                | Event::LyricsChanged {} => {}
             }
         }
     }

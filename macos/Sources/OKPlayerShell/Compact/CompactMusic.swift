@@ -11,6 +11,7 @@ final class CompactMusic: NSObject {
     var leaveMiniPlayer: (() -> Void)?
     private(set) var audioMetadata: AudioMetadata?
     var onQueueToggle: (() -> Void)?
+    var onLyricsToggle: (() -> Void)?
     var accessibilityOverride: MiniPlayerAccessibility? {
         didSet { updateAccessibility() }
     }
@@ -41,7 +42,8 @@ final class CompactMusic: NSObject {
         for (button, action) in [
             (view.play, #selector(playPause)), (view.previous, #selector(previousItem)),
             (view.next, #selector(nextItem)), (view.mute, #selector(mute)),
-            (view.queue, #selector(toggleQueue)), (view.more, #selector(openCommands)),
+            (view.queue, #selector(toggleQueue)), (view.lyrics, #selector(toggleLyrics)),
+            (view.more, #selector(openCommands)),
             (view.switchToVideo, #selector(restoreStandard))
         ] {
             button.target = self
@@ -133,6 +135,11 @@ final class CompactMusic: NSObject {
         refresh()
     }
 
+    func setLyricsShown(_ shown: Bool) {
+        view.lyricsShown = shown
+        refresh()
+    }
+
     func setContextShown(_ shown: Bool) {
         guard isActive, contextPin != shown else { return }
         contextPin = shown
@@ -151,8 +158,10 @@ final class CompactMusic: NSObject {
         default: break
         }
         guard event.type == .scrollWheel else { return false }
-        let point = view.queueHost.convert(event.locationInWindow, from: nil)
-        if view.queueShown && view.queueHost.bounds.contains(point) { return false }
+        let queuePoint = view.queueHost.convert(event.locationInWindow, from: nil)
+        if view.queueShown && view.queueHost.bounds.contains(queuePoint) { return false }
+        let lyricsPoint = view.lyricsHost.convert(event.locationInWindow, from: nil)
+        if view.lyricsShown && view.lyricsHost.bounds.contains(lyricsPoint) { return false }
         if let command = VolumeScrollAccumulator.command(steps: scroll.steps(for: ScrollInput(event: event))) {
             session?.dispatch(command)
         }
@@ -262,9 +271,10 @@ final class CompactMusic: NSObject {
         view.show(title: title, detail: detail, hasVideo: audioMetadata == nil && snapshot.video != nil)
         let playing = snapshot.status == .playing
         view.play.isEnabled = playing || snapshot.status == .paused
+        view.lyrics.isEnabled = audioMetadata != nil
         view.showTransport(transport, playing: playing, canStep: (session?.store.playlist.items.count ?? 0) > 1)
         view.artwork.updateMotion(playing: playing && !snapshot.buffering, reduceMotion: accessibility.reduceMotion)
-        autoHide.update(allowed: transport.osc.autoHide && !view.queueShown && !scrub.isDragging &&
+        autoHide.update(allowed: transport.osc.autoHide && !view.panelExpanded && !scrub.isDragging &&
                         !view.volume.isPressed, hideAfter: transport.osc.hideAfter)
     }
 
@@ -290,6 +300,7 @@ final class CompactMusic: NSObject {
     @objc private func nextItem() { session?.dispatch(.playlist(action: .next)) }
     @objc private func mute() { session?.dispatch(.toggleMute) }
     @objc private func toggleQueue() { onQueueToggle?() }
+    @objc private func toggleLyrics() { onLyricsToggle?() }
     @objc private func openCommands() {
         showCommands?(view.more.convert(CGPoint(x: view.more.bounds.midX, y: view.more.bounds.midY), to: nil))
     }

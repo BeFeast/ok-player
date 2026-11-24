@@ -75,6 +75,7 @@ pub enum CommandGroup {
 }
 
 const COMPACT_MUSIC: &str = "compact-music";
+const LOCAL_LYRICS: &str = "lyrics";
 
 /// A place in the player command menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -322,7 +323,20 @@ impl CommandRegistry {
                     shortcut: None,
                 }
             });
-        player.chain(music).chain(keyboard).collect()
+        let lyrics =
+            (self.platform == Platform::MacOs && self.is_available(LOCAL_LYRICS)).then(|| {
+                RegistryCommand {
+                    id: LOCAL_LYRICS.to_owned(),
+                    label: "Lyrics".to_owned(),
+                    group: CommandGroup::TracksSubtitles,
+                    menu: Some(CommandMenu::Playback),
+                    available: true,
+                    enabled: snapshot.source.is_some(),
+                    checked: false,
+                    shortcut: None,
+                }
+            });
+        player.chain(music).chain(lyrics).chain(keyboard).collect()
     }
 
     #[must_use]
@@ -417,6 +431,20 @@ impl CommandRegistry {
             {
                 entries.push(CommandSurfaceEntry::Group {
                     label: PlayerCommandGroup::ViewWindow.label().to_owned(),
+                });
+                entries.push(CommandSurfaceEntry::Command { row: row.clone() });
+            }
+        }
+        if let Some(row) = rows.iter().find(|row| row.id == LOCAL_LYRICS) {
+            if query.is_empty() && page == CommandMenu::Playback {
+                entries.push(CommandSurfaceEntry::Command { row: row.clone() });
+            } else if !query.is_empty()
+                && ["lyrics", "local lyrics", "lrc"]
+                    .iter()
+                    .any(|label| label.contains(&query))
+            {
+                entries.push(CommandSurfaceEntry::Group {
+                    label: PlayerCommandGroup::TracksSubtitles.label().to_owned(),
                 });
                 entries.push(CommandSurfaceEntry::Command { row: row.clone() });
             }
@@ -599,7 +627,7 @@ fn command_for_action(platform: Platform, action: ShortcutAction) -> &'static st
 }
 
 fn is_registry_id(platform: Platform, id: &str) -> bool {
-    (platform == Platform::MacOs && id == COMPACT_MUSIC)
+    (platform == Platform::MacOs && matches!(id, COMPACT_MUSIC | LOCAL_LYRICS))
         || player_command_registry()
             .iter()
             .any(|spec| spec.id.id() == id)

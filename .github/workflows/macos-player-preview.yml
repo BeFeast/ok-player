@@ -353,7 +353,7 @@ jobs:
             transport_scenarios=(osc-layout osc-idle-and-pins osc-volume-speed osc-status)
             about_scenarios=(about-identity about-geometry)
             open_scenarios=(welcome-first-run welcome-return open-files-folders open-drag-drop)
-            compact_scenarios=(compact-mini compact-mini-floor compact-music)
+            compact_scenarios=(compact-mini compact-mini-floor compact-music lyrics-sidecar)
             controlled_scenarios=("${window_scenarios[@]}" "${transport_scenarios[@]}" "${track_scenarios[@]}"
                                   settings-shell-appearance "${open_scenarios[@]}" context-idle-and-playback command-keyboard
                                   "${about_scenarios[@]}" "${queue_scenarios[@]}" "${compact_scenarios[@]}"

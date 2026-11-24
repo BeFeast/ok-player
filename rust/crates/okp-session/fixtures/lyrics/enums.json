@@ -1,0 +1,10 @@
+{
+  "lyrics_state": [
+    "unavailable",
+    "loading",
+    "synced",
+    "plain",
+    "missing",
+    "invalid"
+  ]
+}

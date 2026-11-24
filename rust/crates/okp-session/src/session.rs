@@ -21,6 +21,7 @@ use crate::coalesce::Coalescer;
 use crate::commands::{CommandMenu, CommandRegistry, Invocation, WindowState};
 use crate::engine::{Engine, MpvEngine, Observation};
 use crate::history::{HistoryAction, HistoryActionResult, Report, SessionHistory};
+use crate::lyrics::SessionLyrics;
 use crate::machine::SessionMachine;
 use crate::open_paths::{self, OpenFormats};
 use crate::playlist::{Background, PlannedOpen, SessionPlaylist, Step};
@@ -100,6 +101,8 @@ struct State {
     /// The track details the menus' labels need, and the subtitle delay and
     /// size asked for.
     tracks: TrackState,
+    /// Local sidecar lyrics for the current audio track.
+    lyrics: SessionLyrics,
 }
 
 struct PendingSubtitles {
@@ -191,6 +194,7 @@ impl Session {
         engine.set_listener(Some(Arc::new(move || listener_signal.notify())));
         let playlist_signal = Arc::clone(&signal);
         let history_signal = Arc::clone(&signal);
+        let lyrics_signal = Arc::clone(&signal);
         history.set_waker(Arc::new(move || history_signal.notify()));
         let shared = Arc::new(Shared {
             engine,
@@ -210,6 +214,7 @@ impl Session {
                 volume: VolumeTarget::default(),
                 status: StatusState::default(),
                 tracks: TrackState::default(),
+                lyrics: SessionLyrics::new(Arc::new(move || lyrics_signal.notify())),
             }),
             signal,
             wakeup: Mutex::new(None),
@@ -350,6 +355,13 @@ impl Session {
                 QueryResult::AudioMetadata {
                     source: state.queue.published().source.clone(),
                     value: state.audio_metadata.clone(),
+                }
+            }
+            Query::Lyrics { at } => {
+                let state = lock(&self.shared.state);
+                let position = at.or(state.queue.published().time_pos);
+                QueryResult::Lyrics {
+                    lyrics: state.lyrics.view(position),
                 }
             }
             Query::WindowFit {
@@ -673,6 +685,13 @@ impl State {
                 artist: audio.artist.clone(),
                 album: audio.album.clone(),
             });
+        let lyrics_polled = self.lyrics.poll();
+        let lyrics_observed = self
+            .lyrics
+            .observe(current.source.as_ref(), self.audio_metadata.is_some());
+        if lyrics_polled || lyrics_observed {
+            self.queue.push_once(Event::LyricsChanged {});
+        }
         self.fit.observe(current.video.as_ref());
         let held = self.queue.observe(&current, now);
         // A history change waiting for its timed save wakes the thread too.
@@ -758,6 +777,9 @@ impl State {
             self.pending_subtitles = None;
             self.fit.begin_source();
             self.status.begin_source();
+            if self.lyrics.begin_source() {
+                self.queue.push_once(Event::LyricsChanged {});
+            }
         }
         match (outcome, engine_result) {
             (CommandOutcome::Accepted { request_id }, Ok(())) => {

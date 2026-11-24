@@ -24,9 +24,11 @@ extension PlayerApp {
             context.draw(frame, in: video.convert(video.bounds, to: root))
         }
         // The title floats over the content. The side panel and toast sit above the OSC.
-        var planes: [NSView] = [osc.scrim, osc.panel, miniPlayer.controls, music.view,
-                                statusLayer.overlay, prompt,
-                                history.welcomeView, controller.titleChrome.label]
+        var planes: [NSView] = []
+        if !music.isActive { planes.append(lyrics.panel) }
+        planes += [osc.scrim, osc.panel, miniPlayer.controls, music.view,
+                   statusLayer.overlay, prompt,
+                   history.welcomeView, controller.titleChrome.label]
         if !music.isActive { planes.append(upNext.panel) }
         planes += [osc.volumeCapsule, tracks.panel, statusLayer.toastView]
             + controller.trafficLights + [controller.pinButton]

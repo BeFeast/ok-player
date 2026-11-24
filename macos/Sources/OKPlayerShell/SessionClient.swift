@@ -40,6 +40,9 @@ final class SessionStore {
             case .notice:
                 // Shown by the status layer; nothing to keep.
                 break
+            case .lyricsChanged:
+                // Handled by LyricsController; nothing to keep in the store.
+                break
             case .error(_, let message, _):
                 lastError = message
             case .shutdown:

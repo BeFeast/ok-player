@@ -15,6 +15,7 @@ mod coalesce;
 pub mod commands;
 mod engine;
 pub mod history;
+pub mod lyrics;
 pub mod machine;
 pub mod open_paths;
 mod playlist;

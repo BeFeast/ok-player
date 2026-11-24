@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "lyrics-sidecar",
+  "fixture": "lyrics-synced.mp3",
+  "appearances": ["light", "dark"],
+  "steps": [
+    {"action": "open"},
+    {"action": "lyrics_advance", "seconds": 15.2},
+    {"action": "capture", "name": "lyrics-synced", "expect": "lyrics_synced"},
+    {"action": "lyrics_seek_back", "seconds": 2.4},
+    {"action": "lyrics_click_row"},
+    {"action": "lyrics_switch_plain"},
+    {"action": "capture", "name": "lyrics-plain", "expect": "lyrics_plain"},
+    {"action": "lyrics_switch_malformed"},
+    {"action": "lyrics_switch_missing"},
+    {"action": "capture", "name": "lyrics-missing", "expect": "lyrics_missing"},
+    {"action": "close_media"}
+  ]
+}

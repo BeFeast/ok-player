@@ -42,6 +42,7 @@ struct VerificationOptions {
         case "compact-mini": "compact_snap_disabled"
         case "compact-mini-floor": "compact_clearance_disabled"
         case "compact-music": "music_auto_entry_disabled"
+        case "lyrics-sidecar": "lyrics_active_highlight_disabled"
         default: "unsupported_control"
         }
     }
@@ -160,6 +161,9 @@ struct VerificationScenario: Decodable {
         case musicPause = "music_pause", musicIdle = "music_idle", musicSeek = "music_seek"
         case musicQueue = "music_queue", musicNext = "music_next", musicRoundTrip = "music_round_trip"
         case openMusicVideo = "open_music_video", musicVideoRoundTrip = "music_video_round_trip"
+        case lyricsAdvance = "lyrics_advance", lyricsSeekBack = "lyrics_seek_back"
+        case lyricsClickRow = "lyrics_click_row", lyricsSwitchPlain = "lyrics_switch_plain"
+        case lyricsSwitchMalformed = "lyrics_switch_malformed", lyricsSwitchMissing = "lyrics_switch_missing"
     }
     enum Expectation: String, Decodable {
         case noCue = "no_cue", clearance, baseMargin = "base_margin"
@@ -180,6 +184,7 @@ struct VerificationScenario: Decodable {
         case feedbackAttached = "feedback_attached"
         case musicArtwork = "music_artwork", musicHidden = "music_hidden", musicQueue = "music_queue"
         case musicPlaceholder = "music_placeholder", musicVideo = "music_video"
+        case lyricsSynced = "lyrics_synced", lyricsPlain = "lyrics_plain", lyricsMissing = "lyrics_missing"
     }
     let schemaVersion: Int
     let id: String
@@ -213,6 +218,7 @@ final class VerifyRun {
     var testWindow: NSWindow?
     var miniOriginal: (frame: CGRect, level: NSWindow.Level, id: Int, media: MediaSource?, client: SessionClient)?
     var miniChecks: [[String: Any]] = []
+    var lyricsDeepScrollOffset: CGFloat = 0
     private var visibleCueBottom: CGFloat?
     private var hiddenCueBottom: CGFloat?
     private var compositorStatus = "not_probed"
@@ -279,6 +285,7 @@ final class VerifyRun {
                     try await performCommandStep(step)
                 }
                 else if scenario.id == "compact-music" { try await performMusicStep(step) }
+                else if scenario.id == "lyrics-sidecar" { try await performLyricsStep(step) }
                 else if scenario.id.hasPrefix("compact-mini") { try await performMiniStep(step) }
                 else if scenario.id == "feedback-dialog" { try await performFeedbackStep(step) }
                 else { try await perform(step) }

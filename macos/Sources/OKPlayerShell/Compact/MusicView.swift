@@ -8,10 +8,12 @@ final class MusicView: NSView {
 
     let artwork = MusicArtworkView()
     let queueHost = NSView()
+    let lyricsHost = NSView()
     let play = TransportOverlay.iconButton("play.fill", "Play")
     let previous = TransportOverlay.iconButton("backward.end.fill", "Previous Item")
     let next = TransportOverlay.iconButton("forward.end.fill", "Next Item")
     let queue = TransportOverlay.iconButton("list.bullet.rectangle", "Chapters & Up Next")
+    let lyrics = TransportOverlay.iconButton("quote.bubble", "Lyrics")
     let more = TransportOverlay.iconButton("ellipsis", "More commands")
     let mute = TransportOverlay.iconButton("speaker.wave.2.fill", "Mute")
     let seek = ScrubberView()
@@ -32,12 +34,24 @@ final class MusicView: NSView {
     var queueShown = false {
         didSet {
             guard oldValue != queueShown else { return }
+            queueHost.isHidden = !queueShown
             needsLayout = true
             queue.state = queueShown ? .on : .off
             queue.toolTip = queueShown ? "Hide Chapters & Up Next" : "Chapters & Up Next"
             queue.setAccessibilityLabel(queue.toolTip)
         }
     }
+    var lyricsShown = false {
+        didSet {
+            guard oldValue != lyricsShown else { return }
+            lyricsHost.isHidden = !lyricsShown
+            needsLayout = true
+            lyrics.state = lyricsShown ? .on : .off
+            lyrics.toolTip = lyricsShown ? "Hide Lyrics" : "Lyrics"
+            lyrics.setAccessibilityLabel(lyrics.toolTip)
+        }
+    }
+    var panelExpanded: Bool { queueShown || lyricsShown }
     var controlsShown: Bool { !controls.isHidden }
 
     override var isFlipped: Bool { true }
@@ -53,15 +67,18 @@ final class MusicView: NSView {
         material.material = .windowBackground
         material.blendingMode = .behindWindow
         material.state = .followsWindowActiveState
-        ([material, header, artwork, title, detail, controls, queueHost] as [NSView]).forEach(addSubview)
-        ([play, previous, next, queue, more, mute, seek, elapsed, remaining, volume, switchToVideo] as [NSView])
+        ([material, header, artwork, title, detail, controls, queueHost, lyricsHost] as [NSView]).forEach(addSubview)
+        ([play, previous, next, queue, lyrics, more, mute, seek, elapsed, remaining, volume, switchToVideo] as [NSView])
             .forEach(controls.addSubview)
+        queueHost.isHidden = true
+        lyricsHost.isHidden = true
         queue.setButtonType(.onOff)
+        lyrics.setButtonType(.onOff)
         play.isBordered = true
         play.bezelStyle = .circular
         play.bezelColor = .controlAccentColor
         play.contentTintColor = .white
-        for button in [previous, next, queue, more, mute] {
+        for button in [previous, next, queue, lyrics, more, mute] {
             button.contentTintColor = .labelColor
             button.refusesFirstResponder = false
         }
@@ -94,11 +111,11 @@ final class MusicView: NSView {
         header.frame = NSRect(x: 0, y: 0, width: bounds.width, height: 36)
         header.label.frame = NSRect(x: 82, y: 8, width: max(0, bounds.width - 130), height: 17)
 
-        let side = queueShown ? 72 : max(80, min(width, bounds.height - 224))
-        artwork.frame = NSRect(x: queueShown ? inset : bounds.midX - side / 2,
+        let side = panelExpanded ? 72 : max(80, min(width, bounds.height - 224))
+        artwork.frame = NSRect(x: panelExpanded ? inset : bounds.midX - side / 2,
                                y: 42, width: side, height: side)
-        let titleX = queueShown ? artwork.frame.maxX + 14 : inset
-        let titleTop = queueShown ? artwork.frame.minY + 13 : artwork.frame.maxY + 14
+        let titleX = panelExpanded ? artwork.frame.maxX + 14 : inset
+        let titleTop = panelExpanded ? artwork.frame.minY + 13 : artwork.frame.maxY + 14
         title.frame = NSRect(x: titleX, y: titleTop, width: bounds.width - inset - titleX, height: 28)
         detail.frame = NSRect(x: titleX, y: titleTop + 29, width: title.frame.width, height: 20)
 
@@ -108,17 +125,20 @@ final class MusicView: NSView {
         remaining.frame = NSRect(x: width - 56, y: 5, width: 56, height: 16)
         seek.frame = NSRect(x: 52, y: 0, width: max(0, width - 108), height: 24)
         play.frame = NSRect(x: width / 2 - 22, y: 25, width: 44, height: 44)
-        previous.frame = NSRect(x: play.frame.minX - 49, y: 31, width: 34, height: 32)
-        next.frame = NSRect(x: play.frame.maxX + 15, y: 31, width: 34, height: 32)
+        previous.frame = NSRect(x: play.frame.minX - 46, y: 31, width: 34, height: 32)
+        next.frame = NSRect(x: play.frame.maxX + 12, y: 31, width: 34, height: 32)
         queue.frame = NSRect(x: 0, y: 31, width: 32, height: 32)
+        lyrics.frame = NSRect(x: width - 66, y: 31, width: 32, height: 32)
         more.frame = NSRect(x: width - 32, y: 31, width: 32, height: 32)
         mute.frame = NSRect(x: 0, y: 74, width: 28, height: 26)
         volume.frame = NSRect(x: 30, y: 74, width: switchToVideo.isHidden ? width - 30 : width - 155, height: 26)
         switchToVideo.frame = NSRect(x: width - 120, y: 75, width: 120, height: 24)
 
-        let queueTop = controls.frame.maxY + 8
-        queueHost.frame = NSRect(x: 10, y: queueTop, width: bounds.width - 20,
-                                 height: max(0, bounds.height - queueTop - 12))
+        let panelTop = controls.frame.maxY + 8
+        let panelFrame = NSRect(x: 10, y: panelTop, width: bounds.width - 20,
+                                height: max(0, bounds.height - panelTop - 12))
+        queueHost.frame = panelFrame
+        lyricsHost.frame = panelFrame
     }
 
     func show(title name: String, detail subtitle: String, hasVideo: Bool) {

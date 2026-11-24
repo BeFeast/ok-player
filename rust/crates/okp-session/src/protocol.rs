@@ -25,6 +25,7 @@ pub use crate::history::{
     HistoryAction, HistoryActionResult, HistoryBucket, HistoryEntry, HistoryEvent, HistoryQuery,
     HistoryQueryResult, HistorySection, HistoryState,
 };
+pub use crate::lyrics::{LyricsLineView, LyricsState, LyricsView};
 pub use crate::open_paths::{OpenFormats, OpenPlan};
 pub use crate::playlist::{PlaylistAction, PlaylistEntry, PlaylistState, QueueMode, RepeatMode};
 pub use crate::settings::{
@@ -284,6 +285,12 @@ pub enum Query {
     Snapshot {},
     /// Tag metadata when the current loaded source is audio-only.
     AudioMetadata {},
+    /// Local sidecar lyrics for the current audio track, projected at `at` or
+    /// the current published playhead.
+    Lyrics {
+        #[serde(default)]
+        at: Option<f64>,
+    },
     /// The frame of a window fitted to a video on one screen
     /// ([`crate::window::fit_window`]). Reads no session state.
     WindowFit {
@@ -416,6 +423,9 @@ pub enum QueryResult {
         source: Option<MediaSource>,
         value: Option<AudioMetadata>,
     },
+    Lyrics {
+        lyrics: LyricsView,
+    },
     /// The answer to `window_fit`, `initial_window_fit` and
     /// `compact_window_placement`; `null` when there
     /// is nothing to fit.
@@ -538,6 +548,8 @@ pub enum Event {
     Notice {
         text: String,
     },
+    /// Local lyrics for the active audio track changed (query `lyrics` again).
+    LyricsChanged {},
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

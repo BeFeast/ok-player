@@ -150,6 +150,9 @@ struct DispatchReply: Codable, Equatable {
 enum Query: Codable, Equatable {
     case snapshot
     case audioMetadata
+    /// Local sidecar lyrics for the current audio track, projected at `at` or
+    /// the current published playhead.
+    case lyrics(at: Double? = nil)
     /// See `SessionClient.windowFit` and `SessionClient.initialWindowFit`.
     case windowFit(video: WindowSize, backingScale: Double, visibleFrame: WindowRect, minSize: WindowSize?,
                    chrome: WindowSize?)
@@ -196,6 +199,7 @@ struct QueryEnvelope: Codable, Equatable {
 enum QueryResult: Codable, Equatable {
     case snapshot(snapshot: SessionSnapshot)
     case audioMetadata(source: MediaSource?, value: AudioMetadata?)
+    case lyrics(lyrics: LyricsSnapshot)
     case windowFit(frame: WindowRect?)
     case compactWindowSize(size: WindowSize?)
     case videoClick(intent: VideoClickIntent)
@@ -411,6 +415,8 @@ enum Event: Codable, Equatable {
     case history(event: HistoryEvent)
     /// A one-line message for the toast (Status/StatusRules.swift).
     case notice(text: String)
+    /// Local sidecar lyrics state changed; query `lyrics` again.
+    case lyricsChanged
 }
 
 extension Event {

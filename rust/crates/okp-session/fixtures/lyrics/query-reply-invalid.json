@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "result": {
+    "lyrics": {
+      "lyrics": {
+        "source": {
+          "kind": "local",
+          "location": "/Users/example/Music/Corrupt.mp3"
+        },
+        "generation": 5,
+        "header": "LYRICS",
+        "state": "invalid",
+        "message": "Local lyrics file could not be read",
+        "lines": [],
+        "active_index": null
+      }
+    }
+  }
+}

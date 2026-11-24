@@ -189,7 +189,7 @@ enum MenuBarLayout {
                     .others]
         case .audio:
             return [.command("volume-up"), .command("volume-down"), .command("mute"), .separator,
-                    .command("audio-track"), .others]
+                    .command("audio-track"), .command("lyrics"), .others]
         case .subtitles:
             return [.command("subtitles"), .command("add-subtitle"), .separator,
                     .command("subtitle-delay-forward"), .command("subtitle-delay-back"), .separator,

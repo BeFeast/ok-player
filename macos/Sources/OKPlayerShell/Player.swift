@@ -32,6 +32,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let osc = TransportOverlay()
     let miniPlayer = MiniPlayer()
     let music = CompactMusic()
+    /// Local sidecar lyrics view and session sync (Lyrics/).
+    let lyrics = LyricsController()
     /// Loading, buffering and failure states over the video, and the toast.
     let statusLayer = StatusLayer()
     /// The Up Next side panel and its button on the controls.
@@ -117,10 +119,26 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         behaviour.install(in: root, videoArea: videoArea)
         history.firstRun.openButton.allowsKeyFocus = verification?.control != "welcome_focus_disabled"
         upNext.install(in: root, above: osc.panel)
+        lyrics.install(in: root, above: videoArea, below: osc)
+        lyrics.syncsActiveLine = verification?.control != "lyrics_active_highlight_disabled"
+        lyrics.onVisibilityChange = { [weak self] visible in
+            guard let self else { return }
+            if self.music.isActive {
+                if visible { self.upNext.hide() }
+                self.music.setLyricsShown(visible)
+            } else {
+                self.osc.setPinned(visible, by: .panel)
+            }
+            self.commands.invalidate()
+        }
         upNext.onVisibilityChange = { [weak self] visible in
             guard let self, !["panel_pin_disabled", "queue_pin_disabled"].contains(self.verification?.control ?? "") else { return }
-            if self.music.isActive { self.music.setQueueShown(visible) }
-            else { self.osc.setPinned(visible, by: .panel) }
+            if self.music.isActive {
+                if visible { self.lyrics.hide() }
+                self.music.setQueueShown(visible)
+            } else {
+                self.osc.setPinned(visible, by: .panel)
+            }
         }
         behaviour.dismissTransient = { [weak self] in
             guard let self else { return false }
@@ -154,6 +172,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         music.showCommands = { [weak self] point in self?.commandPopover.show(at: point) }
         music.leaveMiniPlayer = { [weak self] in self?.miniPlayer.restore() }
         music.onQueueToggle = { [weak self] in _ = self?.upNext.toggle() }
+        music.onLyricsToggle = { [weak self] in _ = self?.lyrics.toggle() }
         behaviour.onExitCompactMusic = { [weak self] in self?.music.restoreStandard() }
         music.onModeChange = { [weak self] active in
             guard let self else { return }
@@ -161,10 +180,12 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self.tracks.dismissPopover()
             self.upNext.hide()
             self.music.setQueueShown(false)
+            self.music.setLyricsShown(active && self.lyrics.isShown)
             self.upNext.useMusicLayout(active ? self.music.view.queueHost : nil)
+            self.lyrics.useMusicLayout(active ? self.music.view.lyricsHost : nil)
             self.upNext.panel.focusReturn = active ? self.music.view : self.video
             self.commandPopover.focusReturn = active ? self.music.view : self.video
-            self.osc.setPinned(false, by: .panel)
+            self.osc.setPinned(!active && self.lyrics.isShown, by: .panel)
             self.osc.setPinned(false, by: .context)
             self.osc.suspend(active)
             self.commands.invalidate()
@@ -256,6 +277,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             client?.dispatch(command) ?? .rejected(reason: .noActiveMedia, message: "No playback session")
         }
         upNext.query = { [weak client] query in client?.query(query) }
+        lyrics.dispatch = { [weak client] command in
+            client?.dispatch(command) ?? .rejected(reason: .noActiveMedia, message: "No playback session")
+        }
+        lyrics.query = { [weak client] query in client?.query(query) }
         upNext.isFullscreen = { [weak behaviour] in behaviour?.window.isInFullscreen ?? false }
         upNext.panel.focusReturn = video
         upNext.onQueueError = { [weak self] message in self?.statusLayer.show(toast: message) }
@@ -372,6 +397,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if case .accepted = result { return }
         }
         music.sessionChanged(snapshot)
+        lyrics.sessionChanged(snapshot: snapshot, audioMetadata: music.audioMetadata, batch: batch)
         var presented = snapshot
         if music.audioMetadata != nil { presented.video = nil }
         miniPlayer.sessionChanged(presented)

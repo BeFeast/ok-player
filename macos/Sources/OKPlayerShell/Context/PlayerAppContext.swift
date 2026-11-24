@@ -14,7 +14,7 @@ extension PlayerApp {
             guard case .commandSurface(let surface)? = self.client?.query(request) else { return nil }
             let entries = surface.entries.map { entry in
                 guard case .command(let row) = entry else { return entry }
-                return .command(row: self.music.project(row))
+                return .command(row: self.lyrics.project(self.music.project(row)))
             }
             return CommandSurface(entries: entries, preferredWidth: surface.preferredWidth, maxHeight: surface.maxHeight)
         }

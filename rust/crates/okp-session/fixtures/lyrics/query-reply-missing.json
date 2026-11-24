@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "result": {
+    "lyrics": {
+      "lyrics": {
+        "source": {
+          "kind": "local",
+          "location": "/Users/example/Music/Instrumental.mp3"
+        },
+        "generation": 4,
+        "header": "LYRICS",
+        "state": "missing",
+        "message": "No lyrics found for this track",
+        "lines": [],
+        "active_index": null
+      }
+    }
+  }
+}

@@ -66,6 +66,8 @@ extension PlayerApp: PlayerCommandResponder, NSMenuItemValidation {
         tracks.register(with: commands)
         // Playback > Chapters & Up Next shows and hides the Up Next panel (UpNext/).
         upNext.register(with: commands)
+        // Audio > Lyrics toggles local sidecar lyrics (Lyrics/).
+        lyrics.register(with: commands)
     }
 
     /// Read the shortcut table from `client`, rebuild the menu bar from its
@@ -84,7 +86,7 @@ extension PlayerApp: PlayerCommandResponder, NSMenuItemValidation {
                     fullscreen: fullscreen, miniPlayer: self?.miniPlayer.isActive == true)) else {
                     return []
                 }
-                return self.map { app in rows.map(app.music.project) } ?? rows
+                return self.map { app in rows.map { app.lyrics.project(app.music.project($0)) } } ?? rows
             },
             keys: ShortcutKeyMap(table: table, repeating: repeating))
         menuBar?.install()

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "result": {
+    "lyrics": {
+      "lyrics": {
+        "source": {
+          "kind": "local",
+          "location": "/Users/example/Music/Neon Skyline.mp3"
+        },
+        "generation": 2,
+        "header": "LYRICS",
+        "state": "synced",
+        "message": null,
+        "lines": [
+          {
+            "time_seconds": 0.0,
+            "text": "City lights blur into the rain",
+            "is_gap": false
+          },
+          {
+            "time_seconds": 5.4,
+            "text": "♪",
+            "is_gap": true
+          },
+          {
+            "time_seconds": 16.8,
+            "text": "A neon skyline out of sight",
+            "is_gap": false
+          }
+        ],
+        "active_index": 2
+      }
+    }
+  }
+}
