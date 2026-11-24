@@ -53,7 +53,7 @@ pub struct LyricsView {
     /// The media source this view belongs to, or `None` when `state` is `unavailable`.
     /// Shells compare this against their active track so stale lyrics never render.
     pub source: Option<MediaSource>,
-    /// Monotonic generation incremented on every accepted `open` or `close`.
+    /// Generation counter incremented on every accepted `open` or `close`.
     pub generation: u64,
     /// Canonical header (`"LYRICS"` or `"LYRICS · NOT SYNCED"`).
     pub header: String,
@@ -167,8 +167,12 @@ impl SessionLyrics {
         }
 
         self.loaded_source = None;
-        self.data = LoadedData::Loading;
-        self.spawn_load(self.generation, source.clone());
+        if self.spawn_load(self.generation, source.clone()) {
+            self.data = LoadedData::Loading;
+        } else {
+            self.loaded_source = Some(source.clone());
+            self.data = LoadedData::Ready(LocalLyrics::invalid());
+        }
         true
     }
 
@@ -247,13 +251,13 @@ impl SessionLyrics {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     }
 
-    fn spawn_load(&self, generation: u64, source: MediaSource) {
+    fn spawn_load(&self, generation: u64, source: MediaSource) -> bool {
         let path = PathBuf::from(&source.location);
         let cancel = Arc::clone(&self.cancel);
         let inbox = Arc::clone(&self.inbox);
         let waker = Arc::clone(&self.waker);
         let loader = Arc::clone(&self.loader);
-        let _ = thread::Builder::new()
+        thread::Builder::new()
             .name("okp-session-lyrics".to_owned())
             .spawn(move || {
                 if cancel.load(Ordering::Acquire) {
@@ -271,7 +275,8 @@ impl SessionLyrics {
                     lyrics,
                 });
                 waker();
-            });
+            })
+            .is_ok()
     }
 }
 

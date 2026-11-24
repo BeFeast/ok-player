@@ -34,6 +34,7 @@ final class MusicView: NSView {
     var queueShown = false {
         didSet {
             guard oldValue != queueShown else { return }
+            if queueShown && lyricsShown { lyricsShown = false }
             queueHost.isHidden = !queueShown
             needsLayout = true
             queue.state = queueShown ? .on : .off
@@ -44,6 +45,7 @@ final class MusicView: NSView {
     var lyricsShown = false {
         didSet {
             guard oldValue != lyricsShown else { return }
+            if lyricsShown && queueShown { queueShown = false }
             lyricsHost.isHidden = !lyricsShown
             needsLayout = true
             lyrics.state = lyricsShown ? .on : .off
