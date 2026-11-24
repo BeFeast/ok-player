@@ -148,7 +148,17 @@ extension VerifyRun {
             let finishes = title == "Finished"
             _ = app.client?.dispatch(.setPaused(paused: !finishes))
             if finishes {
-                try await wait("\(title) is playing") { self.snapshot.status == .playing }
+                try await wait("the completed fixture plays before the first progress save") {
+                    self.snapshot.status == .playing && (self.snapshot.timePos ?? 0) > 0.5
+                }
+                // EOF marks an existing row finished. Save through the normal
+                // Pause path before seeking to the end of this short fixture.
+                _ = app.client?.dispatch(.setPaused(paused: true))
+                try await wait("the completed fixture has a saved progress row") {
+                    self.snapshot.status == .paused && (self.savedHistory(title)?["position"] as? Double ?? 0) > 0
+                }
+                _ = app.client?.dispatch(.setPaused(paused: false))
+                try await wait("the completed fixture resumes playing") { self.snapshot.status == .playing }
             } else {
                 try await wait("\(title) is paused") { self.snapshot.status == .paused }
             }
@@ -156,6 +166,9 @@ extension VerifyRun {
             if finishes {
                 try await wait("fixture reaches actual EOF") {
                     self.snapshot.status == .ended && self.snapshot.endReason == .eof
+                }
+                try await wait("the completed fixture is marked finished on disk") {
+                    self.savedHistory(title)?["finished"] as? Bool == true
                 }
             } else {
                 try await wait("\(title) renders at \(seconds) s") {
@@ -165,13 +178,7 @@ extension VerifyRun {
             try await closeHistoryMedia()
         }
         try await wait("the latest played row is on disk") {
-            let url = self.options.profile.appendingPathComponent("data/history.json")
-            guard let document = try? Data(contentsOf: url),
-                  let root = (try? JSONSerialization.jsonObject(with: document)) as? [String: Any],
-                  let files = root["files"] as? [String: [String: Any]],
-                  let position = files[self.options.historyFile("Episode 3").path]?["position"] as? Double else {
-                return false
-            }
+            guard let position = self.savedHistory("Episode 3")?["position"] as? Double else { return false }
             return abs(position - 7) < 0.12
         }
         app.window.setContentSize(CGSize(width: 1120, height: 780))
@@ -192,6 +199,14 @@ extension VerifyRun {
                 throw VerifyError("The playback fixture did not create four eligible, one finished and one early entry")
             }
         }
+    }
+
+    private func savedHistory(_ title: String) -> [String: Any]? {
+        let url = options.profile.appendingPathComponent("data/history.json")
+        guard let document = try? Data(contentsOf: url),
+              let root = (try? JSONSerialization.jsonObject(with: document)) as? [String: Any],
+              let files = root["files"] as? [String: [String: Any]] else { return nil }
+        return files[options.historyFile(title).path]
     }
 
     private func closeHistoryMedia() async throws {
