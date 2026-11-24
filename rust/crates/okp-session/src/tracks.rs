@@ -56,6 +56,9 @@ pub struct TrackChoice {
     /// The core's descriptor: name, language, channels, codec, source.
     pub label: String,
     pub selected: bool,
+    /// The audio metadata suffix of the label, for two-line switcher rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_detail: Option<String>,
 }
 
 /// A subtitle adjustment and its readout.
@@ -181,6 +184,7 @@ impl TrackState {
             id: None,
             label: "Off".to_owned(),
             selected: !has_primary,
+            audio_detail: None,
         })
         .chain(of_kind(TrackKind::Subtitle).map(|track| self.choice(track)))
         .collect();
@@ -215,28 +219,39 @@ impl TrackState {
         let codec = detail.and_then(|detail| detail.codec.as_deref());
         let title = track.title.as_deref();
         let lang = track.lang.as_deref();
-        let label = match track.kind {
-            TrackKind::Audio => track_label::audio_track_label(
-                track.id,
-                title,
-                lang,
-                detail.and_then(|detail| detail.audio_channels.as_deref()),
-                codec,
-            ),
-            TrackKind::Subtitle => track_label::subtitle_track_label(
-                track.id,
-                title,
-                lang,
-                codec,
-                detail.and_then(|detail| detail.external_filename.as_deref()),
-                track.external,
-                track.default,
+        let (label, audio_detail) = match track.kind {
+            TrackKind::Audio => {
+                let (name, detail) = track_label::audio_track_parts(
+                    track.id,
+                    title,
+                    lang,
+                    detail.and_then(|detail| detail.audio_channels.as_deref()),
+                    codec,
+                );
+                if detail.is_empty() {
+                    (name, None)
+                } else {
+                    (format!("{name} · {detail}"), Some(detail))
+                }
+            }
+            TrackKind::Subtitle => (
+                track_label::subtitle_track_label(
+                    track.id,
+                    title,
+                    lang,
+                    codec,
+                    detail.and_then(|detail| detail.external_filename.as_deref()),
+                    track.external,
+                    track.default,
+                ),
+                None,
             ),
         };
         TrackChoice {
             id: Some(track.id),
             label,
             selected: track.selected,
+            audio_detail,
         }
     }
 }
@@ -390,6 +405,7 @@ mod tests {
                 id: None,
                 label: "Off".to_owned(),
                 selected: true,
+                audio_detail: None,
             }]
         );
         assert!(!idle.adjustable);

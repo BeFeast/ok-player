@@ -24,6 +24,7 @@ struct TrackChoice: Codable, Equatable {
     /// The core's descriptor: name, language, channels, codec, source.
     var label: String
     var selected: Bool
+    var audioDetail: String? = nil
 }
 
 /// A subtitle adjustment and its readout.

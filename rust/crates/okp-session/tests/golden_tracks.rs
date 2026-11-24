@@ -89,31 +89,38 @@ fn the_reply_fixture_carries_the_core_labels() {
         id,
         label,
         selected,
+        audio_detail: None,
     };
     let expected = TracksView {
         audio: vec![
-            choice(
-                Some(1),
-                track_label::audio_track_label(
-                    1,
-                    Some("English"),
-                    Some("eng"),
-                    Some("5.1"),
-                    Some("eac3"),
-                ),
-                true,
-            ),
-            choice(
-                Some(2),
-                track_label::audio_track_label(
-                    2,
-                    Some("Director's Commentary"),
-                    Some("eng"),
-                    Some("2.0"),
-                    Some("ac3"),
-                ),
-                false,
-            ),
+            TrackChoice {
+                audio_detail: Some("5.1 · EAC3".to_owned()),
+                ..choice(
+                    Some(1),
+                    track_label::audio_track_label(
+                        1,
+                        Some("English"),
+                        Some("eng"),
+                        Some("5.1"),
+                        Some("eac3"),
+                    ),
+                    true,
+                )
+            },
+            TrackChoice {
+                audio_detail: Some("ENG · 2.0 · AC3".to_owned()),
+                ..choice(
+                    Some(2),
+                    track_label::audio_track_label(
+                        2,
+                        Some("Director's Commentary"),
+                        Some("eng"),
+                        Some("2.0"),
+                        Some("ac3"),
+                    ),
+                    false,
+                )
+            },
         ],
         subtitles: vec![
             choice(None, "Off".to_owned(), false),

@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "id": "subtitle-switcher",
+  "fixture": "04-mkv-2audio-2subs.mkv",
+  "appearances": [
+    "light",
+    "dark"
+  ],
+  "steps": [
+    {
+      "action": "open"
+    },
+    {
+      "action": "pause"
+    },
+    {
+      "action": "size_osc",
+      "width": 1280
+    },
+    {
+      "action": "pointer_reveal"
+    },
+    {
+      "action": "seek",
+      "seconds": 2.5
+    },
+    {
+      "action": "check_subtitle_switcher"
+    },
+    {
+      "action": "capture",
+      "name": "switcher",
+      "expect": "track_panel"
+    },
+    {
+      "action": "check_track_pin"
+    }
+  ]
+}

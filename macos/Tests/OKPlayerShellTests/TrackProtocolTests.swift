@@ -52,8 +52,9 @@ final class TrackProtocolTests: XCTestCase {
         let reply = try GoldenFixtures.decode(QueryReply.self, name)
         let expected = TracksView(
             audio: [
-                TrackChoice(id: 1, label: "English · 5.1 · EAC3", selected: true),
-                TrackChoice(id: 2, label: "Director's Commentary · ENG · 2.0 · AC3", selected: false),
+                TrackChoice(id: 1, label: "English · 5.1 · EAC3", selected: true, audioDetail: "5.1 · EAC3"),
+                TrackChoice(id: 2, label: "Director's Commentary · ENG · 2.0 · AC3", selected: false,
+                            audioDetail: "ENG · 2.0 · AC3"),
             ],
             subtitles: [
                 TrackChoice(id: nil, label: "Off", selected: false),

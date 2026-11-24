@@ -13,6 +13,7 @@ enum TrackMenuAction: Equatable {
     case addSubtitle
     /// Run a registry command the session carries out: the delay and size steps.
     case invoke(id: String)
+    case resetDelay, resetSize
 }
 
 /// One item of a track menu.
@@ -32,6 +33,7 @@ struct TrackMenuItem: Equatable {
     var checked = false
     var enabled = false
     var action: TrackMenuAction?
+    var detail: String? = nil
 
     static let separator = TrackMenuItem(kind: .separator)
 }
@@ -44,6 +46,7 @@ struct SubtitleAdjustment: Equatable {
     var enabled: Bool
     var decrease: TrackMenuAction
     var increase: TrackMenuAction
+    var reset: TrackMenuAction
     var decreaseHelp: String
     var increaseHelp: String
 }
@@ -90,10 +93,10 @@ enum TrackMenus {
         guard let view else { return [] }
         return [
             SubtitleAdjustment(title: "Delay", value: view.subtitleDelay.label, enabled: view.adjustable,
-                               decrease: .invoke(id: delayBack), increase: .invoke(id: delayForward),
+                               decrease: .invoke(id: delayBack), increase: .invoke(id: delayForward), reset: .resetDelay,
                                decreaseHelp: "Show subtitles earlier", increaseHelp: "Show subtitles later"),
             SubtitleAdjustment(title: "Size", value: view.subtitleScale.label, enabled: view.adjustable,
-                               decrease: .invoke(id: sizeDown), increase: .invoke(id: sizeUp),
+                               decrease: .invoke(id: sizeDown), increase: .invoke(id: sizeUp), reset: .resetSize,
                                decreaseHelp: "Make subtitles smaller", increaseHelp: "Make subtitles larger"),
         ]
     }
@@ -103,6 +106,8 @@ enum TrackMenus {
         switch action {
         case .select(let kind, let id): return .selectTrack(kind: kind, id: id)
         case .invoke(let id): return .invokeCommand(id: id)
+        case .resetDelay: return .setSubtitleDelay(seconds: 0)
+        case .resetSize: return .setSubtitleScale(scale: 1)
         case .addSubtitle: return nil
         }
     }
@@ -119,7 +124,7 @@ enum TrackMenus {
 
     private static func choice(_ kind: TrackKind, _ row: TrackChoice, enabled: Bool) -> TrackMenuItem {
         TrackMenuItem(kind: .choice, title: row.label, checked: row.selected, enabled: enabled,
-                      action: .select(kind: kind, id: row.id))
+                      action: .select(kind: kind, id: row.id), detail: row.audioDetail)
     }
 }
 

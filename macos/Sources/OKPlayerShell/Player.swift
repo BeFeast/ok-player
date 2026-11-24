@@ -113,7 +113,7 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         behaviour.dismissTransient = { [weak self] in
             guard let self else { return false }
-            if self.osc.dismissVolume() || self.tracks.dismissPopover() { return true }
+            if self.tracks.dismissPopover() || self.osc.dismissVolume() { return true }
             guard self.upNext.isShown else { return false }
             self.upNext.hide()
             return true
@@ -143,7 +143,10 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         osc.onRevealChange = { [weak self] revealed in self?.oscRevealChanged(revealed) }
         behaviour.oscVisibilityChanged(osc.isRevealed, animated: false)
         behaviour.window.acceptsMouseMovedEvents = true
-        behaviour.window.onPlayerInput = { [weak self] event in self?.osc.handleWindowInput(event) ?? false }
+        behaviour.window.onPlayerInput = { [weak self] event in
+            guard let self else { return false }
+            return self.tracks.handleWindowInput(event) || self.osc.handleWindowInput(event)
+        }
         behaviour.window.onKeyDown = { [weak self] in self?.keyPressed() }
         behaviour.titleStrip.onPointerActivity = { [weak self] in self?.osc.noteActivity() }
         window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
@@ -197,7 +200,8 @@ final class PlayerApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return view
         }
         tracks.holdControls = { [weak self] hold in
-            self?.osc.setPinned(hold, by: .tracks)
+            guard let self, self.verification?.control != "track_pin_disabled" else { return }
+            self.osc.setPinned(hold, by: .tracks)
         }
         osc.onPrevious = { [weak self] in _ = self?.playlist.step(.previous) }
         osc.onNext = { [weak self] in _ = self?.playlist.step(.next) }

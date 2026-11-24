@@ -241,54 +241,36 @@ final class TrackControlsTests: XCTestCase {
 
     // MARK: Popover
 
-    func testThePopoverKeepsItsControlsWhileTheTracksStayTheSame() {
-        let popover = controls.popoverContent
-        popover.update(kind: .subtitle, view: view)
-        let rows = popover.controls
-        let buttons = Self.buttons(in: rows)
-        XCTAssertEqual(buttons.count, 3 + 1 + 4, "three choices, Add Subtitle File… and two steps per row")
-        XCTAssertTrue(buttons.allSatisfy(\.refusesFirstResponder), "no control of the popover takes keyboard focus")
-        // Batches with nothing new for the popover, as during playback.
-        popover.update(kind: .subtitle, view: view)
-        popover.update(kind: .subtitle, view: view)
-        XCTAssertTrue(Self.same(Self.buttons(in: popover.controls), buttons), "the buttons under the pointer stay")
+    func testThePanelKeepsItsTrackControlsWhenTheDelayChanges() {
+        let panel = controls.panel
+        panel.update(kind: .subtitle, tracks: view)
+        let buttons = panel.choiceButtons
+        let adjustments = panel.adjustmentButtons
+        XCTAssertEqual(buttons.count, 4)
+        XCTAssertEqual(adjustments.count, 6)
+        XCTAssertTrue(((buttons as [NSButton]) + adjustments).allSatisfy(\.refusesFirstResponder))
 
         var later = view!
         later.subtitleDelay = SubtitleValue(value: 0.3, label: "+300 ms", reported: 0.3)
-        popover.update(kind: .subtitle, view: later)
-        XCTAssertFalse(Self.same(popover.controls, rows), "a new delay is shown")
-        let shown = popover.controls
-        // Closed after a choice the session did not take: reopened, it shows the session's state.
-        popover.invalidate()
-        popover.update(kind: .subtitle, view: later)
-        XCTAssertFalse(Self.same(popover.controls, shown))
+        panel.update(kind: .subtitle, tracks: later)
+        XCTAssertEqual(panel.choiceButtons.map(ObjectIdentifier.init), buttons.map(ObjectIdentifier.init))
+        XCTAssertEqual(panel.adjustmentButtons.map(ObjectIdentifier.init), adjustments.map(ObjectIdentifier.init))
+        XCTAssertEqual(panel.adjustmentValues, ["+300 ms", "110%"])
     }
 
-    func testAfterAPopoverClosesSpacePausesInsteadOfClickingTheTrackButton() throws {
+    func testSpaceAndEscapeWhileTrackPanelIsOpen() throws {
         let rig = try PlayerRig(controls: controls, commands: commands)
         defer { rig.close() }
-        XCTAssertTrue(controls.audioButton.refusesFirstResponder && controls.subtitleButton.refusesFirstResponder,
-                      "a click on a track button leaves keyboard focus where it was")
-        // Where a click would have left focus with Keyboard navigation on.
-        _ = rig.window.makeFirstResponder(controls.subtitleButton)
-        controls.popoverDidClose(Notification(name: NSPopover.didCloseNotification))
+        controls.sessionChanged(SessionSnapshot(status: .paused))
+        controls.subtitleButton.performClick(nil)
+        XCTAssertTrue(controls.isPopoverShown)
         rig.window.sendEvent(try rig.key(" ", keyCode: 49))
         XCTAssertEqual(invoked, ["play-pause"])
-    }
-
-    func testKeysPressedInThePopoverGoToThePlayerWindow() throws {
-        let rig = try PlayerRig(controls: controls, commands: commands)
-        defer { rig.close() }
-        let content = controls.popoverContent.view
-        XCTAssertTrue(content.acceptsFirstResponder, "the popover's content holds keyboard focus, not its Off button")
-        content.keyDown(with: try rig.key(" ", keyCode: 49))
-        XCTAssertEqual(dispatched, [.invokeCommand(id: "play-pause")],
-                       "Space pauses as it does on the video, and turns no subtitle off")
-        content.keyDown(with: try rig.key("]", keyCode: 30))
-        XCTAssertEqual(dispatched.last, .invokeCommand(id: "subtitle-size-up"), "] steps the size the popover shows")
-        XCTAssertEqual(controls.readout.text, "Subtitle size: 110%")
-        XCTAssertFalse(controls.popoverKey(try rig.key("\u{1b}", keyCode: WindowKeys.escapeKeyCode)),
-                       "Escape is left to the popover, which closes")
+        XCTAssertTrue(controls.isPopoverShown)
+        rig.window.sendEvent(try rig.key("\u{1b}", keyCode: WindowKeys.escapeKeyCode))
+        XCTAssertFalse(controls.isPopoverShown)
+        rig.window.sendEvent(try rig.key(" ", keyCode: 49))
+        XCTAssertEqual(invoked, ["play-pause", "play-pause"])
     }
 
     private func offscreenWindow() -> NSWindow {
@@ -298,13 +280,7 @@ final class TrackControlsTests: XCTestCase {
         return window
     }
 
-    private static func buttons(in views: [NSView]) -> [NSButton] {
-        views.flatMap { view in (view as? NSButton).map { [$0] } ?? buttons(in: view.subviews) }
-    }
 
-    private static func same(_ left: [NSView], _ right: [NSView]) -> Bool {
-        left.count == right.count && zip(left, right).allSatisfy { $0 === $1 }
-    }
 }
 
 /// A real player window with a video view holding keyboard focus, the track
@@ -328,6 +304,7 @@ private final class PlayerRig {
         osc.focusReturn = video
         controls.install(in: osc, over: root)
         controls.window = window
+        window.onPlayerInput = { [weak controls] in controls?.handleWindowInput($0) ?? false }
         window.shortcutKeys = { [weak commands] event in commands?.handle(event) ?? false }
         XCTAssertTrue(window.makeFirstResponder(video))
     }

@@ -28,6 +28,10 @@ TRANSPORT_CONTROLS = {
     "osc-volume-speed": ("volume_wheel_disabled", {"osc_volume_speed:wheel"}),
     "osc-status": ("copy_details_disabled", {"osc_status:copy_details"}),
 }
+TRACK_CONTROLS = {
+    "audio-switcher": "track_pin_disabled",
+    "subtitle-switcher": "track_pin_disabled",
+}
 SETTINGS = "settings-shell-appearance"
 SETTINGS_PHASES = ("edit", "light-relaunch", "auto-relaunch")
 LEGACY_SETTINGS = {
@@ -37,6 +41,7 @@ LEGACY_SETTINGS = {
     "profile_extension": {"keep": True},
 }
 CONTROLS = {
+    **TRACK_CONTROLS,
     "subtitle-lift": "subtitle_clearance_disabled",
     SETTINGS: "appearance_persistence_disabled",
     **WINDOW_CONTROLS,
@@ -75,7 +80,8 @@ def read_scenario(path):
                "small_work_area", "open_portrait", "resize_edges", "pin", "unpin", "overlap_window",
                "size_osc", "check_more", "check_seek", "check_idle", "check_pins", "show_volume",
                "check_wheel", "check_speed_mute", "set_unity", "open_stall", "release_stall", "open_failure",
-               "check_failure_actions", "check_stale", "open_buffer", "release_buffer"}
+               "check_failure_actions", "check_stale", "open_buffer", "release_buffer",
+               "check_audio_switcher", "check_subtitle_switcher", "check_track_pin"}
     if path.stem == SETTINGS:
         actions.update({"settings_shortcut", "settings_context", "settings_legacy", "settings_search",
                         "settings_resize", "settings_system", "settings_light", "settings_auto", "settings_player_input"})
@@ -96,7 +102,7 @@ def read_scenario(path):
                                            "fullscreen", "restored", "landscape", "portrait", "idle",
                                            "floating", "normal", "repinned", "osc_row", "osc_hidden", "osc_pinned",
                                            "volume", "speed", "loading", "buffering", "failure", "recovered",
-                                           "settings_light", "settings_auto"}
+                                           "settings_light", "settings_auto", "track_panel"}
                     or not step.get("name", "").replace("-", "").isalnum()):
                 raise ValueError("Invalid capture checkpoint")
         if step["action"] == "check_subtitle_menu":
@@ -104,7 +110,7 @@ def read_scenario(path):
             if (not isinstance(labels, list) or not all(isinstance(label, str) for label in labels)
                     or step["selected_subtitle"] not in labels):
                 raise ValueError("Subtitle menu check needs labels and an expected selected item")
-    if spec["fixture"] not in {*FIXTURE_SUBTITLES, "01-h264-1080p24-tone.mp4", "landscape-4k.mp4"}:
+    if spec["fixture"] not in {*FIXTURE_SUBTITLES, "01-h264-1080p24-tone.mp4", "landscape-4k.mp4", "04-mkv-2audio-2subs.mkv"}:
         raise ValueError("Unknown scenario fixture")
     return spec
 
@@ -113,7 +119,9 @@ def fixture(ffmpeg, temporary, spec, receipt):
     video = temporary / spec["fixture"]
     version = command(ffmpeg, "-version", capture_output=True, text=True).stdout.splitlines()[0]
     receipt["fixture"] = {"ffmpeg_version": version, "ffmpeg_sha256": digest(Path(ffmpeg))}
-    if video.name in FIXTURE_SUBTITLES:
+    if video.name == "04-mkv-2audio-2subs.mkv":
+        track_fixtures(ffmpeg, video, receipt["fixture"])
+    elif video.name in FIXTURE_SUBTITLES:
         for suffix in FIXTURE_SUBTITLES[video.name]:
             subtitle = video.with_suffix(suffix)
             subtitle.write_text(SIDECAR, encoding="utf-8")
@@ -145,6 +153,39 @@ def fixture(ffmpeg, temporary, spec, receipt):
                     "-movflags", "+faststart", str(path), timeout=120)
             receipt["fixture"][path.name] = digest(path)
     return video
+
+
+def track_fixtures(ffmpeg, video, provenance):
+    # Saturated bars keep neutral-white subtitle glyphs independently measurable.
+    bars = ",".join(f"drawbox=x={320 * column}:y=0:w=320:h=1080:color={color}:t=fill"
+                    for column, color in enumerate(("0xff1900", "0x00da00", "0xffeb00", "0x1414f8",
+                                                    "0xff00ff", "0x00deec")))
+    sources = ["-f", "lavfi", "-i", f"color=c=black:s=1920x1080:r=24:d=18,{bars}"]
+    subtitles = []
+    for name, text in (("embedded-en", "EMBEDDED EN line one"), ("embedded-ru", "RU"),
+                       ("added-external", "ADDED EXTERNAL subtitle")):
+        subtitle = video.with_name(name + ".srt")
+        subtitle.write_text(f"1\n00:00:01,000 --> 00:00:17,500\n{text}\n\n", encoding="utf-8")
+        provenance[subtitle.name] = digest(subtitle)
+        subtitles.append(subtitle)
+
+    codec = ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-threads", "2",
+             "-g", "24", "-fflags", "+bitexact", "-flags", "+bitexact"]
+    prefix = [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error"]
+    no_audio = video.with_name("video-only.mp4")
+    command(*prefix, *sources, *codec, str(no_audio), timeout=120)
+    provenance[no_audio.name] = digest(no_audio)
+    command(*prefix, "-i", str(no_audio),
+            "-f", "lavfi", "-i", "sine=frequency=300:sample_rate=48000:duration=18",
+            "-f", "lavfi", "-i", "sine=frequency=900:sample_rate=48000:duration=18",
+            "-i", str(subtitles[0]), "-i", str(subtitles[1]),
+            "-map", "0:v", "-map", "1:a", "-map", "2:a", "-map", "3:s", "-map", "4:s",
+            "-c:v", "copy", "-c:a", "aac", "-c:s", "srt", "-fflags", "+bitexact",
+            "-metadata:s:a:0", "title=Low 300Hz", "-metadata:s:a:0", "language=eng",
+            "-metadata:s:a:1", "title=High 900Hz", "-metadata:s:a:1", "language=rus",
+            "-metadata:s:s:0", "language=eng", "-metadata:s:s:1", "language=rus",
+            "-disposition:a:0", "default", "-disposition:s:0", "default", str(video), timeout=120)
+    provenance[video.name] = digest(video)
 
 
 def prepare_app(args, temporary, receipt):
@@ -403,6 +444,8 @@ def main():
                         f"subtitle_clearance:{step['name']}" for step in spec["steps"]
                         if step.get("expect") == "clearance"
                     }
+                elif spec["id"] in TRACK_CONTROLS:
+                    expected_failures = {"track_switcher:pin"}
                 elif spec["id"] in TRANSPORT_CONTROLS:
                     expected_failures = TRANSPORT_CONTROLS[spec["id"]][1]
                 elif spec["id"] == SETTINGS:

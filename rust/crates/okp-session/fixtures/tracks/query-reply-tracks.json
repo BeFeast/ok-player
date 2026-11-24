@@ -4,8 +4,8 @@
     "tracks": {
       "tracks": {
         "audio": [
-          { "id": 1, "label": "English · 5.1 · EAC3", "selected": true },
-          { "id": 2, "label": "Director's Commentary · ENG · 2.0 · AC3", "selected": false }
+          { "id": 1, "label": "English · 5.1 · EAC3", "selected": true, "audio_detail": "5.1 · EAC3" },
+          { "id": 2, "label": "Director's Commentary · ENG · 2.0 · AC3", "selected": false, "audio_detail": "ENG · 2.0 · AC3" }
         ],
         "subtitles": [
           { "id": null, "label": "Off", "selected": false },

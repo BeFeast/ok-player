@@ -16,9 +16,9 @@ final class TrackMenusTests: XCTestCase {
     func testTheAudioMenuListsEveryTrackWithTheSessionsLabelAndChecksThePlayingOne() {
         XCTAssertEqual(TrackMenus.audioItems(view), [
             TrackMenuItem(kind: .choice, title: "English · 5.1 · EAC3", checked: true, enabled: true,
-                          action: .select(kind: .audio, id: 1)),
+                          action: .select(kind: .audio, id: 1), detail: "5.1 · EAC3"),
             TrackMenuItem(kind: .choice, title: "Director's Commentary · ENG · 2.0 · AC3", checked: false, enabled: true,
-                          action: .select(kind: .audio, id: 2)),
+                          action: .select(kind: .audio, id: 2), detail: "ENG · 2.0 · AC3"),
         ])
     }
 

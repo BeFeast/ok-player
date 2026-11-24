@@ -24,6 +24,7 @@ struct VerificationOptions {
         case "osc-volume-speed": "volume_wheel_disabled"
         case "osc-status": "copy_details_disabled"
         case "settings-shell-appearance": "appearance_persistence_disabled"
+        case "audio-switcher", "subtitle-switcher": "track_pin_disabled"
         default: "unsupported_control"
         }
     }
@@ -110,6 +111,8 @@ struct VerificationScenario: Decodable {
         case settingsLegacy = "settings_legacy", settingsSearch = "settings_search", settingsResize = "settings_resize"
         case settingsSystem = "settings_system", settingsLight = "settings_light", settingsAuto = "settings_auto"
         case settingsPlayerInput = "settings_player_input"
+        case checkAudioSwitcher = "check_audio_switcher", checkSubtitleSwitcher = "check_subtitle_switcher"
+        case checkTrackPin = "check_track_pin"
     }
     enum Expectation: String, Decodable {
         case noCue = "no_cue", clearance, baseMargin = "base_margin"
@@ -117,6 +120,7 @@ struct VerificationScenario: Decodable {
         case oscRow = "osc_row", oscHidden = "osc_hidden", oscPinned = "osc_pinned"
         case volume, speed, loading, buffering, failure, recovered
         case settingsLight = "settings_light", settingsAuto = "settings_auto"
+        case trackPanel = "track_panel"
     }
     let schemaVersion: Int
     let id: String
@@ -139,6 +143,7 @@ final class VerifyRun {
     unowned let app: PlayerApp
     let options: VerificationOptions
     var observations: [[String: Any]] = []
+    var trackChecks: [String: Any] = [:]
     var failures: [String] = []
     var initialFrame: CGRect?
     var preFullscreenFrame: CGRect?
@@ -197,6 +202,7 @@ final class VerifyRun {
                 if scenario.id.hasPrefix("window-") { try await performWindowStep(step) }
                 else if scenario.id.hasPrefix("osc-") { try await performTransportStep(step) }
                 else if scenario.id == "settings-shell-appearance" { try await performSettingsStep(step) }
+                else if scenario.id.hasSuffix("-switcher") { try await performTrackStep(step) }
                 else { try await perform(step) }
             }
             result["status"] = failures.isEmpty ? "passed" : "failed"
@@ -210,6 +216,7 @@ final class VerifyRun {
         result["assertion_failures"] = failures
         result["compositor"] = compositorStatus
         result["subtitle_menu"] = subtitleMenu
+        result["track_checks"] = trackChecks.isEmpty ? nil : trackChecks
         do {
             try options.write(result)
         } catch {

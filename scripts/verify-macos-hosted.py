@@ -28,6 +28,8 @@ CONTROLS = {
     "osc-volume-speed": "volume_wheel_disabled",
     "osc-status": "copy_details_disabled",
     "settings-shell-appearance": "appearance_persistence_disabled",
+    "audio-switcher": "track_pin_disabled",
+    "subtitle-switcher": "track_pin_disabled",
 }
 
 

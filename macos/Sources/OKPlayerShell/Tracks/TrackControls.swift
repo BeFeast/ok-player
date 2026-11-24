@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 /// What the surfaces list and send comes from `TrackMenus`, over the session's
 /// `tracks` view; selecting, adding and stepping are session commands. Nothing here
 /// keeps track state of its own.
-final class TrackControls: NSObject, NSPopoverDelegate {
+final class TrackControls: NSObject {
     /// The registry commands this shell carries out for the track surfaces.
     static let shellCommands = [TrackMenus.addSubtitle]
     /// The readout when an added subtitle file was refused or libmpv could not load it.
@@ -27,8 +27,7 @@ final class TrackControls: NSObject, NSPopoverDelegate {
     /// Holds the transport controls up (true) or lets them hide again (false)
     /// while a popover is open.
     var holdControls: ((Bool) -> Void)?
-    /// The window the file panel is a sheet of, and the player window that the
-    /// popover hands key presses on to.
+    /// The player window owns the track panel and the Add Subtitle sheet.
     weak var window: NSWindow?
     /// Shows the file panel as a sheet of the window and hands over the chosen file.
     var presentFilePanel: (NSWindow, @escaping (URL) -> Void) -> Void = TrackControls.openSubtitlePanel
@@ -40,13 +39,9 @@ final class TrackControls: NSObject, NSPopoverDelegate {
     let subtitleButton = TransportOverlay.iconButton("captions.bubble", "Subtitles")
     let readout = TrackReadoutView()
 
-    /// The popover's content.
-    let popoverContent = TrackPopoverController()
-
-    private let popover = NSPopover()
-    private var popoverKind: TrackKind?
-    /// The transport controls the buttons sit in; their `focusReturn` is where
-    /// keyboard focus goes when a popover closes.
+    let panel = TrackPanel()
+    private(set) var panelKind: TrackKind?
+    private var panelAnchor: NSLayoutConstraint?
     private weak var osc: TransportOverlay?
     /// The registry command whose readout is showing.
     private var readoutCommand: String?
@@ -61,16 +56,10 @@ final class TrackControls: NSObject, NSPopoverDelegate {
 
     override init() {
         super.init()
-        popover.behavior = .transient
-        // Track choices have the same light over-video material in either theme.
-        popover.appearance = NSAppearance(named: .aqua)
-        popover.contentViewController = popoverContent
-        popover.delegate = self
-        popoverContent.onAction = { [weak self] action, closes in
+        panel.onAction = { [weak self] action in
+            if case .select = action { self?.dismissPopover() }
             self?.choose(action)
-            if closes { self?.popover.performClose(nil) } else { self?.refresh() }
         }
-        popoverContent.onKey = { [weak self] event in self?.popoverKey(event) ?? false }
         audioButton.target = self
         audioButton.action = #selector(showAudio)
         subtitleButton.target = self
@@ -93,6 +82,14 @@ final class TrackControls: NSObject, NSPopoverDelegate {
         osc.addTrailingControl(audioButton, id: "audio") { [weak self] in
             Self.trackMenuItem("Audio", items: self?.menuItems(.audio) ?? [])
         }
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(panel)
+        NSLayoutConstraint.activate([
+            panel.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 8),
+            panel.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -8),
+            panel.topAnchor.constraint(greaterThanOrEqualTo: osc.topAnchor, constant: 8),
+            panel.bottomAnchor.constraint(equalTo: osc.panel.topAnchor, constant: -4),
+        ])
         readout.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(readout)
         NSLayoutConstraint.activate([
@@ -105,7 +102,8 @@ final class TrackControls: NSObject, NSPopoverDelegate {
     func sessionChanged(_ snapshot: SessionSnapshot) {
         let loaded = snapshot.status == .playing || snapshot.status == .paused
         for button in [audioButton, subtitleButton] { button.isEnabled = loaded }
-        if popover.isShown || readoutCommand != nil { refresh() }
+        if !loaded { dismissPopover() }
+        if isPopoverShown || readoutCommand != nil { refresh() }
     }
 
     // MARK: Commands
@@ -154,7 +152,7 @@ final class TrackControls: NSObject, NSPopoverDelegate {
             return
         }
         present(text, following: id)
-        if popover.isShown { popoverContent.update(kind: popoverKind ?? .subtitle, view: view) }
+        if let panelKind { panel.update(kind: panelKind, tracks: view) }
     }
 
     /// Do what a menu or popover item stands for.
@@ -162,6 +160,10 @@ final class TrackControls: NSObject, NSPopoverDelegate {
         switch action {
         case .addSubtitle: chooseSubtitleFile()
         case .invoke(let id): run(id)
+        case .resetDelay, .resetSize:
+            guard let command = TrackMenus.command(for: action) else { return }
+            send(command, failure: Self.changeFailed)
+            refresh()
         case .select: if let command = TrackMenus.command(for: action) { send(command, failure: Self.changeFailed) }
         }
     }
@@ -227,7 +229,7 @@ final class TrackControls: NSObject, NSPopoverDelegate {
         // As the menu item and the popover row, which are disabled then: no media
         // to add the file to.
         guard query?()?.adjustable == true, let window else { return }
-        if popover.isShown { popover.performClose(nil) }
+        dismissPopover()
         presentFilePanel(window) { [weak self] url in self?.addSubtitle(url) }
     }
 
@@ -250,45 +252,47 @@ final class TrackControls: NSObject, NSPopoverDelegate {
     @objc private func showSubtitles() { show(.subtitle, from: subtitleButton) }
 
     private func show(_ kind: TrackKind, from button: NSButton) {
-        // A button closes whichever popover is open; the next click opens its own.
-        guard !popover.isShown else { popover.performClose(nil); return }
-        popoverKind = kind
-        popoverContent.update(kind: kind, view: query?())
+        guard let osc, let window, panel.window === window, !button.isHidden else { return }
+        if panelKind == kind { dismissPopover(); return }
+        osc.dismissVolume()
+        osc.noteActivity()
+        window.makeFirstResponder(osc.focusReturn)
+        panelKind = kind
+        panel.update(kind: kind, tracks: query?())
+        panelAnchor?.isActive = false
+        let anchor = panel.centerXAnchor.constraint(equalTo: button.centerXAnchor)
+        anchor.priority = .defaultHigh
+        anchor.isActive = true
+        panelAnchor = anchor
+        panel.isHidden = false
         holdControls?(true)
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY)
     }
 
     private func refresh() {
         guard let view = query?() else { return }
-        if popover.isShown, let kind = popoverKind { popoverContent.update(kind: kind, view: view) }
+        if let panelKind { panel.update(kind: panelKind, tracks: view) }
         if let id = readoutCommand, let text = TrackMenus.readout(after: id, in: view) { readout.update(text) }
     }
 
-    func popoverDidClose(_ notification: Notification) {
-        popoverKind = nil
-        // A clicked radio button turns itself on whether or not the session takes
-        // the choice: the next opening shows the session's state again.
-        popoverContent.invalidate()
-        holdControls?(false)
-        returnFocus()
-    }
-
-    /// A key pressed while the popover is the key window. Escape closes the
-    /// popover as usual; any other key goes to the player window, as if the
-    /// popover were not there: Space pauses, Z and ] step the values it shows.
-    func popoverKey(_ event: NSEvent) -> Bool {
-        guard event.keyCode != WindowKeys.escapeKeyCode, let window else { return false }
-        (window.firstResponder ?? window).keyDown(with: event)
-        return true
-    }
-
-    /// Keyboard focus goes back to the video when a popover closes, unless
-    /// another control of the window holds it (the scrubber after a click).
-    private func returnFocus() {
-        guard let window, let video = osc?.focusReturn else { return }
-        let holder = window.firstResponder
-        guard holder == nil || holder === window || holder === audioButton || holder === subtitleButton else { return }
-        _ = window.makeFirstResponder(video)
+    /// A click outside dismisses the panel and continues to its original target.
+    /// Escape consumes the event so the queue and fullscreen stay in place.
+    func handleWindowInput(_ event: NSEvent) -> Bool {
+        guard isPopoverShown else { return false }
+        switch event.type {
+        case .keyDown:
+            return event.keyCode == WindowKeys.escapeKeyCode && dismissPopover()
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            let point = event.locationInWindow
+            let surfaces = [panel, audioButton, subtitleButton] as [NSView]
+            if !surfaces.contains(where: {
+                !$0.isHiddenOrHasHiddenAncestor && $0.bounds.contains($0.convert(point, from: nil))
+            }) {
+                dismissPopover()
+            }
+        default:
+            break
+        }
+        return false
     }
 
     private static func trackMenuItem(_ title: String, items: [NSMenuItem]) -> NSMenuItem {
@@ -301,12 +305,16 @@ final class TrackControls: NSObject, NSPopoverDelegate {
         return item
     }
 
-    var isPopoverShown: Bool { popover.isShown }
+    var isPopoverShown: Bool { panelKind != nil }
 
     @discardableResult
     func dismissPopover() -> Bool {
-        guard popover.isShown else { return false }
-        popover.performClose(nil)
+        guard panelKind != nil else { return false }
+        panelKind = nil
+        panel.isHidden = true
+        panelAnchor?.isActive = false
+        panelAnchor = nil
+        holdControls?(false)
         return true
     }
 
@@ -359,164 +367,6 @@ final class TrackActionBox: NSObject {
 }
 
 // MARK: - Views
-
-/// The popover content: the track choices, and for subtitles Add Subtitle File…
-/// and the delay and size rows. Choosing a track closes the popover; the steps
-/// keep it open. Its controls never take keyboard focus: the content view holds
-/// it and hands key presses to `onKey`.
-final class TrackPopoverController: NSViewController {
-    /// An action was chosen; `closes` when the popover should close after it.
-    var onAction: ((TrackMenuAction, _ closes: Bool) -> Void)?
-    /// A key pressed while the popover is the key window; true when it was used.
-    var onKey: ((NSEvent) -> Bool)?
-    private let stack = TrackPopoverView()
-    /// What the controls show now.
-    private var shown: (kind: TrackKind, view: TracksView?)?
-
-    override func loadView() {
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 4
-        stack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
-        stack.onKey = { [weak self] event in self?.onKey?(event) ?? false }
-        view = stack
-    }
-
-    override func viewDidAppear() {
-        super.viewDidAppear()
-        _ = view.window?.makeFirstResponder(view)
-    }
-
-    /// The rows of the popover, top to bottom.
-    var controls: [NSView] {
-        loadViewIfNeeded()
-        return stack.arrangedSubviews
-    }
-
-    /// Show `tracks` for `kind`. Batches arrive about ten times a second during
-    /// playback; the controls are rebuilt only when what they show changed, so a
-    /// button is never pulled away under a click and keyboard and VoiceOver focus
-    /// stay where they are.
-    func update(kind: TrackKind, view tracks: TracksView?) {
-        loadViewIfNeeded()
-        if let shown, shown.kind == kind, shown.view == tracks { return }
-        shown = (kind, tracks)
-        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        boxes = [:]
-        let title = NSTextField(labelWithString: kind == .audio ? "Audio" : "Subtitles")
-        title.font = .boldSystemFont(ofSize: NSFont.smallSystemFontSize)
-        title.textColor = PaletteRole.text.color
-        stack.addArrangedSubview(title)
-        for item in TrackMenus.items(kind, tracks) { stack.addArrangedSubview(control(for: item)) }
-        guard kind == .subtitle else { return }
-        stack.addArrangedSubview(separator())
-        for adjustment in TrackMenus.adjustments(tracks) { stack.addArrangedSubview(row(for: adjustment)) }
-    }
-
-    private func control(for item: TrackMenuItem) -> NSView {
-        switch item.kind {
-        case .separator:
-            return separator()
-        case .placeholder:
-            let label = NSTextField(labelWithString: item.title)
-            label.textColor = PaletteRole.textMuted.color
-            return label
-        case .choice:
-            let button = NSButton(radioButtonWithTitle: item.title, target: self, action: #selector(choose(_:)))
-            button.state = item.checked ? .on : .off
-            button.isEnabled = item.enabled
-            attach(item.action, to: button)
-            return button
-        case .command:
-            let button = NSButton(title: item.title, target: self, action: #selector(choose(_:)))
-            button.bezelStyle = .inline
-            button.isEnabled = item.enabled
-            attach(item.action, to: button)
-            return button
-        }
-    }
-
-    private func row(for adjustment: SubtitleAdjustment) -> NSView {
-        let title = NSTextField(labelWithString: adjustment.title)
-        let value = NSTextField(labelWithString: adjustment.value)
-        title.textColor = PaletteRole.textMuted.color
-        value.textColor = PaletteRole.text.color
-        value.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        value.alignment = .right
-        value.widthAnchor.constraint(greaterThanOrEqualToConstant: 64).isActive = true
-        let decrease = step("minus", adjustment.decreaseHelp, adjustment.decrease, adjustment.enabled)
-        let increase = step("plus", adjustment.increaseHelp, adjustment.increase, adjustment.enabled)
-        let row = NSStackView(views: [title, value, decrease, increase])
-        row.orientation = .horizontal
-        row.spacing = 6
-        title.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
-        return row
-    }
-
-    private func step(_ symbol: String, _ help: String, _ action: TrackMenuAction, _ enabled: Bool) -> NSButton {
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: help) ?? NSImage()
-        let button = NSButton(image: image, target: self, action: #selector(adjust(_:)))
-        button.bezelStyle = .inline
-        button.contentTintColor = PaletteRole.text.color
-        button.toolTip = help
-        button.isEnabled = enabled
-        attach(action, to: button)
-        return button
-    }
-
-    private func separator() -> NSView {
-        let line = PaletteSurface(fill: .borderSubtle)
-        line.heightAnchor.constraint(equalToConstant: 1).isActive = true
-        line.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
-        return line
-    }
-
-    /// The next `update` rebuilds the controls even if nothing changed.
-    func invalidate() { shown = nil }
-
-    private func attach(_ action: TrackMenuAction?, to button: NSButton) {
-        button.refusesFirstResponder = true
-        guard let action else { return }
-        button.identifier = NSUserInterfaceItemIdentifier(UUID().uuidString)
-        boxes[button.identifier!] = TrackActionBox(action)
-    }
-
-    private var boxes: [NSUserInterfaceItemIdentifier: TrackActionBox] = [:]
-
-    @objc private func choose(_ sender: NSButton) {
-        guard let id = sender.identifier, let box = boxes[id] else { return }
-        // Add Subtitle File… opens a sheet; the popover gets out of its way too.
-        onAction?(box.action, true)
-    }
-
-    @objc private func adjust(_ sender: NSButton) {
-        guard let id = sender.identifier, let box = boxes[id] else { return }
-        onAction?(box.action, false)
-    }
-}
-
-/// The popover's content view. It holds keyboard focus while the popover is the
-/// key window, so the player's keys keep working there.
-final class TrackPopoverView: NSStackView {
-    /// A key press; true when it was used.
-    var onKey: ((NSEvent) -> Bool)?
-
-    override var acceptsFirstResponder: Bool { true }
-
-    override func draw(_ dirtyRect: NSRect) {
-        PaletteRole.surface.color.setFill()
-        dirtyRect.fill()
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        needsDisplay = true
-    }
-
-    override func keyDown(with event: NSEvent) {
-        if onKey?(event) != true { super.keyDown(with: event) }
-    }
-}
 
 /// The on-screen readout of the delay and size keys: the session's value for a
 /// moment over the top of the video. It takes no clicks.
