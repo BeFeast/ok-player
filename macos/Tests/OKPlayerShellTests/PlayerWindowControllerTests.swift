@@ -202,6 +202,13 @@ final class PlayerWindowControllerTests: XCTestCase {
         XCTAssertEqual(contentFrame, fit)
     }
 
+    func testPortraitFitCanUseTheDesktopReserveToKeepItsAspect() {
+        rules.fits = [CGRect(x: 200, y: 110, width: 425, height: 593)]
+        controller.sessionChanged(playing(VideoGeometry(width: 1080, height: 1440, displayAspect: 0.75)))
+        window.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertEqual(video.bounds.width, video.bounds.height * 0.75, accuracy: 1)
+    }
+
     func testAFitOwedInFullscreenIsSpentWithoutResizing() {
         window.flagged = true
         let before = window.frame

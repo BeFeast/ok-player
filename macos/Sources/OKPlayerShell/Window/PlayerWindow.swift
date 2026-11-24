@@ -298,9 +298,27 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
                                                    minSize: contentSize(forFrameSize: window.minSize),
                                                    chrome: videoChrome),
               !window.isInFullscreen, applyInitialFit else { return }
-        let safe = window.frameRect(forContentRect: content).fitted(inside: area)
-        window.setFrame(safe, display: true)
-        lastFit = window.contentRect(forFrameRect: safe)
+        var target = aspectFittedFrame(content: content, in: area)
+        window.setFrame(target, display: true)
+        if target.size != window.frame.size {
+            // AppKit may enlarge a narrow frame for its native title controls.
+            target = aspectFittedFrame(content: window.contentRect(forFrameRect: window.frame), in: area)
+            window.setFrame(target, display: true)
+        }
+        lastFit = window.contentRect(forFrameRect: target)
+    }
+
+    private func aspectFittedFrame(content: CGRect, in area: CGRect) -> CGRect {
+        let size = aspect.map { video in
+            // The core reserves desktop space in the initial fit. A narrow
+            // title-safe window can use that reserve to avoid pillarboxing.
+            VideoAreaAspect.constrain(proposed: content.size, current: content.size, video: video,
+                                      chrome: videoChrome, minimum: contentSize(forFrameSize: window.minSize),
+                                      maximum: contentSize(forFrameSize: area.size))
+        } ?? content.size
+        let centered = CGRect(x: (content.midX - size.width / 2).rounded(),
+                              y: (content.midY - size.height / 2).rounded(), width: size.width, height: size.height)
+        return window.frameRect(forContentRect: centered).fitted(inside: area)
     }
 
     var trafficLights: [NSButton] {

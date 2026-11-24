@@ -125,18 +125,17 @@ final class VerifyRun {
             guard scenario.schemaVersion == 1, scenario.id == options.scenarioID else {
                 throw VerifyError("Unsupported scenario or schema")
             }
-            try await wait("mapped AppKit window", blocked: true) {
-                self.app.window.isVisible && self.app.window.windowNumber > 0 && self.app.window.screen != nil
+            try await wait("mapped AppKit window registered with WindowServer", blocked: true) {
+                let window = self.app.window!
+                guard window.isVisible, window.windowNumber > 0, window.screen != nil,
+                      let rows = CGWindowListCopyWindowInfo(.optionIncludingWindow,
+                                                            CGWindowID(window.windowNumber)) as? [[String: Any]] else { return false }
+                return rows.contains { ($0[kCGWindowOwnerPID as String] as? Int32) == getpid() }
             }
             let appearance: NSAppearance.Name = options.appearance == "dark" ? .darkAqua : .aqua
             app.window.appearance = NSAppearance(named: appearance)
             guard app.window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == appearance else {
                 throw VerifyError("Requested appearance is unavailable", blocked: true)
-            }
-            guard let windowServerRows = CGWindowListCopyWindowInfo(.optionIncludingWindow,
-                                                                   CGWindowID(app.window.windowNumber)) as? [[String: Any]],
-                  windowServerRows.contains(where: { ($0[kCGWindowOwnerPID as String] as? Int32) == getpid() }) else {
-                throw VerifyError("WindowServer did not list the expected window/PID", blocked: true)
             }
             result["window_id"] = app.window.windowNumber
             result["source_sha"] = Bundle.main.object(forInfoDictionaryKey: "OKPSourceSHA")
