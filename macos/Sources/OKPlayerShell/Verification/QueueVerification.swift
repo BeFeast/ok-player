@@ -244,11 +244,20 @@ extension VerifyRun {
     }
 
     private func captureQueue(_ name: String) async throws {
-        try await Task.sleep(nanoseconds: 250_000_000)
         guard let root = app.window.contentView, let video = app.video else {
             throw VerifyError("The player window is unavailable", blocked: true)
         }
+        _ = try await waitUntil(timeout: 3) {
+            root.layoutSubtreeIfNeeded()
+            let rect = self.queuePanel.convert(self.queuePanel.bounds, to: root)
+            let bar = self.app.osc.panel.convert(self.app.osc.panel.bounds, to: root)
+            return !self.queuePanel.isHidden && self.queuePanel.selectedTab == .upNext
+                && abs(rect.maxX - root.bounds.maxX) <= 0.5
+                && abs(rect.minY - bar.maxY - 2) <= 0.5
+                && abs(rect.width - 316) <= 0.5 && rect.height > 0
+        }
         root.layoutSubtreeIfNeeded()
+        app.window.displayIfNeeded()
         let rect = queuePanel.convert(queuePanel.bounds, to: root)
         let bar = app.osc.panel.convert(app.osc.panel.bounds, to: root)
         if queuePanel.isHidden || queuePanel.selectedTab != .upNext ||

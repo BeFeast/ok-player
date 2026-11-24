@@ -180,9 +180,11 @@ extension VerifyRun {
         let height = Int((root.bounds.height * 2).rounded())
         var frame: CGImage?
         if isVideo {
-            guard let evidence = video.videoLayer.verificationFrame(
-                width: Int((video.bounds.width * 2).rounded()), height: Int((video.bounds.height * 2).rounded())),
-                  evidence.hasPicture else {
+            guard let evidence = try await captureVideoFrame(
+                video,
+                width: Int((video.bounds.width * 2).rounded()),
+                height: Int((video.bounds.height * 2).rounded())
+            ) else {
                 throw VerifyError("Could not capture live video fallback", blocked: true)
             }
             frame = evidence.image

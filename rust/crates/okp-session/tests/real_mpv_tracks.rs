@@ -42,17 +42,25 @@ fn accepted(reply: DispatchResult) {
 }
 
 fn open(session: &Session, media: &Path) {
+    let target = media.to_string_lossy().into_owned();
     accepted(session.dispatch(&Command::Open {
         source: MediaSource {
             kind: SourceKind::Local,
-            location: media.to_string_lossy().into_owned(),
+            location: target.clone(),
         },
         resume_from: None,
         audio_track: None,
         subtitle_track: None,
     }));
     assert!(
-        wait_for(|| matches!(session.snapshot().status, Status::Playing | Status::Paused)),
+        wait_for(|| {
+            let snapshot = session.snapshot();
+            matches!(snapshot.status, Status::Playing | Status::Paused)
+                && snapshot
+                    .source
+                    .as_ref()
+                    .is_some_and(|source| source.location == target)
+        }),
         "the fixture never loaded"
     );
 }
@@ -180,6 +188,11 @@ fn tagged_sidecars_supply_real_mpv_titles_languages_and_preferred_selection() {
     });
     let session = Session::new(&config).expect("libmpv starts");
     open(&session, &movie);
+    assert!(
+        wait_for(|| subtitle_count(&session) == 3),
+        "the three tagged sidecars did not load: {:?}",
+        session.snapshot().tracks
+    );
     let snapshot = session.snapshot();
     let subtitles: Vec<_> = snapshot
         .tracks
@@ -223,7 +236,11 @@ fn tagged_sidecars_supply_real_mpv_titles_languages_and_preferred_selection() {
     assert!(view.subtitles[3].selected);
 
     open(&session, &common::tone_fixture(root.path()));
-    assert_eq!(subtitle_count(&session), 0);
+    assert!(
+        wait_for(|| subtitle_count(&session) == 0),
+        "the next file kept stale subtitle tracks: {:?}",
+        session.snapshot().tracks
+    );
 }
 
 #[test]

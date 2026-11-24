@@ -489,8 +489,11 @@ fn terminating_live_collector_stops_the_evaluator_and_reclaims_scratch() {
     let evaluator_pid = root.path().join("evaluator.pid");
     let evaluator_ready = root.path().join("evaluator.ready");
     let evaluator_signal = root.path().join("evaluator.signal");
+    let collector_stderr = root.path().join("collector.stderr");
     write_executable(&evaluator, SIGNAL_AWARE_EVALUATOR);
 
+    let stderr_file =
+        fs::File::create(&collector_stderr).expect("collector stderr capture should be created");
     let mut child = Command::new("bash");
     child
         .arg(checker_path())
@@ -517,10 +520,15 @@ fn terminating_live_collector_stops_the_evaluator_and_reclaims_scratch() {
         .env("TMPDIR", &scratch)
         .env("PATH", path_with(&fake_bin))
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::from(stderr_file));
     let mut child = child.spawn().expect("live collector should start");
 
-    wait_for_fixture_file(&evaluator_ready, &mut child, Duration::from_secs(10));
+    wait_for_fixture_file(
+        &evaluator_ready,
+        &mut child,
+        &collector_stderr,
+        Duration::from_secs(30),
+    );
     let evaluator_pid_value = fs::read_to_string(&evaluator_pid)
         .expect("evaluator PID should be recorded")
         .trim()
@@ -532,7 +540,7 @@ fn terminating_live_collector_stops_the_evaluator_and_reclaims_scratch() {
         .expect("collector should receive SIGTERM");
     assert!(signal_status.success(), "failed to signal collector");
 
-    let checker_status = wait_for_child_exit(&mut child, Duration::from_secs(10));
+    let checker_status = wait_for_child_exit(&mut child, Duration::from_secs(20));
     let evaluator_was_signaled = evaluator_signal.exists();
     let evaluator_is_alive = process_is_alive(&evaluator_pid_value);
     if evaluator_is_alive {
@@ -645,19 +653,24 @@ fn path_with(directory: &Path) -> String {
     )
 }
 
-fn wait_for_fixture_file(path: &Path, child: &mut Child, timeout: Duration) {
+fn wait_for_fixture_file(path: &Path, child: &mut Child, stderr_path: &Path, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while !path.exists() {
         if let Some(status) = child
             .try_wait()
             .expect("collector status should be readable")
         {
-            panic!("collector exited before evaluator became ready: {status}");
+            let stderr = fs::read_to_string(stderr_path).unwrap_or_default();
+            panic!("collector exited before evaluator became ready: {status}\nstderr:\n{stderr}");
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("timed out waiting for evaluator readiness");
+            let stderr = fs::read_to_string(stderr_path).unwrap_or_default();
+            panic!(
+                "timed out after {}s waiting for evaluator readiness\nstderr:\n{stderr}",
+                timeout.as_secs()
+            );
         }
         thread::sleep(Duration::from_millis(20));
     }
@@ -722,7 +735,8 @@ terminate() {
 trap terminate TERM
 tail -f /dev/null &
 blocker_pid=$!
-printf '%s\n' "$$" >"$OKP_TEST_EVALUATOR_PID"
+printf '%s\n' "$$" >"${OKP_TEST_EVALUATOR_PID}.tmp"
+mv "${OKP_TEST_EVALUATOR_PID}.tmp" "$OKP_TEST_EVALUATOR_PID"
 : >"$OKP_TEST_EVALUATOR_READY"
 wait "$blocker_pid"
 "#;

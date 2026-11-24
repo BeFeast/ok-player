@@ -126,15 +126,60 @@ if [[ "${1:-}" == "--inner" ]]; then
     ' "$LOG"
   }
 
-  wait_for_marker() {
-    local marker="$1" limit="${2:-160}"
+  marker_count() {
+    grep -cF "$1" "$LOG" 2>/dev/null || true
+  }
+
+  wait_for_marker_count() {
+    local marker="$1" want="$2" limit="${3:-160}"
     for _ in $(seq 1 "$limit"); do
-      grep -q "$marker" "$LOG" && return 0
+      if (( $(marker_count "$marker") >= want )); then
+        return 0
+      fi
       sleep 0.25
     done
-    echo "never observed: $marker" >&2
+    echo "never observed $want occurrence(s) of: $marker" >&2
     tail -40 "$LOG" >&2
     return 1
+  }
+
+  latest_fit_target() {
+    awk '
+      index($0, "window fit configure: ") == 1 {
+        for (i = 1; i <= NF; i++) {
+          if (index($i, "target=") == 1) {
+            spec = substr($i, 8)
+            sub(/\+.*/, "", spec)
+            split(spec, dims, "x")
+            w = dims[1]; h = dims[2]
+          }
+        }
+      }
+      END { if (w != "" && h != "") print w, h }
+    ' "$LOG"
+  }
+
+  # Wait until the window manager applies the requested geometry and GTK publishes it.
+  wait_for_window_size() {
+    local want_w="$1" want_h="$2" limit="${3:-120}"
+    local cur_w cur_h
+    for _ in $(seq 1 "$limit"); do
+      cur_w="$(field window w)"
+      cur_h="$(field window h)"
+      if [[ -n "$cur_w" && -n "$cur_h" ]] \
+          && (( cur_w >= want_w - 2 && cur_w <= want_w + 2 && cur_h >= want_h - 2 && cur_h <= want_h + 2 )); then
+        return 0
+      fi
+      sleep 0.25
+    done
+    echo "window stayed $(window_geometry) instead of reaching ${want_w}x${want_h}" >&2
+    tail -40 "$LOG" >&2
+    return 1
+  }
+
+  wait_for_marker() {
+    local marker="$1" limit="${2:-160}"
+    wait_for_marker_count "$marker" 1 "$limit"
   }
 
   # Block until the record stops changing. Asserting before it has would test whatever GTK
@@ -319,9 +364,14 @@ if [[ "${1:-}" == "--inner" ]]; then
     sleep 0.25
   done
 
+  loaded_before="$(marker_count 'idle-return-smoke: file-loaded')"
+  fits_before="$(marker_count 'window fit configure: ')"
   open_media "$OUT_DIR/media/portrait.mkv"
-  wait_for_marker 'idle-return-smoke: file-loaded' || exit 1
-  wait_for_marker 'window fit configure: ' || exit 1
+  wait_for_marker_count 'idle-return-smoke: file-loaded' $((loaded_before + 1)) || exit 1
+  wait_for_marker_count 'window fit configure: ' $((fits_before + 1)) || exit 1
+  read -r fit_w fit_h < <(latest_fit_target)
+  [[ -n "${fit_w:-}" && -n "${fit_h:-}" ]] || { echo "window fit configure omitted a target size" >&2; exit 1; }
+  wait_for_window_size "$fit_w" "$fit_h" || exit 1
   wait_for_settled || { echo "the window never settled on the portrait fit" >&2; exit 1; }
   portrait_geometry="$(window_geometry)"
   portrait_width="$(field window w)"
@@ -333,9 +383,13 @@ if [[ "${1:-}" == "--inner" ]]; then
   }
   echo "portrait_fit_geometry=${portrait_geometry}" >>"$RESULTS"
 
+  idle_w="${idle_geometry%x*}"
+  idle_h="${idle_geometry#*x}"
+  closes_before="$(marker_count 'idle-return-smoke: close-idle')"
   xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
   xdotool key --clearmodifiers x
-  wait_for_marker 'idle-return-smoke: close-idle' || exit 1
+  wait_for_marker_count 'idle-return-smoke: close-idle' $((closes_before + 1)) || exit 1
+  wait_for_window_size "$idle_w" "$idle_h" 80 || true
   wait_for_settled || { echo "the window never settled after leaving playback" >&2; exit 1; }
   restored_geometry="$(window_geometry)"
   capture 02-idle-after-portrait
@@ -348,12 +402,22 @@ if [[ "${1:-}" == "--inner" ]]; then
 
   # A portrait file followed by a landscape file must not accumulate drift: the second
   # session has to return to the same geometry the first one did.
+  loaded_before="$(marker_count 'idle-return-smoke: file-loaded')"
+  fits_before="$(marker_count 'window fit configure: ')"
   open_media "$OUT_DIR/media/landscape.mkv"
+  wait_for_marker_count 'idle-return-smoke: file-loaded' $((loaded_before + 1)) || exit 1
+  wait_for_marker_count 'window fit configure: ' $((fits_before + 1)) || exit 1
+  read -r fit_w fit_h < <(latest_fit_target)
+  [[ -n "${fit_w:-}" && -n "${fit_h:-}" ]] || { echo "landscape fit configure omitted a target size" >&2; exit 1; }
+  wait_for_window_size "$fit_w" "$fit_h" || exit 1
   wait_for_settled || { echo "the window never settled on the landscape fit" >&2; exit 1; }
   landscape_geometry="$(window_geometry)"
   capture 03-playing-landscape
+  closes_before="$(marker_count 'idle-return-smoke: close-idle')"
   xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
   xdotool key --clearmodifiers x
+  wait_for_marker_count 'idle-return-smoke: close-idle' $((closes_before + 1)) || exit 1
+  wait_for_window_size "$idle_w" "$idle_h" 80 || true
   wait_for_settled || { echo "the window never settled after the second close" >&2; exit 1; }
   drifted_geometry="$(window_geometry)"
   capture 04-idle-after-landscape

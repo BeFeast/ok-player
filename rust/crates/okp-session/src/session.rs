@@ -323,27 +323,20 @@ impl Session {
                 }
             }
             Query::StatusSurface {} => {
-                let snapshot = self.snapshot();
-                QueryResult::StatusSurface {
-                    surface: lock(&self.shared.state).status.surface(&snapshot),
-                }
+                self.with_refreshed_state(|state, snapshot| QueryResult::StatusSurface {
+                    surface: state.status.surface(snapshot),
+                })
             }
-            Query::Tracks {} => {
-                let snapshot = self.snapshot();
-                QueryResult::Tracks {
-                    tracks: lock(&self.shared.state).tracks.view(&snapshot),
-                }
-            }
+            Query::Tracks {} => self.with_refreshed_state(|state, snapshot| QueryResult::Tracks {
+                tracks: state.tracks.view(snapshot),
+            }),
             Query::Playlist {} => QueryResult::Playlist {
                 playlist: lock(&self.shared.state).playlist.state(),
             },
             Query::QueueView {} => {
-                let snapshot = self.snapshot();
-                QueryResult::QueueView {
-                    view: lock(&self.shared.state)
-                        .playlist
-                        .queue_view(snapshot.title.as_deref()),
-                }
+                self.with_refreshed_state(|state, snapshot| QueryResult::QueueView {
+                    view: state.playlist.queue_view(snapshot.title.as_deref()),
+                })
             }
             Query::AudioMetadata {} => {
                 let state = lock(&self.shared.state);
@@ -403,20 +396,16 @@ impl Session {
             Query::CommandRegistry {
                 fullscreen,
                 mini_player,
-            } => {
-                let snapshot = self.snapshot();
-                let playlist_items = lock(&self.shared.state).playlist.len();
-                QueryResult::CommandRegistry {
-                    commands: self.commands.resolve(
-                        &snapshot,
-                        WindowState {
-                            fullscreen: *fullscreen,
-                            mini_player: *mini_player,
-                        },
-                        playlist_items,
-                    ),
-                }
-            }
+            } => self.with_refreshed_state(|state, snapshot| QueryResult::CommandRegistry {
+                commands: self.commands.resolve(
+                    snapshot,
+                    WindowState {
+                        fullscreen: *fullscreen,
+                        mini_player: *mini_player,
+                    },
+                    state.playlist.len(),
+                ),
+            }),
             Query::ShortcutTable {} => QueryResult::ShortcutTable {
                 shortcuts: self.commands.shortcut_table(),
             },
@@ -453,25 +442,26 @@ impl Session {
     }
 
     fn command_surface(&self, window: WindowState, page: CommandMenu, query: &str) -> QueryResult {
-        let snapshot = self.snapshot();
-        let playlist_items = lock(&self.shared.state).playlist.len();
-        QueryResult::CommandSurface {
+        self.with_refreshed_state(|state, snapshot| QueryResult::CommandSurface {
             surface: self
                 .commands
-                .surface(&snapshot, window, playlist_items, page, query),
-        }
+                .surface(snapshot, window, state.playlist.len(), page, query),
+        })
     }
 
     /// Run a registry command: forward the session command it stands for, or
     /// tell the shell to carry it out. An unknown or unavailable command is
     /// refused.
     fn invoke_command(&self, id: &str) -> DispatchResult {
-        let mut snapshot = self.snapshot();
-        // The delay keys build on the delay asked for last, which libmpv may
-        // not have reported yet.
-        snapshot.subtitle_delay = lock(&self.shared.state)
-            .tracks
-            .delay(snapshot.subtitle_delay);
+        let snapshot = self.with_refreshed_state(|state, snapshot| {
+            let mut snapshot = snapshot.clone();
+            // The delay keys build on the delay asked for last, which libmpv may
+            // not have reported yet. Reading `tracks` under the same lock as the
+            // refreshed snapshot prevents the event loop from clearing
+            // `asked_delay` between reading the two.
+            snapshot.subtitle_delay = state.tracks.delay(snapshot.subtitle_delay);
+            snapshot
+        });
         match self.commands.invocation(id, &snapshot) {
             Invocation::Run(command) => self.dispatch(&command),
             Invocation::Perform => DispatchResult::Perform {},
@@ -479,19 +469,25 @@ impl Session {
         }
     }
 
-    /// The full state, including every change not yet drained. Answering folds
-    /// in the engine's latest report first, so it reflects a command dispatched
-    /// just before.
-    pub fn snapshot(&self) -> SessionSnapshot {
+    /// Refresh the session under one lock and project a value from the
+    /// consistent `(state, snapshot)` pair.
+    fn with_refreshed_state<T>(&self, read: impl FnOnce(&State, &SessionSnapshot) -> T) -> T {
         let mut state = lock(&self.shared.state);
         state.refresh(&*self.shared.engine, Instant::now());
-        let snapshot = state.queue.published().clone();
+        let value = read(&state, state.queue.published());
         let pending = state.queue.has_pending();
         drop(state);
         if pending {
             self.shared.signal.notify();
         }
-        snapshot
+        value
+    }
+
+    /// The full state, including every change not yet drained. Answering folds
+    /// in the engine's latest report first, so it reflects a command dispatched
+    /// just before.
+    pub fn snapshot(&self) -> SessionSnapshot {
+        self.with_refreshed_state(|_, snapshot| snapshot.clone())
     }
 
     /// When the event thread next wakes on its own, as of a refresh now.

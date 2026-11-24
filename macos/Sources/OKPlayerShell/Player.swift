@@ -682,17 +682,45 @@ final class SmokeRun {
             if let problem = app?.system.smokeCheckPlayingThenPause() { fail(problem) }
         case .pausing where snapshot.status == .paused:
             phase = .holding
-            // Let the pause settle, then measure two seconds of it.
-            after(0.5) { [self] in
-                pausePosition = app?.client?.store.snapshot.timePos ?? 0
-                pausedRenders = renders
-                after(2) { [self] in checkPause() }
-            }
+            // Wait for any in-flight render callback or display-link tick from before
+            // pause to drain and stay quiet for 0.5 s, then measure two paused seconds.
+            let now = ProcessInfo.processInfo.systemUptime
+            waitForPauseSettle(startRenders: renders, lastCount: renders, quietSince: now, deadline: now + 3.0)
         case .resuming where snapshot.status == .playing && position > pausePosition + 0.5 && renders > pausedRenders + 5:
             phase = .resizing
             resize()
         default:
             break
+        }
+    }
+
+    private func waitForPauseSettle(startRenders: Int, lastCount: Int, quietSince: TimeInterval,
+                                    deadline: TimeInterval) {
+        guard phase == .holding, !cancelled, let app else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        let current = renders
+        let pacerIdle = app.video?.videoLayer.pacer.with {
+            !$0.frameDue && !$0.drawInFlight && !$0.updateScheduled && !$0.linkRunning
+        } ?? true
+        if current != lastCount || !pacerIdle {
+            if now >= deadline {
+                fail("Pause rendering did not settle (\(current - startRenders) render calls during settle)")
+                return
+            }
+            after(0.1) { [self] in
+                waitForPauseSettle(startRenders: startRenders, lastCount: current, quietSince: now, deadline: deadline)
+            }
+            return
+        }
+        if now - quietSince >= 0.5 {
+            pausePosition = app.client?.store.snapshot.timePos ?? 0
+            pausedRenders = current
+            after(2) { [self] in checkPause() }
+            return
+        }
+        after(0.1) { [self] in
+            waitForPauseSettle(startRenders: startRenders, lastCount: current, quietSince: quietSince,
+                               deadline: deadline)
         }
     }
 

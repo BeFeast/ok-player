@@ -180,14 +180,15 @@ extension VerifyRun {
             (.resetDelay, 0.0, 0.9),
             (.resetSize, 0.0, 1.0),
         ] {
+            let ms = Int((delay * 1000).rounded())
+            let expected = [(ms > 0 ? "+" : "") + "\(ms) ms", "\(Int((size * 100).rounded()))%"]
             try clickTrack(action)
             try await wait("engine reported subtitle delay \(delay) and size \(size)") {
                 guard let view = self.tracks.query?(), let reportedDelay = view.subtitleDelay.reported,
                       let reportedSize = view.subtitleScale.reported else { return false }
                 return abs(reportedDelay - delay) < 0.001 && abs(reportedSize - size) < 0.001
+                    && self.tracks.panel.adjustmentValues == expected
             }
-            let ms = Int((delay * 1000).rounded())
-            let expected = [(ms > 0 ? "+" : "") + "\(ms) ms", "\(Int((size * 100).rounded()))%"]
             if !tracks.isPopoverShown || tracks.panel.adjustmentValues != expected {
                 failures.append("track_switcher:readout_\(ms)_\(size)")
             }
@@ -196,16 +197,30 @@ extension VerifyRun {
     }
 
     private func measureCue(wide: Bool?) async throws -> Int {
+        guard let video = app.video else {
+            throw VerifyError("No actual 2× track fixture frame", blocked: true)
+        }
         var width = 0
         var matched = false
-        // Track selection is reported before libmpv has rendered the new cue.
-        for _ in 0..<8 {
-            try await Task.sleep(nanoseconds: 120_000_000)
-            let frame = try trackFrame()
-            width = Int(frame.glyphBounds?.width ?? 0)
-            let span = Double(width) / Double(frame.image.width)
-            matched = wide.map { $0 ? span > 0.12 : (0.01...0.10).contains(span) } ?? (width == 0)
-            if matched { break }
+        var sawPicture = false
+        // Track selection is reported before libmpv has rendered the new cue (or cleared it).
+        let deadline = ProcessInfo.processInfo.systemUptime + 8.0
+        while true {
+            let frameWidth = Int((video.bounds.width * 2).rounded())
+            let frameHeight = Int((video.bounds.height * 2).rounded())
+            if let frame = video.videoLayer.verificationFrame(width: frameWidth, height: frameHeight),
+               frame.hasPicture {
+                sawPicture = true
+                width = Int(frame.glyphBounds?.width ?? 0)
+                let span = Double(width) / Double(frame.image.width)
+                matched = wide.map { $0 ? span > 0.12 : (0.01...0.10).contains(span) } ?? (width == 0)
+                if matched { break }
+            }
+            if ProcessInfo.processInfo.systemUptime >= deadline { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        guard sawPicture else {
+            throw VerifyError("No actual 2× track fixture frame", blocked: true)
         }
         if !matched { failures.append("track_switcher:cue_width_\(wide.map(String.init) ?? "off")") }
         return width
@@ -258,25 +273,28 @@ extension VerifyRun {
         }
     }
 
-    private func trackFrame() throws -> VideoEvidence {
-        guard let video = app.video, let frame = video.videoLayer.verificationFrame(
-            width: Int((video.bounds.width * 2).rounded()), height: Int((video.bounds.height * 2).rounded())
-        ), frame.hasPicture else { throw VerifyError("No actual 2× track fixture frame", blocked: true) }
+    private func captureTrackFrame() async throws -> VideoEvidence {
+        guard let video = app.video,
+              let frame = try await captureVideoFrame(
+                  video,
+                  width: Int((video.bounds.width * 2).rounded()),
+                  height: Int((video.bounds.height * 2).rounded())
+              ) else { throw VerifyError("No actual 2× track fixture frame", blocked: true) }
         return frame
     }
 
     private func captureTrackPanel(_ name: String) async throws {
-        try await Task.sleep(nanoseconds: 300_000_000)
         guard let window = app.window, let root = window.contentView, let video = app.video,
               let kind = tracks.panelKind else { throw VerifyError("The track panel or video is missing") }
         root.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
         let panel = tracks.panel
         let rect = panel.convert(panel.bounds, to: root)
         let bar = app.osc.panel.convert(app.osc.panel.bounds, to: root)
         let light = panel.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .aqua
         let anchor = kind == .audio ? tracks.audioButton : tracks.subtitleButton
         let anchorCenter = anchor.convert(NSPoint(x: anchor.bounds.midX, y: anchor.bounds.midY), to: root)
-        let drawn = try trackFrame()
+        let drawn = try await captureTrackFrame()
         if !root.bounds.contains(rect) || !rect.width.isFinite || rect.height <= 0 ||
             abs(rect.minY - bar.maxY - 4) > 0.5 || !app.osc.isRevealed || !light ||
             !(rect.minX...rect.maxX).contains(anchorCenter.x) {

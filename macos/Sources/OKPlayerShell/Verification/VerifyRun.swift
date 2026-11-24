@@ -388,13 +388,27 @@ final class VerifyRun {
         snapshot.tracks.first { $0.kind == .subtitle && $0.external && $0.selected }
     }
 
-    func wait(_ step: String, blocked: Bool = false, condition: () -> Bool) async throws {
-        let limit = ProcessInfo.processInfo.systemUptime + 8
+    func wait(_ step: String, blocked: Bool = false, timeout: TimeInterval = 10,
+              condition: () -> Bool) async throws {
+        let limit = ProcessInfo.processInfo.systemUptime + timeout
         while !condition() {
             if ProcessInfo.processInfo.systemUptime >= limit { throw VerifyError("Timed out: \(step)", blocked: blocked) }
             try await Task.sleep(nanoseconds: 30_000_000)
         }
         print("OKP_VERIFY \(step)")
+    }
+
+    /// Wait up to `timeout` seconds for `condition` without throwing if the
+    /// caller wants to record a normal assertion failure instead of an error.
+    @discardableResult
+    func waitUntil(timeout: TimeInterval = 3, intervalNs: UInt64 = 30_000_000,
+                   condition: () -> Bool) async throws -> Bool {
+        let limit = ProcessInfo.processInfo.systemUptime + timeout
+        while !condition() {
+            if ProcessInfo.processInfo.systemUptime >= limit { return false }
+            try await Task.sleep(nanoseconds: intervalNs)
+        }
+        return true
     }
 
     func pressKey(_ characters: String, code: UInt16, focusVideo: Bool = true,
@@ -437,18 +451,24 @@ final class VerifyRun {
     }
 
     private func capture(_ name: String, expecting expectation: VerificationScenario.Expectation) async throws {
-        // Let AppKit finish presentation and the live video layer swap before reading the FBO.
-        try await Task.sleep(nanoseconds: 330_000_000)
         guard let root = app.window.contentView, let video = app.video, let track = selectedExternal else {
             throw VerifyError("The selected external SRT or video view disappeared")
         }
-        root.layoutSubtreeIfNeeded()
         let panel = app.osc.panel
+        let expectsVisible = expectation != .baseMargin
+        _ = try await waitUntil(timeout: 3) {
+            root.layoutSubtreeIfNeeded()
+            let rect = panel.convert(panel.bounds, to: video)
+            let hit = self.app.osc.hitTest(panel.convert(CGPoint(x: panel.bounds.midX, y: panel.bounds.midY),
+                                                         to: self.app.osc.superview)) != nil
+            let visible = !panel.isHidden && panel.alphaValue > (expectsVisible ? 0.99 : 0)
+            return visible == expectsVisible && hit == expectsVisible && rect.height > 0
+        }
+        root.layoutSubtreeIfNeeded()
         let rect = panel.convert(panel.bounds, to: video)
         let panelHit = app.osc.hitTest(panel.convert(CGPoint(x: panel.bounds.midX, y: panel.bounds.midY),
                                                          to: app.osc.superview)) != nil
         let visible = !panel.isHidden && panel.alphaValue > 0
-        let expectsVisible = expectation != .baseMargin
         guard visible == expectsVisible, panelHit == expectsVisible, rect.height > 0 else {
             throw VerifyError("OSC visibility/hit testing disagreed with checkpoint \(name)")
         }
@@ -461,12 +481,13 @@ final class VerifyRun {
         }
         var observed: VideoEvidence?
         // A seek can swap video before libmpv has updated the subtitle plane.
-        // Retry missing glyphs, independent of their clearance relative to the OSC.
-        let attempts = 24
-        for attempt in 0..<attempts {
+        // Wait for painted glyphs up to a bounded deadline, independent of clearance.
+        let frameDeadline = ProcessInfo.processInfo.systemUptime + 8
+        while true {
             observed = video.videoLayer.verificationFrame(width: frameWidth, height: frameHeight)
             if let observed, observed.videoPresent, expectation == .noCue || observed.glyphPixels > 100 { break }
-            if attempt + 1 < attempts { try await Task.sleep(nanoseconds: 130_000_000) }
+            if ProcessInfo.processInfo.systemUptime >= frameDeadline { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
         }
         guard let frame = observed, frame.videoPresent else {
             throw VerifyError("Genuine 2× libmpv capture is unavailable at \(name)", blocked: true)
@@ -539,15 +560,17 @@ final class VerifyRun {
     }
 
     /// A live swap can precede the picture appearing in the verification FBO.
-    func captureVideoFrame(_ video: VideoView, width: Int, height: Int,
+    func captureVideoFrame(_ video: VideoView, width: Int, height: Int, timeout: TimeInterval = 8,
                            matching: (VideoEvidence) -> Bool = { $0.hasPicture }) async throws -> VideoEvidence? {
-        for attempt in 0..<8 {
+        guard width > 0, height > 0 else { return nil }
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        while true {
             if let frame = video.videoLayer.verificationFrame(width: width, height: height), matching(frame) {
                 return frame
             }
-            if attempt < 7 { try await Task.sleep(nanoseconds: 130_000_000) }
+            if ProcessInfo.processInfo.systemUptime >= deadline { return nil }
+            try await Task.sleep(nanoseconds: 100_000_000)
         }
-        return nil
     }
 
     func captureCompositor(width: Int, height: Int, window: NSWindow? = nil) async -> CGImage? {

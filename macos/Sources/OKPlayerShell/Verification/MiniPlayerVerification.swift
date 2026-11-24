@@ -41,7 +41,13 @@ extension VerifyRun {
             try miniMouse(.leftMouseDragged, at: CGPoint(x: start.x + near.x - origin.x,
                                                          y: start.y + near.y - origin.y))
             try miniMouse(.leftMouseUp, at: start)
-            try await Task.sleep(nanoseconds: 350_000_000)
+            if options.control != "compact_snap_disabled" {
+                _ = try await waitUntil(timeout: 2) {
+                    abs(window.frame.minX - area.minX - 16) <= 1 && abs(area.maxY - window.frame.maxY - 16) <= 1
+                }
+            } else {
+                try await Task.sleep(nanoseconds: 250_000_000)
+            }
             let frame = window.frame
             if abs(frame.minX - area.minX - 16) > 1 || abs(area.maxY - frame.maxY - 16) > 1 {
                 failures.append("compact_mini:corner_snap")
@@ -122,8 +128,10 @@ extension VerifyRun {
                 try miniMouse(.leftMouseUp, at: location, count: count)
             }
             try await wait("Double-click expanded the same player") { !mini.isActive }
-            try await Task.sleep(nanoseconds: 400_000_000)
             guard let original = miniOriginal else { throw VerifyError("The standard frame was not recorded") }
+            _ = try await waitUntil(timeout: 2) {
+                window.frame == original.frame && window.level == original.level
+            }
             if window.frame != original.frame || window.isInFullscreen || window.level != original.level ||
                 window.windowNumber != original.id || snapshot.source != original.media ||
                 app.client !== original.client || snapshot.status != .playing ||
@@ -192,10 +200,12 @@ extension VerifyRun {
             failures.append("compact_mini:geometry_\(name)")
         }
         var frame: VideoEvidence?
-        for attempt in 0..<8 {
+        let frameDeadline = ProcessInfo.processInfo.systemUptime + 8
+        while true {
             frame = video.videoLayer.verificationFrame(width: width, height: height)
             if let frame, frame.hasPicture && (hover || frame.glyphPixels > 100) { break }
-            if attempt < 7 { try await Task.sleep(nanoseconds: 130_000_000) }
+            if ProcessInfo.processInfo.systemUptime >= frameDeadline { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
         }
         guard let frame, frame.hasPicture else {
             throw VerifyError("Could not capture live 2× compact video", blocked: true)

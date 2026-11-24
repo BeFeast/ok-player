@@ -224,3 +224,81 @@ fn delay_keys_pressed_before_libmpv_reports_the_delay_all_count() {
         "the readout shows the delay asked for before libmpv reports it"
     );
 }
+
+#[test]
+fn tracks_query_keeps_delay_consistent_when_engine_reports_concurrently() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let (session, engine) = playing_with(Vec::new());
+    let session = Arc::new(session);
+    let stop = Arc::new(AtomicBool::new(false));
+    let updater_engine = Arc::clone(&engine);
+    let updater_stop = Arc::clone(&stop);
+    let updater = std::thread::spawn(move || {
+        let mut published = 0.0_f64;
+        while !updater_stop.load(Ordering::Relaxed) {
+            let latest = updater_engine
+                .forwarded()
+                .into_iter()
+                .rev()
+                .find_map(|command| match command {
+                    Command::SetSubtitleDelay { seconds } => Some(seconds),
+                    _ => None,
+                });
+            if let Some(seconds) = latest
+                && (seconds - published).abs() > 1e-6
+            {
+                published = seconds;
+                updater_engine.publish(
+                    |observation| {
+                        observation.subtitle_delay = seconds;
+                    },
+                    Vec::new(),
+                );
+            }
+            std::thread::yield_now();
+        }
+    });
+
+    for step in 1..=200 {
+        let id = if step % 2 == 1 {
+            "subtitle-delay-forward"
+        } else {
+            "subtitle-delay-back"
+        };
+        let target = if step % 2 == 1 { 0.05 } else { 0.0 };
+        let expected = if step % 2 == 1 { "+50 ms" } else { "0 ms" };
+        assert!(matches!(
+            session.dispatch(&Command::InvokeCommand { id: id.to_owned() }),
+            DispatchResult::Accepted { .. }
+        ));
+        // Poll Query::Tracks repeatedly while the background thread reports the
+        // new delay: the readout must never drop back to the previous delay during
+        // the handoff from asked_delay to reported subtitle_delay.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let view = tracks(&session);
+            assert_eq!(
+                view.subtitle_delay.label, expected,
+                "step {step} observed an inconsistent (snapshot, tracks) pair: {:?}",
+                view.subtitle_delay
+            );
+            if view
+                .subtitle_delay
+                .reported
+                .is_some_and(|reported| (reported - target).abs() < 0.000_5)
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "step {step} timed out waiting for reported delay {target}"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    updater.join().expect("engine updater thread finished");
+}

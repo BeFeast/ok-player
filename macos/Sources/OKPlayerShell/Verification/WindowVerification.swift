@@ -25,10 +25,15 @@ extension VerifyRun {
             let url = step.action == .open ? options.fixture
                 : options.fixture.deletingLastPathComponent().appendingPathComponent("portrait.mp4")
             let before = swaps
+            let expectsPortrait = step.action == .openPortrait
+            let expects4K = step.action == .open && options.scenarioID == "window-fit"
             app.application(NSApp, open: [url])
             try await wait("opened \(url.lastPathComponent) via AppKit and swapped") {
-                self.snapshot.source?.location == url.path && self.snapshot.status == .playing &&
-                    self.snapshot.video != nil && self.swaps > before
+                guard self.snapshot.source?.location == url.path, self.snapshot.status == .playing,
+                      let geometry = self.snapshot.video, self.swaps > before else { return false }
+                if expectsPortrait { return geometry.height > geometry.width }
+                if expects4K { return geometry.width >= 3840 }
+                return true
             }
         case .playTo:
             guard let seconds = step.seconds else { throw VerifyError("Missing playback timestamp") }
@@ -36,6 +41,7 @@ extension VerifyRun {
                 self.snapshot.status == .playing && (self.snapshot.timePos ?? -1) >= seconds
             }
         case .doubleClick:
+            _ = try await waitUntil(timeout: 2) { self.snapshot.timePos != nil }
             preFullscreenFrame = window.frame
             preFullscreenTime = snapshot.timePos
             controller.onFullscreenChanged = { [weak self] entered in if entered { self?.fullscreenEntries += 1 } }
@@ -56,14 +62,22 @@ extension VerifyRun {
             // The negative control continues to the checkpoints even when the transition is absent.
             if options.control != "video_fullscreen_disabled" {
                 try await wait("native fullscreen and a fresh video swap after double-click") {
-                    self.fullscreenEntries > 0 && self.swaps > before
+                    guard let currentScreen = window.screen else { return false }
+                    return self.fullscreenEntries > 0 && controller.window.isInFullscreen
+                        && self.sameFrame(window.frame, currentScreen.frame) && self.swaps > before
                 }
             }
             if controller.isPinned && (fullscreenEntries != 1 || controller.window.level != .normal) {
                 failures.append("window_float:fullscreen_level")
             }
         case .leaveFullscreen:
-            if controller.window.isInFullscreen { try await perform(step) }
+            if controller.window.isInFullscreen {
+                try await perform(step)
+                try await wait("restored normal window frame after fullscreen") {
+                    !controller.window.isInFullscreen
+                        && (self.preFullscreenFrame.map { self.sameFrame(window.frame, $0) } ?? true)
+                }
+            }
         case .waitForChromeHide:
             try await wait("playing with the OSC auto-hidden") {
                 self.snapshot.status == .playing && !self.app.osc.isRevealed
@@ -128,13 +142,63 @@ extension VerifyRun {
 
     private func captureWindow(_ name: String, expecting expected: VerificationScenario.Expectation,
                                root: NSView, video: VideoView, controller: PlayerWindowController) async throws {
-        try await Task.sleep(nanoseconds: 320_000_000)
-        root.layoutSubtreeIfNeeded()
         let window = controller.window
+        let title = controller.titleChrome
+        // Wait for transitions (chrome fade, playhead advance, window fit/restore) to settle
+        // without masking negative-control assertion failures.
+        switch expected {
+        case .welcome, .playing, .chromeHidden:
+            let expectsChrome = expected != .chromeHidden
+            _ = try await waitUntil(timeout: 3) {
+                root.layoutSubtreeIfNeeded()
+                let lights = controller.trafficLights
+                let chromeVisible = self.viewVisible(title) && self.viewVisible(title.label)
+                let pinVisible = self.viewVisible(controller.pinButton) && controller.pinButton.isEnabled
+                if expectsChrome {
+                    return chromeVisible && pinVisible && lights.count == 3 && lights.allSatisfy(self.viewVisible)
+                }
+                return !chromeVisible && !pinVisible && !lights.contains(where: self.viewVisible)
+                    && title.isHidden && controller.pinButton.isHidden && lights.allSatisfy(\.isHidden)
+            }
+        case .fullscreen, .restored:
+            let fullscreen = expected == .fullscreen
+            _ = try await waitUntil(timeout: 5) {
+                root.layoutSubtreeIfNeeded()
+                let progressing = self.snapshot.status == .playing
+                    && (self.snapshot.timePos ?? 0) > (self.preFullscreenTime ?? 0)
+                if self.options.control == "video_fullscreen_disabled" { return progressing }
+                guard progressing, window.isInFullscreen == fullscreen else { return false }
+                if fullscreen {
+                    return !self.viewVisible(title) && !self.viewVisible(controller.pinButton)
+                        && self.viewVisible(self.app.osc.panel)
+                }
+                return self.preFullscreenFrame.map { self.sameFrame(window.frame, $0) } ?? true
+            }
+        case .landscape, .portrait:
+            if options.control != "initial_fit_disabled" {
+                _ = try await waitUntil(timeout: 3) {
+                    root.layoutSubtreeIfNeeded()
+                    guard let area = controller.verificationWorkArea else { return false }
+                    return controller.lastFit != nil && area.contains(window.frame)
+                        && self.videoFitsAspect(video, controller: controller)
+                        && self.viewVisible(title) && self.viewVisible(title.label)
+                }
+            }
+        case .idle:
+            _ = try await waitUntil(timeout: 3) {
+                root.layoutSubtreeIfNeeded()
+                return self.app.history.showsWelcome
+                    && (self.initialFrame.map { self.sameFrame(window.frame, $0) } ?? true)
+                    && self.viewVisible(title) && self.viewVisible(title.label)
+            }
+        default:
+            try await Task.sleep(nanoseconds: 150_000_000)
+        }
+        root.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
         guard let screen = window.screen else {
             throw VerifyError("The player lost its display at \(name)", blocked: true)
         }
-        let title = controller.titleChrome
         let titleRect = title.label.convert(title.label.bounds, to: root)
         let videoRect = video.convert(video.bounds, to: root)
         let hasVideo = snapshot.video != nil

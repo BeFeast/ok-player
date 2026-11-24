@@ -9,8 +9,8 @@ extension VerifyRun {
         case .open:
             try await openWelcomeFixture()
         case .waitForEOF:
-            try await wait("natural EOF with no successor") {
-                self.app.history.showsWelcome || self.snapshot.endReason == .eof
+            try await wait("natural EOF with no successor returned to Welcome") {
+                self.snapshot.source == nil && self.app.history.showsWelcome
             }
         case .closeMediaShortcut:
             try pressKey("w", code: 13, modifiers: .command, throughApplication: true)
@@ -70,11 +70,20 @@ extension VerifyRun {
     }
 
     private func captureWelcomeReturn(_ name: String) async throws {
-        try await Task.sleep(nanoseconds: 330_000_000)
+        // Wait for any transient playback toast (such as "Resumed at 00:00") to dismiss
+        // and for the SwiftUI Continue watching shelf to finish laying out before sampling.
+        _ = try await waitUntil(timeout: 5) {
+            guard self.app.history.showsWelcome, self.snapshot.source == nil,
+                  self.app.statusLayer.toastView.isHidden,
+                  !self.app.history.welcomeView.isHidden,
+                  !self.app.history.welcomeView.bounds.isEmpty else { return false }
+            return self.app.history.welcome.isFirstRun || !self.app.history.shelfBounds.isEmpty
+        }
         guard let root = app.window.contentView, let video = app.video else {
             throw VerifyError("The Welcome window or video plane disappeared")
         }
         root.layoutSubtreeIfNeeded()
+        app.window.displayIfNeeded()
         let width = Int((root.bounds.width * 2).rounded())
         let height = Int((root.bounds.height * 2).rounded())
         let compositor = await captureCompositor(width: width, height: height)

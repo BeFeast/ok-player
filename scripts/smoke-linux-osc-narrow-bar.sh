@@ -265,8 +265,45 @@ if [[ "${1:-}" == "--inner" ]]; then
       "$uri" >>"$OUT_DIR/open-calls.log"
   }
 
+  latest_fit_target() {
+    awk '
+      index($0, "window fit configure: ") == 1 {
+        for (i = 1; i <= NF; i++) {
+          if (index($i, "target=") == 1) {
+            spec = substr($i, 8)
+            sub(/\+.*/, "", spec)
+            split(spec, dims, "x")
+            w = dims[1]; h = dims[2]
+          }
+        }
+      }
+      END { if (w != "" && h != "") print w, h }
+    ' "$LOG"
+  }
+
+  wait_for_window_size() {
+    local want_w="$1" want_h="$2" limit="${3:-120}"
+    local seq cur_w cur_h
+    for _ in $(seq 1 "$limit"); do
+      seq="$(newest_seq)"
+      if [[ -n "$seq" ]]; then
+        cur_w="$(field window w "$seq")"
+        cur_h="$(field window h "$seq")"
+        if [[ -n "$cur_w" && -n "$cur_h" ]] \
+            && (( cur_w >= want_w - 2 && cur_w <= want_w + 2 && cur_h >= want_h - 2 && cur_h <= want_h + 2 )); then
+          return 0
+        fi
+      fi
+      nudge
+      sleep 0.25
+    done
+    echo "window stayed ${cur_w:-unknown}x${cur_h:-unknown} instead of reaching ${want_w}x${want_h}" >&2
+    tail -40 "$LOG" >&2
+    return 1
+  }
+
   timeout 300s env OKP_DEBUG_INTERACTIONS=1 OKP_DEBUG_WINDOW_FIT=1 OKP_DEBUG_OSC_LAYOUT=1 \
-    "$BINARY" >"$LOG" 2>&1 &
+    OKP_DEBUG_IDLE_RETURN_SMOKE=1 "$BINARY" >"$LOG" 2>&1 &
   app_pid=$!
   window_id=""
   for _ in $(seq 1 120); do
@@ -285,11 +322,16 @@ if [[ "${1:-}" == "--inner" ]]; then
   done
 
   open_media "$OUT_DIR/media/portrait.mkv"
+  wait_for_marker 'idle-return-smoke: file-loaded' || exit 1
   wait_for_marker 'window fit configure: ' || exit 1
   # A paused clip is the state the operator screenshotted, and it is also the state in which
   # the chrome does not auto-hide, so the bar can be measured through a resize.
   xdotool windowactivate "$window_id" >/dev/null 2>&1 || true
   xdotool key --clearmodifiers space
+  nudge
+  read -r fit_w fit_h < <(latest_fit_target)
+  [[ -n "${fit_w:-}" && -n "${fit_h:-}" ]] || { echo "window fit configure omitted a target size" >&2; exit 1; }
+  wait_for_window_size "$fit_w" "$fit_h" || exit 1
   nudge
   wait_for_settled || { echo "the window never settled on the portrait fit" >&2; exit 1; }
 

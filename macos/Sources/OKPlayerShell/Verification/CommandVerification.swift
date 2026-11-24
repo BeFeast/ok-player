@@ -388,9 +388,9 @@ extension VerifyRun {
         } else {
             var frame: CGImage?
             if wantsVideo {
-                let evidence = video.videoLayer.verificationFrame(width: Int((video.bounds.width * 2).rounded()),
-                                                                  height: Int((video.bounds.height * 2).rounded()))
-                guard let evidence, evidence.hasPicture else {
+                let evidence = try await captureVideoFrame(video, width: Int((video.bounds.width * 2).rounded()),
+                                                           height: Int((video.bounds.height * 2).rounded()))
+                guard let evidence else {
                     throw VerifyError("Real video was unavailable at \(name)", blocked: true)
                 }
                 frame = evidence.image
