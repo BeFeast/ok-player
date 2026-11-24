@@ -169,10 +169,21 @@ final class PlayerWindowControllerTests: XCTestCase {
         NotificationCenter.default.post(name: NSWindow.willEnterFullScreenNotification, object: window)
         XCTAssertTrue(controller.isPinned)
         XCTAssertEqual(window.level, .normal)
+        XCTAssertFalse(controller.canTogglePin)
+        controller.togglePin()
+        XCTAssertTrue(controller.isPinned, "ignore a pin action delivered during the native transition")
 
         controller.fullscreenFailed()
         XCTAssertTrue(controller.isPinned)
         XCTAssertEqual(window.level, .floating)
+        XCTAssertTrue(controller.canTogglePin)
+    }
+
+    func testNativeFullscreenDisablesPinEvenBeforeTheChromeUpdates() {
+        window.flagged = true
+        XCTAssertFalse(controller.canTogglePin)
+        controller.togglePin()
+        XCTAssertFalse(controller.isPinned)
     }
 
     // MARK: Clicks on the video

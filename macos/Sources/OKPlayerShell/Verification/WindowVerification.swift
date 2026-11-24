@@ -3,8 +3,8 @@ import AppKit
 @MainActor
 extension VerifyRun {
     func performWindowStep(_ step: VerificationScenario.Step) async throws {
-        guard let controller = app.windowBehaviour, let video = app.video,
-              let root = app.window.contentView, let screen = app.window.screen else {
+        guard let window = app.window, let controller = app.windowBehaviour, let video = app.video,
+              let root = window.contentView, let screen = window.screen else {
             throw VerifyError("The window, display or player render plane is unavailable", blocked: true)
         }
         switch step.action {
@@ -19,8 +19,8 @@ extension VerifyRun {
             if small { controller.verificationWorkArea = workArea }
             let idle = small ? CGRect(x: workArea.minX + 20, y: workArea.minY + 24,
                                       width: min(520, workArea.width), height: min(410, workArea.height)) : workArea
-            app.window.setFrame(idle, display: true)
-            initialFrame = app.window.frame
+            window.setFrame(idle, display: true)
+            initialFrame = window.frame
         case .open, .openPortrait:
             let url = step.action == .open ? options.fixture
                 : options.fixture.deletingLastPathComponent().appendingPathComponent("portrait.mp4")
@@ -36,7 +36,7 @@ extension VerifyRun {
                 self.snapshot.status == .playing && (self.snapshot.timePos ?? -1) >= seconds
             }
         case .doubleClick:
-            preFullscreenFrame = app.window.frame
+            preFullscreenFrame = window.frame
             preFullscreenTime = snapshot.timePos
             controller.onFullscreenChanged = { [weak self] entered in if entered { self?.fullscreenEntries += 1 } }
             let location = video.convert(NSPoint(x: video.bounds.midX, y: video.bounds.midY), to: nil)
@@ -45,18 +45,19 @@ extension VerifyRun {
                 for type: NSEvent.EventType in [.leftMouseDown, .leftMouseUp] {
                     guard let event = NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
                                                         timestamp: ProcessInfo.processInfo.systemUptime,
-                                                        windowNumber: app.window.windowNumber, context: nil,
+                                                        windowNumber: window.windowNumber, context: nil,
                                                         eventNumber: 0, clickCount: count,
                                                         pressure: type == .leftMouseDown ? 1 : 0) else {
                         throw VerifyError("Could not construct a video double-click")
                     }
-                    app.window.sendEvent(event)
+                    window.sendEvent(event)
                 }
             }
-            // Leave time for the native Space animation and the pending single click.
-            let deadline = ProcessInfo.processInfo.systemUptime + 5
-            while (fullscreenEntries == 0 || swaps == before) && ProcessInfo.processInfo.systemUptime < deadline {
-                try await Task.sleep(nanoseconds: 50_000_000)
+            // The negative control continues to the checkpoints even when the transition is absent.
+            if options.control != "video_fullscreen_disabled" {
+                try await wait("native fullscreen and a fresh video swap after double-click") {
+                    self.fullscreenEntries > 0 && self.swaps > before
+                }
             }
             if controller.isPinned && (fullscreenEntries != 1 || controller.window.level != .normal) {
                 failures.append("window_float:fullscreen_level")
@@ -75,26 +76,26 @@ extension VerifyRun {
             try await wait("restored idle screen via Close Media") { self.snapshot.source == nil && self.app.history.showsWelcome }
         case .resizeEdges:
             guard let area = controller.verificationWorkArea else { throw VerifyError("No small work area") }
-            let original = app.window.frame
+            let original = window.frame
             // AppKit provides the proposed size to this delegate for all four edges.
             for (index, change) in [CGSize(width: 80, height: 0), CGSize(width: -50, height: 0),
                                     CGSize(width: 0, height: 115), CGSize(width: 0, height: -90)].enumerated() {
                 let proposal = CGSize(width: original.width + change.width, height: original.height + change.height)
-                let size = app.windowWillResize(app.window, to: proposal)
+                let size = app.windowWillResize(window, to: proposal)
                 var rect = CGRect(origin: original.origin, size: size)
                 if index == 0 { rect.origin.x = original.maxX - size.width }
                 if index == 3 { rect.origin.y = original.maxY - size.height }
-                app.window.setFrame(rect, display: true)
-                app.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification, object: app.window))
+                window.setFrame(rect, display: true)
+                app.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification, object: window))
                 root.layoutSubtreeIfNeeded()
-                if !area.contains(app.window.frame) || !videoFitsAspect(video, controller: controller) {
+                if !area.contains(window.frame) || !videoFitsAspect(video, controller: controller) {
                     failures.append("window_fit:edge_\(index)")
                 }
             }
         case .pin, .unpin:
             let button = controller.pinButton
             let expected = step.action == .pin
-            guard viewVisible(button), button.isEnabled, button.window === app.window,
+            guard viewVisible(button), button.isEnabled, button.window === window,
                   button.bounds.width >= 22, button.bounds.height >= 20,
                   !(button.accessibilityLabel() ?? "").isEmpty else {
                 throw VerifyError("Always on Top has no live, accessible title bar button")
@@ -105,13 +106,13 @@ extension VerifyRun {
         case .overlapWindow:
             let overlap = testWindow ?? NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
             overlap.isReleasedWhenClosed = false
-            let frame = app.window.frame
+            let frame = window.frame
             overlap.setFrame(frame.insetBy(dx: frame.width / 4, dy: frame.height / 4), display: true)
             overlap.level = .normal
             overlap.orderFrontRegardless()
             testWindow = overlap
             try await wait("WindowServer mapped the overlapping normal-level window", blocked: true) {
-                self.frontWindowIndex(overlap) != nil && self.frontWindowIndex(self.app.window) != nil
+                self.frontWindowIndex(overlap) != nil && self.frontWindowIndex(window) != nil
             }
         case .capture:
             guard let name = step.name, let expected = step.expect else { throw VerifyError("Window checkpoint is missing fields") }

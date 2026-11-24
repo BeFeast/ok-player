@@ -138,21 +138,21 @@ final class VerifyRun {
                 throw VerifyError("Unsupported scenario or schema")
             }
             try await wait("mapped AppKit window registered with WindowServer", blocked: true) {
-                let window = self.app.window!
-                guard window.isVisible, window.windowNumber > 0, window.screen != nil,
+                guard let window = self.app.window, window.isVisible, window.windowNumber > 0, window.screen != nil,
                       let rows = CGWindowListCopyWindowInfo(.optionIncludingWindow,
                                                             CGWindowID(window.windowNumber)) as? [[String: Any]] else { return false }
                 return rows.contains { ($0[kCGWindowOwnerPID as String] as? Int32) == getpid() }
             }
+            guard let window = app.window else { throw VerifyError("The mapped player window disappeared", blocked: true) }
             let appearance: NSAppearance.Name = options.appearance == "dark" ? .darkAqua : .aqua
-            app.window.appearance = NSAppearance(named: appearance)
-            guard app.window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == appearance else {
+            window.appearance = NSAppearance(named: appearance)
+            guard window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == appearance else {
                 throw VerifyError("Requested appearance is unavailable", blocked: true)
             }
-            result["window_id"] = app.window.windowNumber
+            result["window_id"] = window.windowNumber
             result["source_sha"] = Bundle.main.object(forInfoDictionaryKey: "OKPSourceSHA")
             result["revision"] = Bundle.main.object(forInfoDictionaryKey: "OKPSourceRevision")
-            result["window_backing_scale"] = app.window.backingScaleFactor
+            result["window_backing_scale"] = window.backingScaleFactor
             compositorStatus = CGPreflightScreenCaptureAccess() ? "available" : "permission_unavailable"
             for step in scenario.steps {
                 if scenario.id.hasPrefix("window-") { try await performWindowStep(step) }
@@ -212,8 +212,7 @@ final class VerifyRun {
                 self.snapshot.status == .playing && !self.app.osc.isRevealed
             }
         case .pointerReveal:
-            let window = app.window!
-            guard let video = app.video,
+            guard let window = app.window, let video = app.video,
                   let event = NSEvent.mouseEvent(with: .mouseMoved, location: video.convert(
                     CGPoint(x: video.bounds.midX, y: video.bounds.midY), to: nil),
                     modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
@@ -271,8 +270,7 @@ final class VerifyRun {
     }
 
     func pressKey(_ characters: String, code: UInt16) throws {
-        let window = app.window!
-        guard window.makeFirstResponder(app.video),
+        guard let window = app.window, window.makeFirstResponder(app.video),
               let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
                                            timestamp: ProcessInfo.processInfo.systemUptime,
                                            windowNumber: window.windowNumber, context: nil,
@@ -284,7 +282,7 @@ final class VerifyRun {
     }
 
     private func seek(_ timestamp: Double) throws {
-        let window = app.window!
+        guard let window = app.window else { throw VerifyError("The seek window disappeared", blocked: true) }
         window.contentView?.layoutSubtreeIfNeeded()
         let slider = app.osc.scrubber
         guard slider.isEnabled, slider.accessibilityRole() == .slider, let duration = snapshot.duration else {

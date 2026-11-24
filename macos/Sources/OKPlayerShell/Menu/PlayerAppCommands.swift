@@ -11,7 +11,7 @@ extension PlayerApp: PlayerCommandResponder, NSMenuItemValidation {
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem === closeMediaItem { return client?.store.snapshot.source != nil }
-        if menuItem === pinItem { return windowBehaviour?.window.isInFullscreen == false }
+        if menuItem === pinItem { return windowBehaviour?.canTogglePin == true }
         return commands.validate(menuItem)
     }
 

@@ -211,15 +211,19 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
         if window.frame != safe { window.setFrame(safe, display: true) }
     }
 
+    var canTogglePin: Bool {
+        !chrome.fullscreen && !fullscreenTransition && !window.isInFullscreen
+    }
+
     @objc func togglePin() {
-        guard !chrome.fullscreen, !fullscreenTransition else { return }
+        guard canTogglePin else { return }
         isPinned.toggle()
         updatePin()
         onPinChanged?(isPinned)
     }
 
     private func updatePin() {
-        let level: NSWindow.Level = isPinned && !chrome.fullscreen ? .floating : .normal
+        let level: NSWindow.Level = isPinned && canTogglePin ? .floating : .normal
         if applyFloatingLevel, window.level != level { window.level = level }
         pinButton.state = isPinned ? .on : .off
         let label = isPinned ? "Disable Always on Top" : "Always on Top"
@@ -342,7 +346,7 @@ final class PlayerWindowController: NSObject, WindowChromeVisibility {
         let views: [(NSView, Bool)] = lights.map { ($0 as NSView, showLights) }
             + [(pinButton, showStrip), (identity, showStrip && showTitleIdentity)]
         if !showStrip, window.firstResponder === pinButton { window.makeFirstResponder(videoArea) }
-        pinButton.isEnabled = showStrip
+        pinButton.isEnabled = showStrip && canTogglePin
         for (view, show) in views where show { view.isHidden = false }
         guard animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
             for (view, show) in views {
